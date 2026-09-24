@@ -1,0 +1,119 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "curl",
+ "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+ "harvest_rule": "decl-block lines matching '(type)([*]*)local_[0-9a-f]+([N])*;' before first statement; offset = -int(name[6:],16)",
+ "functions": {
+  "0x1025a0": {
+   "name": "main",
+   "locals": [
+    {
+     "offset": -560,
+     "name": "local_230",
+     "type": "int",
+     "typelock": true
+    }
+   ]
+  },
+  "0x103980": {
+   "name": "helpf",
+   "locals": [
+    {
+     "offset": -184,
+     "name": "local_b8",
+     "type": "undefined1[8]",
+     "typelock": true
+    },
+    {
+     "offset": -176,
+     "name": "local_b0",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -168,
+     "name": "local_a8",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -160,
+     "name": "local_a0",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -152,
+     "name": "local_98",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -144,
+     "name": "local_90",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -136,
+     "name": "local_88",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -120,
+     "name": "local_78",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -104,
+     "name": "local_68",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -88,
+     "name": "local_58",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -72,
+     "name": "local_48",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -56,
+     "name": "local_38",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -40,
+     "name": "local_28",
+     "type": "undefined8",
+     "typelock": true
+    },
+    {
+     "offset": -24,
+     "name": "local_18",
+     "type": "undefined8",
+     "typelock": true
+    }
+   ]
+  },
+  "0x103c80": {
+   "name": "parseconfig",
+   "locals": [
+    {
+     "offset": -352,
+     "name": "local_160",
+     "type": "char *",
+     "typelock": true
+    }
+   ]
+  }
+ }
+}

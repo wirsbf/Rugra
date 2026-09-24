@@ -241,3 +241,59 @@ oracle-seeded 同 3）；下标形 119（canon 116，oracle-seeded 133——差 
 C5-邻域，非 C1 目标。SPALIAS 定点（§5.5-2）：`long local_c8 [4]`/
 `local_d0`/`local_d8` 声明全量出现 ✓；`plVar = local_c8` 直接符号形 ✓
 （canon 的 `local_d0 = retaddr` 15 处拼写族按 §9.1 证伪边界豁免）。
+
+## §10 W1b 交付记录（Lane W1B，2026-09-25，基=亲父 1de6dd39=master TYPEFIX 后）
+
+curl 语料卷入：manifest 入库 + curl 驱动 opt-in 门，**零 src/ 改动**
+（BRIDGE1+TYPEFIX 后库侧通道在位，本波纯驱动/数据域）。
+
+### 10.1 manifest（`tests/golden/manifests/local_seed_curl_1204.json`）
+
+- harvest：BRIDGE1 方法原样（`tools/harvest_local_manifest.py` over
+  `tests/golden/ghidra_curl_1204.c`，oracle commit e40ed130 + golden
+  sha256 指纹齐备）——**3 函数 / 16 种子**：main 1（`int local_230`）、
+  helpf 13（`undefined1 local_b8[8]` + 12×`undefined8 local_*`）、
+  parseconfig 1（`char *local_160`）。
+- KNOWN_BASES 剔除生效：getparameter 的 `Configurable *local_5b8` /
+  `HttpPost *local_5a8`（结构体指针基，post-TYPEFIX parse_c_type
+  no-fallback bail ⇒ 若入库即为死条目，harvest 同逻辑剔除）；golden
+  内 18 个 distinct local_ 名全部归账（16 收 + 2 剔）。
+- 域边界（与 §9.2 一致）：curl golden 的具名 local 以 DWARF 语义名为主
+  （urlnum/urls/outs/heads/usedarg/filebuffer/ap(va_list) 等），名字不
+  内嵌偏移 ⇒ 保守 local_ 域不收（DWARF-named 扩展 = 独立后续 lane，
+  需 .debug_loc 位置表 fbreg→stack 偏移换算 + W0 `<localdb>` XML 交叉
+  验证；getparameter 结构指针基依赖 C4 组合类型通道）。
+
+### 10.2 驱动接线（`examples/curl_decompile.rs`，镜像 httpd 侧门）
+
+- `RUGRA_TYPESEED=1`（`RUGRA_TYPESEED_MANIFEST` 覆写路径，默认
+  `tests/golden/manifests/local_seed_curl_1204.json`）→ worker 进程
+  `decompile_request` 在 fd 构建后、perform_action 前把 canon 地址键
+  （vaddr+0x100000）的种子挂到 `fd.committed_locals`（`<localdb>`
+  transport 位；worker 子进程继承控制器 env ⇒ 同门；原型 pre-pass
+  永不播种——镜像 httpd 只在反编译线程播种的边界）。
+- OnceLock 每进程一次装载；**默认路径构造性恒等**：env 未设 →
+  无 manifest IO、committed_locals 恒空，亲父 cmp 字节恒等（实测）。
+- 镜像门恒不装载：任一 mirror 分量（RUGRA_MIRROR/RUGRA_FLOW_MIRROR/
+  RUGRA_BARE_LOAD/RUGRA_ORACLE_FIXTURE_DATA）在场即拒绝并告警；
+  实测 RUGRA_MIRROR=1+TYPESEED=1 输出与纯 mirror 运行 cmp 恒等。
+
+### 10.3 W1b 验收（亲测，基=亲父 1de6dd39）
+
+| 门禁 | 默认（无 env） | opt-in（RUGRA_TYPESEED=1） |
+|---|---|---|
+| curl E2E canon | **1099/0/0**，cmp 亲父字节恒等 | **1054/0/0**（−45） |
+| httpd E2E canon | **1472/0/0**（=亲父，例程未触碰） | **1360/0/0**（=BRIDGE1 见证复现） |
+| 投影银行 | —（frozen 钉） | mirror 门恒不装载 |
+| gcc 审计 | 103 OK/21 FAIL | fail 集逐名相同（零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+
+逐函数（全部改善、0 回退；121 个未播种函数字节恒等）：main 212→206、
+helpf 75→50、parseconfig 73→59。播种函数零回退硬门 ✓。
+
+−45 vs 目标 −50 的差额归因（域内无可收余量）：helpf 余 50 =
+va_list ap typedef 族（DWARF-named 域）+ 寄存器溢出赋值吸收族
+（库级 typeprop 域，与 §9.3 下标形残差同族）+ `&stack0x8` 拼写；
+parseconfig 余 59 = usedarg/filebuffer（DWARF-named bool）+ 临时编号
+偏移 + 字符串常量形（C5-邻域）；main 余 206 = urlnum/urls/outs/heads/
+progressbar/fileinfo/errorbuffer（DWARF-named/结构体域）。
