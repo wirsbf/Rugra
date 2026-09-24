@@ -2653,3 +2653,28 @@ funcdata` 批（单线程）17 failed==master 逐字（branch 40 passed 含新�
 ret 3-op 形=RUGRA-GLUE RET-OP3-0001 锁定 sla `:RET` 模板（RIP=LOAD(ram[RSP])；
 RSP=INT_ADD(RSP,8)；RETURN[RIP]），x86_lift.rs 已有 oracle 探针证据。生产代码
 零改动（本文件改动全部位于 `#[cfg(test)]`）。
+
+## 2026-09-24：inject_raw_ops_single 补 PcodeEmitFd::dump 的 newVarnode 尾（Lane CURB）
+
+`inject_raw_ops_single`（`PcodeEmitFd::dump` 的对端口，funcdata.cc:878-908）
+此前对非 const 输入与输出直接走 `vbank.create_with_space`/`create_def_with_space`
+裸建——丢掉了 oracle `Funcdata::newVarnode`/`newVarnodeOut`
+（funcdata_varnode.cc:148-169 / 104-122）的 queryProperties 符号尾
+（`localmap->queryProperties` → `setSymbolProperties`/`setFlags`）与
+assignHigh。现在：
+
+- 输出腿=`new_varnode_out_full`（createDef+setOutput+assignHigh+laned 探针+
+  符号尾，usepoint=op 地址）；
+- 非 const 输入腿=`new_varnode_in_space`（create+assignHigh+laned+符号尾，
+  usepoint=invalid），常量输入保持 `create_constant`（符号尾对 const space
+  恒 0；dump 期常量的 assignHigh 残差登记 CONST-IMPORT-ASSIGNHIGH-0001）。
+
+符号尾是导入期的属性通道：Database flagbase 的 readonly 属性范围与
+全局符号命中在此落到自由 ram varnode 上——PLTSTUB-THUNKRELRO-0001 的
+`.got`（RELRO）readonly 范围经此挂上 PLT 桩 `BRANCHIND(ram:0x16e90)` 输入
+varnode，`JumpBasic::findNormalized`（jumptable.cc:1212-1230）的单分支
+readonly 救援随即读 GOT 槽值（驱动镜像已施加 JUMP_SLOT/GLOB_DAT 外部符号
+重定位）成单元素表，`sanityCheck`（jumptable.cc:2297-2320）距离>0xffff 判
+thunk → fail_thunk → 无警告 CALLIND。投影银行 8/8 MATCH、curl/httpd 全量
+逐函数 0 回退实证该尾对其余函数面行为中性（这些函数的自由 ram 输入在
+其 DB 环境无符号命中、属性为 0）。

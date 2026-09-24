@@ -553,6 +553,35 @@ struct DecompileRequest {
     /// range source (`Database::setPropertyRange(Varnode::readonly, ...)`,
     /// the loader registration channel of architecture.cc:1371-1383).
     rodata_span: Option<(u64, u64)>,
+    /// `.got` section extent `(base_vaddr, size)` — PLTSTUB-THUNKRELRO
+    /// (CURB lane): the second readonly property range, mirroring the
+    /// analyzeHeadless Program environment for the RELRO-covered GOT.
+    /// The locked curl input carries PT_GNU_RELRO (0x16c48..0x17000,
+    /// read-only, BIND_NOW) over the whole `.got` section, and Ghidra's
+    /// ELF loader surfaces that as a read-only memory block, which the
+    /// Java protocol's `<hole readonly>`/symbol-property responses install
+    /// as `Database::setPropertyRange(Varnode::readonly, ...)` ranges
+    /// (database_ghidra.cc:84-91/158-166). The decompiler consumer chain
+    /// — `Funcdata::newVarnode`'s `localmap->queryProperties` tail
+    /// (funcdata_varnode.cc:161-166) attaching Varnode::readonly to free
+    /// ram varnodes, then JumpBasic::findNormalized's single-branch
+    /// readonly rescue (jumptable.cc:1212-1230) reading the slot through
+    /// MemoryImage — is what turns every PLT stub's `jmp *[GOT]` into the
+    /// one-entry address table that JumpTable::sanityCheck classifies as a
+    /// thunk (jumptable.cc:2297-2320: single entry at offset 0 or farther
+    /// than 0xffff → JumptableThunkError → Funcdata::stageJumpTable's
+    /// fail_thunk, funcdata_block.cc:539-540 → FlowInfo::
+    /// truncateIndirectJump's warning-free CALLIND arm, flow.cc:741-745).
+    /// Locked-oracle witness: golden 0x102310 strcpy / 0x102320 puts print
+    /// the `(*(code *)PTR_... )()` call body with NO jumptable warnings
+    /// while the pre-fix output emitted "Could not recover jumptable" +
+    /// "Treating indirect jump as call" (fail_normal). Only PLT stubs
+    /// reference `.got` slots directly, so the range cannot perturb the
+    /// bare-BFD projection bank (next_url/match_url/... never touch it),
+    /// and `readonlypropagate=false` (architecture.cc:1427 default, never
+    /// enabled here) keeps ActionVarnodeProps' fillinReadOnly arm off, so
+    /// the PTR_ display forms survive exactly as in the golden.
+    got_span: Option<(u64, u64)>,
     /// MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
     /// name, byte size, is-pointer-slot) — ELF OBJECT symbols, GOT PTR_
     /// labels and .data PTR_DAT_ pointer labels the worker installs into
@@ -1153,6 +1182,76 @@ fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
             if vaddr < dst_end {
                 image[vaddr..dst_end].copy_from_slice(&src[..dst_end - vaddr]);
             }
+        }
+    }
+    // PLTSTUB-THUNKRELRO-0001 (image half): Ghidra's ELF loader applies the
+    // dynamic relocation table into the loaded Program image by default
+    // (ElfLoaderOptions APPLY_RELICATIONS/APPLY_RELOCATIONS=true), so the
+    // oracle's decompiler LoadImage reads RELOCATED `.got` bytes: every
+    // external-symbol JUMP_SLOT (.rela.plt) / GLOB_DAT (.rela.dyn) slot
+    // holds the import's EXTERNAL-block slot address (ElfProgramBuilder
+    // getNextExternalBlockEntryAddress order — the same slot table
+    // EXTERNAL-STUB-SUPPORT-0001 renders), NOT the file's lazy PLT
+    // back-pointer (e.g. GOT[0x16e90] file 0x2050 vs relocated 0x19018).
+    // That relocated value is the decisive input of JumpBasic::
+    // findNormalized's single-branch readonly rescue (jumptable.cc:1225
+    // MemoryImage read) and of JumpTable::sanityCheck's thunk distance
+    // test (jumptable.cc:2307-2320: single entry farther than 0xffff →
+    // JumptableThunkError → fail_thunk → warning-free CALLIND). RELATIVE
+    // (type 8) entries are NOT rewritten: at load base 0 the applied value
+    // equals the file's link-time addend, so skipping them leaves the
+    // bytes identical.
+    {
+        const R_X86_64_GLOB_DAT: u32 = 1;
+        const R_X86_64_JUMP_SLOT: u32 = 7;
+        let external_base = external_block_base(elf);
+        let external_imports = collect_external_imports(elf);
+        let external_slot_of: std::collections::HashMap<&str, u64> =
+            external_imports
+                .iter()
+                .enumerate()
+                .map(|(index, import)| {
+                    (import.name.as_str(), external_base + 8 * index as u64)
+                })
+                .collect();
+        let mut apply_import_reloc = |image: &mut [u8],
+                                      reloc_type: u32,
+                                      reloc_sym: usize,
+                                      reloc_offset: u64| {
+            if reloc_type != R_X86_64_GLOB_DAT && reloc_type != R_X86_64_JUMP_SLOT {
+                return;
+            }            let Some(sym) = elf.dynsyms.get(reloc_sym) else {
+                return;
+            };
+            if sym.st_shndx != 0 {
+                return; // Defined symbols keep their file values.
+            }
+            let Some(name) = elf.dynstrtab.get_at(sym.st_name) else {
+                return;
+            };
+            let Some(&slot) = external_slot_of.get(name) else {
+                return;
+            };
+            let offset = reloc_offset as usize;
+            if let Some(bytes) = image.get_mut(offset..offset + 8) {
+                bytes.copy_from_slice(&slot.to_le_bytes());
+            }
+        };
+        for reloc in elf.pltrelocs.iter() {
+            apply_import_reloc(
+                &mut image,
+                reloc.r_type,
+                reloc.r_sym,
+                reloc.r_offset,
+            );
+        }
+        for reloc in elf.dynrelas.iter() {
+            apply_import_reloc(
+                &mut image,
+                reloc.r_type,
+                reloc.r_sym,
+                reloc.r_offset,
+            );
         }
     }
     image
@@ -3602,7 +3701,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     // undefined8 unlocked; witness completed_8061 printing
                     // identically either way).
                     if pointer_slot {
-                        DebugGlobalDatabase::seed_global_locked(
+                        let seeded = DebugGlobalDatabase::seed_global_locked(
                             &mut db,
                             global,
                             address,
@@ -3610,6 +3709,37 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                             dtype.clone().unwrap(),
                             size,
                         );
+                        // PLTSTUB-THUNKRELRO-0001: GOT label symbols inside
+                        // the RELRO `.got` range carry the readonly symbol
+                        // flag, mirroring the Java protocol's symbol
+                        // serialization for read-only memory blocks: a
+                        // symbol's `<mapsym>` flags include the block's
+                        // readonly property, and ScopeGhidra::dump2Cache
+                        // (database_ghidra.cc:158-166) both caches it as a
+                        // property range and leaves it on the Symbol. On the
+                        // decompiler side the queryProperties walk hands the
+                        // entry to Varnode::setSymbolProperties
+                        // (funcdata_varnode.cc:163-164), whose
+                        // setFlags(entry->getAllFlags()) (varnode.cc:422,
+                        // getAllFlags = extraflags | symbol flags,
+                        // database.hh:271) is the oracle's import-time route
+                        // to the readonly bit on the free ram varnode that
+                        // JumpBasic::findNormalized's single-branch rescue
+                        // (jumptable.cc:1212-1230) consumes. The PTR_DAT_
+                        // pointer layer outside `.got` stays unflagged —
+                        // `.data` is a writable block in the oracle Program.
+                        if let (Some(symbol_id), Some((base, span_size))) =
+                            (seeded, request.got_span)
+                        {
+                            if address >= base && address < base + span_size {
+                                db.set_symbol_flag(
+                                    global,
+                                    symbol_id,
+                                    rugra::database::symbol_flags::READONLY,
+                                    true,
+                                );
+                            }
+                        }
                     } else {
                         db.add_symbol_mapped(global, name, dtype, Address::new(address), size);
                     }
@@ -3637,6 +3767,22 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     }
                 }
                 if let Some((base, size)) = request.rodata_span {
+                    if let Some(rng) = rugra::address::Range::new(
+                        Address::new(base),
+                        Address::new(base + size - 1),
+                    ) {
+                        db.set_property_range(
+                            rugra::database::symbol_flags::READONLY,
+                            rng);
+                    }
+                }
+                // PLTSTUB-THUNKRELRO-0001: the RELRO-covered `.got` extent
+                // joins the readonly property ranges (full-analysis Program
+                // environment only — the bare-BFD mirror branch above keeps
+                // its LoadImageBfd::getReadonly mirror untouched, since the
+                // bare oracle loads no RELRO flags for .got and the
+                // projection bank's PLT-free functions never touch it).
+                if let Some((base, size)) = request.got_span {
                     if let Some(rng) = rugra::address::Range::new(
                         Address::new(base),
                         Address::new(base + size - 1),
@@ -5081,6 +5227,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // B3-COREACTION-CONSTANTPTR-0001 (b): `.rodata` extent for the readonly
     // property range (the a0 layer's reserved consumers).
     let mut rodata_span: Option<(u64, u64)> = None;
+    // PLTSTUB-THUNKRELRO-0001: the `.got` extent for the second readonly
+    // property range (see WorkerRequest::got_span for the full oracle
+    // chain). PT_GNU_RELRO covers the section in the locked input.
+    let mut got_span: Option<(u64, u64)> = None;
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
     // MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
     // name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
@@ -5239,6 +5389,27 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     break;
                 }
+            }
+        }
+
+        // PLTSTUB-THUNKRELRO-0001: capture the `.got` section extent. The
+        // locked curl input's PT_GNU_RELRO segment (R, covers 0x16c48..
+        // 0x17000) contains the whole section, and BIND_NOW makes the
+        // linker's own final state read-only — the analyzeHeadless ELF
+        // loader's memory-block flag the golden's thunk path observably
+        // consumed. Zero-sized sections are skipped (Range::new requires
+        // base <= last).
+        for header in elf.section_headers.iter() {
+            if elf.shdr_strtab.get_at(header.sh_name) == Some(".got")
+                && header.sh_size > 0
+            {
+                got_span = Some((header.sh_addr, header.sh_size));
+                eprintln!(
+                    "[PREPASS] .got readonly span (PLTSTUB-THUNKRELRO-0001): 0x{:x}..0x{:x}",
+                    header.sh_addr,
+                    header.sh_addr + header.sh_size - 1
+                );
+                break;
             }
         }
 
@@ -5824,6 +5995,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     .map(|(&address, name)| (address, name.clone()))
                     .collect(),
                 rodata_span,
+                got_span,
                 db_symbol_entries: db_symbol_entries.clone(),
                 // CURL-CODEREF-SYMBOLIZE-0001: the print-side function
                 // registry (see the build site above).

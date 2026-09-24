@@ -7012,29 +7012,24 @@ impl Funcdata {
             // PcodeEmitFd::dump: the output varnode is created between
             // newOp and opSetOpcode, before any input (funcdata.cc:884-890).
             if let Some(out_raw) = raw.output() {
-                // newVarnodeOut → VarnodeBank::createDef (ctor flags +
-                // written|coverdirty from setDef + insert from xref).
-                let out_vn = self.vbank.create_def_with_space(
+                // newVarnodeOut → VarnodeBank::createDef + op->setOutput +
+                // assignHigh + laned probe + the queryProperties symbol tail
+                // with usepoint = op->getAddr() (funcdata_varnode.cc:104-122,
+                // FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001). The pre-fix direct
+                // create_def_with_space + laned probe dropped assignHigh and
+                // the symbol tail — the tail is what attaches
+                // Database::setPropertyRange flags (PLTSTUB-THUNKRELRO-0001:
+                // Varnode::readonly on the RELRO `.got` range, consumed by
+                // JumpBasic::findNormalized's single-branch readonly rescue,
+                // jumptable.cc:1212-1230) to import-time free ram varnodes
+                // the way the oracle's PcodeEmitFd::dump does.
+                let out_vn = self.new_varnode_out_full(
                     out_raw.size,
                     out_raw.space,
-                    out_raw.offset,
-                    &op_ref.0,
+                    crate::address::Address::new(out_raw.offset),
+                    &op_ref,
                 );
                 op_ref.0.write().unwrap().output = Some(out_vn);
-                // funcdata.cc:890's newVarnodeOut leg carries the laned-
-                // register probe (funcdata_varnode.cc:113
-                // `if (s >= minLanedSize) checkForLanedRegister(s,m)`),
-                // which this direct materialization must not drop: the
-                // 16-byte LOAD outputs feeding ActionLaneDivide's unique-
-                // space splits (match_url ordinal 29) enter the laned map
-                // here (ARCH-REGISTERDATA-LANE-0001).
-                if out_raw.size >= self.min_laned_size as usize {
-                    self.check_for_laned_register(
-                        out_raw.size,
-                        out_raw.space,
-                        crate::address::Address::new(out_raw.offset),
-                    );
-                }
             }
             // funcdata.cc:891: opcode assignment follows output creation and
             // precedes the input walk.  Besides opcode-derived flags this also
@@ -7071,27 +7066,30 @@ impl Funcdata {
                 let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank
-                        .create_with_space(
-                        input_raw.size,
-                        input_raw.space,
-                        input_raw.offset)
-                };
-                in_vn.write().unwrap().add_descend(&op_ref.0);
-                op_ref.0.write().unwrap().inrefs.push(in_vn);
-                // newVarnode's laned-register probe (funcdata_varnode.cc:160
-                // `if (s >= minLanedSize) checkForLanedRegister(s,m)`): the
-                // STORE-side whole-register reads share the laned map key
-                // with the defining output (ARCH-REGISTERDATA-LANE-0001).
-                if input_raw.space != crate::space::AddressSpace::Const
-                    && input_raw.size >= self.min_laned_size as usize
-                {
-                    self.check_for_laned_register(
+                    // funcdata.cc:899: vn = fd->newVarnode(vars[i].size,
+                    // vars[i].space, vars[i].offset) — the FULL newVarnode:
+                    // vbank.create + assignHigh + laned probe + the
+                    // queryProperties symbol tail (funcdata_varnode.cc:148-169
+                    // via the explicit-space overload cc:239-246). The
+                    // pre-fix bare create_with_space dropped assignHigh and
+                    // the tail; the tail is the import-time property channel
+                    // (PLTSTUB-THUNKRELRO-0001's Varnode::readonly on `.got`
+                    // free ram varnodes — JumpBasic::findNormalized's
+                    // readonly rescue, jumptable.cc:1212-1230 — and the
+                    // global-scope symbol attach the oracle performs at dump
+                    // time). Constants keep create_constant: the tail's
+                    // property closure is hard-zero for the const space and
+                    // assignHigh for dump-time constants stays a declared
+                    // residual (CONST-IMPORT-ASSIGNHIGH-0001) to avoid
+                    // perturbing the verified constant channels.
+                    self.new_varnode_in_space(
                         input_raw.size,
                         input_raw.space,
                         crate::address::Address::new(input_raw.offset),
-                    );
-                }
+                    )
+                };
+                in_vn.write().unwrap().add_descend(&op_ref.0);
+                op_ref.0.write().unwrap().inrefs.push(in_vn);
             }
         }
     }
