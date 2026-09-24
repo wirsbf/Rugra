@@ -733,7 +733,7 @@ printc.cc:2260/2518/2497）：
   - 扩展 `build_rpn_token_table`，新增 4 个 OpToken（字段逐项对齐 printc.cc:25/26/33/35）：`pointer_member`（`->`，binary prec 66 assoc）、`object_member`（`.`，binary prec 66 assoc）、`typecast`（`(`/`)` presurround prec 62）、`addressof`（`&` unary prefix prec 62）。
   - 在 `dispatch_op_rpn` 新增 `CPUI_PTRSUB` 分支：忠实移植 opPtrsub 的 struct/union（`[&]ptr->field`）、array（`*ptr`）与无类型回退（`ptr->field_0x<hex>` / `ptr[off]`）发射形态；Rugra 无 TypePointerRel，`ptrel` 分支塌缩为 `ct = ptype->getPtrTo()`（与 legacy `op_ptrsub` 一致）。
 - 2026-08-25（B3-COREACTION-CONSTANTPTR-0001 段(b)）：RPN 路径补齐 TYPE_SPACEBASE 臂（printc.cc:1057-1097，此前 RPN 恒落 `field_0x` 回退）。symbol 经 in(1) high 的 linkSymbolReference 附件（namerec 残留未接，打印侧替代为同一 queryContainer 通道：global scope + 空 usepoint）；ARRAY symbol 按 cc:1062-1070 弃 `&`；`!valueon` 发 `&name`；无 symbol 走 `0x<hex>` 无名位置；arrayvalue 后置 `[0]`。hugehelp 六别名经此臂渲染 `&DAT_00107180/…99a8/…c1d8`（与 golden 逐字节一致）。
-  - **R-RAWQUAR F3 登记（2026-08-25）**：该臂两分支缺口登记 TODO 并入 ALIGNMENT_ROADMAP printc 行——①`PRINTC-SPACEBASE-TYPECODE-0001`（printc.cc:1068-1069 `TYPE_CODE → valueon=true`：函数符号不打 `&`；program-DB hit 只带 type_metatype、driver DAT 层无 CODE 条目，现管线不可达）；②`PRINTC-SPACEBASE-PARTIALSYM-0001`（printc.cc:1084-1093 `symbolOffset≠0 → pushPartialSymbol`：mid-symbol 命中打子字段；容器查询 stand-in 无 symbol-offset 通道且 ConstantPtr 路径 off 恒 0，现管线不可达；解锁依赖 FUNCDATA-LINKSYMBOL 的 high→symbol 附着通道）。
+  - **R-RAWQUAR F3 登记（2026-08-25；①已于 2026-09-24 解锁，见文末 HTTPD-CODEREF-SYMBOLIZE-0001 节）**：该臂两分支缺口登记 TODO 并入 ALIGNMENT_ROADMAP printc 行——①`PRINTC-SPACEBASE-TYPECODE-0001`（printc.cc:1068-1069 `TYPE_CODE → valueon=true`：函数符号不打 `&`；已随 driver 函数符号 DB 的 CODE 条目接通）；②`PRINTC-SPACEBASE-PARTIALSYM-0001`（printc.cc:1084-1093 `symbolOffset≠0 → pushPartialSymbol`：mid-symbol 命中打子字段；容器查询 stand-in 无 symbol-offset 通道且 ConstantPtr 路径 off 恒 0，现管线不可达；解锁依赖 FUNCDATA-LINKSYMBOL 的 high→symbol 附着通道）。
   - 在 `dispatch_op_rpn` 新增 `CPUI_CAST` 分支：忠实移植 opTypeCast 的 array-decay `&in0` 短路与 `(type)in0` 主路径；`typecast` 是 presurround，RPN emit 机制自动产生 `(typename)operand`。
 - **隐式内联打通**：为让 PTRSUB/CAST（消费时一定是 implied）真正进入 dispatch，引入 `rpn_push_in(op_arc, op, slot, m)`——忠实 `PrintLanguage::pushVn`（printlanguage.cc:197）的 nodepend 记录语义。`COPY`/`LOAD`/`PTRSUB`/`CAST` 的操作数改为走 `rpn_push_in`，由 `rpn_recurse`（printlanguage.cc:514）按 implied 标志决定内联 def 或推叶子 atom。此前各 dispatch 分支直接 `make_atom_for_vn + rpn_push_atom`，等价于只走 `pushVnExplicit` 叶子路径，导致所有 implied def（含 PTRSUB/CAST）永不被内联。**2026-08-23 扩展**：二元/一元算术、STORE、CALL、RETURN、CBRANCH、PTRSUB 变址回退与 INT_ADD 字段短路的全部操作数位同步接通（见上文 PRINTC-UNLINKED-REF-0001 节），implied 内联覆盖所有表达式位。
 - **当前生效限制（诚实声明）**：`CPUI_PTRSUB`/`CPUI_CAST` op 目前在 curl/httpd 中**不被产生**——Rugra 缺少 `RulePtrsub`（INT_ADD→PTRSUB 的创建规则，ruleaction.cc，仅移植了 `RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo` 这类消费现有 op 的规则），且 `ActionSetCasts::castInput` 的 PTRADD/PTRSUB pointer-fit 检查与 castOutput 延后（coreaction.rs:2893-2897 注释），故 CAST 创建对 curl 当前类型推断结果不触发（`cast_standard_full` 返回 None）。本 PR 的 dispatch 分支已就位且经过 Ghidra 行逐行核对，待上述底层 infra 补齐后即生效。
@@ -2580,3 +2580,43 @@ lib 串行 1650/18(失败集=既有 flaky 家族)。
   RESIDMAP-PLTSTUB-VARTYPE-0001)②警告 3 行(PLTSTUB-WARNLOSS/JUMPTABLE
   域));free/puts 等 void stub 体 `(*(code *)PTR_free_00116e80)();` 全
   canon MATCH;gcc 审计 82→104 OK。
+
+## 2026-09-24（HTTPD-CODEREF-SYMBOLIZE-0001）：常量叶片函数符号化 + opPtrsub TYPE_CODE 臂接通
+
+httpd L1 破零车道（wt/l1zero）。canon golden（analyzeHeadless 产物）对
+分析器发现的代码引用函数印 `FUN_0012dc80` 形（如
+`apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)`），Rugra 此前印
+`0x2dc80`。oracle 的类型运输链 = Parameter ID 分析器把锁定函数指针类型
+挂在参数上（typeop.cc:703-708 TypeOpCall::getInputLocal 的 locked-param
+臂）→ ActionInferTypes 经 HighVariable 播类型（coreaction.cc:5016-5036）
+→ pushConstant TYPE_PTR→TYPE_CODE 臂（printc.cc:1786-1788）→
+`pushPtrCodeConstant`（cc:1730-1742：默认代码空间 + 全局 scope
+`queryFunction` → displayName 原子）。Rugra 打印侧叶片追查绕过携带注解的
+SSA varnode（legacy value_def_map 侧表），常量叶片可能无类型到达。三处落地：
+
+- **`constant_leaf_text` 的 None/Unknown 臂**接 `code_entry_constant_text`
+  （RUGRA-GLUE，driver-transport 包装：sentinel `code*` 指针类型走既有
+  `ptr_code_constant_text` 的 cc:1730 解析链，无 cast 前缀）；同时在
+  read-facing high 缺答时回退咨询 `vn.v_type`（驱动参数锁注解的落点）。
+  仅函数入口地址解析成功，整数常量保持 hex/dec 形态。
+- **`op_ptrsub` 的 TYPE_SPACEBASE 臂补 cc:1068-1069**
+  （`PRINTC-SPACEBASE-TYPECODE-0001` 解锁）：容器命中符号的 metatype 为
+  CODE 时 `valueon = true`——函数符号不打 `&`（canon
+  `apr_pool_cleanup_kill(V,V,FUN_0012dc80)` 裸名实参形态）。解锁前提 =
+  driver 侧符号 Database 的全局 scope 经 `Scope::add_function` 注册函数
+  符号携带 Code 类型（database.cc:514-520 buildType），CODE 命中可达。
+- 驱动层（examples/httpd_decompile.rs）：反汇编流 const 空间输入收割 +
+  exec-range/已知入口/endbr64 三门验证为分析器函数发现面；打印期
+  per-function Architecture 克隆挂只读符号 DB（action 侧查询通道保持
+  channel-absent，canon 基线管线语义不变）；函数块间发射双空行分隔
+  （golden emitter 布局，`}\n\n\n/* ----`）。
+
+门禁（基线=亲父 b25bce7a）：httpd 门禁面 2072→**2070/0/0**（ap_pregfree
+2→0，首个真代码函数体逐字节 MATCH）；httpd 全量 25997→25989/0/0，
+**byte-exact 真代码 0→11**（ap_pregfree/ap_close_piped_log/
+ap_create_request_config 等）；curl 1995/0/0 字节恒等；三投影
+next_url/match_url/parseconfig MATCH 保持；getparameter ord351/
+myprogress ord399/httpd main ord83 前沿不动。gcc 审计 8OK→7OK：
+ap_pregfree 孤立块引用 `FUN_0012dc80` 无前向声明——canon golden 孤立块
+同形（FUN_ 定义块在 golden:5034，Rugra 29 函数门禁面不含该块），非打印
+缺陷。

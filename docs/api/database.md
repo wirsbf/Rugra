@@ -475,3 +475,24 @@ equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签�
   global-discovery uselimit 清空 / 空 uselimit → symbol ADDRTIED + flagbase
   property 折叠；label entry 的 extraflags 随 addMapInternal 取
   `Varnode::mapped`）。findCodeLabel 的 `inUse(addr)` 由 addrtied 腿放行。
+
+## 2026-09-24（HTTPD-CODEREF-SYMBOLIZE-0001）：add_function 补 FunctionSymbol::buildType + addMap 折叠旗标
+
+`Scope::add_function`（database.cc:1615）此前只建 `type_name=="func"` 的
+裸符号；函数符号的两段语义缺失使打印侧容器命中读不到 CODE metatype：
+
+- **FunctionSymbol::buildType（database.cc:514-520）**：符号数据类型 =
+  `TypeFactory::getTypeCode()` 的泛型 code 类型，且符号携带
+  `namelock|typelock`。`add_function` 现在置 `dtype=Code` +
+  `NAMELOCK|TYPELOCK`——`find_container` 命中透出 metatype，PrintC
+  opPtrsub 的 spacebase 臂（printc.cc:1068-1069）据此对函数符号不打 `&`。
+- **Scope::addMap 折叠（database.cc:1131-1133, 1147-1151）**：全局 scope
+  上的整图点积分置 `persist`；合法地址 + 空 uselimit 置 `addrtied`（两
+  旗标在 addMapInternal 前折进符号 flags）。`addrtied` 是
+  `SymbolEntry::inUse`（database.cc:114-119）的载荷语义——地址绑定条目
+  对任意 usepoint 有效，包括 linkSymbolReference 与打印侧 spacebase 查询
+  携带的 invalid usepoint。与 2026-08-29 节的 `apply_add_map_rules` 同源
+  语义，在 addFunction 的整图条目路径上内联。
+
+消费方=examples/httpd_decompile.rs 打印期符号 DB（canon golden 的
+analyzeHeadless 函数符号层）；门禁数据见 docs/api/printc.md 同日节。

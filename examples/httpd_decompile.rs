@@ -583,6 +583,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // HTTPD-CODEREF-SYMBOLIZE-0001: constants in the raw P-code of the
+    // analyzed face that reference code addresses. Ghidra's analyzeHeadless
+    // front-end (the canon golden's producer, per
+    // tests/golden/ghidra_httpd_1204.provenance.json: "analyzeHeadless
+    // defaults") follows code references and creates a Function at valid
+    // entry targets even when nothing CALLS them directly — e.g. the
+    // cleanup callback at 0x12dc80 (endbr64; sub rsp,8; call ap_regfree;
+    // xor eax,eax; ret) passed BY CONSTANT to apr_pool_cleanup_kill in
+    // ap_pregfree/ap_pregcomp. The canon golden prints it as
+    // `FUN_0012dc80` (printc.cc:1730 pushPtrCodeConstant → global-scope
+    // queryFunction finds the analyzer-created function). Validation of
+    // the candidates happens after the prepass loops (see
+    // is_function_entry below); here we only harvest const-space inputs.
+    let mut const_code_refs: Vec<u64> = Vec::new();
+
     for &(vaddr, size, file_offset, ref name) in functions.iter().take(max_functions + 50) {
         if size < 5 { continue; }
         let max_size = std::cmp::min(size, 4096);
@@ -609,6 +624,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
             }
             raw_ops.extend(ops);
+        }
+        // HTTPD-CODEREF-SYMBOLIZE-0001: harvest const-space input offsets
+        // (COPY of an immediate into an arg register lifts as
+        // `COPY const:0xVAL -> RDX`). No filtering here — the exec-range
+        // and entry-validity gates run post-prepass.
+        for op in &raw_ops {
+            for inv in op.inputs() {
+                if inv.space == rugra::space::AddressSpace::Const {
+                    const_code_refs.push(inv.offset);
+                }
+            }
         }
         let mut fd = Funcdata::new(name, Address::new(vaddr), size as i32);
         fd.inject_raw_ops(&raw_ops);
@@ -647,6 +673,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("[PREPASS] Collected {} prototypes ({} from call targets)", prototype_db.len(), call_targets.len());
 
+    // HTTPD-CODEREF-SYMBOLIZE-0001: validate the harvested const-space code
+    // references into function-entry candidates. A candidate is a function
+    // entry iff (a) it falls inside an executable section, and (b) it is
+    // already a known entry (ELF symbol or call target) OR its first 4
+    // bytes are the endbr64 CET function-start mark (f3 0f 1e fa — the
+    // same entry-candidate signal scan_switch_default_handlers uses at
+    // the disassembly level). This mirrors the analyzeHeadless front-end's
+    // reference following: it creates Functions at code addresses
+    // referenced from analyzed code, default-named FUN_<image-base addr>.
+    // Non-code constants (rodata strings, small ints, masks) fail (a) or
+    // (b) and keep their current hex/string rendering.
+    let exec_ranges: Vec<(u64, u64)> = if let Object::Elf(ref elf) = obj {
+        elf.section_headers
+            .iter()
+            .filter(|h| h.sh_flags & 0x4 != 0) // SHF_EXECINSTR
+            .map(|h| (h.sh_addr, h.sh_addr + h.sh_size))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let known_entries: std::collections::HashSet<u64> =
+        functions.iter().map(|f| f.0).chain(call_targets.iter().copied()).collect();
+    let mut code_ref_fn_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for addr in const_code_refs {
+        if !exec_ranges.iter().any(|&(lo, hi)| addr >= lo && addr < hi) {
+            continue;
+        }
+        if known_entries.contains(&addr) {
+            code_ref_fn_entries.insert(addr);
+            continue;
+        }
+        let has_endbr64 = addr_to_fileoff(addr)
+            .map(|(off, _)| off + 4 <= buffer.len() && buffer[off..off + 4] == [0xf3, 0x0f, 0x1e, 0xfa])
+            .unwrap_or(false);
+        if has_endbr64 {
+            code_ref_fn_entries.insert(addr);
+        }
+    }
+    eprintln!(
+        "[PREPASS] HTTPD-CODEREF-SYMBOLIZE-0001: {} code-ref function entries",
+        code_ref_fn_entries.len()
+    );
+
     // HTTPD-URAM-SYMBOLIZE-0001: default names for analysis-discovered
     // functions. Ghidra's front-end creates a Function for every call target
     // its analysis follows that no ELF symbol covers (httpd's shared tail
@@ -658,8 +727,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // queryCall → setFuncdata → opCall chain as named thunks then prints
     // `FUN_0012c960(...)` at call sites. Thunk entries already carry their
     // import names, so they are excluded here.
+    // HTTPD-CODEREF-SYMBOLIZE-0001 extends the entry set with the
+    // code-reference entries validated above (same FUN_ naming channel:
+    // the canon golden prints `FUN_0012dc80` for the cleanup-callback
+    // constant in ap_pregfree, via printc.cc:1730 pushPtrCodeConstant's
+    // queryFunction on the analyzer-created function).
     const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
-    for &target in &call_targets {
+    let analysis_discovered: Vec<u64> = call_targets
+        .iter()
+        .copied()
+        .chain(code_ref_fn_entries.iter().copied())
+        .collect();
+    for &target in &analysis_discovered {
         if symbol_table.contains_key(&target) || plt_imports.contains(target) {
             continue;
         }
@@ -755,6 +834,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect()
     } else { Vec::new() };
 
+    // HTTPD-CODEREF-SYMBOLIZE-0001 (print-side symbol Database): the
+    // global-scope function map the canon oracle harness carries. The canon
+    // golden's producer (analyzeHeadless) registers EVERY discovered
+    // function as a FunctionSymbol in the global scope (database.cc:1615
+    // Scope::addFunction via the front-end symbol layer); PrintC::opPtrsub's
+    // spacebase arm (printc.cc:1057-1097) then resolves a code-address
+    // constant through queryContainer and prints the function symbol BARE
+    // (cc:1068-1069 TYPE_CODE drops the '&') — the canon `FUN_0012dc80`
+    // argument form. Entries: canon mode = ELF-defined functions ∪
+    // analyzer-discovered (call targets ∪ validated code references);
+    // mirror mode (bare-BFD harness parity, EG2/FI) = dynsym-defined
+    // functions only — the direct-runner oracle registers no
+    // analyzer-discovered functions. consume_size = 1
+    // (glb->min_funcsymbol_size default, architecture.cc).
+    //
+    // PRINT-ONLY install: the Database is attached to a per-function clone
+    // of the Architecture AFTER the action pipeline finishes (right before
+    // PrintC::doc_function snapshots fd.arch.symboltab, printc.rs
+    // doc_function). The action-side query channels in funcdata/varmap
+    // (setVarnodeProperties / linkSymbol / mapGlobals / coverVarnodes
+    // parent-scope queries) are fixture-era partial ports that change
+    // wholesale naming behavior when a symboltab exists; the decompile
+    // pipeline must keep running channel-absent, exactly as the canon
+    // baseline was established.
+    let print_symbol_db: std::sync::Arc<std::sync::RwLock<rugra::database::Database>> = {
+        let mut symbol_db = rugra::database::Database::new(false);
+        let mut code_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        {
+            let db_scope = symbol_db.get_global_scope_mut().expect("global scope");
+            let db_entries: Vec<(u64, String)> = if mirror {
+                mirror_fn_syms.clone()
+            } else {
+                functions
+                    .iter()
+                    .map(|&(v, _, _, ref n)| (v, n.clone()))
+                    .chain(
+                        analysis_discovered
+                            .iter()
+                            .filter_map(|t| symbol_table.get(t).map(|n| (*t, n.clone()))),
+                    )
+                    .collect()
+            };
+            for (entry_addr, entry_name) in db_entries {
+                db_scope.add_function(Address::new(entry_addr), &entry_name, 1);
+                code_entries.insert(entry_addr);
+            }
+        }
+        eprintln!(
+            "[PREPASS] HTTPD-CODEREF-SYMBOLIZE-0001 print DB: {} function symbols",
+            code_entries.len()
+        );
+        std::sync::Arc::new(std::sync::RwLock::new(symbol_db))
+    };
+
     for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
         if idx >= max_functions && stage_selector.is_none() { break; }
         if stage_selector.is_some() {
@@ -777,6 +910,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mirror_fn = mirror;
         let mirror_img = mirror_image.clone();
         let mirror_syms = mirror_fn_syms.clone();
+        // HTTPD-CODEREF-SYMBOLIZE-0001: per-thread share of the print-side
+        // symbol Database (read-only at print time).
+        let print_db = print_symbol_db.clone();
 
         let mut raw_ops = Vec::new();
         // PRINTC-LABSPELL-LABSYMS-0001: the front-end reference set — every
@@ -1039,6 +1175,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // HTTPD-CODEREF-SYMBOLIZE-0001 (print-only install): swap the
+            // action-phase Architecture for a clone carrying the global
+            // function-symbol Database, so PrintC::doc_function's snapshot
+            // (printc.rs doc_function: fd.arch.symboltab) resolves code-
+            // address constants through the global scope. The action-phase
+            // queries never saw the DB (channel-absent decompile, per the
+            // build-site comment above). The print-side resolution itself
+            // lives in printc's constant leaf (constant_leaf_text's
+            // untyped/Unknown arms -> code_entry_constant_text, the
+            // pushPtrCodeConstant chain printc.cc:1730) — the oracle's
+            // equivalent state is the Parameter-ID-locked function-pointer
+            // param type the analyzer attached (canon evidence:
+            // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)` at both
+            // call sites vs the analyzer-less direct-runner golden's
+            // `0x2dc80`).
+            {
+                let mut fd_write = fd_arc.write().unwrap();
+                if let Some(a) = fd_write.arch.clone() {
+                    let mut print_arch = (*a).clone();
+                    print_arch.set_symboltab(print_db.clone());
+                    fd_write.arch = Some(std::sync::Arc::new(print_arch));
+                }
+            }
+
             let fd_read = fd_arc.read().unwrap();
             // BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001 diagnostic: dump the final
             // structured tree (sblocks) for the RUGRA_DUMP_FUNC target.
@@ -1165,6 +1325,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(Ok(Some(output))) => {
                 println!("/* ---- 0x{:x}: {} ({} bytes) ---- */", vaddr, name, size);
                 println!("{}", output);
+                println!();
+                // HTTPD-CODEREF-SYMBOLIZE-0001: the canon golden's emitter
+                // (tools/ghidra_decompile_all.py postScript) separates
+                // function blocks with TWO blank lines (`}\n\n\n/* ----`),
+                // one more than Rugra's historical single blank. Emit the
+                // matching layout so per-function body blocks compare
+                // byte-exact including the trailing separator; the gate's
+                // skeleton normalization is whitespace-insensitive, so
+                // gate totals are unchanged.
                 println!();
                 total_success += 1;
             }

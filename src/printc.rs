@@ -1552,7 +1552,29 @@ impl PrintC {
                 .and_then(|vn_arc| read_op.slot_of_input(&vn_arc))?;
             vn.get_high_type_read_facing(read_op, slot as i32)
         });
-        let Some(ct) = read_facing else {
+        // HTTPD-CODEREF-SYMBOLIZE-0001 transport: Ghidra's constants always
+        // carry a HighVariable whose type ActionInferTypes seeded
+        // (coreaction.cc:5016-5036); Rugra's leaf chase can bypass the high
+        // (no HighVariable on the const), so the driver's param-lock
+        // annotation lands in v_type — consult it when the high answered
+        // nothing.
+        let ct = read_facing.or_else(|| vn.v_type.clone());
+        let Some(ct) = ct else {
+            // HTTPD-CODEREF-SYMBOLIZE-0001: untyped constant that resolves
+            // to a function entry in the global scope prints as the
+            // function's display name — the oracle form produced when the
+            // Parameter ID analyzer's locked function-pointer param type
+            // reaches pushConstant's TYPE_PTR->TYPE_CODE arm
+            // (printc.cc:1786-1788 -> pushPtrCodeConstant, cc:1730). The
+            // oracle's type transport is ActionInferTypes through the
+            // HighVariable (coreaction.cc:5016-5036); Rugra's print-side
+            // leaf chase bypasses the annotated SSA varnode (legacy
+            // value_def_map side tables), so the resolution happens here
+            // on the untyped leaf. Only function-ENTRY addresses resolve,
+            // so integer constants keep their hex/decimal form.
+            if let Some(name) = self.code_entry_constant_text(val) {
+                return name;
+            }
             return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
         };
         let sz = ct.get_size();
@@ -1575,7 +1597,14 @@ impl PrintC {
                     self.integer_text(val, sz, true, display_format::DEFAULT)
                 }
             }
-            TypeMetatype::Unknown => self.integer_text(val, sz, false, display_format::DEFAULT)
+            TypeMetatype::Unknown => {
+                // HTTPD-CODEREF-SYMBOLIZE-0001: same function-entry
+                // resolution as the untyped arm (see the None arm comment).
+                if let Some(name) = self.code_entry_constant_text(val) {
+                    return name;
+                }
+                self.integer_text(val, sz, false, display_format::DEFAULT)
+            }
             ,
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
@@ -1660,6 +1689,28 @@ impl PrintC {
                 let _ = ct;
                 name
             })
+    }
+
+    // RUGRA-GLUE: code_entry_constant_text (driver-transport wrapper of
+    // PrintC::pushPtrCodeConstant, printc.cc:1730). The oracle reaches that
+    // method with the Parameter-ID-locked pointer-to-code type on the
+    // constant (via TypeOpCall::getInputLocal, typeop.cc:703-708, and
+    // ActionInferTypes, coreaction.cc:5016-5036). Rugra's print-side leaf
+    // can arrive untyped (the legacy side-table chase bypasses the SSA
+    // varnode carrying the annotation), so the untyped/Unknown constant
+    // arms call this wrapper: same resolution chain (default code space →
+    // global-scope queryFunction → display name), no cast prefix.
+    fn code_entry_constant_text(&self, val: u64) -> Option<String> {
+        let sentinel = std::sync::Arc::new(crate::type_system::datatype::Datatype::Pointer(
+            crate::type_system::datatype::TypePointer::new(
+                8,
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Code(
+                    crate::type_system::datatype::TypeCode::new(),
+                )),
+                1,
+            ),
+        ));
+        self.ptr_code_constant_text(val, &sentinel)
     }
 
     // RUGRA-GLUE: make_atom_for_vn (RPN leaf atom construction; mirrors the
@@ -2541,6 +2592,7 @@ impl PrintC {
                         let mut arrayvalue = false;
                         let mut symbol: Option<String> = None;
                         let mut symbol_type_array = false;
+                        let mut symbol_type_code = false;
                         {
                             let hit = self.symboltab.as_ref().and_then(|db| {
                                 let db = db.read().unwrap();
@@ -2558,6 +2610,8 @@ impl PrintC {
                                 symbol = Some(hit.symbol_name.clone());
                                 symbol_type_array =
                                     hit.type_metatype == TypeMetatype::Array;
+                                symbol_type_code =
+                                    hit.type_metatype == TypeMetatype::Code;
                             }
                         }
                         if symbol.is_some() {
@@ -2567,14 +2621,19 @@ impl PrintC {
                                 arrayvalue = valueon_here;
                                 valueon_here = true;
                             }
-                            // TODO(PRINTC-SPACEBASE-TYPECODE-0001): oracle
-                            // cc:1068-1069's `TYPE_CODE → valueon = true`
-                            // (a function symbol drops the '&' as well) is
-                            // not implemented — the program-DB hit carries
-                            // only `type_metatype` and no CODE entries exist
-                            // in the driver's DAT layer, so the branch is
-                            // unreachable in this pipeline; registered in
-                            // ALIGNMENT_ROADMAP.md (printc module residuals).
+                            // cc:1068-1069: a CODE symbol (function entry)
+                            // also drops the '&' — `FUN_xxxxxxx` prints
+                            // bare in argument position (the canon golden's
+                            // `apr_pool_cleanup_kill(V,V,FUN_0012dc80)`).
+                            // PRINTC-SPACEBASE-TYPECODE-0001 resolved: the
+                            // driver now registers analyzer-discovered
+                            // functions in the symbol Database global scope
+                            // (Scope::add_function sets the FunctionSymbol's
+                            // code type, database.cc:514-520), so CODE hits
+                            // are reachable.
+                            else if symbol_type_code {
+                                valueon_here = true;
+                            }
                         }
                         // cc:1072-1076: EMIT &name / name.
                         if !valueon_here {
