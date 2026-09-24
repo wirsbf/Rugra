@@ -12415,6 +12415,26 @@ mod tests {
         static ref FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
     }
 
+    // RUGRA-GLUE: test-only poison-immune acquisition of FFI_TEST_LOCK
+    // (TESTLIB-STATE-CONTAMINATION-0001). Ghidra has no test-harness
+    // counterpart. Previously every holder acquired with `.lock().unwrap()`,
+    // so one genuine assertion panic inside a holder (the observed trigger:
+    // test_normalize_branches_break_in_while_loop, funcdata.rs:15063)
+    // poisoned the Mutex and cascaded `PoisonError` into every later
+    // CURRENT_PROGRAM user — 16 deterministic victims in serial mode and a
+    // scheduling-dependent 17↔27 failure-count drift in parallel mode.
+    // Recovering the guard via `into_inner` keeps the mutual exclusion (the
+    // OS mutex still serializes holders) while making each test's outcome
+    // independent of earlier failures: every holder re-initializes the
+    // shared fixture via `ffi::set_current_program(fd)` before any
+    // comparison read, so no IR state from the panicking test can leak
+    // into the next one.
+    fn ffi_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        FFI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn test_funcdata_creation() {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
@@ -12697,7 +12717,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg_reg_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x89, 0xc3]; // mov rbx, rax
         let start = Address::new(0x1000);
 
@@ -12747,7 +12767,7 @@ mod tests {
 
     #[test]
     fn test_add_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x83, 0xc0, 0x01]; // add rax, 1
         let start = Address::new(0x1000);
 
@@ -12859,7 +12879,7 @@ mod tests {
 
     #[test]
     fn test_sub_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x83, 0xe8, 0x08]; // sub rax, 8
         let start = Address::new(0x1000);
 
@@ -12953,7 +12973,7 @@ mod tests {
 
     #[test]
     fn test_and_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // and rax, 0xf  →  48 83 e0 0f
         let code = vec![0x48, 0x83, 0xe0, 0x0f];
         let start = Address::new(0x1000);
@@ -13041,7 +13061,7 @@ mod tests {
 
     #[test]
     fn test_or_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // or rax, 0x10  →  48 83 c8 10
         let code = vec![0x48, 0x83, 0xc8, 0x10];
         let start = Address::new(0x1000);
@@ -13123,7 +13143,7 @@ mod tests {
 
     #[test]
     fn test_xor_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // xor rax, 0x7  →  48 83 f0 07
         let code = vec![0x48, 0x83, 0xf0, 0x07];
         let start = Address::new(0x1000);
@@ -13181,7 +13201,7 @@ mod tests {
 
     #[test]
     fn test_shl_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // shl rax, 4  →  48 c1 e0 04
         let code = vec![0x48, 0xc1, 0xe0, 0x04];
         let start = Address::new(0x1000);
@@ -13195,9 +13215,31 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 (shl/sal shift flags ported
+        // from the locked x86-64.sla shlflags/shiftresultflags templates,
+        // all count forms): count&0x3f mask, saved pre-shift value, direct
+        // INT_LEFT to rax, then CF(bit count-1)/OF/SF/ZF/POPCOUNT-PF
+        // chains — 37 ops. The old 2-op (INT_LEFT+COPY) expectation was
+        // the pre-flag-pcode form, masked from failing by the
+        // FFI_TEST_LOCK poison cascade (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(raw_ops.len(), 37);
 
-        let raw_op = &raw_ops[0];
+        // Op 0: tmp:4 = count & 0x3f (sla masks the shift count)
+        let raw_mask = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_mask.get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
+        let mask_inputs = raw_mask.inputs();
+        assert_eq!(mask_inputs.len(), 2);
+        assert_eq!(mask_inputs[0].space, AddressSpace::Const);
+        assert_eq!(mask_inputs[0].offset, 0x04);
+        assert_eq!(mask_inputs[0].size, 4);
+        assert_eq!(mask_inputs[1].space, AddressSpace::Const);
+        assert_eq!(mask_inputs[1].offset, 0x3f);
+
+        // Op 2: RAX = INT_LEFT(RAX, tmp) — direct-dst shift
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_LEFT)
@@ -13205,26 +13247,45 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
         assert_eq!(op_inputs.len(), 2);
         assert_eq!(op_inputs[0].space, AddressSpace::Register);
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
-        assert_eq!(op_inputs[1].space, AddressSpace::Const);
-        assert_eq!(op_inputs[1].offset, 0x04);
+        assert_eq!(op_inputs[1].space, AddressSpace::Unique); // masked count
 
+        // Op 1: saved pre-shift RAX (CF extracts bit count-1 from it)
         let raw_copy = &raw_ops[1];
         assert_eq!(
             OpCode::from_i32(raw_copy.get_opcode()),
             Some(OpCode::CPUI_COPY)
         );
 
+        // Flag-register writers terminate the chains: CF(0x200) at #10,
+        // OF(0x20b) at #17, SF(0x207) at #23, ZF(0x206) at #28,
+        // PF(0x202) at #36 (INT_OR merge per sla resultflags pattern).
+        for (idx, flag_off) in [(10usize, 0x200u64), (17, 0x20b), (23, 0x207), (28, 0x206), (36, 0x202)] {
+            let writer = &raw_ops[idx];
+            assert_eq!(
+                OpCode::from_i32(writer.get_opcode()),
+                Some(OpCode::CPUI_INT_OR),
+                "flag writer at #{}",
+                idx
+            );
+            let out_binding = writer.output();
+            let out = out_binding.as_ref().unwrap();
+            assert_eq!(out.space, AddressSpace::Register);
+            assert_eq!(out.offset, flag_off);
+            assert_eq!(out.size, 1);
+        }
+
         let mut fd = Funcdata::new("shl_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 37);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -13233,14 +13294,14 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("shl_rax_4_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("shl_rax_4_minimal", start, &rugra_ops, 37);
 
         assert!(matches!(result, VerifyResult::Match));
     }
 
     #[test]
     fn test_shr_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // shr rax, 4  →  48 c1 e8 04
         let code = vec![0x48, 0xc1, 0xe8, 0x04];
         let start = Address::new(0x1000);
@@ -13254,9 +13315,24 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 (shr shares the ported
+        // shlflags/shiftresultflags templates): count&0x3f mask, saved
+        // pre-shift value, direct INT_RIGHT to rax, then CF(bit count-1 of
+        // the ORIGINAL value, via a second INT_RIGHT + INT_AND&1)/OF/SF/ZF/
+        // POPCOUNT-PF chains — 37 ops. Old 2-op expectation was the
+        // pre-flag-pcode form, masked by the FFI_TEST_LOCK poison cascade
+        // (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(raw_ops.len(), 37);
 
-        let raw_op = &raw_ops[0];
+        // Op 0: tmp:4 = count & 0x3f
+        let raw_mask = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_mask.get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
+
+        // Op 2: RAX = INT_RIGHT(RAX, tmp) — direct-dst shift
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_RIGHT)
@@ -13264,26 +13340,35 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
         assert_eq!(op_inputs.len(), 2);
         assert_eq!(op_inputs[0].space, AddressSpace::Register);
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
-        assert_eq!(op_inputs[1].space, AddressSpace::Const);
-        assert_eq!(op_inputs[1].offset, 0x04);
+        assert_eq!(op_inputs[1].space, AddressSpace::Unique); // masked count
 
+        // Op 1: saved pre-shift RAX; Ops 5-6: CF = (orig >> (count-1)) & 1
         let raw_copy = &raw_ops[1];
         assert_eq!(
             OpCode::from_i32(raw_copy.get_opcode()),
             Some(OpCode::CPUI_COPY)
         );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[5].get_opcode()),
+            Some(OpCode::CPUI_INT_RIGHT)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[6].get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
 
         let mut fd = Funcdata::new("shr_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 37);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -13292,14 +13377,14 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("shr_rax_4_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("shr_rax_4_minimal", start, &rugra_ops, 37);
 
         assert!(matches!(result, VerifyResult::Match));
     }
 
     #[test]
     fn test_cmp_rax_rbx_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // cmp rax, rbx  →  48 39 d8
         let code = vec![0x48, 0x39, 0xd8];
         let start = Address::new(0x1000);
@@ -13399,7 +13484,7 @@ mod tests {
     ///   2. CPUI_COPY(unique_tmp) -> reg(rax)
     #[test]
     fn test_load_mov_rax_mem_rbx_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x8b, 0x03]; // mov rax, [rbx]
         let start = Address::new(0x1000);
 
@@ -13483,7 +13568,7 @@ mod tests {
     ///   1. CPUI_STORE(const(ram_space_id), reg(rbx), reg(rax)) — no output
     #[test]
     fn test_store_mov_mem_rbx_rax_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x89, 0x03]; // mov [rbx], rax
         let start = Address::new(0x1000);
 
@@ -13553,7 +13638,7 @@ mod tests {
     ///   3. CPUI_COPY(tmp_val) -> rax
     #[test]
     fn test_load_mov_rax_mem_rbx_disp_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x8b, 0x43, 0x10]; // mov rax, [rbx+0x10]
         let start = Address::new(0x1000);
 
@@ -13649,7 +13734,7 @@ mod tests {
     ///   3. CPUI_STORE(ram_space_id, rbx, tmp_result)  (write back)
     #[test]
     fn test_add_mem_rbx_rax_rmw_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x01, 0x03]; // add [rbx], rax
         let start = Address::new(0x1000);
 
@@ -13793,7 +13878,7 @@ mod tests {
     /// - Varnode def/use chains are established
     #[test]
     fn test_ssa_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Build raw ops for: mov rax, rdi; add rax, rsi; ret
         let mut op1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -13864,7 +13949,7 @@ mod tests {
     ///   COPY(rax ← rdi), INT_ADD(tmp), COPY(rax ← tmp), RETURN
     #[test]
     fn test_seq_mov_add_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // mov rax, rdi = 48 89 f8
         // add rax, rsi = 48 01 f0
         // ret          = c3
@@ -13942,11 +14027,11 @@ mod tests {
 
     /// Test: `mov rax, rdi; and rax, 0xf; shl rax, 4; ret`
     /// Arithmetic chain: mask low nibble, shift left by 4. Returns (arg & 0xf) << 4.
-    /// Produces 6 P-code ops in a single basic block:
-    ///   COPY(rax←rdi), INT_AND(tmp1), COPY(rax←tmp1), INT_LEFT(tmp2), COPY(rax←tmp2), RETURN
+    /// Flag-pcode era op budget (X86LIFT-FLAG-PCODE-0001 + ea5010e9 +
+    /// RET-OP3-0001): mov→1, and→9, shl→37, ret→3 — 50 ops, 1 basic block.
     #[test]
     fn test_seq_mov_and_shl_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x89, 0xf8,       // mov rax, rdi
             0x48, 0x83, 0xe0, 0x0f, // and rax, 0xf
@@ -13968,9 +14053,14 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // X86LIFT-FLAG-PCODE-0001: mov→1 + and→9(logicalflags+AND direct-dst
-        // +SF/ZF/PF) + shl→2(INT_LEFT+COPY, flags 未实现=后续任务) + ret→1 = 13
-        assert_eq!(all_raw_ops.len(), 13);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 + RET-OP3-0001: mov→1 +
+        // and→9(logicalflags+AND direct-dst+SF/ZF/PF) + shl→37(count mask,
+        // saved value, direct INT_LEFT, CF/OF/SF/ZF/PF chains) + ret→3
+        // (RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP] per the
+        // locked sla :RET template) = 50. Old 13 assumed shl→2
+        // (flags 未实现) and ret→1 — both stale, masked by the
+        // FFI_TEST_LOCK poison cascade (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(all_raw_ops.len(), 50);
 
         assert_eq!(
             OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
@@ -13981,20 +14071,33 @@ mod tests {
         assert_eq!(
             OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_AND)
         );
+        // shl block: flat[10]=count&0x3f mask, flat[11]=saved RAX,
+        // flat[12]=direct INT_LEFT result write
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_INT_AND)
         );
         assert_eq!(
             OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+        );
+        // ret block: flat[47]=LOAD return address, flat[48]=RSP bump,
+        // flat[49]=RETURN
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[47].get_opcode()), Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[48].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[49].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         let mut fd = Funcdata::new("seq_and_shl_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 13);
+        assert_eq!(fd.obank.alivelist.len(), 50);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -14003,7 +14106,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 13);
+            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 50);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -14018,13 +14121,14 @@ mod tests {
     /// 0x1010: ret              ; c3
     /// ```
     /// Tests: CBRANCH generation, basic block splitting, multi-block inject.
-    /// Block 0: cmp(3 ops) + je(CBRANCH) = 4 ops
-    /// Block 1: mov(COPY) + ret(RETURN) = 2 ops
-    /// Block 2: xor(INT_XOR+COPY) + ret(RETURN) = 3 ops
-    /// Total: 9 ops, 3 blocks
+    /// Flag-pcode era op budget (X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001):
+    /// Block 0: cmp(9 flag ops) + je(CBRANCH) = 10 ops
+    /// Block 1: mov(COPY) + ret(3-op :RET template) = 4 ops
+    /// Block 2: xor(9 flag ops) + ret(3-op :RET template) = 12 ops
+    /// Total: 26 ops, 3 blocks
     #[test]
     fn test_seq_cmp_je_multiblock_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x39, 0xf7,                         // cmp rdi, rsi
             0x74, 0x08,                                // je +8 → 0x100d
@@ -14060,15 +14164,17 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // X86LIFT-FLAG-PCODE-0001:
+        // X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001:
         // cmp→9(LESS/SBORROW/SUB→tmp/SF/ZF/PF)
         // je→1(CBRANCH)
         // mov→1(COPY)
-        // ret→1(RETURN)
+        // ret→3(RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP],
+        //        locked sla :RET template)
         // xor→9(logicalflags/XOR direct-dst/SF/ZF/PF)
-        // ret→1(RETURN)
-        // Total: 22
-        assert_eq!(all_raw_ops.len(), 22);
+        // ret→3(same :RET template)
+        // Total: 26 (old 22 assumed ret→1; masked stale by the
+        // FFI_TEST_LOCK poison cascade, TESTLIB-STATE-CONTAMINATION-0001)
+        assert_eq!(all_raw_ops.len(), 26);
 
         // Verify key opcodes
         assert_eq!(
@@ -14081,17 +14187,20 @@ mod tests {
             OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[13].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[14].get_opcode()), Some(OpCode::CPUI_INT_XOR)
+            OpCode::from_i32(all_raw_ops[14].get_opcode()), Some(OpCode::CPUI_COPY) // CF=0
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[16].get_opcode()), Some(OpCode::CPUI_INT_XOR)
         );
 
         // Phase 3: Inject and verify block structure
         let mut fd = Funcdata::new("seq_cmp_je_multi", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 22);
+        assert_eq!(fd.obank.alivelist.len(), 26);
         // CBRANCH terminates block 0, RETURN terminates block 1 and block 2 → 3 blocks
         assert_eq!(fd.bblocks.get_size(), 3);
 
@@ -14099,13 +14208,13 @@ mod tests {
         let block0 = fd.bblocks.get_block(0).unwrap();
         assert_eq!(block0.read().unwrap().get_ops().len(), 10);
 
-        // Verify block 1 has 2 ops (mov + ret)
+        // Verify block 1 has 4 ops (mov COPY + 3-op :RET template)
         let block1 = fd.bblocks.get_block(1).unwrap();
-        assert_eq!(block1.read().unwrap().get_ops().len(), 2);
+        assert_eq!(block1.read().unwrap().get_ops().len(), 4);
 
-        // Verify block 2 has 10 ops (xor: 9 ops + ret)
+        // Verify block 2 has 12 ops (xor: 9 flag ops + 3-op :RET template)
         let block2 = fd.bblocks.get_block(2).unwrap();
-        assert_eq!(block2.read().unwrap().get_ops().len(), 10);
+        assert_eq!(block2.read().unwrap().get_ops().len(), 12);
 
         // Phase 4: Verify via RuntimeVerifier
         let verifier = RuntimeVerifier::new();
@@ -14114,7 +14223,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 22);
+            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 26);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -14137,7 +14246,7 @@ mod tests {
     /// Block 3: MULTIEQUAL (Phi for rax) + add + ret
     #[test]
     fn test_ssa_dual_block_phi_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -14205,7 +14314,7 @@ mod tests {
     ///   - op1's input[0] should be Arc::ptr_eq to op0's output
     #[test]
     fn test_ssa_rename_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Build: op0: RAX = COPY(RDI)
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -14303,7 +14412,7 @@ mod tests {
     ///   - op `add rax, rsi` in Block 3 should use the Phi output as its RAX input
     #[test]
     fn test_ssa_rename_multi_block_phi_inputs() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -14436,7 +14545,7 @@ mod tests {
     ///   Block 3 (merge): ret   (Phi for RAX should be placed here)
     #[test]
     fn test_ssa_rename_diamond_pattern() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         let code = vec![
             // Block 0: cmp rdi, 0; je block2
@@ -14536,7 +14645,7 @@ mod tests {
     /// the INPUT varnode that heritage creates for uninitialized reads.
     #[test]
     fn test_ssa_rename_input_varnode_for_undefined_read() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // op0: RAX = INT_ADD(RAX, RSI)   — RAX is read before being defined
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
@@ -14612,7 +14721,7 @@ mod tests {
 
     #[test]
     fn test_cbranch_condition_def_wired_via_heritage_single_block() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Reproduce the P-code x86_lift.rs emits for `cmp rdi,rsi` + `je`
         // (X86LIFT-FLAG-PCODE-0001 sla layout): cmp's resultflags writes
@@ -14679,7 +14788,7 @@ mod tests {
     /// curl produces.
     #[test]
     fn test_cbranch_condition_def_wired_multiblock_real_x86() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // 0x1000: cmp rdi, rsi      48 39 f7
         // 0x1003: je  0x100a        74 05     → branches over the next insn
@@ -14765,7 +14874,7 @@ mod tests {
     ///   blk[2] exit (ret)
     #[test]
     fn test_cbranch_condition_def_wired_loop_header_is_entry() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // --- blk[0] (header/entry): cmp; je exit; jmp back ---
         // cmp rdi, rsi  →  INT_EQUAL ZF = (RDI == RSI)
@@ -14990,7 +15099,7 @@ mod tests {
 
     #[test]
     fn test_normalize_branches_break_in_while_loop() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // while(rdi != rsi) { if (rax == 0x10) break; rax++; }
         //
@@ -15992,7 +16101,7 @@ mod tests {
     /// `return iVar1 ^ iVar1` defect in curl main_init.
     #[test]
     fn test_xor_eax_eax_input_identity() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // 31 c0 = xor eax,eax ; c3 = ret
         let code = vec![0x31, 0xc0, 0xc3];
         let start = Address::new(0x1000);
@@ -16002,10 +16111,14 @@ mod tests {
         let mut lifter = X86Lifter::new();
         let mut raw_ops = Vec::new();
         for inst in &instructions { raw_ops.extend(lifter.lift(inst)); }
-        // X86LIFT-FLAG-PCODE-0001: xor→10 (COPY CF=0, COPY OF=0, INT_XOR
-        // direct-dst, INT_ZEXT rax←eax, SF, ZF, PF chain), ret→1 — 11 ops.
+        // X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001: xor→10 (COPY CF=0, COPY
+        // OF=0, INT_XOR direct-dst, INT_ZEXT rax←eax, SF, ZF, PF chain),
+        // ret→3 (RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP] per
+        // the locked sla :RET template) — 13 ops. Old 11 assumed ret→1;
+        // masked stale by the FFI_TEST_LOCK poison cascade
+        // (TESTLIB-STATE-CONTAMINATION-0001).
         assert_eq!(
-            raw_ops.len(), 11, "expected 11 raw ops, got {}", raw_ops.len()
+            raw_ops.len(), 13, "expected 13 raw ops, got {}", raw_ops.len()
         );
         let mut fd = Funcdata::new("xor_eax_eax", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);

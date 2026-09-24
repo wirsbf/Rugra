@@ -12,6 +12,15 @@ use std::sync::Mutex;
 
 lazy_static! {
     /// Global state to hold the Rugra program currently being compared
+    ///
+    /// TESTLIB-STATE-CONTAMINATION-0001: every accessor below recovers a
+    /// poisoned guard with `into_inner` instead of panicking. The mutex
+    /// still enforces mutual exclusion, but a panic inside one critical
+    /// section no longer poisons the singleton for the rest of the process
+    /// (which used to cascade `PoisonError` into every later test that
+    /// called `set_current_program`). Callers always overwrite the slot
+    /// before reading it, so no comparison state can leak across a
+    /// recovered boundary.
     static ref CURRENT_PROGRAM: Mutex<Option<Funcdata>> = Mutex::new(None);
 }
 
@@ -394,7 +403,9 @@ pub extern "C" fn rugra_version() -> *const c_char {
 /// Set the current program for comparison
 /// This is called by Rugra before starting the comparison with Ghidra
 pub fn set_current_program(program: Funcdata) {
-    let mut lock = CURRENT_PROGRAM.lock().unwrap();
+    let mut lock = CURRENT_PROGRAM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *lock = Some(program);
 }
 
@@ -402,7 +413,9 @@ pub fn set_current_program(program: Funcdata) {
 /// Initialize a blank program for FFI testing
 #[no_mangle]
 pub extern "C" fn rugra_init_test_program() {
-    let mut lock = CURRENT_PROGRAM.lock().unwrap();
+    let mut lock = CURRENT_PROGRAM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *lock = Some(Funcdata::new("test_func", Address::new(0), 0));
 }
 
@@ -417,7 +430,9 @@ pub extern "C" fn rugra_add_test_op(
     out_offset: u64,
     out_size: u32,
 ) {
-    let mut lock = CURRENT_PROGRAM.lock().unwrap();
+    let mut lock = CURRENT_PROGRAM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(ref mut program) = *lock {
         let op_addr = Address::new(addr);
         let seqnum = SeqNum::new(op_addr, program.obank.get_uniqid());
@@ -526,7 +541,9 @@ pub unsafe extern "C" fn rugra_compare_pcode(
     inputs: *const VarnodeFFI,
     input_count: i32,
 ) -> PcodeCompareResultFFI {
-    let lock = CURRENT_PROGRAM.lock().unwrap();
+    let lock = CURRENT_PROGRAM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let program = match lock.as_ref() {
         Some(p) => p,
         None => {

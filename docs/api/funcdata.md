@@ -2612,3 +2612,28 @@ funcdata` 批（单线程）17 failed==master 逐字（branch 40 passed 含新�
   —— 无空间名传输打印 "ram"（代码块全在 ram），偏移走
   `print_raw_code_addr`。curl 语料 `(,2be0d)` 旧形 12 处全数转
   `(ram,0x0012be0d)` canon 同形。
+
+## 2026-09-24：FFI_TEST_LOCK 中毒免疫 + 5 个 lifter 计数陈旧期望重钉（TESTLIB-STATE-CONTAMINATION-0001）
+
+`#[cfg(test)]` 模块内 27 处 `FFI_TEST_LOCK.lock().unwrap()` 全部改为新的
+`ffi_test_lock()` 辅助函数（`unwrap_or_else(|p| p.into_inner())`）。此前任一
+持锁测试的真实断言失败（实测触发点：test_normalize_branches_break_in_while_loop）
+会毒化该 Mutex 并把 `PoisonError` 级联进后续所有 CURRENT_PROGRAM 使用者——
+串行 16 个确定受害者、并行 17↔27 漂移谱全由这一个毒化事件加调度顺序解释。
+
+毒化修复暴露了 5 个被掩盖的陈旧期望，按当前锁定 oracle lifter 逐 op dump
+重钉（结构锚点断言，非仅计数）：
+
+- `test_shl_rax_imm_minimal_alignment_path`：2→**37**（ea5010e9 移位 flags
+  全模板：count&0x3f 掩码、保存原值、direct INT_LEFT、CF/OF/SF/ZF/POPCOUNT-PF
+  链，flag 写手 INT_OR→0x200/0x20b/0x207/0x206/0x202 索引锚定）；
+- `test_shr_rax_imm_minimal_alignment_path`：2→**37**（同上，INT_RIGHT + CF=
+  (原值>>(count-1))&1 经第二次 INT_RIGHT+INT_AND 锚定）；
+- `test_seq_mov_and_shl_ret_alignment`：13→**50**（shl 2→37 + ret 1→3）；
+- `test_seq_cmp_je_multiblock_alignment`：22→**26**（两处 ret 1→3；块预算
+  block1=4、block2=12）;
+- `test_xor_eax_eax_input_identity`：11→**13**（ret 1→3）。
+
+ret 3-op 形=RUGRA-GLUE RET-OP3-0001 锁定 sla `:RET` 模板（RIP=LOAD(ram[RSP])；
+RSP=INT_ADD(RSP,8)；RETURN[RIP]），x86_lift.rs 已有 oracle 探针证据。生产代码
+零改动（本文件改动全部位于 `#[cfg(test)]`）。

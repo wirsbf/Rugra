@@ -7198,17 +7198,24 @@ mod tests {
     fn test_heritage_creation() {
         let mut h = Heritage::new();
         assert_eq!(h.get_pass(), 0);
-        // Locked-oracle delay model (MAINDIFF-UNIQLEAK-0001): x86-64.sla
-        // space table gives ram delay=1 (unique/register=0); stack is
-        // synthesized as ram+1 = 2 (architecture.cc:566 addSpacebase).
+        // Locked-oracle delay model (MAINDIFF-UNIQLEAK-0001 / RCA-2): x86-64.sla
+        // space table gives ram delay=1 (unique/register=0). The stack space is
+        // NOT in the .sla; it is synthesized by addSpacebase
+        // (architecture.cc:1013 → 559-570) with delay = ptrdata.space->getDelay()+1
+        // (architecture.cc:565), where ptrdata.space is the stack-pointer
+        // REGISTER space (delay 0), not the ram basespace — oracle
+        // HeritageInfo dump: `stack:idx=8,type=IPTR_SPACEBASE,delay=1`
+        // (RCA2_MAXPASS.md §4.3/§5; corrected in commit 6821e158).
         // getDeadCodeDelay reads infolist; build_info_list populates it.
         h.build_info_list();
         assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 1);
         // deadRemovalAllowed = (pass > deadcodedelay) = (0 > 1) = false.
         // (Ghidra prevents dead-code removal before any heritage pass.)
         assert!(!h.dead_removal_allowed(AddressSpace::Ram));
-        // Stack has delay=2 (ram delay 1 + 1, architecture.cc:566).
-        assert_eq!(h.get_dead_code_delay(AddressSpace::Stack), 2);
+        // Stack has delay=1 (register(0)+1, architecture.cc:565; the old
+        // "ram+1 = 2" reading asserted here pre-6821e158 was the misread
+        // ptrdata.space → basespace, refuted by the oracle dump above).
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Stack), 1);
         // Register/unique have delay=0 (x86-64.sla).
         assert_eq!(h.get_dead_code_delay(AddressSpace::Register), 0);
         assert_eq!(h.get_dead_code_delay(AddressSpace::Unique), 0);
