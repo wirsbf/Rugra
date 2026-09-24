@@ -408,6 +408,221 @@ fn local_maptable_space_rank(space: crate::space::AddressSpace) -> u8 {
     }
 }
 
+/// One disjoint sub-range of the rangemap common refinement
+/// (rangemap.hh:76-93 `AddrRange`): `[first, last]` inclusive offsets of the
+/// sub-range, the owning record's EntrySubsort, and the owner's index into
+/// the entry slice. The Vec position among equal `(last, sub)` keys mirrors
+/// the C++ multiset placement rules (plain insert lands after existing
+/// equal keys; the piece-loop hint insert lands before the hinted element
+/// when its key is equal — rangemap.hh:253/259 vs :207).
+#[derive(Clone, Copy)]
+struct ScopeMapPiece {
+    id: u64,
+    first: u64,
+    last: u64,
+    /// (useindex, useoffset) projection; (0, 0) is the minimal subsort
+    /// (database.hh:107-134 EntrySubsort, database.cc:97-109 getSubsort).
+    sub: (u32, u64),
+    owner: usize,
+}
+
+// Ghidra: rangemap.hh:223 rangemap<_recordtype>::insert
+/// Emulate the `std::list<SymbolEntry>` order that ScopeInternal's per-space
+/// EntryMap maintains (database.hh:164 `rangemap<SymbolEntry>`, storage
+/// `std::list<_recordtype> record` rangemap.hh:130), which is the order
+/// `MapIterator` walks in `PrintC::emitScopeVarDecls` (printc.cc:2535,
+/// database.cc:1889-1919 `ScopeInternal::begin` -> `begin_list()`).
+///
+/// `rangemap::insert(data, a, b)` (rangemap.hh:221-277) splices each newly
+/// inserted record immediately BEFORE the list node of the owner of the
+/// first tree AddrRange whose key `(last, subsort)` is >= the new record's
+/// full-range key `(b, subsort)`; with no such AddrRange the record is
+/// appended at the list end. Tree AddrRange keys are the inclusive ends of
+/// the disjoint refinement pieces, so an enclosing record's split piece can
+/// be the splice target and the resulting list order is NOT in general a
+/// pure `(end, subsort)` sort of the full ranges.
+///
+/// `entries` carries `(a, b_inclusive, subsort, payload)` per record in the
+/// scope's entry-creation order; returns the payloads in emulated list
+/// order.
+///
+/// RUGRA-GLUE: C++ list/multiset iterators are stable across inserts; this
+/// emulation tracks pieces by `id` and re-finds Vec positions instead, and
+/// represents the EntrySubsort as `(0,0)` for address-tied entries and
+/// `(1, first-use offset)` otherwise (all local-scope uselimits share the
+/// code address space, so the shared useindex collapses to a constant).
+fn scope_rangemap_list_order(entries: &[(u64, u64, (u32, u64), usize)]) -> Vec<usize> {
+    let mut next_id: u64 = 0;
+    // Sorted by (last, sub) with Vec position as the equal-key placement.
+    let mut tree: Vec<ScopeMapPiece> = Vec::new();
+    let mut list: Vec<usize> = Vec::new();
+
+    let find = |tree: &Vec<ScopeMapPiece>, id: u64| -> usize {
+        tree.iter().position(|p| p.id == id).expect("piece id")
+    };
+    // First element with (last, sub) >= key (C++ multiset lower_bound).
+    let lower_bound_key =
+        |tree: &Vec<ScopeMapPiece>, last: u64, sub: (u32, u64)| -> Option<usize> {
+            tree.iter().position(|p| (p.last, p.sub) >= (last, sub))
+        };
+    // First element with last >= point (AddrRange(point) carries the minimal
+    // subsort, so the subsort never decides this bound — rangemap.hh:85/228).
+    let lower_bound_point = |tree: &Vec<ScopeMapPiece>, point: u64| -> Option<usize> {
+        tree.iter().position(|p| p.last >= point)
+    };
+    // Plain multiset insert: sorted position, after existing equal keys.
+    let insert_plain = |tree: &mut Vec<ScopeMapPiece>, piece: ScopeMapPiece| {
+        let idx = tree
+            .iter()
+            .position(|p| (p.last, p.sub) > (piece.last, piece.sub))
+            .unwrap_or(tree.len());
+        tree.insert(idx, piece);
+    };
+
+    for &(a, b, sub, payload) in entries.iter() {
+        // rangemap.hh:226-233: refine the partition at the left boundary.
+        // `low` tracks the C++ iterator by piece id (stable across inserts).
+        let mut low = lower_bound_point(&tree, a).map(|p| tree[p].id);
+        if let Some(l) = low {
+            if tree[find(&tree, l)].first < a {
+                scope_rangemap_unzip(&mut tree, a - 1, l, &mut next_id);
+            }
+        }
+        // rangemap.hh:238-245: splice before the owner of the first
+        // AddrRange with key >= (b, sub); append at the end otherwise.
+        let spot = lower_bound_key(&tree, b, sub);
+        match spot {
+            None => list.push(payload),
+            Some(s) => {
+                let owner = tree[s].owner;
+                let pos = list.iter().position(|&r| r == owner).expect("owner in list");
+                list.insert(pos, payload);
+            }
+        }
+        // rangemap.hh:247-274: insert the new record's refinement pieces.
+        let mut f = a;
+        while let Some(l) = low {
+            let piece = tree[find(&tree, l)];
+            if piece.first > b {
+                break;
+            }
+            if f <= piece.last {
+                if f < piece.first {
+                    insert_plain(
+                        &mut tree,
+                        ScopeMapPiece {
+                            id: next_id,
+                            first: f,
+                            last: piece.first - 1,
+                            sub,
+                            owner: payload,
+                        },
+                    );
+                    next_id += 1;
+                    f = piece.first;
+                }
+                let piece = tree[find(&tree, l)];
+                if piece.last <= b {
+                    let new_piece = ScopeMapPiece {
+                        id: next_id,
+                        first: f,
+                        last: piece.last,
+                        sub,
+                        owner: payload,
+                    };
+                    next_id += 1;
+                    // tree.insert(low, addrrange): the hinted insert lands
+                    // immediately before the hinted element on an equal key,
+                    // at the sorted after-equals position otherwise.
+                    if (piece.last, piece.sub) == (new_piece.last, new_piece.sub) {
+                        let lpos = find(&tree, l);
+                        tree.insert(lpos, new_piece);
+                    } else {
+                        insert_plain(&mut tree, new_piece);
+                    }
+                    if piece.last == b {
+                        break;
+                    }
+                    f = piece.last + 1;
+                } else {
+                    // b < piece.last: refine at b and stop.
+                    scope_rangemap_unzip(&mut tree, b, l, &mut next_id);
+                    break;
+                }
+            }
+            // ++low (rangemap.hh:268).
+            let lpos = find(&tree, l);
+            low = if lpos + 1 < tree.len() {
+                Some(tree[lpos + 1].id)
+            } else {
+                None
+            };
+        }
+        if f <= b {
+            insert_plain(
+                &mut tree,
+                ScopeMapPiece {
+                    id: next_id,
+                    first: f,
+                    last: b,
+                    sub,
+                    owner: payload,
+                },
+            );
+            next_id += 1;
+        }
+    }
+    list
+}
+
+// Ghidra: rangemap.hh:196 rangemap<_recordtype>::unzip
+/// Split every refinement sub-range that contains the boundary point `i`
+/// (first <= i < last), starting the walk at piece `start_id`, into a
+/// `[first..i]` piece (inserted at its sorted after-equals position) and the
+/// original element shrunk to `[i+1..last]` (its `(last, sub)` key — and so
+/// its multiset position — is unchanged; only `first` moves, which is why
+/// the C++ iterator at the split element stays valid).
+fn scope_rangemap_unzip(
+    tree: &mut Vec<ScopeMapPiece>,
+    i: u64,
+    start_id: u64,
+    next_id: &mut u64,
+) {
+    let mut cur = match tree.iter().position(|p| p.id == start_id) {
+        Some(p) => p,
+        None => return,
+    };
+    // rangemap.hh:200: boundary already present -> nothing to split.
+    if tree[cur].last == i {
+        return;
+    }
+    while cur < tree.len() && tree[cur].first <= i {
+        let f = tree[cur].first;
+        tree[cur].first = i + 1;
+        let new_piece = ScopeMapPiece {
+            id: *next_id,
+            first: f,
+            last: i,
+            sub: tree[cur].sub,
+            owner: tree[cur].owner,
+        };
+        *next_id += 1;
+        // The new (i, sub) key sorts strictly before the split element's
+        // (last, sub); the hinted multiset placement reduces to the sorted
+        // after-equals position among foreign pieces with the same key.
+        let idx = tree
+            .iter()
+            .position(|p| (p.last, p.sub) > (new_piece.last, new_piece.sub))
+            .unwrap_or(tree.len());
+        debug_assert!(idx <= cur);
+        // The insert lands at or before the split element, shifting it (and
+        // everything after it) one slot right; the walk continues at the
+        // element that followed the split element (C++ ++iter).
+        tree.insert(idx, new_piece);
+        cur += 2;
+    }
+}
+
 /// Represents a detected struct on the stack frame.
 /// When a stack address is passed to a function call (via lea reg, [rsp+X]),
 /// it indicates a struct/buffer at that offset.
@@ -6335,29 +6550,34 @@ impl PrintC {
     /// 2. cat < 0 (cc:2535-2553): iterate the full `MapIterator` — Ghidra's
     ///    `ScopeInternal::maptable` is a vector of per-address-space entry
     ///    rangemaps (database.hh:810) walked in address-space-index order
-    ///    (database.cc:1889-1919/826-836), each rangemap sorted by entry
-    ///    start address with the use-point `EntrySubsort` as tie-break
-    ///    (database.hh:103-134, getSubsort database.cc:97-107: addrtied
-    ///    entries sort earliest, others by first uselimit address).
-    ///    Filters per entry: isPiece (cc:2539), category != cat (cc:2541),
-    ///    empty name (cc:2542), FunctionSymbol/LabSymbol (cc:2543-2546),
-    ///    multi-entry symbols declared once at their first whole map
-    ///    (cc:2547-2550).
+    ///    (database.cc:1889-1919/1940-1954). The iterator dereferences the
+    ///    per-space `std::list<SymbolEntry>` (database.hh:379-401 MapIterator,
+    ///    `begin_list()`), NOT the sorted AddrRange multiset: the list order
+    ///    is the `rangemap::insert` splice order (rangemap.hh:221-277) — each
+    ///    record is spliced immediately before the owner of the first
+    ///    AddrRange (keyed by inclusive refinement-piece end + EntrySubsort,
+    ///    rangemap.hh:88-91) whose key is >= the new record's full-range key
+    ///    (b, subsort), or appended at the list end. Emulated exactly by
+    ///    `scope_rangemap_list_order`. Filters per entry: isPiece (cc:2539),
+    ///    category != cat (cc:2541), empty name (cc:2542),
+    ///    FunctionSymbol/LabSymbol (cc:2543-2546), multi-entry symbols
+    ///    declared once at their first whole map (cc:2547-2550).
     /// 3. Dynamic entries (cc:2554-2572): the `dynamicentry` list in
     ///    insertion order (database.cc:1921-1931), same filters.
     ///
     /// Rugra adaptation: each `varmap::LocalSymbol` models a symbol plus its
     /// single whole SymbolEntry (space/start/usepoint/dyn/hash fields,
-    /// varmap.rs:1444-1490), so the MapIterator walk is emulated by sorting
-    /// non-dynamic symbols by (space rank, start, usepoint) — the space rank
-    /// reproduces the x86-64 maptable order Unique < Register < Stack
-    /// observed in the locked-oracle golden decl blocks (e.g.
-    /// tests/golden/ghidra_curl_1204.c `helpf`: `lVar1` unique-space temp
-    /// before `in_AL..in_XMM7_Qa` register entries before `ap`/`local_*`
-    /// stack entries). `usepoint: None` models the invalid usepoint of an
-    /// addrtied entry, which sorts earliest exactly like Ghidra's minimal
-    /// EntrySubsort. Rugra LocalSymbols are single-entry (no `wholeCount`),
-    /// cannot be FunctionSymbol/LabSymbol (no such creation path in
+    /// varmap.rs:1444-1490), so the MapIterator walk is emulated by the
+    /// per-space `scope_rangemap_list_order` replay of the insertion
+    /// sequence — the space rank reproduces the x86-64 maptable order
+    /// Unique < Register < Stack observed in the locked-oracle golden decl
+    /// blocks (e.g. tests/golden/ghidra_curl_1204.c `helpf`: `lVar1`
+    /// unique-space temp before `in_AL..in_XMM7_Qa` register entries before
+    /// `ap`/`local_*` stack entries). `usepoint: None` models the invalid
+    /// usepoint of an addrtied entry, whose EntrySubsort (0,0) sorts
+    /// earliest exactly like Ghidra's minimal subsort (database.cc:100).
+    /// Rugra LocalSymbols are single-entry (no `wholeCount`), cannot be
+    /// FunctionSymbol/LabSymbol (no such creation path in
     /// `varmap::ScopeLocal`), and never carry `precislo/precishi` piece
     /// flags, so those three Ghidra filters reduce to no-ops here.
     ///
@@ -6365,16 +6585,19 @@ impl PrintC {
     /// - References/output params: `sym_scope` borrowed read-only; emits via
     ///   `&mut self.emit`. Returns `notempty` (cc:2521/2574).
     /// - Loop bounds/order: address-map walk first, dynamic list second
-    ///   (cc:2535 then cc:2554); map order = (space index, AddrRange
-    ///   `last` end boundary, usepoint subsort) per MapIterator over the
-    ///   per-space EntryMap list (database.hh:377-389) and AddrRange
-    ///   operator< (rangemap.hh:88-91); category branch in category slot
-    ///   order (cc:2525).
+    ///   (cc:2535 then cc:2554); map order = (space index, per-space
+    ///   `std::list` order from rangemap::insert splices) per MapIterator
+    ///   over the per-space EntryMap list (database.hh:377-401) — the list
+    ///   is NOT the sorted AddrRange multiset; category branch in category
+    ///   slot order (cc:2525).
     /// - Counter/accumulator: single `bool notempty`, set once per emitted
     ///   decl, never reset inside the walk (cc:2521/2530/2551).
-    /// - Sort/compare key: rangemap (last end boundary, EntrySubsort
-    ///   usepoint); symbol identity for multi-entry dedup = first whole
-    ///   map only.
+    /// - Sort/compare key: splice target = first AddrRange key
+    ///   (inclusive piece end, EntrySubsort usepoint) >= the new record's
+    ///   (b, subsort); equal multiset keys keep insertion order (after
+    ///   existing equals for plain inserts, before the hinted element for
+    ///   the piece-loop hint insert); symbol identity for multi-entry dedup
+    ///   = first whole map only.
     pub fn emit_scope_local_var_decls(
         &mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32,
     ) -> bool {
@@ -6384,24 +6607,61 @@ impl PrintC {
         if cat >= 0 {
             return notempty;
         }
-        // cc:2535-2553: full MapIterator walk, emulated as a stable sort of
-        // the scope's non-dynamic symbols. MapIterator walks the per-space
-        // EntryMap list (database.hh:377-389); within one map the rangemap
-        // multiset orders AddrRange by (last, subsort) — rangemap.hh:88-91,
-        // the end boundary decides first — so among overlapping entries
-        // the one whose range ENDS sooner is visited first (iVar1=EAX[0,4)
-        // before sVar2=RAX[0,8) in glob_url's declaration block). Projected
-        // as key (space rank, end, usepoint-subsort).
+        // cc:2535-2553: full MapIterator walk. MapIterator dereferences the
+        // per-space EntryMap's std::list<SymbolEntry> in list order
+        // (database.hh:379-401), which is the rangemap::insert splice order
+        // (rangemap.hh:221-277): each record lands immediately before the
+        // owner of the first AddrRange whose (inclusive piece end, subsort)
+        // key is >= its own (b, subsort) key, else at the list end. The
+        // AddrRange keys are refinement-piece ends, so among overlapping
+        // entries the one whose range ENDS sooner is visited sooner
+        // (iVar1=EAX[0,4) before sVar2=RAX[0,8) in glob_url's block), and
+        // an enclosing record's split piece can capture a later small
+        // record behind an interior one (list order is not a pure
+        // (end, subsort) sort in that morphology). Replayed exactly by
+        // scope_rangemap_list_order over the creation-order entries.
         let mut statics: Vec<&crate::varmap::LocalSymbol> = sym_scope
             .symbols
             .iter()
             .filter(|s| !s.is_dynamic)
             .collect();
-        statics.sort_by_key(|s| {
-            let end = s.start.saturating_add(s.size.max(0) as u64);
-            (local_maptable_space_rank(s.space), end, s.usepoint)
-        });
-        for sym in statics {
+        // MapIterator concatenates the per-space EntryMap lists in address
+        // space index order (database.cc:1940-1954 operator++); Rugra groups
+        // by local_maptable_space_rank. Within one space the list order is
+        // the rangemap::insert splice order — see scope_rangemap_list_order.
+        // EntrySubsort projection (database.cc:97-109 getSubsort): the
+        // minimal (0,0) for address-tied entries, else (1, first-use offset)
+        // (all local-scope uselimits live in the one code space, so the
+        // shared useindex collapses to the constant 1). Entry bounds are
+        // inclusive [a, b] (database.cc:84-93 SymbolEntry a/b constructor).
+        // Entries carry the owning statics index: a space group is not
+        // contiguous in creation order (e.g. ap_fini_vhost_config's stack
+        // entries at creation indexes 0-6 and 30).
+        let mut grouped: Vec<(u8, Vec<(u64, u64, (u32, u64), usize)>)> = Vec::new();
+        for (i, s) in statics.iter().enumerate() {
+            let rank = local_maptable_space_rank(s.space);
+            let a = s.start;
+            let size = if s.size >= 1 { s.size as u64 } else { 1 };
+            let b = a + size - 1;
+            let sub = if s.addrtied {
+                (0u32, 0u64)
+            } else {
+                (1u32, s.usepoint.unwrap_or(0))
+            };
+            match grouped.iter_mut().find(|(r, _)| *r == rank) {
+                Some((_, v)) => v.push((a, b, sub, i)),
+                None => grouped.push((rank, vec![(a, b, sub, i)])),
+            }
+        }
+        // maptable vector order = address space index order
+        // (database.cc:1952 maptable.resize + ScopeInternal::begin walk).
+        grouped.sort_by_key(|(r, _)| *r);
+        let mut order: Vec<usize> = Vec::with_capacity(statics.len());
+        for (_, entries) in &grouped {
+            order.extend(scope_rangemap_list_order(entries));
+        }
+        for si in order {
+            let sym = statics[si];
             // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
             if sym.category != cat {
                 continue;
@@ -16860,6 +17120,71 @@ mod tests {
     use crate::address::Address;
     use crate::opcodes::OpCode;
     use crate::prettyprint::EmitNoMarkup;
+
+    #[test]
+    fn test_scope_rangemap_list_order_vhost_register_block() {
+        // ap_fini_vhost_config register-space entries (creation order,
+        // inclusive a..b, subsort = first-use offset), traced against
+        // rangemap.hh:221-277 splice semantics on 2026-09-26: the 4-byte
+        // RAX-family entry ends sooner and splices ahead of every same-base
+        // 8-byte entry; equal-range 8-byte entries order by subsort; the
+        // params keep their slot ahead of the later-appended far registers.
+        let entries = vec![
+            (0x38, 0x3f, (1u32, 184351u64), 0), // param_1
+            (0x30, 0x37, (1u32, 184351u64), 1), // param_2
+            (0x00, 0x03, (1u32, 184649u64), 2), // iVar7 (int, EAX-sized)
+            (0x00, 0x07, (1u32, 184424u64), 3), // lVar8
+            (0x00, 0x07, (1u32, 184598u64), 4), // puVar9
+            (0x00, 0x07, (1u32, 184968u64), 5), // plVar10
+            (0x00, 0x07, (1u32, 185274u64), 6), // puVar11
+            (0x00, 0x07, (1u32, 185760u64), 7), // uVar12
+            (0x10, 0x17, (1u32, 184649u64), 8), // extraout_RDX
+            (0x10, 0x17, (1u32, 184843u64), 9), // uVar13
+            (0x10, 0x17, (1u32, 185395u64), 10), // extraout_RDX_00
+            (0x10, 0x17, (1u32, 185442u64), 11), // extraout_RDX_01
+            (0x10, 0x17, (1u32, 185474u64), 12), // extraout_RDX_02
+            (0x18, 0x1f, (1u32, 184752u64), 13), // plVar14
+            (0xb8, 0xbb, (1u32, 184522u64), 14), // uVar15
+            (0x110, 0x117, (1u32, 184351u64), 15), // in_FS_OFFSET
+            (0x288, 0x28f, (1u32, 184351u64), 16), // in_RIP
+        ];
+        assert_eq!(
+            scope_rangemap_list_order(&entries),
+            vec![
+                2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1, 0, 14, 15, 16
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scope_rangemap_list_order_enclosing_piece_capture() {
+        // Morphology where the list order is NOT a pure (end, subsort)
+        // sort: P=[5,6] inserted first, Q=[0,10] appended after it, then
+        // N=[0,3]: N's splice target is Q's split piece [0..4] (key
+        // (4,sQ)), so N lands between P and Q even though N ends soonest
+        // (rangemap.hh:242-245 lower_bound over piece keys).
+        let entries = vec![
+            (5u64, 6u64, (1u32, 1u64), 0),  // P
+            (0u64, 10u64, (1u32, 2u64), 1), // Q
+            (0u64, 3u64, (1u32, 3u64), 2),  // N
+        ];
+        assert_eq!(scope_rangemap_list_order(&entries), vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn test_scope_rangemap_list_order_addrtied_minimal_subsort() {
+        // Addrtied entries carry the minimal (0,0) subsort
+        // (database.cc:100-107): a later-inserted non-addrtied entry that
+        // starts earlier still splices before them by end, while an
+        // addrtied entry appended after a greater-end record stays put
+        // when nothing sorts between their keys.
+        let entries = vec![
+            (0x100u64, 0x107u64, (0u32, 0u64), 0),  // addrtied, far
+            (0x10u64, 0x17u64, (1u32, 42u64), 1),   // non-addrtied, near
+            (0x0u64, 0x7u64, (0u32, 0u64), 2),      // addrtied, near
+        ];
+        assert_eq!(scope_rangemap_list_order(&entries), vec![2, 1, 0]);
+    }
 
     #[test]
     fn test_print_c_copy() {
