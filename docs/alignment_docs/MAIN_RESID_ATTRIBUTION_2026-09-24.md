@@ -395,3 +395,58 @@ varmap 域可修的唯一真实移植偏差（addGuard null-ct 早退）已补�
 - varmap 域交付:addGuard null-ct 移植补齐（见上,行为中性+Ghidra 行级对齐）。
 - 工件:/dev/shm/rugra-tests/rangehint/（diag/ 仪器化 harness+构建脚本+oracle drill 输出+
   symdump;main_resid.py/census.py 已适配本 worktree;curl/httpd base+fix 输出恒等证据)。
+
+# §8 RENUM 续章（wt/renum，2026-09-25）— 门控 main 644 三类逐行分解 + 编号机制审计（判定：编号域零缺陷，SYMDB 阻塞项①退役）
+
+## 8.1 基线（亲父 master 0cdbc81c，本 worktree 亲测，fast-release）
+
+- httpd 门控 RUGRA_SYMDB=1：**1328/0/0**（defects=0 numbering=0）。
+- httpd 默认：1472/0/0；curl E2E：1099/0/0；投影 bank 71/71 MATCH。
+- main：门控 skeleton diff **644**（n=0 核心 −333/+311）；默认态 694。
+
+## 8.2 三类行数表（任务①口径；skeleton 归一化把 `xVarN`/`param_N` 抹成 V——纯编号差对 skeleton 计数器贡献恒为 0 行）
+
+| 类 | 定义 | 行数（占 644） | 判定 |
+|---|---|---|---|
+| (a) 编号/命名序一致仅计数器放大 | 深归一化（去 cast/栈名拼写/符号后缀）后与 golden 相等的行对 | **0–5**（5 对仅差 cast） | FLAGBASE "~67 行 puVarN 级联" 是**归一化文本距离度量的伪影**，skeleton 计数器不可见 |
+| (b) 真偏号 | 结构等价但变量身份映射与全局双射冲突 | **0** | 编号/发射机制 oracle 忠实（见 8.4 探针）；编号值差异全部为上游变量集/类型差异的衍生 |
+| (c) 内容差（字符串/类型/结构——HEAD 族） | 其余 | **644（100%）** | 见 8.3 子族分解 |
+
+(b) 类核验细节：`VarN` 使用序列与 golden 的恒等匹配率 0.0（门控/默认同），但该差异由变量集不同（15 vs 16 槽位、类型前缀族不同、唯一 dynamic 符号 puVar10）派生——非槽位分配机制缺陷。
+
+## 8.3 (c) 类子族（n=0：golden 侧 −333 / rugra 侧 +311）
+
+| 子族 | 证据行 | 归属 |
+|---|---|---|
+| DWARF 行号存储 `local_d0 = 0x…` | golden 侧 14 行 | canon 独有命名形；纯库真值为 `*(xunknown8*)((int8)piVar10 + -8) = 0x2b874;` cast 指针算术形（direct-runner golden 同形=Rugra 现形）→ **HEAD**（§7.1 判例延伸） |
+| 推荐栈名/参数名声明 `local_d8/local_c8[4]/local_a8/__s1` | golden 侧 ~10 decl+使用行 | analyzeHeadless Parameter-ID/栈帧分析回灌（nameRecommend 通道，coreaction.cc:2984 `recoverNameRecommendationsForSymbols`；Rugra coreaction.rs:9125 在案 RUGRA-GAP）→ **HEAD**；direct-runner 同为 `axStack_c8[32]/xStack_a8` |
+| 结构族 `if(V==LIT){` vs `goto LAB;while(true){` | golden 24 + rugra 44 行 + "other stmt" 主体（两侧 215/186） | 纯库真值同 Rugra 的 goto+while 形（direct-runner 亲证）→ canon if-block 形 **HEAD**；库内残余结构差在案 MAIN-RC3-STRUCTURED-EMIT-0001/BLOCKACTION 族登记 |
+| 类型/cast 族 `(char*)/(undefined8*)/(long)`、`undefined1[32]` vs `long[4]`、`code*` vs `void(*)()` | 声明 61/61 行 + 语句内 cast | canon 的精确类型来自整程序分析回灌（跨函数类型/原型锁定）→ 主体 **HEAD**；库内类型渲染残差在案 TYPE-UNKNOWN-0001 族登记 |
+| `param_2` 指针性 `undefined8*` vs `undefined8` | 1 行（签名） | fspec/原型域（CANON 桥接差异），非 printc/varmap |
+
+粗粒度形态覆盖估计（coarse normalizer）：canon 侧 333 changed 行中 **236（70%）** 的形态存在于 direct-runner 纯库真值中（= Rugra 对应行与库真值同形，canon 行只是桥接层富化）；**97 行** canon 独有形态（严格 HEAD 上界）。
+
+## 8.4 编号/发射机制审计（(b)=0 的机制证据；临时探针已撤，撤后 E2E cmp 恒等）
+
+scope 快照（门控 main，`emit_scope_local_var_decls` 探针）：
+
+```
+static rank-1 (register): pcVar1..pVar8(start 0x0), puVar9(0x20), puVar11(0x20),
+  pcVar12(0x28), param_2(0x30), param_1(0x38), plVar13(0xa0), puVar14(0xa8),
+  puVar15(0xb8), in_FS_OFFSET(0x110)
+static rank-2 (stack, 偏移降序): auStack_c8, uStack_a8, auStack_9c, uStack_40
+dynamic (尾部): puVar10 (hash 0x22327fca60c34b)
+```
+
+与 Ghidra 机制逐点对照（printc.cc:2518 emitScopeVarDecls = MapIterator(maptable 空间序×rangemap splice 序) 先、dynamic 列表尾；database.cc:2434 buildVariableName index 计数；coreaction.cc:2978 ActionNameVars::apply 的 namerec 序；type.hh:273/424/457 printNameBase——TypeCode 名 "code"→pc 前缀）：
+- 编号序=符号创建/静态条目 splice 序 ✓；in_FS_OFFSET(0x110) 排 puVar15(0xb8) 后 ✓（同为 rank-1，splice 序）；
+- 栈条目偏移降序 ✓（golden local_d8..local_40 同向）；
+- puVar10 落 dynamic 尾=**Ghidra dynamic 尾部语义的正确行为**（该符号经 dynamic hash 映射——变量集本身与 canon 不同，系上游类型/合并状态差异的衍生，非 varmap/printc 缺陷）；
+- nameBase 链（p/pc/au/l/i/u 前缀）oracle 忠实（type_system/datatype.rs:1119 镜像 type.hh 虚派发）。
+
+## 8.5 处置
+
+- **RENUM 判定：编号/命名域（printc.rs/varmap.rs）零缺陷，零 src 改动**（AFINI/RANGEHINT 判例延续）。
+- FLAGBASE 终报 SYMDB 默认化余项① "main 重编号级联 ~67 行" **退役**（度量伪影，skeleton 不可见）；余项仅 ②已清（DATASYMS）+③ap_pregfree +2（独立登记）。SYMDB 默认化在编号/稳定性维度**无剩余阻塞**。
+- canon main 644 的收敛路径=HEAD 桥接层整程序回灌（不开库层 TODO，§7.3 判例）+ 已登记结构/类型族。
+- 工件：/dev/shm/rugra-tests/sb-renum/（classify.py/classify2.py/skel_diff.py/varseq*.py + main_skel.diff + main_classified*.txt + decls2.err 探针 + 双态输出）。
