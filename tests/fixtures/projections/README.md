@@ -234,6 +234,38 @@ projection) changed from `f6cb61d1…` to `24a4bec2…`; all 26 pre-existing
 entries' oracle projections were re-captured and re-pinned with the
 producer line verified as the only byte difference.
 
+## httpd PLT-thunk population (2026-09-25, lane HBANK — inventoried and
+oracle-captured, not yet banked)
+
+The httpd corpus carries the same first-section PLT thunk family curl
+has, at a larger scale. Enumerated with the same readelf `-S`/`-r`
+method as the curl sweep (only real code slots in the executable PLT
+sections enter — EXTERNAL pseudo-functions have no code bytes and are
+excluded by construction):
+
+| segment | entries | stages/ops |
+|---|---|---|
+| PLT0 header @0x29020 | 1 | 191 / 1,240 |
+| .plt.got (apr_bucket_free @0x2a400, __cxa_finalize @0x2a410) | 2 | 186 / 742 |
+| .plt.sec @0x2a420-0x2b7e0 | 317 | 186 / 742 |
+
+320 entries total (ledger: `/dev/shm/rugra-tests/hbank/httpd_thunks.tsv`,
+regenerable via `make_inventory.py` in the same directory). httpd is
+stripped, so unlike curl none of these thunks appear in any BFD symbol
+table — the address-only arm is the only oracle capture channel, and all
+320 oracle projections were captured deterministically (double-run cmp)
+through it with the shared build cache (`RUGRA_STAGE_PROJECTION_BUILD`).
+
+Banking is blocked on the rugra side: the httpd driver's stage-selectable
+function ledger is dynsym-defined-only (473 entries, first at 0x2b820), so
+`RUGRA_STAGE_FUNC=0x2a430` exits 1 ("matched no function in the ELF symbol
+tables") — unlike curl, whose driver ledger (GOLDEN_CORPUS_LEDGER) bakes
+the thunks in. Registered as TODO `HBANK-DRIVER-STAGELEDGER-0001`. The
+frozen oracle-side captures live under `/dev/shm/rugra-tests/hbank/
+oracle_thunks/` for the follow-up lane (RAM disk — re-capture recipe:
+`RUGRA_STAGE_PROJECTION_OUT=… bash tools/run_stage_projection_oracle.sh
+httpd <entry> -`).
+
 ## Adding a function
 
 1. capture both sides with the recipes above (double-run determinism check

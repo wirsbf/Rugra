@@ -303,6 +303,14 @@ fixture 按控制台 `load <addr>` 语义在入口注册函数；全部首验即
 首分歧残差与地址臂机制见银行 README）。结构、重捕获 recipe 与新增条目
 流程见 `tests/fixtures/projections/README.md`。
 
+httpd 侧同族 PLT-thunk 总群已于 2026-09-25（lane HBANK）盘点并完成
+oracle 侧全量捕获（320 条：PLT0 @0x29020 + 2 个 .plt.got + 317 个
+.plt.sec，形态同 curl——186/742 桩与 191/1240 PLT0；双跑 cmp 恒等），
+但**尚未入库**：httpd 驱动的 stage 可选函数账本只含 dynsym 定义符号
+（473 条），地址形 selector 选不中 thunk（curl 侧是 GOLDEN_CORPUS_LEDGER
+把 thunk 烤进账本才可行）。阻塞登记 `HBANK-DRIVER-STAGELEDGER-0001`，
+解锁后按银行 README 的新增条目流程批量入库（预期 71→391）。
+
 #### Level 4 补充资产：varmap gatheropen/guard 双侧 fixture 的 untyped 臂（2026-09-25，RANGEHINT-CR-F1）
 
 `tests/oracle/varmap_gatheropen_guard_1204.{cc,rs}` 是 MapState::addGuard /
