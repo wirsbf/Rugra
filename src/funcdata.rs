@@ -15139,7 +15139,16 @@ mod tests {
             fd.bblocks.get_size()
         );
 
-        fd.bblocks.build_dom_tree();
+        // Ghidra contract (funcdata.cc:150-168 startProcessing): followFlow +
+        // structureReset run BEFORE any Action — structureReset calls
+        // bblocks.structureLoops (funcdata_block.cc:711), which labels the
+        // F_BACK_EDGE the structurer's orderLoopBodies consumes
+        // (blockaction.cc:1148). The previous hand-rolled `build_dom_tree`
+        // skipped the labeling entirely, so orderLoopBodies found 0 loops,
+        // no BlockWhileDo was structured, and ActionNormalizeBranches had no
+        // loop_info to tag the back-edge jmp CONTINUE
+        // (BLOCKACT-NORMALIZE-CONTINUE-TAG-0001).
+        fd.start_processing();
 
         use crate::action::Action;
         let mut structurer = crate::blockaction::ActionBlockStructure::new();

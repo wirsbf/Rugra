@@ -8566,42 +8566,170 @@ impl Action for ActionNormalizeBranches {
         let mut changed = 0;
         let size = fd.sblocks.get_size();
 
-        // Collect loop header/exit pairs from structured blocks
-        let mut loop_info: Vec<(crate::address::Address, Option<crate::address::Address>)> =
-            Vec::new();
+        // Collect loop header/exit/condition triples from structured blocks
+        // at ANY nesting depth. A WhileDo/DoWhile nested inside a BlockList
+        // (loop body chained: head -> ... -> tail -> head) is invisible to a
+        // top-level-only scan, leaving its back-edge jmp untagged
+        // (BLOCKACT-NORMALIZE-CONTINUE-TAG-0001).
+        //
+        // The traversal is Ghidra's structure-tree walk pattern
+        // (ActionPreferComplement, blockaction.cc:2143-2164): a vec-based BFS
+        // seeded with the root graph's components; copy/basic children are
+        // not descended (they hold no nested composites), every other child
+        // is pushed. The break/continue classification this feeds mirrors
+        // Ghidra's own scopeBreak (block.cc:1270-1288), which reaches every
+        // composite via virtual dispatch, not just the top level.
+        struct LoopInfo {
+            header_addr: crate::address::Address,
+            exit_addr: Option<crate::address::Address>,
+            /// Condition block resolved to the live original (BlockCopy
+            /// unwrapped), for op-parent identity checks.
+            cond_orig: std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        }
 
-        for i in 0..size {
-            let block = match fd.sblocks.get_block(i) {
-                Some(b) => b,
-                None => continue,
+        let resolve_orig = |blk: &std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>|
+         -> std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+            let r = blk.read().unwrap();
+            if r.get_type() == crate::block::BlockType::Copy {
+                if let Some(orig) = r.sub_block(0) {
+                    return orig;
+                }
+            }
+            blk.clone()
+        };
+
+        // RUGRA-GLUE: child enumeration for the composite kinds the walk
+        // descends (Ghidra's t_copy/t_basic skip, blockaction.cc:2158). Rust
+        // trait objects do not virtual-dispatch subBlock for these kinds, so
+        // downcast per type — the same enumeration is_structured_child uses.
+        let structured_children =
+            |b: &dyn FlowBlock| -> Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+                use crate::block::{
+                    BlockCondition, BlockDoWhile, BlockGoto, BlockIf, BlockInfLoop, BlockList,
+                    BlockSwitch, BlockWhileDo,
+                };
+                let mut out: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+                    Vec::new();
+                match b.get_type() {
+                    crate::block::BlockType::Condition => {
+                        if let Some(bc) = b.as_any().downcast_ref::<BlockCondition>() {
+                            out.push(bc.first.clone());
+                            out.push(bc.second.clone());
+                        }
+                    }
+                    crate::block::BlockType::If => {
+                        if let Some(bi) = b.as_any().downcast_ref::<BlockIf>() {
+                            out.push(bi.condition.clone());
+                            out.push(bi.if_body.clone());
+                            if let Some(ref eb) = bi.else_body {
+                                out.push(eb.clone());
+                            }
+                        }
+                    }
+                    crate::block::BlockType::WhileDo => {
+                        if let Some(wd) = b.as_any().downcast_ref::<BlockWhileDo>() {
+                            out.push(wd.condition.clone());
+                            out.push(wd.body.clone());
+                        }
+                    }
+                    crate::block::BlockType::DoWhile => {
+                        if let Some(dw) = b.as_any().downcast_ref::<BlockDoWhile>() {
+                            out.push(dw.condition.clone());
+                        }
+                    }
+                    crate::block::BlockType::InfLoop => {
+                        if let Some(il) = b.as_any().downcast_ref::<BlockInfLoop>() {
+                            out.push(il.body.clone());
+                        }
+                    }
+                    crate::block::BlockType::Goto => {
+                        if let Some(bg) = b.as_any().downcast_ref::<BlockGoto>() {
+                            if let Some(ref wrapped) = bg.wrapped {
+                                out.push(wrapped.clone());
+                            }
+                        }
+                    }
+                    crate::block::BlockType::List => {
+                        if let Some(bl) = b.as_any().downcast_ref::<BlockList>() {
+                            out.extend(bl.children.iter().cloned());
+                        }
+                    }
+                    crate::block::BlockType::Switch => {
+                        if let Some(bs) = b.as_any().downcast_ref::<BlockSwitch>() {
+                            out.push(bs.control.clone());
+                            out.extend(bs.cases.iter().cloned());
+                            if let Some(ref dc) = bs.default_case {
+                                out.push(dc.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                out
             };
 
+        let mut loop_info: Vec<LoopInfo> = Vec::new();
+        let mut queue: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for i in 0..size {
+            if let Some(b) = fd.sblocks.get_block(i) {
+                queue.push(b);
+            }
+        }
+        let mut pos = 0;
+        while pos < queue.len() {
+            let block = queue[pos].clone();
+            pos += 1;
+
             let block_type = block.read().unwrap().get_type();
+
+            // Children to descend into (Ghidra cc:2154-2161 skips t_copy /
+            // t_basic). Collected per composite kind via downcast; Rust's
+            // trait objects do not virtual-dispatch subBlock for these.
+            let children: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                let b: std::sync::RwLockReadGuard<'_, dyn FlowBlock + Send + Sync> =
+                    block.read().unwrap();
+                match block_type {
+                    crate::block::BlockType::Copy | crate::block::BlockType::Basic => Vec::new(),
+                    _ => structured_children(&*b),
+                }
+            };
 
             match block_type {
                 crate::block::BlockType::WhileDo => {
                     let block_read = block.read().unwrap();
                     if let Some(wd) = block_read.as_any().downcast_ref::<BlockWhileDo>() {
-                        let header_addr = wd.condition.read().unwrap().get_start_addr();
+                        // The condition member of the collapse graph is a
+                        // BlockCopy (or Basic) whose default get_start_addr
+                        // is 0 and whose edges were rewired onto the
+                        // composite by identifyInternal — resolve to the
+                        // live original, which keeps the bblocks entry
+                        // address and the original out-edges (body / exit).
+                        let cond_orig = resolve_orig(&wd.condition);
+                        let header_addr =
+                            crate::address::Address::new(crate::block::front_leaf_start_addr(
+                                &wd.condition,
+                            ));
 
-                        // The exit block is the false-branch target of the CBRANCH
-                        // in the condition block.
+                        // The exit block is the out-edge of the ORIGINAL
+                        // condition block that does NOT point at the body
+                        // front leaf.
                         let exit_addr = {
-                            let cond = wd.condition.read().unwrap();
+                            let cond = cond_orig.read().unwrap();
                             if cond.size_out() >= 2 {
-                                // false edge (slot 0 for while-do) is typically the exit
-                                // but which slot is exit depends on the loop structure.
-                                // For while(cond), true edge → exit, false edge → body.
-                                // Check both edges to find the one NOT pointing at body.
-                                let body_addr = wd.body.read().unwrap().get_start_addr();
+                                let body_u =
+                                    crate::block::front_leaf_start_addr(&wd.body);
                                 let out0_addr = cond
                                     .get_out(0)
-                                    .map(|e| e.point.read().unwrap().get_start_addr());
+                                    .map(|e| {
+                                        crate::block::front_leaf_start_addr(&e.point)
+                                    });
                                 let out1_addr = cond
                                     .get_out(1)
-                                    .map(|e| e.point.read().unwrap().get_start_addr());
+                                    .map(|e| {
+                                        crate::block::front_leaf_start_addr(&e.point)
+                                    });
 
-                                if out0_addr == Some(body_addr) {
+                                if out0_addr == Some(body_u) {
                                     out1_addr
                                 } else {
                                     out0_addr
@@ -8609,9 +8737,14 @@ impl Action for ActionNormalizeBranches {
                             } else {
                                 None
                             }
-                        };
+                        }
+                        .map(crate::address::Address::new);
 
-                        loop_info.push((header_addr, exit_addr));
+                        loop_info.push(LoopInfo {
+                            header_addr,
+                            exit_addr,
+                            cond_orig,
+                        });
                     }
                 }
                 crate::block::BlockType::DoWhile => {
@@ -8620,21 +8753,60 @@ impl Action for ActionNormalizeBranches {
                         .as_any()
                         .downcast_ref::<crate::block::BlockDoWhile>()
                     {
-                        let header_addr = dwd.condition.read().unwrap().get_start_addr();
-                        let exit_addr = {
-                            let cond = dwd.condition.read().unwrap();
-                            if cond.size_out() >= 2 {
-                                cond.get_out(1)
-                                    .map(|e| e.point.read().unwrap().get_start_addr())
-                            } else {
-                                None
-                            }
+                        let cond_orig = resolve_orig(&dwd.condition);
+                        // Do-while: the condition block IS the loop tail.
+                        // Its CBRANCH targets the loop head (back edge); the
+                        // OTHER out-edge of the original is the exit. Slot
+                        // order is not fixed, so identify the head from the
+                        // cbranch target and take the non-head edge as exit.
+                        let header_addr = {
+                            let cond = cond_orig.read().unwrap();
+                            cond.get_ops()
+                                .iter()
+                                .rev()
+                                .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                                .and_then(|o| {
+                                    let op = o.0.read().unwrap();
+                                    op.inrefs
+                                        .first()
+                                        .map(|vn| vn.read().unwrap().get_offset())
+                                })
+                                .map(crate::address::Address::new)
+                                .unwrap_or_else(|| {
+                                    crate::address::Address::new(
+                                        crate::block::front_leaf_start_addr(
+                                            &dwd.condition,
+                                        ),
+                                    )
+                                })
                         };
-                        loop_info.push((header_addr, exit_addr));
+                        let header_u = header_addr.as_u64();
+                        let exit_addr = {
+                            let cond = cond_orig.read().unwrap();
+                            (0..cond.size_out())
+                                .map(|s| {
+                                    cond.get_out(s)
+                                        .map(|e| {
+                                            crate::block::front_leaf_start_addr(&e.point)
+                                        })
+                                        .unwrap_or(u64::MAX)
+                                })
+                                .find(|&a| a != header_u)
+                                .filter(|&a| a != u64::MAX)
+                        }
+                        .map(crate::address::Address::new);
+
+                        loop_info.push(LoopInfo {
+                            header_addr,
+                            exit_addr,
+                            cond_orig,
+                        });
                     }
                 }
                 _ => {}
             }
+
+            queue.extend(children);
         }
 
         if loop_info.is_empty() {
@@ -8649,27 +8821,41 @@ impl Action for ActionNormalizeBranches {
                     if op.branch_type != crate::op::branch_type::NONE {
                         continue;
                     }
+                    // The loop's own condition test (the cbranch living in the
+                    // WhileDo/DoWhile condition block) never tags: Ghidra
+                    // consumes it as the `while (...)` / `do ... while (...)`
+                    // syntax (BlockWhileDo/BlockDoWhile emit reads the
+                    // condition's cbranch; scopeBreak never visits it as a
+                    // goto). Identify it by op-parent identity against the
+                    // resolved original condition block — the previous
+                    // op-addr == header-addr check only matched single-op
+                    // headers and mistagged the loop test of any header with
+                    // leading non-branch ops.
+                    let op_cond_parent = op
+                        .parent
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                        .map(|p| resolve_orig(&p));
+
                     // Input[0] is the branch target address varnode
                     let target_addr = match op.inrefs.get(0) {
                         Some(vn_arc) => vn_arc.read().unwrap().get_offset(),
                         None => continue,
                     };
 
-                    for (header_addr, exit_addr) in &loop_info {
-                        if target_addr == header_addr.as_u64() {
-                            // Skip the header's own CBRANCH (the loop condition test itself)
-                            if op.get_addr().as_u64() == header_addr.as_u64() {
+                    for li in &loop_info {
+                        if let Some(ref parent_orig) = op_cond_parent {
+                            if std::sync::Arc::ptr_eq(parent_orig, &li.cond_orig) {
                                 continue;
                             }
+                        }
+                        if target_addr == li.header_addr.as_u64() {
                             op.branch_type = crate::op::branch_type::CONTINUE;
                             changed += 1;
                             break;
                         }
-                        if let Some(ref exit) = exit_addr {
+                        if let Some(ref exit) = li.exit_addr {
                             if target_addr == exit.as_u64() {
-                                if op.get_addr().as_u64() == header_addr.as_u64() {
-                                    continue;
-                                }
                                 op.branch_type = crate::op::branch_type::BREAK;
                                 changed += 1;
                                 break;
