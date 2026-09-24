@@ -1,5 +1,31 @@
 # `printc.rs` API Reference
 
+## 2026-09-24：STORE 地址恢复单发射（PRINTC-STORE-DBLEMIT-0001 / Lane GI）
+
+`PrintC` 的 STORE 发射块（`emit` 的 opStore 分支）在 merge 33418058
+（75d51e03 × 4aee0d60）冲突解错后同时保留了**两条**地址发射路径：FQ 侧的手射
+`tag_op("*")`+`rpn_push_in(...)` 与 FR 侧的 dereference token 协议路径
+（`rpn_push_op(rpn_tok_dereference)`+`rpn_push_in(..., self.mods)`），导致每个
+STORE 地址印两次（`*(cast)ADDR*(cast)ADDR = v`，全语料不可编译 C：httpd 140 行 /
+curl 19 行拼接形）。
+
+修复恢复 `PrintC::opStore`（printc.cc:500-517）的单发射语义：
+
+- **deref 形**（`deref_form == true`）：仅 `rpn_push_op(rpn_tok_dereference)` 一次 +
+  `rpn_push_in(op, 1, m)` —— 对应 cc:511 `pushOp(&dereference,op)`；token 协议的
+  括号决策（printlanguage.cc:287-292，unary_prefix prec 62）保证
+  `*(puVar4 + 3)` 形合法左值。
+- **usearray 形**：不压任何 token，仅 `m |= print_store_value` —— 对应
+  cc:508-509（`usearray && !isSet(force_pointer)` 时 `m |= print_store_value`），
+  由隐式 PTRADD/PTRSUB def 自己发射 `p[i]`。修复前该形也被错误压了 token，
+  且压的是 `self.mods` 而非带 flag 的 `m`。
+
+验证（亲父 b5b949dd 前后对照，双侧亲测）：curl 门禁 1822/0/0 → **1744/0/0**、
+httpd 1756/0/0 → **1700/0/0**（零回退：curl 14 fn 改善、httpd 9 fn 改善）；
+gcc 审计 curl 104OK/20FAIL、httpd 23OK/6FAIL；双发射行两口径均清零；五投影
+（RUGRA_MIRROR=1）与锁定 oracle projection 逐字节 MATCH。归因账本见
+`docs/alignment_docs/MAIN_RESID_ATTRIBUTION_2026-09-24.md`。
+
 ## 2026-09-24：印前指针兜底盖章通道按 oracle 方向收缩（WIDTHOP 宽度算子族 / Lane GF）
 
 `doc_function` 的印前指针盖章通道（`pointer_varnodes` 收集 + 兜底
