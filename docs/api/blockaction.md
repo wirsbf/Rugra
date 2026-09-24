@@ -1507,3 +1507,52 @@ pick 111 后分叉：oracle 以 Cat 15+DoWhile 15（+1 dfc）收掉 loop(15,131)
 后 selectGoto 挑走 (131,133)/(131,15) 两条外来边。修复后点火轨迹经 Switch 29(#2)+Cat 15
 对齐，首 op 分歧 ord 7（funclink）→ ord 55（activeparam），stage 40-54 snapshot 与
 count kv 全同。blockaction 属机制 C 白名单：Cross-Review PENDING。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 — case isexit 捕获 + default 路由坐标修复）
+
+三症状的结构化侧根因与修复（JTRES 移交收口；oracle 对照=tree_dump_1204 仪器化追踪，
+/dev/shm/rugra-tests/casewrap/）：
+
+1. **isexit 捕获时点**（症状①：httpd main `case 0x4d:` 丢 `break;`）：oracle 的
+   `BlockSwitch::addCase`（block.cc:3511-3514）在 `grabCaseBasic` 时——即
+   `newBlockSwitch` 的 `identifyInternal` 消费 case 组件、`selfIdentify` 的
+   `replaceInEdge` 半删除组件外部出边（block.cc:160-173）**之前**——计算
+   `isexit = (bl->sizeOut()==1)` 并永久记录在 `CaseOrder`（block.hh:763）；打印侧
+   `isExit(i)`（printc.cc:3342）读的是该旗标，事后不可从 sizeOut 重导（组件消费后
+   外部出边数恒 0）。Rugra 此前在 printc 用 `size_out()==1` 打印期重导 → 恒 false →
+   break 全靠 JTRES 的发射侧台账补偿。修复：`BlockSwitch` 增 `case_isexit`/
+   `default_isexit` 平行数组（同 `case_gototypes` 形态），`try_rule_switch` 的
+   case 收集循环在 identify_internal 之前按 cc:3513-3514 捕获；multigoto 重加臂
+   置 false（cc:3512 gt!=0）；`finalize_case_labels` 的稳定排序与之联合置换；
+   printc 的 cc:3342 判定改读旗标。
+2. **default 路由坐标**（症状④：`case 0x43:` 整 case 丢失）：`newBlockMultiGoto`
+   的 peel（removeEdge，block.cc:1746）把 goto 标记的 dispatch 边移出结构图出边
+   表后，结构槽位 j 与基本图槽位错位——槽位索引的 `is_default_branch(j)` 拿原始
+   边旗标对照 SHIFT 后的目标：httpd main peel 后槽 1 是 case 0x43 的块而原始槽 1
+   是已 peel 的 default → 0x43 被误路由进 default 槽位、随真正 default 的 multigoto
+   重加被覆盖蒸发。oracle 的 addCase 用基本图反查（cc:3506-3515：
+   `inindex = basicbl->getInIndex(switchbl)` → `outindex` → `isDefaultBranch`），
+   从不受结构图 peel 影响。修复：case 收集改用既有 `switch_case_basic_coords`
+   （同一基本图 in-edge 反查）判定 default。
+3. **gotoPrints 后继链的合并打印序**（症状③：`case 0x66:` 丢
+   `goto switchD_.._caseD_40;`，block.rs `next_flow_after_successors` Switch 臂）：
+   oracle `BlockSwitch::nextFlowAfter`（block.cc:3639-3661）遍历的是排序后的
+   caseblocks（default 以其 label 序位列于其中），最后一个 caseblock 交给父臂
+   （cc:3659-3660 "flow is to exit of switch"）；Rugra 组件表把 default 追加在尾
+   → 最后一个真实 case 的后继= default 前叶=其 goto 目标 → prints=false 丢语句。
+   修复：Switch 臂构造合并打印序（default 按 `default_label` 序插入，同 printc
+   def_pos 配方），末位交父臂。
+4. **发射侧守卫退役**（printc.rs）：BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 的
+   `needs_switch_break` 台账补偿块按 TODO 退役条件移除——A/B 实测守卫置死后
+   httpd/curl 双语料逐字节恒等（结构化侧旗标已全覆盖其职责）；同修
+   emit_block_ops 的 discovery 台账对 Goto 弧记录 wrapped 叶起点（症状②：
+   `switchD_.._caseD_3f:` 标签被 never-emitted 锚误吞），`case_exit_stmt_printed`
+   字段保留写入作为 discharge 记录、读者移除。
+
+E2E（默认脸亲测，@ master 3b2bd7bf 基线）：httpd 1243→**1218**/0/0（main 572→549）、
++TYPESEED 1125→**1100**/0/0（main 550→527）、curl 1096→**1081**/0/0（getparameter
+381→369、parseconfig 73→71、next_url 31→29；glob_set 47→48= default 体 isexit 的
+canon 同款 break 落在 Rugra 既有 default 排位上，形态+1 正确向 canon）、curl 三门
+默认脸 767→**758**。main switch 区四症状全收敛（case 0x43+goto LAB_0012bb80+
+caseD_3f 标签+0x4d break+0x66 goto 与 canon 同形）；gcc 审计 fail 名集双语料逐名
+恒等；双跑 cmp 恒等。

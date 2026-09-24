@@ -852,12 +852,12 @@ pub struct PrintC {
     /// reject) — names a label no block can ever define
     /// (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001).
     code_block_starts: HashSet<u64>,
-    /// Per-case exit-statement ledger for emit_structured_switch's cc:3342
-    /// break decision: true once the case component expressed its own exit
-    /// flow (a formal goto/break/continue statement via emit_block_goto's
-    /// cc:2775-2778 arm or a goto-typed case's cc:3334-3337 statement).
-    /// Reset before each case body; read after it. See
-    /// BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001.
+    /// Per-case exit-statement ledger (RETIRED reader with
+    /// BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001's structuring-side fix: the
+    /// cc:3342 break decision now reads the oracle's own captured
+    /// `BlockSwitch::case_isexit` flag, and the A/B retirement test showed
+    /// zero residue with this ledger's consumer removed). The writes are
+    /// kept as the discharge record for future re-derivations.
     case_exit_stmt_printed: bool,
     /// Restructured local-variable scope (faithful port of varmap.cc). Built
     /// once per doc_function from the function's stack varnodes. When a symbol
@@ -4340,15 +4340,57 @@ impl PrintC {
         // counting it here would wrongly suppress the never-emitted anchor.
         // The real pass does not re-insert — the set must stay the discovery
         // snapshot the defenses were specified against.
+        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001: a BlockGoto arc arriving
+        // here (a Goto-wrapped switch case body, emit_block_goto's
+        // Basic/Copy arm) emits the WRAPPED leaf's ops — the arc itself is
+        // not Basic/Copy — so the ledger must record the wrapped leaf's
+        // start. Without it the goto statement's never-emitted-target anchor
+        // (emit_goto_statement) misfires for a target whose body IS emitted
+        // by the tree: the anchor consumes printed_labels and the real
+        // label at the case head is suppressed (observed: httpd main
+        // `goto switchD_0012ba94_caseD_3f;` with the
+        // `switchD_0012ba94_caseD_3f:` label missing at case 0x3f's slot).
         if self.discovery_pass
             && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
-            && matches!(
-                block_arc.read().unwrap().get_type(),
-                crate::block::BlockType::Basic | crate::block::BlockType::Copy
-            )
         {
-            if let Some(start) = Self::flow_entry_address(block_arc) {
-                self.discovery_block_starts.insert(start);
+            let ledger_arc = {
+                let bt = block_arc.read().unwrap().get_type();
+                if bt == crate::block::BlockType::Goto {
+                    block_arc
+                        .read()
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockGoto>()
+                        .and_then(|g| g.wrapped.clone())
+                } else {
+                    None
+                }
+                .filter(|w| {
+                    matches!(
+                        w.read().unwrap().get_type(),
+                        crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                    )
+                })
+            };
+            let ledger_targets: Vec<&std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >> = match &ledger_arc {
+                Some(w) => vec![w],
+                None => {
+                    if matches!(
+                        block_arc.read().unwrap().get_type(),
+                        crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                    ) {
+                        vec![block_arc]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
+            for target_arc in ledger_targets {
+                if let Some(start) = Self::flow_entry_address(target_arc) {
+                    self.discovery_block_starts.insert(start);
+                }
             }
         }
         // GOTO-LABEL-UNPRINTED-0001 backpatch: a `goto` to this block's
@@ -6075,69 +6117,37 @@ impl PrintC {
                         // -1)` → tagLine + break. isExit(i) (block.hh:791)
                         // reads the per-case `isexit` flag set by
                         // BlockSwitch::addCase (block.cc:3511-3514):
-                        // `gt != 0 → false; else isexit = (bl->sizeOut()==1)`.
+                        // `gt != 0 → false; else isexit = (bl->sizeOut()==1)`,
+                        // captured at grabCaseBasic time (before the
+                        // components' external out edges are half-deleted)
+                        // and carried on BlockSwitch::case_isexit.
                         //
-                        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 adapter:
-                        // the oracle invariant behind cc:3342 is that every
-                        // case's exit flow is expressed exactly once — as
-                        // the component's own formal statement (a
-                        // scopeBreak-promoted `break`, block.cc:2866-2873/
-                        // 3613-3630, or `goto <label>` when the target is
-                        // not the switch exit), as the chained fall-thru
-                        // into the next case in emission order (no
-                        // statement; BlockSwitch::nextFlowAfter,
-                        // block.cc:3639-3663: "Blocks are printed in
-                        // fallthru order"), or as this switch-level break.
-                        // Rugra's structurer leaves most case components as
-                        // Goto wrappers whose gototype never received the
-                        // scopeBreak promotion and whose flat terminal
-                        // branch prints nothing (branch_type NONE) — so the
-                        // invariant is re-derived here from the emission
-                        // ledger: a break is needed when the component did
-                        // NOT discharge its own statement
-                        // (case_exit_stmt_printed), does not end in RETURN
-                        // (a RETURN-terminated case has no out-edge:
-                        // oracle isexit = sizeOut()==1 = false), and its
-                        // exit target is not the next case's entry (not a
-                        // fall-thru chain link).
+                        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001: the
+                        // emission-side ledger adapter that used to live
+                        // here (needs_switch_break re-derivation) is
+                        // RETIRED with this lane — the structuring side now
+                        // transports the oracle's own isexit flag, and the
+                        // A/B retirement test (both corpora byte-identical
+                        // with the guard dead) confirmed zero residue.
+                        // cc:3513-3514 (addCase): isexit = (bl->sizeOut()==1)
+                        // captured at grabCaseBasic time — BEFORE
+                        // identifyInternal's selfIdentify half-deletes the
+                        // case components' external out edges — and carried
+                        // on the CaseOrder (block.hh:763). Post-collapse
+                        // sizeOut()==0 for every component, so the captured
+                        // flag is the oracle's only transport (isExit(i),
+                        // block.hh:791); re-deriving from size_out() here
+                        // always read false (BLOCKACTION-SWITCH-CASE-GOTO-
+                        // WRAP-0001 symptom ①: case 0x4d's missing break).
                         let oracle_case_isexit = {
                             let gt = switch_data.case_gototypes.get(idx).copied().unwrap_or(0);
-                            gt == 0 && case_block.read().unwrap().size_out() == 1
+                            gt == 0
+                                && switch_data
+                                    .case_isexit
+                                    .get(idx)
+                                    .copied()
+                                    .unwrap_or(false)
                         };
-                        let ends_with_return = {
-                            let cb = case_block.read().unwrap();
-                            cb.get_ops()
-                                .last()
-                                .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN)
-                        };
-                        let case_exit_target = {
-                            let cb = case_block.read().unwrap();
-                            if let Some(g) =
-                                cb.as_any().downcast_ref::<crate::block::BlockGoto>()
-                            {
-                                g.target_dyn
-                                    .as_ref()
-                                    .and_then(|t| Self::flow_entry_address(t))
-                            } else {
-                                cb.get_ops().last().and_then(|o| {
-                                    let og = o.0.read().unwrap();
-                                    match og.opcode {
-                                        OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH => og
-                                            .get_in(0)
-                                            .map(|v| v.read().unwrap().get_offset()),
-                                        _ => None,
-                                    }
-                                })
-                            }
-                        };
-                        let next_case_start = if idx + 1 < switch_data.cases.len() {
-                            Self::flow_entry_address(&switch_data.cases[idx + 1])
-                        } else {
-                            None
-                        };
-                        let needs_switch_break = !ends_with_return
-                            && !self.case_exit_stmt_printed
-                            && case_exit_target.map_or(false, |t| next_case_start != Some(t));
                         // cc:3342 `i!=bl->getNumCaseBlocks()-1`: the FINAL
                         // label in the merged emission order (cases + the
                         // default at its sorted rank, block.cc:3591) never
@@ -6146,7 +6156,7 @@ impl PrintC {
                         // — the last case IS that final label.
                         let is_last_label =
                             idx + 1 == switch_data.cases.len() && (!has_default || def_pos < switch_data.cases.len());
-                        if (oracle_case_isexit || needs_switch_break) && !is_last_label {
+                        if oracle_case_isexit && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
                         }
@@ -6225,7 +6235,7 @@ impl PrintC {
             // goto/return (sizeOut()!=1, addCase cc:3514) does not
             // (oracle gp: default body ends `goto LAB_0010404b`, no break;
             // oracle httpd 0x12f92a default mid-list WITH break).
-            let def_isexit = def_block.read().unwrap().size_out() == 1;
+            let def_isexit = switch_data.default_isexit;
             if !is_last_label && def_isexit {
                 self.emit.tag_line(0);
                 self.emit.print("break;");

@@ -1802,3 +1802,17 @@ to bottom of loop"）接入：match_url Phase 2 ordinal 28 oppool1 首个发射�
 phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=861 对齐。
 四类核对：引用参数=无（只读入边 flags）；遍历序=入边槽位序；计数器=无；
 排序键=flag 位测试（block.hh:110 f_loop_edge=2）。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 — case_isexit 平行数组 + nextFlowAfter 合并打印序）
+
+1. **`BlockSwitch::case_isexit`/`default_isexit`**：`CaseOrder::isexit`（block.hh:763，
+   addCase block.cc:3511-3514 于 grabCaseBasic 时、identifyInternal 半删组件外部出边
+   之前捕获的 `bl->sizeOut()==1`）的 Rust 平行数组传输——与 `case_gototypes` 同形
+   态；`finalize_case_labels` 稳定排序联合置换；捕获点在 blockaction.rs
+   `try_rule_switch`（写域主 commit）。
+2. **`next_flow_after_successors` Switch 臂**：对齐 `BlockSwitch::nextFlowAfter`
+   （block.cc:3639-3661）的 caseblocks 遍历序——default 以其 label 序位插入合并
+   打印序（def_pos 配方同 printc），goto 组件的后继=合并序下一位的前叶，最后一个
+   caseblock 交父臂（cc:3659-3660）；不再用「cases+尾部 default」的原始组件序（该
+   序使最后真实 case 的后继成为 default 前叶，goto 目标恰好是 default 时丢 goto
+   语句，httpd main case 0x66 实证）。文档注释同步改写。

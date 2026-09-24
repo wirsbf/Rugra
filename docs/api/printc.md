@@ -2911,3 +2911,18 @@ break（canon 形）、`goto switchD_..._caseD_40` 形恢复；curl getparameter
 383→381、glob_set 的 base 期语义错误 break（canon=直落 default 链）纠正为
 `goto caseD_5e`（形态 +2）；mirror 面 main CMOV 位由 goto+label 平铺形转
 clean if-block（向 direct-runner 纯库真值收敛 −9 行）。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 — cc:3342 isexit 旗标化 + 守卫退役 + discovery 台账 Goto 弧）
+
+1. **emit_structured_switch 的 cc:3342 判定**：`oracle_case_isexit` 从打印期
+   `size_out()==1` 重导（组件消费后恒 0）改为读 `BlockSwitch::case_isexit`（oracle
+   addCase 捕获传输，block.hh:763/791）；default 槽位 `def_isexit` 同改。
+2. **needs_switch_break 守卫退役**：本 ID 的发射侧台账补偿块（ends_with_return/
+   case_exit_target/next_case_start 三变量 + 判定）按 TODO 退役条件移除——A/B 实测
+   守卫置死后 httpd/curl 双语料逐字节恒等；`case_exit_stmt_printed` 字段保留写入
+   （gt!=0 臂与 emit_block_goto 的 discharge 记录），读者移除。
+3. **emit_block_ops discovery 台账**：BlockGoto 弧（Goto 包裹的 switch case body 经
+   emit_block_goto 的 Basic/Copy 臂进入本通道）发射的是 wrapped 叶的 ops——台账补记
+   wrapped 叶起点（Basic/Copy）；否则 goto 语句的 never-emitted 锚对「树中实际发射
+   的目标」误点火，吃掉 printed_labels 使 case 头部真标签被压掉（httpd main
+   `switchD_0012ba94_caseD_3f:` 标签实证）。
