@@ -674,3 +674,91 @@ printc.rs spacebase 未名回退印裸 `format!("0x{:x}", in1const)`
 默认脸（=SEEDFLIP 后种子态）curl **767/0/0**（main 129/match_url 28
 复现）；投影银行 **71/71 PASS**；gcc 审计 **104 OK/20 FAIL**（=基线
 fail 集）；双跑 cmp 恒等；witness 双复跑字节恒等。
+
+## §14 REGSYM 交付记录（Lane REGSYM，2026-09-25，基=亲父 aa62f6c0）
+
+任务原设：§12.4 登记的 `Configurable *config` 寄存器变量残差——判定 canon 的
+config 参数寄存器形与 `&::config` 体引用族是否需要 localdb register-symbol
+新传输（harvest+manifest+第四门）。
+
+### 14.1 oracle 级预验证判决（先行；C3GLOB/BRIDGE1 方法论照做）
+
+仪器：`stage_regsym_diag.cc`（锁定库 e40ed130，BRIDGE1 diag-build 对象链接；
+`/dev/shm/rugra-reports/regsym-evidence/`：harness + `gen_regsym_seed_xml.py`
++ 五份传输文档 + 全部 runs）——C3GLOB harness 扩展一条真实解码链安装路径
+`STAGE_GLOBAL_XML`（`ScopeInternal::decode` database.cc:2744 → addMapSym，
+即 Program DB 全局符号传输；BFD loader 只载 FUNCTION 符号 loadimage_bfd.cc
+advanceToNextSymbol，typed `config`@0x17520 必须走此路）。目标=
+`getparameter.constprop.0`@0x3f00（.symtab 实名；canon Program DB 命名为
+`getparameter`；`.constprop.0` 后缀=GCC 常量传播克隆，DWARF exprloc
+`DW_OP_addr(0x17520); DW_OP_stack_value` 即被传播的常量 `&::config`）。
+
+**传输分解矩阵**（CROSSBUILD 计数=终态 spacebase PTRSUB；opcodes.cc:28
+`PTRSUB` 的 get_opname 字串在 12.0 是 "CROSSBUILD"）：
+
+| witness | 参数符号(cat=0) | typed 全局 | GetStr callee | sb-PTRSUB | `&::config`/`::config.` |
+|---|---|---|---|---|---|
+| W0 裸 | — | — | — | 0 | 0/0 |
+| W1 | ✓(config@RCX) | — | — | 0 | 0/0 |
+| W2d | — | ✓ | — | 6 | 0/0（裸 `config.<f>`） |
+| W3 | ✓ | ✓ | — | 25 | 全 `::config.` 族 |
+| W4 | ✓ | ✓ | ✓ | 42 | **35/95 ≈ canon 34/94** |
+| W5 消融 | ✓(改名 renamed_cfg) | ✓ | ✓ | 42 | **0/0** |
+
+**判决（三段）**：
+
+1. **寄存器参数形：载体=committed-signature 参数符号，模型存储 RCX**。
+   W1 单独复现 canon 签名 `int getparameter(char *flag,char *nextarg,
+   bool *usedarg,Configurable *config)`，config 参数在体内**死**
+   （constprop 克隆里 RCX 从未被当 config 指针读；0x4229 实证 `COPY
+   const:17520→RCX`，LEA 直接携带折叠常量）。DWARF exprloc 常量**不是**
+   参数存储（canon 体内无 memory 形干扰=W1 同构）。Rugra 侧同构在位：
+   签名逐字相同 + dump 实证 `config:register:38`(RCX) typelock 死参数。
+2. **`&::config` 体引用族：载体=typed 全局符号 + 参数名遮蔽 + 类型传播**。
+   W4 逐形复现 canon：`GetStr(&::config.useragent,(char *)x)`、
+   `pCVar13 = &::config;`、`::config.crlf = '\x01'`、
+   `GetStr(&::config.cert_passwd,nextarg)`。机制钉死：`::` 前缀来自
+   `Symbol::getResolutionDepth`（database.cc:323-359）——参数符号名
+   `config` 占据函数局部名树（`ScopeInternal::isNameUsed` database.cc:
+   2417）→ 全局同名符号解析深度 1 → `PrintC::pushSymbolScope`
+   （printc.cc:202）印全局 scope 空名+`::`。**W5 消融（参数改名）使
+   `::` 全数消失（0/0）——因果链闭合**。空间基址 op 形两侧同构
+   （oracle `PTRSUB(const:0[sb],0x175XX)` vs Rugra dump 同形）。
+3. **无需任何新传输**：参数符号（coreaction.rs:1509 平台安装臂）、
+   typed 全局（Rugra 已印 `::config.outfile` 于 LOAD/STORE 路径）、
+   callee protos（link_call_specs）三载体全数在位 ⇒ 第四门=no-op，
+   C3GLOB 判例式收口：**载体已在，残差在 printc 消费侧**。
+
+### 14.2 残差重归属（出本车道写域；新登记 `PRINTC-SPACEBASE-SCOPEPREFIX-0001`）
+
+- **`&config` vs `&::config`（35 行=getparameter 34+main 1）**：Rugra
+  printc.rs spacebase 符号臂（~3145-3170）印符号名时**未调用已存在的
+  `symbol_scope_prefix` helper**（PRINTC-GLOBALSYM-LEAF-PRIORITY-0001
+  已落地该 helper，仅 7169/7183/7196 叶优先路径接线；oracle 对应
+  printc.cc:1905 pushSymbol→pushSymbolScope 链）。修域=printc.rs，
+  与 PDOTFORM 车道写域序列化。
+- **`&(&config)->field` vs `&::config.field`（同 35 行内）**：spacebase
+  mid-symbol 引用应走 `pushPartialSymbol`（printc.cc:2057，object_member
+  `.` 形，基座=全局对象 lvalue）；Rugra 落指针基座+箭头形。已登记
+  `PRINTC-SPACEBASE-PARTIALSYM-0001`（symbol-offset 通道缺口）+
+  `PRINTC-C3FLEX-DOTFORM-0001`（flex 域）覆盖，本车道不重复登记。
+- getparameter `::config.` 计数 61 vs canon 94 的差额=别名环/计数器分型
+  族（§12.4 预归属不变，库级 typeprop 域）。
+
+### 14.3 门禁（亲测，基=亲父 aa62f6c0，docs/tools-only 车道）
+
+默认脸 curl E2E canon **767/0/0**（getparameter 275/main 129 骨架）；
+投影银行 **391/391 PASS**；gcc 审计 **104 OK/20 FAIL**（=基线 fail 集）；
+双跑 cmp 恒等。src/ 零触碰（printc.rs/varmap.rs/coreaction.rs 全程只读）。
+
+### 14.4 复现
+
+```bash
+bash /dev/shm/rugra-reports/regsym-evidence/build_regsym_diag.sh   # 链 BRIDGE1 锁库
+setarch -R env -i STAGE_DRILL_FUNC=getparameter.constprop.0 STAGE_DRILL_ADDR=0x3f00 \
+  STAGE_SEED_XML=<seed_getparameter.xml> STAGE_PROTO_XML=<proto_getparameter.xml> \
+  STAGE_GLOBAL_XML=<global_config_sym.xml> \
+  STAGE_CALLEE_PROTOS="GetStr=<seed_getstr.xml>:<proto_getstr.xml>" \
+  ./stage_regsym_diag sleigh_specs <repo>/examples/curl        # = W4
+# W5 消融 = seed_getparameter_renamed.xml 替换 seed 后同跑（:: 全数消失）
+```
