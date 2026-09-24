@@ -1,0 +1,5286 @@
+{
+ "curl": {
+  "n": 117,
+  "sum_Rc": 2557,
+  "sum_Rd": 4313,
+  "sum_B": 4386,
+  "pure_bridge": 1,
+  "canon_only": 44,
+  "both_zero": 2,
+  "both_pos": 70,
+  "sum_Rc_push": 224,
+  "sum_Rd_push": 618,
+  "rows": [
+   {
+    "name": "_init",
+    "Rc": 10,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "free",
+    "Rc": 5,
+    "Rd": 4,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__vfprintf_chk",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strcpy",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "puts",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "isatty",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_perform",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_slist_append",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fclose",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strlen",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__stack_chk_fail",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strchr",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strrchr",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "maprintf",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fputc",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fgets",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strtol",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "memcpy",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "time",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fileno",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__xstat",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "malloc",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__isoc99_sscanf",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_init",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_getenv",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "realloc",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__printf_chk",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_version",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_slist_free_all",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fopen",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strcat",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_setopt",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_getdate",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "exit",
+    "Rc": 5,
+    "Rd": 4,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fwrite",
+    "Rc": 9,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__fprintf_chk",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_cleanup",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strdup",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strequal",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_formparse",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strstr",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strnequal",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__ctype_b_loc",
+    "Rc": 11,
+    "Rd": 7,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__sprintf_chk",
+    "Rc": 4,
+    "Rd": 2,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "main",
+    "Rc": 581,
+    "Rd": 925,
+    "B": 860,
+    "Rc_push": 63,
+    "Rd_push": 235,
+    "B_push": 188
+   },
+   {
+    "name": "_start",
+    "Rc": 13,
+    "Rd": 14,
+    "B": 9,
+    "Rc_push": 3,
+    "Rd_push": 3,
+    "B_push": 4
+   },
+   {
+    "name": "deregister_tm_clones",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "register_tm_clones",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__do_global_dtors_aux",
+    "Rc": 8,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "frame_dummy",
+    "Rc": 4,
+    "Rd": 5,
+    "B": 3,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "my_fwrite",
+    "Rc": 4,
+    "Rd": 20,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "myprogress",
+    "Rc": 75,
+    "Rd": 99,
+    "B": 104,
+    "Rc_push": 6,
+    "Rd_push": 16,
+    "B_push": 12
+   },
+   {
+    "name": "GetStr",
+    "Rc": 0,
+    "Rd": 16,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "my_get_token",
+    "Rc": 64,
+    "Rd": 74,
+    "B": 70,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "my_get_line",
+    "Rc": 61,
+    "Rd": 238,
+    "B": 263,
+    "Rc_push": 4,
+    "Rd_push": 91,
+    "B_push": 91
+   },
+   {
+    "name": "helpf",
+    "Rc": 77,
+    "Rd": 199,
+    "B": 204,
+    "Rc_push": 38,
+    "Rd_push": 95,
+    "B_push": 63
+   },
+   {
+    "name": "file2string",
+    "Rc": 123,
+    "Rd": 130,
+    "B": 143,
+    "Rc_push": 19,
+    "Rd_push": 32,
+    "B_push": 31
+   },
+   {
+    "name": "SetHTTPrequest",
+    "Rc": 2,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "parseconfig",
+    "Rc": 99,
+    "Rd": 148,
+    "B": 167,
+    "Rc_push": 17,
+    "Rd_push": 31,
+    "B_push": 20
+   },
+   {
+    "name": "getparameter",
+    "Rc": 743,
+    "Rd": 859,
+    "B": 792,
+    "Rc_push": 74,
+    "Rd_push": 111,
+    "B_push": 49
+   },
+   {
+    "name": "main_init",
+    "Rc": 3,
+    "Rd": 4,
+    "B": 5,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "main_free",
+    "Rc": 1,
+    "Rd": 0,
+    "B": 1,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "SetHTTPrequest",
+    "Rc": 4,
+    "Rd": 13,
+    "B": 13,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "progressbarinit",
+    "Rc": 4,
+    "Rd": 27,
+    "B": 27,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "hugehelp",
+    "Rc": 1,
+    "Rd": 20,
+    "B": 21,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "glob_word",
+    "Rc": 21,
+    "Rd": 317,
+    "B": 330,
+    "Rc_push": 0,
+    "Rd_push": 2,
+    "B_push": 2
+   },
+   {
+    "name": "glob_set",
+    "Rc": 92,
+    "Rd": 191,
+    "B": 195,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "glob_range",
+    "Rc": 80,
+    "Rd": 114,
+    "B": 106,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "glob_url",
+    "Rc": 2,
+    "Rd": 20,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "next_url",
+    "Rc": 103,
+    "Rd": 138,
+    "B": 145,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "match_url",
+    "Rc": 54,
+    "Rd": 108,
+    "B": 126,
+    "Rc_push": 0,
+    "Rd_push": 2,
+    "B_push": 2
+   },
+   {
+    "name": "__libc_csu_init",
+    "Rc": 12,
+    "Rd": 7,
+    "B": 9,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__libc_csu_fini",
+    "Rc": 0,
+    "Rd": 0,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "_fini",
+    "Rc": 0,
+    "Rd": 0,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "free",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__vfprintf_chk",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strcpy",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "puts",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "isatty",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_perform",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_slist_append",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fclose",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strlen",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__stack_chk_fail",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strchr",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strrchr",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "maprintf",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fputc",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fgets",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strtol",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "memcpy",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "time",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fileno",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__xstat",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "malloc",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__isoc99_sscanf",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_init",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_getenv",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "realloc",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__printf_chk",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_version",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_slist_free_all",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fopen",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strcat",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_setopt",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_getdate",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "exit",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "fwrite",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__fprintf_chk",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_easy_cleanup",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strdup",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strequal",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "curl_formparse",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strstr",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "strnequal",
+    "Rc": 0,
+    "Rd": 7,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__ctype_b_loc",
+    "Rc": 0,
+    "Rd": 11,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "__sprintf_chk",
+    "Rc": 0,
+    "Rd": 8,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   }
+  ]
+ },
+ "httpd": {
+  "n": 467,
+  "sum_Rc": 25327,
+  "sum_Rd": 36984,
+  "sum_B": 35367,
+  "pure_bridge": 0,
+  "canon_only": 6,
+  "both_zero": 0,
+  "both_pos": 461,
+  "sum_Rc_push": 695,
+  "sum_Rd_push": 5023,
+  "rows": [
+   {
+    "name": "main",
+    "Rc": 667,
+    "Rd": 656,
+    "B": 705,
+    "Rc_push": 17,
+    "Rd_push": 23,
+    "B_push": 14
+   },
+   {
+    "name": "ap_get_server_built",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "suck_in_APR",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_init_vhost_config",
+    "Rc": 16,
+    "Rd": 16,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_parse_vhost_addrs",
+    "Rc": 50,
+    "Rd": 314,
+    "B": 330,
+    "Rc_push": 0,
+    "Rd_push": 23,
+    "B_push": 23
+   },
+   {
+    "name": "ap_set_name_virtual_host",
+    "Rc": 5,
+    "Rd": 218,
+    "B": 221,
+    "Rc_push": 0,
+    "Rd_push": 58,
+    "B_push": 58
+   },
+   {
+    "name": "ap_fini_vhost_config",
+    "Rc": 383,
+    "Rd": 407,
+    "B": 400,
+    "Rc_push": 6,
+    "Rd_push": 46,
+    "B_push": 40
+   },
+   {
+    "name": "ap_matches_request_vhost",
+    "Rc": 25,
+    "Rd": 61,
+    "B": 58,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_update_vhost_from_headers",
+    "Rc": 212,
+    "Rd": 208,
+    "B": 216,
+    "Rc_push": 9,
+    "Rd_push": 23,
+    "B_push": 18
+   },
+   {
+    "name": "ap_vhost_iterate_given_conn",
+    "Rc": 37,
+    "Rd": 23,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_update_vhost_given_ip",
+    "Rc": 57,
+    "Rd": 55,
+    "B": 56,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_field_noparam",
+    "Rc": 31,
+    "Rd": 35,
+    "B": 26,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_ht_time",
+    "Rc": 80,
+    "Rd": 122,
+    "B": 102,
+    "Rc_push": 2,
+    "Rd_push": 4,
+    "B_push": 2
+   },
+   {
+    "name": "ap_strcmp_match",
+    "Rc": 46,
+    "Rd": 40,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strcasecmp_match",
+    "Rc": 65,
+    "Rd": 60,
+    "B": 33,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_os_is_path_absolute",
+    "Rc": 27,
+    "Rd": 40,
+    "B": 41,
+    "Rc_push": 0,
+    "Rd_push": 11,
+    "B_push": 11
+   },
+   {
+    "name": "ap_is_matchexp",
+    "Rc": 14,
+    "Rd": 14,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pregcomp",
+    "Rc": 15,
+    "Rd": 15,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pregfree",
+    "Rc": 6,
+    "Rd": 8,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strcasestr",
+    "Rc": 50,
+    "Rd": 45,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_stripprefix",
+    "Rc": 28,
+    "Rd": 28,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pregsub",
+    "Rc": 212,
+    "Rd": 208,
+    "B": 86,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getparents",
+    "Rc": 137,
+    "Rd": 129,
+    "B": 98,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_no2slash",
+    "Rc": 29,
+    "Rd": 29,
+    "B": 0,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_make_dirstr_prefix",
+    "Rc": 42,
+    "Rd": 42,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_make_dirstr_parent",
+    "Rc": 22,
+    "Rd": 22,
+    "B": 26,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_count_dirs",
+    "Rc": 21,
+    "Rd": 21,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword",
+    "Rc": 44,
+    "Rd": 42,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_nc",
+    "Rc": 4,
+    "Rd": 40,
+    "B": 40,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_white",
+    "Rc": 42,
+    "Rd": 37,
+    "B": 33,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_white_nc",
+    "Rc": 0,
+    "Rd": 29,
+    "B": 29,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_nulls",
+    "Rc": 26,
+    "Rd": 23,
+    "B": 19,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_nulls_nc",
+    "Rc": 4,
+    "Rd": 19,
+    "B": 19,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_conf",
+    "Rc": 96,
+    "Rd": 66,
+    "B": 62,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_getword_conf_nc",
+    "Rc": 0,
+    "Rd": 83,
+    "B": 83,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_resolve_env",
+    "Rc": 110,
+    "Rd": 121,
+    "B": 135,
+    "Rc_push": 0,
+    "Rd_push": 8,
+    "B_push": 8
+   },
+   {
+    "name": "ap_cfg_closefile",
+    "Rc": 14,
+    "Rd": 14,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pcfg_openfile",
+    "Rc": 88,
+    "Rd": 113,
+    "B": 101,
+    "Rc_push": 5,
+    "Rd_push": 20,
+    "B_push": 15
+   },
+   {
+    "name": "ap_pcfg_open_custom",
+    "Rc": 22,
+    "Rd": 22,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_cfg_getc",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_cfg_getline",
+    "Rc": 147,
+    "Rd": 120,
+    "B": 73,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_size_list_item",
+    "Rc": 66,
+    "Rd": 53,
+    "B": 43,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_list_item",
+    "Rc": 154,
+    "Rd": 384,
+    "B": 388,
+    "Rc_push": 0,
+    "Rd_push": 10,
+    "B_push": 10
+   },
+   {
+    "name": "ap_find_list_item",
+    "Rc": 306,
+    "Rd": 289,
+    "B": 285,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_token",
+    "Rc": 59,
+    "Rd": 51,
+    "B": 44,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_token",
+    "Rc": 49,
+    "Rd": 41,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_last_token",
+    "Rc": 32,
+    "Rd": 32,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_shell_cmd",
+    "Rc": 43,
+    "Rd": 35,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_unescape_url",
+    "Rc": 69,
+    "Rd": 63,
+    "B": 26,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_unescape_url_keep2f_ex",
+    "Rc": 87,
+    "Rd": 79,
+    "B": 46,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_unescape_url_keep2f",
+    "Rc": 4,
+    "Rd": 70,
+    "B": 70,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_construct_server",
+    "Rc": 11,
+    "Rd": 15,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_path_segment",
+    "Rc": 46,
+    "Rd": 48,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_os_escape_path",
+    "Rc": 74,
+    "Rd": 72,
+    "B": 48,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_html2",
+    "Rc": 110,
+    "Rd": 106,
+    "B": 44,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_html",
+    "Rc": 4,
+    "Rd": 92,
+    "B": 92,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_logitem",
+    "Rc": 90,
+    "Rd": 86,
+    "B": 36,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_errorlog_item",
+    "Rc": 102,
+    "Rd": 98,
+    "B": 32,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_is_directory",
+    "Rc": 16,
+    "Rd": 58,
+    "B": 64,
+    "Rc_push": 2,
+    "Rd_push": 22,
+    "B_push": 24
+   },
+   {
+    "name": "ap_is_rdirectory",
+    "Rc": 16,
+    "Rd": 42,
+    "B": 48,
+    "Rc_push": 2,
+    "Rd_push": 12,
+    "B_push": 14
+   },
+   {
+    "name": "ap_make_full_path",
+    "Rc": 30,
+    "Rd": 28,
+    "B": 34,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_is_url",
+    "Rc": 30,
+    "Rd": 27,
+    "B": 13,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_ind",
+    "Rc": 12,
+    "Rd": 10,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_rind",
+    "Rc": 12,
+    "Rd": 10,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_str_tolower",
+    "Rc": 17,
+    "Rd": 15,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_local_host",
+    "Rc": 63,
+    "Rd": 66,
+    "B": 79,
+    "Rc_push": 0,
+    "Rd_push": 18,
+    "B_push": 18
+   },
+   {
+    "name": "ap_pbase64decode",
+    "Rc": 15,
+    "Rd": 15,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pbase64encode",
+    "Rc": 18,
+    "Rd": 18,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_content_type_tolower",
+    "Rc": 14,
+    "Rd": 24,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_escape_quotes",
+    "Rc": 61,
+    "Rd": 57,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_append_pid",
+    "Rc": 7,
+    "Rd": 9,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_timeout_parameter_parse",
+    "Rc": 52,
+    "Rd": 83,
+    "B": 85,
+    "Rc_push": 5,
+    "Rd_push": 14,
+    "B_push": 15
+   },
+   {
+    "name": "ap_regerror",
+    "Rc": 43,
+    "Rd": 43,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_regfree",
+    "Rc": 6,
+    "Rd": 8,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_regcomp",
+    "Rc": 32,
+    "Rd": 121,
+    "B": 123,
+    "Rc_push": 2,
+    "Rd_push": 27,
+    "B_push": 25
+   },
+   {
+    "name": "ap_regexec",
+    "Rc": 88,
+    "Rd": 89,
+    "B": 67,
+    "Rc_push": 2,
+    "Rd_push": 7,
+    "B_push": 5
+   },
+   {
+    "name": "ap_cleanup_scoreboard",
+    "Rc": 25,
+    "Rd": 23,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_pre_mpm",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_pre_mpm",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_pre_mpm",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_calc_scoreboard_size",
+    "Rc": 33,
+    "Rd": 35,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_init_scoreboard",
+    "Rc": 56,
+    "Rd": 77,
+    "B": 65,
+    "Rc_push": 0,
+    "Rd_push": 2,
+    "B_push": 2
+   },
+   {
+    "name": "ap_reopen_scoreboard",
+    "Rc": 25,
+    "Rd": 25,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_create_scoreboard",
+    "Rc": 163,
+    "Rd": 192,
+    "B": 181,
+    "Rc_push": 3,
+    "Rd_push": 38,
+    "B_push": 35
+   },
+   {
+    "name": "ap_exists_scoreboard_image",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_increment_counts",
+    "Rc": 28,
+    "Rd": 26,
+    "B": 28,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "find_child_by_pid",
+    "Rc": 29,
+    "Rd": 50,
+    "B": 49,
+    "Rc_push": 3,
+    "Rd_push": 13,
+    "B_push": 10
+   },
+   {
+    "name": "ap_create_sb_handle",
+    "Rc": 13,
+    "Rd": 11,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_update_child_status_from_indexes",
+    "Rc": 99,
+    "Rd": 98,
+    "B": 79,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_update_child_status",
+    "Rc": 12,
+    "Rd": 92,
+    "B": 90,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_time_process_request",
+    "Rc": 21,
+    "Rd": 21,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_scoreboard_worker",
+    "Rc": 13,
+    "Rd": 13,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_scoreboard_process",
+    "Rc": 10,
+    "Rd": 10,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_scoreboard_global",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_scoreboard_lb",
+    "Rc": 10,
+    "Rd": 10,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_bucket_error_make",
+    "Rc": 21,
+    "Rd": 19,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_bucket_error_create",
+    "Rc": 20,
+    "Rd": 32,
+    "B": 32,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_setup_make_content_type",
+    "Rc": 35,
+    "Rd": 33,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_make_content_type",
+    "Rc": 62,
+    "Rd": 79,
+    "B": 85,
+    "Rc_push": 0,
+    "Rd_push": 17,
+    "B_push": 17
+   },
+   {
+    "name": "ap_set_content_length",
+    "Rc": 11,
+    "Rd": 13,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_rationalize_mtime",
+    "Rc": 20,
+    "Rd": 20,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_rgetline_core",
+    "Rc": 228,
+    "Rd": 540,
+    "B": 586,
+    "Rc_push": 30,
+    "Rd_push": 210,
+    "B_push": 180
+   },
+   {
+    "name": "ap_getline",
+    "Rc": 25,
+    "Rd": 223,
+    "B": 236,
+    "Rc_push": 0,
+    "Rd_push": 54,
+    "B_push": 54
+   },
+   {
+    "name": "ap_get_mime_headers_core",
+    "Rc": 237,
+    "Rd": 222,
+    "B": 211,
+    "Rc_push": 22,
+    "Rd_push": 52,
+    "B_push": 38
+   },
+   {
+    "name": "ap_get_mime_headers",
+    "Rc": 9,
+    "Rd": 11,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_sub_req_protocol",
+    "Rc": 80,
+    "Rd": 79,
+    "B": 57,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_finalize_sub_req_protocol",
+    "Rc": 5,
+    "Rd": 32,
+    "B": 33,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_finalize_request_protocol",
+    "Rc": 5,
+    "Rd": 32,
+    "B": 33,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_note_digest_auth_failure",
+    "Rc": 16,
+    "Rd": 17,
+    "B": 19,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_note_auth_failure",
+    "Rc": 34,
+    "Rd": 54,
+    "B": 54,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_note_basic_auth_failure",
+    "Rc": 25,
+    "Rd": 52,
+    "B": 55,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_basic_auth_pw",
+    "Rc": 84,
+    "Rd": 208,
+    "B": 204,
+    "Rc_push": 0,
+    "Rd_push": 42,
+    "B_push": 42
+   },
+   {
+    "name": "ap_content_length_filter",
+    "Rc": 106,
+    "Rd": 127,
+    "B": 137,
+    "Rc_push": 0,
+    "Rd_push": 18,
+    "B_push": 18
+   },
+   {
+    "name": "ap_send_fd",
+    "Rc": 31,
+    "Rd": 31,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_send_mmap",
+    "Rc": 23,
+    "Rd": 23,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_old_write_filter",
+    "Rc": 27,
+    "Rd": 38,
+    "B": 41,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_rputc",
+    "Rc": 22,
+    "Rd": 39,
+    "B": 43,
+    "Rc_push": 0,
+    "Rd_push": 6,
+    "B_push": 6
+   },
+   {
+    "name": "ap_rputs",
+    "Rc": 22,
+    "Rd": 21,
+    "B": 13,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_rwrite",
+    "Rc": 11,
+    "Rd": 11,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_vrprintf",
+    "Rc": 39,
+    "Rd": 192,
+    "B": 211,
+    "Rc_push": 0,
+    "Rd_push": 94,
+    "B_push": 94
+   },
+   {
+    "name": "ap_rprintf",
+    "Rc": 60,
+    "Rd": 121,
+    "B": 153,
+    "Rc_push": 0,
+    "Rd_push": 56,
+    "B_push": 56
+   },
+   {
+    "name": "ap_rvputs",
+    "Rc": 73,
+    "Rd": 75,
+    "B": 92,
+    "Rc_push": 12,
+    "Rd_push": 20,
+    "B_push": 18
+   },
+   {
+    "name": "ap_rflush",
+    "Rc": 24,
+    "Rd": 24,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_last_modified",
+    "Rc": 23,
+    "Rd": 25,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_send_interim_response",
+    "Rc": 46,
+    "Rd": 70,
+    "B": 76,
+    "Rc_push": 0,
+    "Rd_push": 16,
+    "B_push": 16
+   },
+   {
+    "name": "ap_hook_post_read_request",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_post_read_request",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_post_read_request",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_log_transaction",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_log_transaction",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_log_transaction",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_http_scheme",
+    "Rc": 33,
+    "Rd": 34,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_http_scheme",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_http_scheme",
+    "Rc": 26,
+    "Rd": 26,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_parse_uri",
+    "Rc": 59,
+    "Rd": 56,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_read_request",
+    "Rc": 367,
+    "Rd": 501,
+    "B": 598,
+    "Rc_push": 8,
+    "Rd_push": 48,
+    "B_push": 40
+   },
+   {
+    "name": "ap_hook_default_port",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_default_port",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_default_port",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_core_translate",
+    "Rc": 115,
+    "Rd": 80,
+    "B": 91,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_mgmt_items",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_get_mgmt_items",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_get_mgmt_items",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_per_dir_conf",
+    "Rc": 13,
+    "Rd": 13,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_per_url_conf",
+    "Rc": 13,
+    "Rd": 13,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_file_conf",
+    "Rc": 7,
+    "Rd": 7,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_core_reorder_directories",
+    "Rc": 60,
+    "Rd": 68,
+    "B": 64,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_allow_options",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_allow_overrides",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_auth_type",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_auth_name",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_default_type",
+    "Rc": 10,
+    "Rd": 9,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_document_root",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_requires",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_satisfies",
+    "Rc": 6,
+    "Rd": 6,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_response_code_string",
+    "Rc": 24,
+    "Rd": 20,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_remote_host",
+    "Rc": 165,
+    "Rd": 190,
+    "B": 147,
+    "Rc_push": 8,
+    "Rd_push": 20,
+    "B_push": 12
+   },
+   {
+    "name": "ap_get_remote_logname",
+    "Rc": 12,
+    "Rd": 12,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_name",
+    "Rc": 38,
+    "Rd": 33,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_port",
+    "Rc": 50,
+    "Rd": 64,
+    "B": 58,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_construct_url",
+    "Rc": 30,
+    "Rd": 32,
+    "B": 28,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_limit_req_body",
+    "Rc": 10,
+    "Rd": 9,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_check_cmd_context",
+    "Rc": 155,
+    "Rd": 144,
+    "B": 135,
+    "Rc_push": 0,
+    "Rd_push": 6,
+    "B_push": 6
+   },
+   {
+    "name": "ap_limit_section",
+    "Rc": 63,
+    "Rd": 92,
+    "B": 107,
+    "Rc_push": 0,
+    "Rd_push": 12,
+    "B_push": 12
+   },
+   {
+    "name": "ap_custom_response",
+    "Rc": 56,
+    "Rd": 49,
+    "B": 45,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_exists_config_define",
+    "Rc": 22,
+    "Rd": 24,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_protocol",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_server_protocol",
+    "Rc": 8,
+    "Rd": 8,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_psignature",
+    "Rc": 65,
+    "Rd": 66,
+    "B": 73,
+    "Rc_push": 4,
+    "Rd_push": 7,
+    "B_push": 11
+   },
+   {
+    "name": "ap_get_server_revision",
+    "Rc": 7,
+    "Rd": 7,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_description",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_banner",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_server_version",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_version_component",
+    "Rc": 19,
+    "Rd": 19,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_limit_xml_body",
+    "Rc": 10,
+    "Rd": 9,
+    "B": 7,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_is_recursion_limit_exceeded",
+    "Rc": 76,
+    "Rd": 74,
+    "B": 76,
+    "Rc_push": 2,
+    "Rd_push": 2,
+    "B_push": 4
+   },
+   {
+    "name": "ap_add_output_filters_by_type",
+    "Rc": 26,
+    "Rd": 25,
+    "B": 17,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_request_note",
+    "Rc": 7,
+    "Rd": 7,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_request_note",
+    "Rc": 14,
+    "Rd": 13,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_translate_name",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_translate_name",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_translate_name",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_map_to_storage",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_map_to_storage",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_map_to_storage",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_check_user_id",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_check_user_id",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_check_user_id",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_fixups",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_fixups",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_fixups",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_type_checker",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_type_checker",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_type_checker",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_access_checker",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_access_checker",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_access_checker",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_auth_checker",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_auth_checker",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_auth_checker",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_insert_filter",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_insert_filter",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_insert_filter",
+    "Rc": 14,
+    "Rd": 16,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_create_request",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_create_request",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_create_request",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_directory_walk",
+    "Rc": 844,
+    "Rd": 936,
+    "B": 942,
+    "Rc_push": 99,
+    "Rd_push": 198,
+    "B_push": 139
+   },
+   {
+    "name": "ap_location_walk",
+    "Rc": 201,
+    "Rd": 189,
+    "B": 110,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_file_walk",
+    "Rc": 202,
+    "Rd": 182,
+    "B": 90,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sub_req_output_filter",
+    "Rc": 28,
+    "Rd": 38,
+    "B": 34,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_some_auth_required",
+    "Rc": 23,
+    "Rd": 21,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_process_request_internal",
+    "Rc": 244,
+    "Rd": 236,
+    "B": 166,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sub_req_method_uri",
+    "Rc": 46,
+    "Rd": 46,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sub_req_lookup_uri",
+    "Rc": 4,
+    "Rd": 35,
+    "B": 35,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sub_req_lookup_dirent",
+    "Rc": 192,
+    "Rd": 190,
+    "B": 72,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sub_req_lookup_file",
+    "Rc": 88,
+    "Rd": 85,
+    "B": 53,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_sub_req",
+    "Rc": 21,
+    "Rd": 21,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_destroy_sub_req",
+    "Rc": 4,
+    "Rd": 6,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_update_mtime",
+    "Rc": 6,
+    "Rd": 8,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_is_initial_req",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_provider",
+    "Rc": 48,
+    "Rd": 47,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_lookup_provider",
+    "Rc": 23,
+    "Rd": 25,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_list_provider_names",
+    "Rc": 39,
+    "Rd": 46,
+    "B": 47,
+    "Rc_push": 0,
+    "Rd_push": 9,
+    "B_push": 9
+   },
+   {
+    "name": "ap_bucket_eoc_make",
+    "Rc": 13,
+    "Rd": 13,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_bucket_eoc_create",
+    "Rc": 26,
+    "Rd": 24,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_core_input_filter",
+    "Rc": 405,
+    "Rd": 939,
+    "B": 938,
+    "Rc_push": 14,
+    "Rd_push": 267,
+    "B_push": 253
+   },
+   {
+    "name": "ap_core_output_filter",
+    "Rc": 837,
+    "Rd": 761,
+    "B": 732,
+    "Rc_push": 134,
+    "Rd_push": 269,
+    "B_push": 169
+   },
+   {
+    "name": "ap_hook_header_parser",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_header_parser",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_header_parser",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_pre_config",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_pre_config",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_pre_config",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_test_config",
+    "Rc": 33,
+    "Rd": 34,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_test_config",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_test_config",
+    "Rc": 14,
+    "Rd": 16,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_post_config",
+    "Rc": 33,
+    "Rd": 34,
+    "B": 25,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_post_config",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_post_config",
+    "Rc": 29,
+    "Rd": 31,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_open_logs",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_open_logs",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_open_logs",
+    "Rc": 29,
+    "Rd": 30,
+    "B": 19,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_child_init",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_child_init",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_child_init",
+    "Rc": 14,
+    "Rd": 16,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_handler",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_handler",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_handler",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_quick_handler",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_quick_handler",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_quick_handler",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_optional_fn_retrieve",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_optional_fn_retrieve",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_optional_fn_retrieve",
+    "Rc": 14,
+    "Rd": 16,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_merge_per_dir_configs",
+    "Rc": 41,
+    "Rd": 35,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_create_request_config",
+    "Rc": 0,
+    "Rd": 10,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_create_conn_config",
+    "Rc": 0,
+    "Rd": 10,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_create_per_dir_config",
+    "Rc": 0,
+    "Rd": 10,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_invoke_handler",
+    "Rc": 120,
+    "Rd": 103,
+    "B": 63,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_is_limited",
+    "Rc": 12,
+    "Rd": 12,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_hooks",
+    "Rc": 3,
+    "Rd": 16,
+    "B": 15,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_module",
+    "Rc": 74,
+    "Rd": 78,
+    "B": 64,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_remove_module",
+    "Rc": 31,
+    "Rd": 28,
+    "B": 29,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_loaded_module",
+    "Rc": 17,
+    "Rd": 13,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_remove_loaded_module",
+    "Rc": 24,
+    "Rd": 14,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_setup_prelinked_modules",
+    "Rc": 74,
+    "Rd": 73,
+    "B": 69,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_module_name",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_linked_module",
+    "Rc": 15,
+    "Rd": 13,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_command",
+    "Rc": 19,
+    "Rd": 15,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_command_in_modules",
+    "Rc": 34,
+    "Rd": 30,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_config_vectors",
+    "Rc": 25,
+    "Rd": 25,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_walk_config",
+    "Rc": 77,
+    "Rd": 73,
+    "B": 60,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_build_config",
+    "Rc": 90,
+    "Rd": 311,
+    "B": 335,
+    "Rc_push": 6,
+    "Rd_push": 45,
+    "B_push": 39
+   },
+   {
+    "name": "ap_set_string_slot",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_int_slot",
+    "Rc": 31,
+    "Rd": 42,
+    "B": 41,
+    "Rc_push": 2,
+    "Rd_push": 11,
+    "B_push": 9
+   },
+   {
+    "name": "ap_set_string_slot_lower",
+    "Rc": 16,
+    "Rd": 16,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_flag_slot",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_deprecated",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_server_root_relative",
+    "Rc": 21,
+    "Rd": 36,
+    "B": 41,
+    "Rc_push": 0,
+    "Rd_push": 12,
+    "B_push": 12
+   },
+   {
+    "name": "ap_set_file_slot",
+    "Rc": 18,
+    "Rd": 20,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_soak_end_container",
+    "Rc": 72,
+    "Rd": 800,
+    "B": 820,
+    "Rc_push": 0,
+    "Rd_push": 272,
+    "B_push": 272
+   },
+   {
+    "name": "ap_process_resource_config",
+    "Rc": 102,
+    "Rd": 735,
+    "B": 791,
+    "Rc_push": 0,
+    "Rd_push": 249,
+    "B_push": 249
+   },
+   {
+    "name": "ap_process_config_tree",
+    "Rc": 59,
+    "Rd": 564,
+    "B": 603,
+    "Rc_push": 15,
+    "Rd_push": 168,
+    "B_push": 183
+   },
+   {
+    "name": "ap_parse_htaccess",
+    "Rc": 149,
+    "Rd": 538,
+    "B": 599,
+    "Rc_push": 17,
+    "Rd_push": 128,
+    "B_push": 141
+   },
+   {
+    "name": "ap_init_virtual_host",
+    "Rc": 72,
+    "Rd": 375,
+    "B": 393,
+    "Rc_push": 0,
+    "Rd_push": 28,
+    "B_push": 28
+   },
+   {
+    "name": "ap_fixup_virtual_hosts",
+    "Rc": 75,
+    "Rd": 116,
+    "B": 119,
+    "Rc_push": 0,
+    "Rd_push": 4,
+    "B_push": 4
+   },
+   {
+    "name": "ap_read_config",
+    "Rc": 125,
+    "Rd": 144,
+    "B": 135,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_single_module_configure",
+    "Rc": 23,
+    "Rd": 23,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_rewrite_args",
+    "Rc": 13,
+    "Rd": 11,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_show_directives",
+    "Rc": 132,
+    "Rd": 98,
+    "B": 114,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_show_modules",
+    "Rc": 19,
+    "Rd": 17,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_show_mpm",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_logs_child_init",
+    "Rc": 9,
+    "Rd": 11,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_open_stderr_log",
+    "Rc": 4,
+    "Rd": 6,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_error_log2stderr",
+    "Rc": 18,
+    "Rd": 77,
+    "B": 81,
+    "Rc_push": 0,
+    "Rd_push": 20,
+    "B_push": 20
+   },
+   {
+    "name": "ap_log_error",
+    "Rc": 7,
+    "Rd": 55,
+    "B": 58,
+    "Rc_push": 0,
+    "Rd_push": 9,
+    "B_push": 9
+   },
+   {
+    "name": "ap_replace_stderr_log",
+    "Rc": 50,
+    "Rd": 46,
+    "B": 62,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_open_logs",
+    "Rc": 97,
+    "Rd": 100,
+    "B": 99,
+    "Rc_push": 2,
+    "Rd_push": 13,
+    "B_push": 11
+   },
+   {
+    "name": "ap_log_perror",
+    "Rc": 8,
+    "Rd": 362,
+    "B": 368,
+    "Rc_push": 0,
+    "Rd_push": 209,
+    "B_push": 209
+   },
+   {
+    "name": "ap_log_cerror",
+    "Rc": 7,
+    "Rd": 191,
+    "B": 194,
+    "Rc_push": 0,
+    "Rd_push": 74,
+    "B_push": 74
+   },
+   {
+    "name": "ap_log_pid",
+    "Rc": 44,
+    "Rd": 185,
+    "B": 201,
+    "Rc_push": 2,
+    "Rd_push": 71,
+    "B_push": 73
+   },
+   {
+    "name": "ap_read_pid",
+    "Rc": 48,
+    "Rd": 123,
+    "B": 147,
+    "Rc_push": 0,
+    "Rd_push": 44,
+    "B_push": 44
+   },
+   {
+    "name": "ap_log_assert",
+    "Rc": 15,
+    "Rd": 40,
+    "B": 45,
+    "Rc_push": 3,
+    "Rd_push": 7,
+    "B_push": 10
+   },
+   {
+    "name": "ap_open_piped_log_ex",
+    "Rc": 38,
+    "Rd": 38,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_open_piped_log",
+    "Rc": 13,
+    "Rd": 37,
+    "B": 30,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_close_piped_log",
+    "Rc": 4,
+    "Rd": 6,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_error_log",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_error_log",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_error_log",
+    "Rc": 14,
+    "Rd": 17,
+    "B": 15,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_create_environment",
+    "Rc": 95,
+    "Rd": 96,
+    "B": 73,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_add_common_vars",
+    "Rc": 196,
+    "Rd": 189,
+    "B": 149,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_find_path_info",
+    "Rc": 88,
+    "Rd": 76,
+    "B": 50,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_cgi_vars",
+    "Rc": 147,
+    "Rd": 133,
+    "B": 102,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_scan_script_header_err_core",
+    "Rc": 254,
+    "Rd": 329,
+    "B": 451,
+    "Rc_push": 24,
+    "Rd_push": 8,
+    "B_push": 20
+   },
+   {
+    "name": "ap_scan_script_header_err",
+    "Rc": 4,
+    "Rd": 264,
+    "B": 266,
+    "Rc_push": 0,
+    "Rd_push": 2,
+    "B_push": 2
+   },
+   {
+    "name": "ap_scan_script_header_err_brigade",
+    "Rc": 4,
+    "Rd": 262,
+    "B": 264,
+    "Rc_push": 0,
+    "Rd_push": 2,
+    "B_push": 2
+   },
+   {
+    "name": "ap_scan_script_header_err_strs",
+    "Rc": 57,
+    "Rd": 120,
+    "B": 153,
+    "Rc_push": 0,
+    "Rd_push": 42,
+    "B_push": 42
+   },
+   {
+    "name": "ap_md5_binary",
+    "Rc": 46,
+    "Rd": 69,
+    "B": 77,
+    "Rc_push": 8,
+    "Rd_push": 4,
+    "B_push": 4
+   },
+   {
+    "name": "ap_md5",
+    "Rc": 7,
+    "Rd": 63,
+    "B": 62,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_md5contextTo64",
+    "Rc": 59,
+    "Rd": 104,
+    "B": 103,
+    "Rc_push": 2,
+    "Rd_push": 36,
+    "B_push": 34
+   },
+   {
+    "name": "ap_md5digest",
+    "Rc": 30,
+    "Rd": 50,
+    "B": 58,
+    "Rc_push": 0,
+    "Rd_push": 20,
+    "B_push": 20
+   },
+   {
+    "name": "ap_add_node",
+    "Rc": 18,
+    "Rd": 18,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_explode_recent_localtime",
+    "Rc": 4,
+    "Rd": 103,
+    "B": 103,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_explode_recent_gmt",
+    "Rc": 4,
+    "Rd": 120,
+    "B": 120,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_recent_ctime",
+    "Rc": 116,
+    "Rd": 196,
+    "B": 158,
+    "Rc_push": 26,
+    "Rd_push": 92,
+    "B_push": 70
+   },
+   {
+    "name": "ap_recent_rfc822_date",
+    "Rc": 118,
+    "Rd": 142,
+    "B": 108,
+    "Rc_push": 26,
+    "Rd_push": 58,
+    "B_push": 36
+   },
+   {
+    "name": "ap_hook_create_connection",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_create_connection",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_create_connection",
+    "Rc": 27,
+    "Rd": 27,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_process_connection",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_process_connection",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_process_connection",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_pre_connection",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_pre_connection",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_pre_connection",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_flush_conn",
+    "Rc": 28,
+    "Rd": 41,
+    "B": 41,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_lingering_close",
+    "Rc": 54,
+    "Rd": 84,
+    "B": 76,
+    "Rc_push": 2,
+    "Rd_push": 11,
+    "B_push": 9
+   },
+   {
+    "name": "ap_process_connection",
+    "Rc": 15,
+    "Rd": 37,
+    "B": 34,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_setup_listeners",
+    "Rc": 437,
+    "Rd": 433,
+    "B": 406,
+    "Rc_push": 4,
+    "Rd_push": 13,
+    "B_push": 11
+   },
+   {
+    "name": "ap_close_listeners",
+    "Rc": 11,
+    "Rd": 13,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_listen_pre_config",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_listener",
+    "Rc": 215,
+    "Rd": 197,
+    "B": 178,
+    "Rc_push": 20,
+    "Rd_push": 40,
+    "B_push": 24
+   },
+   {
+    "name": "ap_set_listenbacklog",
+    "Rc": 19,
+    "Rd": 19,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_send_buffer_size",
+    "Rc": 23,
+    "Rd": 21,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_receive_buffer_size",
+    "Rc": 23,
+    "Rd": 21,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_signal_server",
+    "Rc": 273,
+    "Rd": 265,
+    "B": 446,
+    "Rc_push": 0,
+    "Rd_push": 12,
+    "B_push": 12
+   },
+   {
+    "name": "ap_hook_monitor",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_monitor",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_monitor",
+    "Rc": 28,
+    "Rd": 30,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_extra_mpm_process",
+    "Rc": 14,
+    "Rd": 14,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_unregister_extra_mpm_process",
+    "Rc": 45,
+    "Rd": 43,
+    "B": 34,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_reclaim_child_processes",
+    "Rc": 171,
+    "Rd": 236,
+    "B": 223,
+    "Rc_push": 37,
+    "Rd_push": 97,
+    "B_push": 66
+   },
+   {
+    "name": "ap_relieve_child_processes",
+    "Rc": 35,
+    "Rd": 74,
+    "B": 79,
+    "Rc_push": 3,
+    "Rd_push": 10,
+    "B_push": 7
+   },
+   {
+    "name": "ap_mpm_safe_kill",
+    "Rc": 28,
+    "Rd": 26,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_wait_or_timeout",
+    "Rc": 21,
+    "Rd": 20,
+    "B": 11,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_process_child_status",
+    "Rc": 39,
+    "Rd": 38,
+    "B": 21,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_sock_disable_nagle",
+    "Rc": 8,
+    "Rd": 71,
+    "B": 67,
+    "Rc_push": 0,
+    "Rd_push": 9,
+    "B_push": 9
+   },
+   {
+    "name": "ap_uname2id",
+    "Rc": 21,
+    "Rd": 45,
+    "B": 48,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_gname2id",
+    "Rc": 21,
+    "Rd": 33,
+    "B": 36,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_pod_open",
+    "Rc": 25,
+    "Rd": 25,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_pod_check",
+    "Rc": 23,
+    "Rd": 31,
+    "B": 34,
+    "Rc_push": 0,
+    "Rd_push": 8,
+    "B_push": 8
+   },
+   {
+    "name": "ap_mpm_pod_close",
+    "Rc": 8,
+    "Rd": 10,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_pod_signal",
+    "Rc": 25,
+    "Rd": 46,
+    "B": 51,
+    "Rc_push": 0,
+    "Rd_push": 9,
+    "B_push": 9
+   },
+   {
+    "name": "ap_mpm_pod_killpg",
+    "Rc": 7,
+    "Rd": 9,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_pidfile",
+    "Rc": 21,
+    "Rd": 19,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_scoreboard",
+    "Rc": 10,
+    "Rd": 10,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_lockfile",
+    "Rc": 10,
+    "Rd": 10,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_max_requests",
+    "Rc": 15,
+    "Rd": 14,
+    "B": 9,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_coredumpdir",
+    "Rc": 47,
+    "Rd": 52,
+    "B": 59,
+    "Rc_push": 2,
+    "Rd_push": 9,
+    "B_push": 11
+   },
+   {
+    "name": "ap_mpm_set_graceful_shutdown",
+    "Rc": 15,
+    "Rd": 14,
+    "B": 9,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_set_accept_lock_mech",
+    "Rc": 53,
+    "Rd": 53,
+    "B": 38,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_rewrite_args",
+    "Rc": 172,
+    "Rd": 187,
+    "B": 173,
+    "Rc_push": 7,
+    "Rd_push": 38,
+    "B_push": 33
+   },
+   {
+    "name": "ap_mpm_set_max_mem_free",
+    "Rc": 26,
+    "Rd": 28,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_fatal_signal_child_setup",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_fatal_signal_setup",
+    "Rc": 72,
+    "Rd": 78,
+    "B": 64,
+    "Rc_push": 0,
+    "Rd_push": 14,
+    "B_push": 14
+   },
+   {
+    "name": "ap_strchr",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strchr_c",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strrchr",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strrchr_c",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strstr",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_strstr_c",
+    "Rc": 8,
+    "Rd": 4,
+    "B": 10,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_module_config",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_module_config",
+    "Rc": 7,
+    "Rd": 7,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_xml_parse_input",
+    "Rc": 103,
+    "Rd": 109,
+    "B": 80,
+    "Rc_push": 2,
+    "Rd_push": 11,
+    "B_push": 11
+   },
+   {
+    "name": "ap_get_output_filter_handle",
+    "Rc": 10,
+    "Rd": 52,
+    "B": 54,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_input_filter_handle",
+    "Rc": 10,
+    "Rd": 52,
+    "B": 54,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_input_filter",
+    "Rc": 0,
+    "Rd": 102,
+    "B": 102,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_output_filter",
+    "Rc": 8,
+    "Rd": 8,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_register_output_filter_protocol",
+    "Rc": 10,
+    "Rd": 10,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_input_filter",
+    "Rc": 2,
+    "Rd": 4,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_input_filter_handle",
+    "Rc": 3,
+    "Rd": 7,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_output_filter",
+    "Rc": 2,
+    "Rd": 4,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_add_output_filter_handle",
+    "Rc": 3,
+    "Rd": 7,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_remove_input_filter",
+    "Rc": 10,
+    "Rd": 34,
+    "B": 36,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_remove_output_filter",
+    "Rc": 10,
+    "Rd": 34,
+    "B": 36,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_brigade",
+    "Rc": 14,
+    "Rd": 14,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_pass_brigade",
+    "Rc": 26,
+    "Rd": 24,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_filter_flush",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_save_brigade",
+    "Rc": 73,
+    "Rd": 90,
+    "B": 97,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_fflush",
+    "Rc": 15,
+    "Rd": 30,
+    "B": 29,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_fputstrs",
+    "Rc": 50,
+    "Rd": 104,
+    "B": 140,
+    "Rc_push": 0,
+    "Rd_push": 78,
+    "B_push": 78
+   },
+   {
+    "name": "ap_fprintf",
+    "Rc": 48,
+    "Rd": 51,
+    "B": 85,
+    "Rc_push": 0,
+    "Rd_push": 35,
+    "B_push": 35
+   },
+   {
+    "name": "ap_filter_protocol",
+    "Rc": 6,
+    "Rd": 6,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_insert_error_filter",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_insert_error_filter",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_insert_error_filter",
+    "Rc": 14,
+    "Rd": 16,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_keepalive",
+    "Rc": 138,
+    "Rd": 124,
+    "B": 122,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_meets_conditions",
+    "Rc": 136,
+    "Rd": 138,
+    "B": 44,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_registry_init",
+    "Rc": 61,
+    "Rd": 69,
+    "B": 66,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_register",
+    "Rc": 37,
+    "Rd": 35,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_number_of",
+    "Rc": 204,
+    "Rd": 202,
+    "B": 134,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_name_of",
+    "Rc": 25,
+    "Rd": 47,
+    "B": 54,
+    "Rc_push": 0,
+    "Rd_push": 9,
+    "B_push": 9
+   },
+   {
+    "name": "ap_index_of_response",
+    "Rc": 10,
+    "Rd": 25,
+    "B": 21,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_status_line",
+    "Rc": 11,
+    "Rd": 11,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_send_http_options",
+    "Rc": 17,
+    "Rd": 17,
+    "B": 12,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_content_type",
+    "Rc": 20,
+    "Rd": 27,
+    "B": 27,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_accept_ranges",
+    "Rc": 10,
+    "Rd": 12,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_send_error_response",
+    "Rc": 130,
+    "Rd": 323,
+    "B": 285,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_make_method_list",
+    "Rc": 13,
+    "Rd": 13,
+    "B": 8,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_copy_method_list",
+    "Rc": 24,
+    "Rd": 26,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_in_list",
+    "Rc": 31,
+    "Rd": 31,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_list_add",
+    "Rc": 32,
+    "Rd": 32,
+    "B": 22,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_method_list_remove",
+    "Rc": 58,
+    "Rd": 64,
+    "B": 40,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_clear_method_list",
+    "Rc": 5,
+    "Rd": 5,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_internal_fast_redirect",
+    "Rc": 148,
+    "Rd": 169,
+    "B": 173,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_internal_redirect",
+    "Rc": 22,
+    "Rd": 361,
+    "B": 361,
+    "Rc_push": 0,
+    "Rd_push": 4,
+    "B_push": 4
+   },
+   {
+    "name": "ap_die",
+    "Rc": 204,
+    "Rd": 436,
+    "B": 396,
+    "Rc_push": 4,
+    "Rd_push": 4,
+    "B_push": 4
+   },
+   {
+    "name": "ap_process_request",
+    "Rc": 77,
+    "Rd": 92,
+    "B": 73,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_internal_redirect_handler",
+    "Rc": 26,
+    "Rd": 375,
+    "B": 381,
+    "Rc_push": 0,
+    "Rd_push": 4,
+    "B_push": 4
+   },
+   {
+    "name": "ap_allow_methods",
+    "Rc": 52,
+    "Rd": 133,
+    "B": 153,
+    "Rc_push": 13,
+    "Rd_push": 44,
+    "B_push": 41
+   },
+   {
+    "name": "ap_allow_standard_methods",
+    "Rc": 49,
+    "Rd": 95,
+    "B": 102,
+    "Rc_push": 1,
+    "Rd_push": 11,
+    "B_push": 10
+   },
+   {
+    "name": "ap_http_filter",
+    "Rc": 761,
+    "Rd": 813,
+    "B": 852,
+    "Rc_push": 5,
+    "Rd_push": 48,
+    "B_push": 45
+   },
+   {
+    "name": "ap_basic_http_header",
+    "Rc": 18,
+    "Rd": 504,
+    "B": 516,
+    "Rc_push": 0,
+    "Rd_push": 202,
+    "B_push": 202
+   },
+   {
+    "name": "ap_http_header_filter",
+    "Rc": 429,
+    "Rd": 643,
+    "B": 664,
+    "Rc_push": 13,
+    "Rd_push": 198,
+    "B_push": 205
+   },
+   {
+    "name": "ap_discard_request_body",
+    "Rc": 79,
+    "Rd": 163,
+    "B": 158,
+    "Rc_push": 0,
+    "Rd_push": 38,
+    "B_push": 38
+   },
+   {
+    "name": "ap_setup_client_block",
+    "Rc": 64,
+    "Rd": 76,
+    "B": 84,
+    "Rc_push": 0,
+    "Rd_push": 6,
+    "B_push": 6
+   },
+   {
+    "name": "ap_should_client_block",
+    "Rc": 9,
+    "Rd": 9,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_get_client_block",
+    "Rc": 53,
+    "Rd": 51,
+    "B": 40,
+    "Rc_push": 0,
+    "Rd_push": 10,
+    "B_push": 10
+   },
+   {
+    "name": "ap_send_http_trace",
+    "Rc": 139,
+    "Rd": 183,
+    "B": 178,
+    "Rc_push": 0,
+    "Rd_push": 11,
+    "B_push": 11
+   },
+   {
+    "name": "ap_http_outerror_filter",
+    "Rc": 56,
+    "Rd": 76,
+    "B": 76,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_http_chunk_filter",
+    "Rc": 187,
+    "Rd": 191,
+    "B": 212,
+    "Rc_push": 3,
+    "Rd_push": 11,
+    "B_push": 12
+   },
+   {
+    "name": "ap_byterange_filter",
+    "Rc": 147,
+    "Rd": 389,
+    "B": 434,
+    "Rc_push": 0,
+    "Rd_push": 79,
+    "B_push": 79
+   },
+   {
+    "name": "ap_make_etag",
+    "Rc": 94,
+    "Rd": 91,
+    "B": 43,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_set_etag",
+    "Rc": 31,
+    "Rd": 31,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_status_hook",
+    "Rc": 26,
+    "Rd": 28,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_query",
+    "Rc": 43,
+    "Rd": 43,
+    "B": 14,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_graceful_stop_signalled",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_mpm_run",
+    "Rc": 677,
+    "Rd": 746,
+    "B": 711,
+    "Rc_push": 4,
+    "Rd_push": 39,
+    "B_push": 35
+   },
+   {
+    "name": "unixd_setup_child",
+    "Rc": 123,
+    "Rd": 118,
+    "B": 99,
+    "Rc_push": 2,
+    "Rd_push": 0,
+    "B_push": 2
+   },
+   {
+    "name": "unixd_set_user",
+    "Rc": 25,
+    "Rd": 23,
+    "B": 20,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "unixd_set_group",
+    "Rc": 14,
+    "Rd": 14,
+    "B": 6,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "unixd_set_chroot_dir",
+    "Rc": 19,
+    "Rd": 19,
+    "B": 18,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "unixd_set_suexec",
+    "Rc": 23,
+    "Rd": 18,
+    "B": 19,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "unixd_pre_config",
+    "Rc": 37,
+    "Rd": 103,
+    "B": 108,
+    "Rc_push": 5,
+    "Rd_push": 20,
+    "B_push": 19
+   },
+   {
+    "name": "unixd_set_rlimit",
+    "Rc": 99,
+    "Rd": 92,
+    "B": 85,
+    "Rc_push": 0,
+    "Rd_push": 7,
+    "B_push": 7
+   },
+   {
+    "name": "ap_hook_get_suexec_identity",
+    "Rc": 32,
+    "Rd": 34,
+    "B": 24,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_hook_get_get_suexec_identity",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_run_get_suexec_identity",
+    "Rc": 26,
+    "Rd": 26,
+    "B": 16,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "ap_os_create_privileged_process",
+    "Rc": 69,
+    "Rd": 67,
+    "B": 58,
+    "Rc_push": 0,
+    "Rd_push": 5,
+    "B_push": 5
+   },
+   {
+    "name": "unixd_set_proc_mutex_perms",
+    "Rc": 83,
+    "Rd": 197,
+    "B": 210,
+    "Rc_push": 0,
+    "Rd_push": 43,
+    "B_push": 43
+   },
+   {
+    "name": "unixd_set_global_mutex_perms",
+    "Rc": 15,
+    "Rd": 109,
+    "B": 114,
+    "Rc_push": 2,
+    "Rd_push": 22,
+    "B_push": 24
+   },
+   {
+    "name": "unixd_accept",
+    "Rc": 44,
+    "Rd": 99,
+    "B": 89,
+    "Rc_push": 2,
+    "Rd_push": 17,
+    "B_push": 15
+   },
+   {
+    "name": "pcre_version",
+    "Rc": 4,
+    "Rd": 4,
+    "B": 4,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "pcre_info",
+    "Rc": 45,
+    "Rd": 190,
+    "B": 181,
+    "Rc_push": 2,
+    "Rd_push": 16,
+    "B_push": 18
+   },
+   {
+    "name": "pcre_fullinfo",
+    "Rc": 117,
+    "Rd": 141,
+    "B": 170,
+    "Rc_push": 2,
+    "Rd_push": 7,
+    "B_push": 9
+   },
+   {
+    "name": "pcre_config",
+    "Rc": 26,
+    "Rd": 26,
+    "B": 2,
+    "Rc_push": 0,
+    "Rd_push": 0,
+    "B_push": 0
+   },
+   {
+    "name": "pcre_compile",
+    "Rc": 1017,
+    "Rd": 1059,
+    "B": 1576,
+    "Rc_push": 36,
+    "Rd_push": 309,
+    "B_push": 283
+   }
+  ]
+ }
+}

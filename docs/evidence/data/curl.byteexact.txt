@@ -1,0 +1,4 @@
+[curl] rugra_fns=124 golden_fns=124 matched=124 unmatched_rugra=0
+[curl] BYTE-EXACT = 47 / 124 matched (37.9%)
+[curl]   real-code (37): _ITM_deregisterTMCloneTable, _ITM_registerTMCloneTable, curl_easy_cleanup, curl_easy_init, curl_easy_perform, curl_easy_setopt, curl_formparse, curl_getdate, curl_getenv, curl_slist_append, curl_slist_free_all, curl_version, exit, fclose, fgets, fileno, fopen, fputc, free, fwrite, isatty, malloc, maprintf, memcpy, puts, realloc, strcat, strchr, strcpy, strdup, strequal, strlen, strnequal, strrchr, strstr, strtol, time
+[curl]   import-stub (10): __ctype_b_loc, __fprintf_chk, __gmon_start__, __isoc99_sscanf, __libc_start_main, __printf_chk, __sprintf_chk, __stack_chk_fail, __vfprintf_chk, __xstat
