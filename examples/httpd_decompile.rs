@@ -1240,6 +1240,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             fd.inject_raw_ops(&raw_ops);
             eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());
+            // HTTPD-MAIN-WARNUNREACH-JTEDGE-0001: the oracle's load
+            // contract is Funcdata::followFlow (funcdata_op.cc:756), whose
+            // generateOps phase 2 recovers jump tables BEFORE block
+            // generation (flow.cc:796-821) so every switch gets its case
+            // out-edges (collectEdges BRANCHIND arm, flow.cc:933-957) and
+            // switchOver map (funcdata_op.cc:777-778). The linear batch
+            // inject above fused the lift and block formation, leaving
+            // BRANCHIND blocks edge-less — main's 30 case bodies became
+            // spanning-tree extra roots and ActionUnreachable emitted 30
+            // "Removing unreachable block" warnings. Run the recovery
+            // wiring here, at the same position relative to the linear
+            // sweep (A/B evidence: RUGRA_MIRROR=1 through follow_flow_range
+            // = 0 warnings + real case bodies on the same binary).
+            let recovered = rugra::flow::recover_jump_tables_injected(&mut fd);
+            match recovered {
+                Ok(count) if count > 0 => {
+                    eprintln!("[THREAD] {} jumptable recovery: {} tables", func_name, count)
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    // The LowlevelError channel Ghidra lets escape
+                    // followFlow — the function cannot decompile.
+                    eprintln!("[THREAD] {} jumptable recovery failed: {}", func_name, error);
+                    return None;
+                }
+            }
             }
 
             let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
