@@ -135,6 +135,7 @@ recorded for later lanes; not banked):
 | function | entry | kind | first divergence |
 |---|---|---|---|
 | hugehelp | 0x4a00 | op-line | ordinal 2 `universal:start` op 14: oracle `BRANCH in=n:ram:2320:1` vs rugra `CALL in=f:4a0f:c`; op totals 1,699 vs 4,314 |
+| main | 0x25a0 | op-line | ordinal 5 `universal:extrapopsetup` op 1792: identical INT_ADD at differing op-creation ordinal (`2d04:c15` oracle vs `2d04:c0e` rugra, +7 pool offset); op totals 2,414,145 vs 2,413,566 |
 | my_get_line | 0x3840 | result-count | ordinal 52 `universal:fullloop:mainloop:condconst`: result/count 2 vs 1 |
 | helpf | 0x3980 | result-count | ordinal 70 `universal:fullloop:mainloop:stackstall:oppool1`: result/count 118 vs 110 |
 | _start | 0x3370 | result-count | ordinal 149 `universal:fullloop:mainloop:constantptr`: result/count/apply 3/3/1 vs 0/0/0 (ACTION-SYMDB-DATASYM-0001 class) |

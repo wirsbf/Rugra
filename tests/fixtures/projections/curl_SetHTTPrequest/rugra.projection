@@ -1,7 +1,7 @@
 META side=rugra oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86:LE:64:default cspec=gcc
 META analysis_options=default build_flags=v1-no-OPACTION_DEBUG
 META binary_sha256=8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41 func_entry=0x4980 func_name=SetHTTPrequest load_mode=single_function_bfd
-META producer=rugra-tree-591dcc0be7af127ed7eec0c4daa629717f3e6d0b,callspec_link=on maxrestarts=1 unique_base=10000000
+META producer=rugra-tree-acbc7b54831fd0d06279136aa9d16ed90f8b12d3,callspec_link=on maxrestarts=1 unique_base=10000000
 @BEGIN 1 universal
 @BEGIN 2 universal:start
 @END 2 universal:start result=0 count=0 tests=0 apply=0

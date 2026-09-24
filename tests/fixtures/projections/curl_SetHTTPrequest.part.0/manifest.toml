@@ -16,7 +16,7 @@ date = "2026-09-24"
 
 [rugra]
 side = "rugra"
-driver_commit = "4a67708e80f961cc4989f9c80dd8bc2a6add256c"
+driver_commit = "acbc7b54831fd0d06279136aa9d16ed90f8b12d3"
 driver_profile = "fast-release"
 capture_command = "RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=0x3c50 RUGRA_STAGE_PROJ_OUT=tests/fixtures/projections/curl_SetHTTPrequest.part.0/rugra.projection cargo run --profile fast-release --example curl_decompile"
 date = "2026-09-24"
@@ -30,5 +30,5 @@ date = "2026-09-24"
 
 [integrity]
 oracle_sha256 = "47868689d58dedc1b1de6d176574c23e1d27e9d9b5be77daf2c213d6901a0eb1"
-rugra_sha256 = "ac8d42e7ea345df1022e43d957756af5b44ec23fa00479b0e233b562d956ae06"
+rugra_sha256 = "fb7199ed51e661fa7071651a91f0ef273d53a34ee598f82377aa364fef7e3133"
 binary_sha256 = "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
