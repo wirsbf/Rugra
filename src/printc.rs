@@ -2159,25 +2159,21 @@ impl PrintC {
                 }
                 } // end deref_form field_access substitute guard
                 if !field_access {
-                    // cc:509-513: `*` prefix only in the dereference form;
-                    // subscript form lets the implied PTRADD/PTRSUB def emit
-                    // `p[i]` itself (its ` = ` RHS follows below).
+                    // printc.cc:508-513: exactly ONE address emission — the
+                    // unary dereference TOKEN in the deref form (token
+                    // protocol paren decision, printlanguage.cc:287-292,
+                    // makes `*(puVar4 + 3)` a legal lvalue), or no token at
+                    // all in the subscript form (m|print_store_value lets
+                    // the implied PTRADD/PTRSUB def emit `p[i]` itself; its
+                    // ` = ` RHS follows below). The 33418058 merge kept BOTH
+                    // the pre-merge hand-emitted `*` + pushVn pair and the
+                    // token-protocol pair, printing every STORE address
+                    // twice (`*ADDR*ADDR = v`); the cc:512 single pushOp is
+                    // restored here.
                     if deref_form {
-                        self.emit.tag_op("*");
+                        self.rpn_push_op(self.rpn_tok_dereference);
                     }
                     self.rpn_push_in(op_arc, op, 1, m);
-                    // printc.cc:512 pushOp(&dereference,op): route the STORE
-                    // address under the unary dereference TOKEN so the token
-                    // protocol's parentheses() decision (printlanguage.cc:287
-                    // -292, unary_prefix prec 62 vs the address op's token)
-                    // wraps every lower-precedence address expression — a
-                    // PTRADD/INT_ADD address prints `*(puVar4 + 3)`, a legal
-                    // lvalue, instead of the rvalue `*puVar4 + 3` the old
-                    // hand-emitted tag_op("*") produced (equal-preference
-                    // unary/cast addresses and leaf atoms stay paren-free,
-                    // exactly matching the oracle token table pairing).
-                    self.rpn_push_op(self.rpn_tok_dereference);
-                    self.rpn_push_in(op_arc, op, 1, self.mods);
                     self.rpn_recurse();
                 }
                 self.emit.tag_op(" = ");
