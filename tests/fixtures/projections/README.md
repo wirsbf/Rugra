@@ -31,6 +31,7 @@ tests/fixtures/projections/
 | curl_glob_set | glob_set | 0x4bc0 | 366 | 141,943 | bank sha256 (capture-mode first, then frozen) |
 | curl_glob_word | glob_word | 0x4a60 | 335 | 208,414 | bank sha256 (capture mode, re-capture byte-verified) |
 | curl_file2string.part.0 | file2string.part.0 | 0x3a90 | 340 | 87,957 | bank sha256 (== sb-oracle pin c0981445…) |
+| curl_helpf | helpf | 0x3980 | 345 | 195,009 | bank sha256 (capture mode; PM-HF lane, mark_unaliased range-walk fix) |
 
 Common provenance (also recorded per manifest):
 
@@ -100,6 +101,8 @@ Selector spellings: `next_url`, `match_url`, `myprogress`, `glob_set`,
 address form `0x<entry>` is observation-equivalent (verified byte-identical
 on parseconfig). The `file2string` entry's advisory-only `func_name` META
 difference is the same constprop-clone BFD/DWARF spelling class.
+`helpf` (local symbol; no spelling divergence — BFD and the driver's
+FuncInfo layer agree on this name).
 
 ## Adding a function
 
