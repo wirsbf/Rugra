@@ -373,3 +373,96 @@ progressbar`（+passarg 槽遮蔽）/`stat fileinfo`/canon-only `URLGlob glob`
 getparameter `stat statbuf`/`LongShort aliases[50]`（C4）；match_url
 `URLGlob glob`（栈参数，C3）；全部 sec_offset loc-list 变量（Ghidra 自身
 丢弃）。C4 组合类型（V4-W4）与 C3 签名锁（V3-W3）是这些残差的归属通道。
+
+## §12 C3NEXT 交付记录（Lane C3NEXT，2026-09-25，基=亲父 5fff5592）
+
+通道选择判决：§11.4 的 11 个不可复现族中 **8 个属 C4**（urls/outs/heads/
+progressbar+passarg/fileinfo/ap/statbuf/aliases + canon-decl local_5b8/
+local_5a8），仅 glob×2 属 C3；且 getparameter 384 与 main 186 残差主体为
+结构体声明层+字段形族。**选 C4 STRUCT-SEED**。写域=tools/harvest_local_
+manifest.py（--struct 模式）+tests/golden/manifests/local_seed_curl_1204_
+struct.json+examples/curl_decompile.rs（RUGRA_STRUCTSEED 门，镜像 C2DWARF
+形态）+docs；**src 触碰 1 处（声明）**：src/debugproto.rs（OUTSTRUCT-ID0
+身份修复，独立 commit bcaaf396，机制 C 白名单外——debugproto 非
+heritage/jumptable/blockaction/condexe/varmap/merge 域；printc.rs/varmap.rs
+全程未触碰）。
+
+### 12.1 oracle 级预验证（先行，BRIDGE1 方法论照做）
+
+stage_seed_diag（锁定库 e40ed130，真 `<localdb>` decode 链）+ pyelftools
+DWARF 盘点（/dev/shm/rugra-tests/c3next/：struct_inventory.py /
+dwarf_types.py / gen_struct_seed_xml.py + seed_*.xml + oracle_*_seeded.c）：
+
+- **DWARF 盘点**：结构体变量 9 条（main urls/outs/heads/progressbar/
+  fileinfo+passarg 同槽、getparameter statbuf/aliases、helpf ap）+
+  match_url glob 为 fbreg(0) 栈形参（C3 域，不收）。
+- **声明层逐符号复现（3/3 函数全命中）**：main `URLGlob * urls; OutStruct
+  outs; OutStruct heads; ProgressData progressbar; stat fileinfo;`；
+  getparameter `Configurable * local_5b8; HttpPost * local_5a8; stat
+  statbuf; LongShort[50] aliases;`；helpf `va_list ap;`。
+- **字段形族复现**：`outs.stream/outs.filename/heads.stream/heads.filename`
+  读写、`fileinfo.st_size`、`progressbar.total`、`glob_url(&urls,...)`/
+  `next_url(urls)`、getparameter 别名环 `->letter/&->lname`。
+- **va_list 域判决**：typedef 折叠为 struct 时 oracle 打印 `ap.field` 且
+  按 `&ap` 传递；**数组形**（`__va_list_tag[1]` 命名 va_list）时打印
+  `ap[0].field` 且按值传递 `ap`——canon 为数组形 ⇒ 种子必须以数组形
+  运输（gen_struct_seed_xml 的 typedef→array 链修复即此判决）。
+- **已知 harness 工件（非语义差异）**：种子态 oracle 打印抽象数组形
+  `bool[256] errorbuffer`/指针间距 `URLGlob * urls`，canon 打印声明符形
+  `bool errorbuffer [256]`/`URLGlob *urls`——C2DWARF 判例同款（Java 导入
+  器构建的类型对象形态差异）；Rugra 侧独立以 canon 形输出（E2E 实证）。
+- **指针型选举（getparameter 别名环）**：裸 oracle 里 LongShort* 胜出
+  （`pLVar6->letter`），canon 为 Configurable*（`pCVar13->useragent`）；
+  Rugra 全驱动（funcp 的 Configurable* 参数锁在场）落 canon 形 ✓。
+
+### 12.2 实现形态
+
+- **manifest** `tests/golden/manifests/local_seed_curl_1204_struct.json`：
+  3 函数/10 种子（main 5 DWARF + helpf 1 + getparameter 2 canon-decl +
+  2 DWARF）+12 drops 全归账 + residual_notes 5 条（glob×2/register var
+  `Configurable *config`/sec_offset 域/Unresolved 注释族）；指纹齐备
+  （oracle e40ed130 + binary sha256 + golden sha256）；harvest_rule 全
+  规则留档。
+- **harvester** `--struct` 模式：DWARF 复合体命名域（可直接命名的
+  structure/union/enum + typedef over composite/array）为准入门（TYPEFIX
+  规矩的 C4 等价物：未知命名基=工厂名树 None=死条目，剔除）；KNOWN_BASES
+  域显式排除（C1/C2 通道属地，按构造不相交）；首声明槽主规则（progressbar
+  遮蔽 passarg）延续；canon-decl 采纳=local_[hex] 声明 + 结构体指针基。
+- **驱动门** `RUGRA_STRUCTSEED=1`（+`RUGRA_STRUCTSEED_MANIFEST` 覆写）：
+  与 TYPESEED/DWARFSEED 同装载器、独立 env；attach 在 DWARFSEED 之后，
+  偏移碰撞=响亮 manifest 缺陷告警；mirror 四分量在场恒拒载（实测
+  RUGRA_MIRROR+三门输出与纯 mirror cmp 恒等）；默认路径构造性恒等。
+- **src 前置（bcaaf396）**：intern_named 的 id=hashName 派生（type.cc:675
+  镜像）+ 零尺寸不完整复合体守卫 + parse_c_type 名树 findByName 回退
+  （grammar.cc:2989 镜像）——直接命名复合体（OutStruct/stat/...）此前
+  从未进名树（id=0 被 find_add 拒绝后静默未注册），typedef 路径不受影响。
+
+### 12.3 C3NEXT 验收（亲测，基=亲父 5fff5592 + bcaaf396）
+
+| 门禁 | 默认（无 env） | TYPESEED=1 | TYPESEED+DWARFSEED | 三门全开 |
+|---|---|---|---|---|
+| curl E2E canon | **1096/0/0**（=bcaaf396 见证；亲父 5fff5592 为 1099，差额 −3 归因见 bcaaf396 Differential） | 1051/0/0 | **941/0/0** | **767/0/0**（−177 vs 亲父双门） |
+| 投影银行 | 71/71 PASS（离线，frozen） | mirror 门恒闭 | mirror 门恒闭 | mirror 门恒闭（实测拒载+cmp 恒等） |
+| gcc 审计 | 104 OK/20 FAIL | 同 | 104 OK/20 FAIL | **104 OK/20 FAIL**（fail 函数名集与双门态逐名相同，零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 | cmp 恒等 | cmp 恒等 |
+
+逐函数（双门→三门，**0 回退**硬门 ✓；14 个未播种函数字节恒等）：
+main 185→**129**（−56）、getparameter 382→**277**（−105）、helpf 50→**37**
+（−13）。字段形实证：`outs.stream = stdout`/`outs.filename = ::config.outfile`/
+`fileinfo.st_size`/`progressbar.total`/`ap[0].gp_offset`/`LongShort
+aliases [50]`（canon 数组拼写形）全量出现；getparameter 别名环指针选举落
+canon 形（`pCVar13 = (Configurable *)aliases; ... ->useragent`）。
+
+### 12.4 残差登记（不可经本通道复现 → HEAD/C3 域）
+
+- main `URLGlob glob` 槽位发现（canon-only inlined 参数，DWARF 无 location；
+  双门态 decl 已在但槽位归属未钉）→ C3 域。
+- match_url `URLGlob glob` 栈形参（fbreg(0) 正槽）→ C3 原型锁域。
+- main `Configurable *config` 寄存器变量（无栈槽；canon decl 在场=驱动
+  DWARF 层产物）→ localdb register-symbol 域（HEAD）。
+- canon `/* Unresolved local var */` 注释块（Java 前端工件，decompile/cpp
+  无该串；main 3 行+getparameter ~20 行）→ 注释通道域。
+- getparameter/main 计数器分型（`for (var_8; ...)` vs `for (lVar11 =
+  0x96; ...)`）与 canary 声明位/编号级联 → 库级 typeprop/merge 域
+  （与 §9.3 下标形残差同族）。
+- sec_offset loc-list 全域（Ghidra importer 自身丢弃，预登记）。
