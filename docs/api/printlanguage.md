@@ -160,3 +160,12 @@ nested_parenthesized=a * (b + c)
   header|warningheader`（cc:579）、`instr_comment_type = user2|warning`
   （cc:582）——此前两值互换（详见 docs/api/printc.md 2026-08-17 节
   UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ③）。
+
+## 2026-09-24: pushType 虚签名 Arc 化(RESIDMAP-PLTSTUB-EMITSHAPE-0001)
+
+- trait `push_type` 的参数由 `&Datatype` 改为
+  `&std::sync::Arc<Datatype>`——Rust 侧对 Ghidra 虚函数
+  `pushType(const Datatype *ct)`(printlanguage.hh:319)的共享所有权等价
+  (代码库类型一律以 Arc<Datatype> 流转)。实现(PrintC)同步声明符栈化
+  (见 docs/api/printc.md 2026-09-24 节);调用侧仅
+  emit_prototype_output/doc_variable_decl 两处,均已是 &Arc。

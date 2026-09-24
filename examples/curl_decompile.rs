@@ -5142,8 +5142,18 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         // global scope and (via symbol_table) the Funcdata name proxy.
         {
             // Relocation name lookup: r_offset -> version-stripped dynsym name.
+            // JUMP_SLOT relocations live in DT_JMPREL (.rela.plt), which
+            // goblin parses into `pltrelocs` — `dynrelas` alone misses every
+            // PLT GOT slot (witness: the 0x16e90 strcpy slot stayed bare
+            // `PTR_00116e90` while canon reads `PTR_strcpy_00116e90`,
+            // ghidra_curl_1204.c:67). Chain all three sections.
             let reloc_name_at = |offset: u64| -> Option<String> {
-                for reloc in elf.dynrelas.iter().chain(elf.dynrels.iter()) {
+                for reloc in elf
+                    .dynrelas
+                    .iter()
+                    .chain(elf.dynrels.iter())
+                    .chain(elf.pltrelocs.iter())
+                {
                     if reloc.r_offset != offset {
                         continue;
                     }

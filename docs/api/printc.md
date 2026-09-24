@@ -2544,3 +2544,39 @@ httpd 3 处 label-only(无 goto 消费者)经全 setter 插桩(BlockGoto 2856-28
 基线)、next_url+match_url Phase 2 投影 **MATCH 保持**(stage_bisect --v1 vs
 /dev/shm/rugra-tests/sb-oracle 钉板);printc 单测 12/12;gcc 审计 curl 82OK/25FAIL==基线;
 lib 串行 1650/18(失败集=既有 flaky 家族)。
+
+## 2026-09-24: CALLIND 协议臂启用 + pushType 声明符栈化(RESIDMAP-PLTSTUB-EMITSHAPE-0001)
+
+- **`dispatch_op_rpn` 的 `CPUI_CALLIND` 臂由直印通道切换为 RPN 协议通道**
+  (PRINTC-CALLIND-RPN-ASSIGN-0001 落地,解除 PRINTC-CALLIND-P6-NULLIFY-0001
+  阻塞):逐字镜像 printc.cc:640-670——pushOp(function_call)+
+  pushOp(dereference)+ 三分支(count>1: in0→count-1 个 comma→逆序实参;
+  count==1: arg→in0;count==0: in0+EMPTY blank)。语句根
+  emit_expression_rpn 的 assignment token 经 rpn_push_op 的
+  emitOp(revpol.back()) 恰好在调用文本前发火 ` = ` 分隔符——修复
+  `uVar1(*(code *)PTR_x)();` + `return = uVar1;` 泄漏形(curl 22 处)。
+  `(code *)` 面向 cast 在 **rpn_recurse 的 calltarget 运输点**传输
+  (PRINTC-CALLIND-CODECAST-0001 打印侧半):oracle 的 setcasts CAST 在
+  pushVn(in0) 排空点经 opTypeCast(printc.cc:459-462)分派
+  pushOp(typecast)+pushType(code*);Rugra IR 把 code* 类型直载在输入
+  varnode 上,故同一对 push 在排空点(隐式/叶子两形都盖)镜像——
+  `(*(code *)PTR_strcpy_00116e90)()` 与
+  `(*(code *)*(BADTYPE **)(iVar1 * 8 + 0x16c48))(a,b,c)`(__libc_csu_init
+  隐式 LOAD 目标)双形 canon 字节一致。
+- **`push_type` 声明符栈化**:printc.cc:1472-1478 的 pushType =
+  pushTypeStart(ct,true)+EMPTY 原子+pushTypeEnd(ct)——完整声明符栈渲染,
+  而非裸 get_name()。工厂匿名指针类型(名字为空,如 libc 签名表的
+  `char *` 返回)裸打印为零文本,即 PLT stub 签名丢失返回类型的根
+  (` strcpy(...)` vs canon `char * strcpy(...)`,D 族①;
+  next_url/match_url 的 DWARF 指针返回同根修复)。签名通道
+  emit_prototype_output→push_type 不变,类型经
+  push_type_start_opt/push_type_end_opt 渲染;printlanguage trait 的
+  pushType 虚签名同步改 &Arc<Datatype>(Rust 侧 Ghidra `const Datatype*`
+  的共享等价)。
+- 门禁:curl 2005/0/0(−140,亲父 9458a61b);12 stub 函数
+  strcpy/strchr/strrchr/fgets/memcpy/malloc/realloc/fopen/strcat/strdup/
+  strstr/__ctype_b_loc diff 11→7(签名行+PTR 标签行+发射形已 MATCH;余
+  7=①局部类型/`(char *)` cast(heritage 通道,登记
+  RESIDMAP-PLTSTUB-VARTYPE-0001)②警告 3 行(PLTSTUB-WARNLOSS/JUMPTABLE
+  域));free/puts 等 void stub 体 `(*(code *)PTR_free_00116e80)();` 全
+  canon MATCH;gcc 审计 82→104 OK。

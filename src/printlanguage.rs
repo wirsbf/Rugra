@@ -1508,8 +1508,11 @@ pub trait PrintLanguage: Any {
     // Ghidra: printlanguage.hh:513 PrintLanguage::opBranch
     fn op_branch(&mut self, op: &crate::op::PcodeOp);
 
-    // Ghidra: printlanguage.hh:319 PrintLanguage::pushType
-    fn push_type(&mut self, dt: &crate::type_system::Datatype);
+    // Ghidra: printlanguage.hh:319 PrintLanguage::pushType (virtual).
+    // Rust carries shared types as Arc<Datatype> (the codebase's counterpart
+    // of Ghidra's `const Datatype*`), so the virtual's parameter takes the
+    // Arc form.
+    fn push_type(&mut self, dt: &std::sync::Arc<crate::type_system::Datatype>);
     // RUGRA-GLUE: push_varnode (PrintC direct-emit, wraps pushVnExplicit cc:218)
     fn push_varnode(&mut self, vn: &crate::varnode::Varnode, _op: Option<&crate::op::PcodeOp>);
 

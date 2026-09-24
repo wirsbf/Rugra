@@ -1,0 +1,3 @@
+# OpenCode/ripgrep ignore overrides
+!.slim/deepwork/
+!.slim/deepwork/**
