@@ -1183,6 +1183,35 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
   （httpd main 显式临时变量族=canon 方向（golden httpd main `lVar2 =
   plVar6[2]` 显式形态），残余形状差=typeprop/varmap/printc 域，登记移交）。
 
+
+## 2026-09-25（CR 补丁）：for-header 提取的 oracle 门补齐 + 触发点更正
+
+- **触发点更正**：finalizePrinting 的 oracle 触发点是
+  **blockaction.cc:2192 ActionFinalStructure::apply →
+  graph.finalizePrinting(data)**（管线位 :5736，先于 scopeBreak :2193），
+  此前 PLACEMENT NOTE 误写为 Funcdata::print。Rugra 挂点维持
+  ActionPrototypeWarnings（:5737，晚一个 Action、无中间 IR 变更）；迁移
+  计划改为「迁 ActionFinalStructure 内对应点位（blockaction.rs 对
+  blockaction.cc:2192 的移植处）」。finalTransform 的 op 搬移语义
+  （block.cc:3381-3396 opUninsert/opInsertAfter）丢弃 → 登记
+  `GETPARAM-FORLOOP-OPMOVE-0001`。
+- **findLoopVariable 两门补齐**：①根 def（条件比较 op）`is_call() ||
+  is_marker()` 弃权（block.cc:3174-3176）；②loopDef 候选必须
+  `opcode == CPUI_MULTIEQUAL`（block.cc:3189——head 内非 MULTIEQUAL def 走
+  DFS 降层臂，不得作 loopDef）。
+- **testTerminal 显式/可打印门**：渲染门前对 loopDef 两输入跑
+  `test_terminal_statement`——COPY-notPrinted 挖根（block.cc:3264-3269，
+  挖根失败拒绝）+ `vn->isExplicit()`（:3271）+ 根 op 仍可打印
+  （:3272-3273）；lastOp/moveRespectingCover 终端性半边登记
+  `GETPARAM-FORLOOP-GAPSET-0001 ①`。
+- **缺口 ID 化**：`GETPARAM-FORLOOP-GAPSET-0001`
+  （①testTerminal 终端性半边 ②4 层 DFS 仅直连输入 1 层 ③isMoveable
+  INT_ADD 近似 ④push_integer equate/displayFormat 边缘 ⑤pushVnExplicit
+  partial-symbol 形态）；`GETPARAM-STORECROSS-ALIASGATE-0001`
+  （check_implied_cover 同 spacebase 即拒 vs oracle cc:3396
+  isPossibleAlias 放行可分辨指针对——httpd main canon 内联的
+  plVar12[9]/[10] 被 Rugra 物化为显式临时件的根因）。
+
 ## 2026-09-25：for-header 提取迁移（ActionStructureTransform → for_loop_finalize_printing）
 
 - 旧 `ActionStructureTransform::apply`（:5715）在动作期用

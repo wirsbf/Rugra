@@ -3846,14 +3846,31 @@ fn call_entry_address(fc: &crate::fspec::FuncCallSpecs) -> crate::address::Addre
 /// so the block emitters skip them while `emit_for_loop` prints the
 /// `for (init; cond; iter)` header from the rendered text.
 ///
-/// PLACEMENT NOTE: Ghidra runs this from `Funcdata::print` (the
-/// BlockGraph::finalizePrinting sweep, block.cc:1364), i.e. after ALL
-/// actions, when variable names (ActionNameVars :5734) and casts
-/// (ActionSetCasts :5735) are final. Rugra's print entry lives in
-/// printc.rs (lane-frozen this round), so the earliest faithful hook is
-/// the tail of the last coreaction action before print
-/// (ActionPrototypeWarnings :5737). Relocate to the print entry when
-/// printc.rs reopens.
+/// Registered fidelity gaps (umbrella
+/// GETPARAM-FORLOOP-GAPSET-0001): ① testTerminal's lastOp/
+/// moveRespectingCover terminality half (block.cc:3277-3290) needs the op
+/// relocation machinery — unported (also GETPARAM-FORLOOP-OPMOVE-0001);
+/// ② findLoopVariable's 4-level non-MULTIEQUAL DFS descent (block.cc:3205)
+/// is approximated by direct comparison inputs only; ③ PcodeOp::isMoveable
+/// closure is approximated by the INT_ADD gate; ④ the constant renderer
+/// skips push_integer's Symbol equate/displayFormat consult; ⑤ the name
+/// resolver skips pushSymbolDetail's scope-qualified partial-symbol forms.
+/// CAST-wrapped constants and init-less loops fail closed (no conversion).
+///
+/// PLACEMENT NOTE: Ghidra runs this from ActionFinalStructure::apply
+/// (blockaction.cc:2192 `graph.finalizePrinting(data)`, pipeline position
+/// :5736 — BEFORE scopeBreak/markUnstructured/markLabelBumpUp at
+/// :2193-2195), by which point variable names (ActionNameVars :5734) and
+/// casts (ActionSetCasts :5735) are final. The oracle home is therefore
+/// the ActionFinalStructure slot, NOT Funcdata::print. Rugra's
+/// ActionFinalStructure lives in blockaction.rs (lane-frozen write-set
+/// this round), so the nearest stable hook is the tail of the last
+/// coreaction action before it (ActionPrototypeWarnings :5737) — one
+/// action later than the oracle position (ActionPrototypeWarnings runs
+/// after, at :5737 vs :5736 — same post-NameVars/SetCasts world, no
+/// intervening IR mutation). Relocate to the corresponding point inside
+/// ActionFinalStructure (the blockaction.rs port of blockaction.cc:2192)
+/// when that file's write-set reopens.
 pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
     use crate::block::BlockType;
     use crate::op::pcodeop_flags::NONPRINTING;
@@ -4075,10 +4092,20 @@ pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
         let comparison = cond_vn.read().unwrap().get_def();
         let Some(comparison) = comparison else { continue ;
         };
+        // block.cc:3174-3176: `if (op->isCall() || op->isMarker()) return;` —
+        // the loop-variable search aborts when the condition's defining op is
+        // a call or marker (no loop variable through those).
+        {
+            let comp_guard = comparison.read().unwrap();
+            if comp_guard.is_call() || comp_guard.is_marker() {
+                continue;
+            }
+        }
         // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
         // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
-        // non-MULTIEQUAL defs; for the common `i < N` form the loop
-        // variable is a direct comparison input, which we handle here.
+        // non-MULTIEQUAL defs (PcodeOpNode path[4]); Rugra only follows the
+        // direct comparison inputs — the missing 3 descent levels are
+        // registered (GETPARAM-FORLOOP-GAPSET-0001 ②).
         let mut found: Option<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = None;
         #[allow(unused_imports)]
         use crate::opcodes::OpCode;
@@ -4091,6 +4118,13 @@ pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
             };
             let multieq = vn.read().unwrap().get_def();
             let Some(multieq) = multieq else { continue };
+            // block.cc:3189: only a MULTIEQUAL def can be the loopDef —
+            // `if (defOp->code() == CPUI_MULTIEQUAL) { ... }` (a non-
+            // MULTIEQUAL def falls into the DFS-descent branch, never the
+            // loopDef acceptance arm).
+            if multieq.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                continue;
+            }
             // The MULTIEQUAL must live in the head block. Compare by Arc
             // pointer identity with head_ops.
             let me_parent = multieq
@@ -4132,9 +4166,10 @@ pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
             if idef.read().unwrap().is_marker() {
                 continue;
             }
-            // Rugra still lacks the full PcodeOp::isMoveable closure.
-            // Preserve the existing conservative INT_ADD gate whenever
-            // the candidate is not already the tail's final statement.
+            // Rugra still lacks the full PcodeOp::isMoveable closure
+            // (GETPARAM-FORLOOP-GAPSET-0001 ③). Preserve the
+            // existing conservative INT_ADD gate whenever the candidate
+            // is not already the tail's final statement.
             if !Arc::ptr_eq(&idef, &last_op.0)
                 && idef.read().unwrap().opcode != OpCode::CPUI_INT_ADD
             {
@@ -4200,13 +4235,28 @@ pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
                 }
             }
         };
-        // Ghidra testTerminal (block.cc:3258-3291) requires the iterator
-        // statement's root output to be an explicit variable read by
-        // loopDef, and testIterateForm (block.cc:3296-3315) requires the
-        // loop variable as input. The rendering below only accepts the
-        // COPY-const initializer and INT_ADD(var,±const) iterator forms;
-        // anything else bails (no for-header conversion, statement stays
-        // visible — the fail-closed equivalent of testTerminal refusing).
+        // Ghidra testTerminal (block.cc:3258-3291): the statement rooted at
+        // each loopDef input must be an EXPLICIT variable statement —
+        // `vn->isExplicit()` (:3271) — and the root op must still be
+        // printable (:3272-3273); a COPY that is already notPrinted has its
+        // root dug through to the COPY's input def (:3263-3269), which must
+        // then live in the slot's parent block. The lastOp/
+        // moveRespectingCover terminality half (:3277-3290) needs the op
+        // relocation machinery and is registered
+        // (GETPARAM-FORLOOP-GAPSET-0001 ①). testIterateForm
+        // (block.cc:3296-3315) requires the loop variable as iterator
+        // input — the INT_ADD(var,±const) render gate below is a strict
+        // subset of it.
+        if !ActionStructureTransform::test_terminal_statement(&loop_def, tail_slot) {
+            continue;
+        }
+        if !ActionStructureTransform::test_terminal_statement(&loop_def, entry_slot) {
+            continue;
+        }
+        // The rendering below only accepts the COPY-const initializer and
+        // INT_ADD(var,±const) iterator forms; anything else bails (no
+        // for-header conversion, statement stays visible — the fail-closed
+        // equivalent of testTerminal refusing).
         let Some(initialize_op) = init_op else {
             continue;
         };
@@ -4340,11 +4390,15 @@ impl Action for ActionPrototypeWarnings {
         // coreaction.cc:4935: return 0; (no IR mutation).
         //
         // RUGRA ADDITION — for-loop header extraction
-        // (BlockWhileDo::finalizePrinting, block.cc:3399-3423): Ghidra runs
-        // this sweep from Funcdata::print after every action; Rugra's print
-        // entry (printc.rs) is lane-frozen, so the last coreaction action
-        // before print is the earliest faithful hook. See
-        // `for_loop_finalize_printing` for the placement note.
+        // (BlockWhileDo::finalizePrinting, block.cc:3399-3423): the oracle
+        // trigger is ActionFinalStructure::apply →
+        // graph.finalizePrinting(data) (blockaction.cc:2192, pipeline
+        // :5736, before scopeBreak). Rugra's ActionFinalStructure port
+        // lives in blockaction.rs (lane-frozen write-set this round), so
+        // this last coreaction action (:5737, one action later, no
+        // intervening IR mutation) is the nearest stable hook. See
+        // `for_loop_finalize_printing` for the full placement note and the
+        // relocation plan.
         for_loop_finalize_printing(fd);
         Ok(action_status::NO_CHANGE)
     }
@@ -5115,12 +5169,20 @@ impl ActionMarkImplied {
                         continue;
                     }
                     // The LOAD crosses this STORE. Ghidra consults
-                    // isPossibleAlias (coreaction.cc:3392) before refusing;
-                    // Rugra's full alias machinery is unported
-                    // (is_possible_alias_step is reserved), so same-spacebase
-                    // crossings are conservatively refused — a superset of
-                    // Ghidra's refusals, differing only for provably
-                    // non-aliasing pointer pairs.
+                    // isPossibleAlias (coreaction.cc:3396, fn at :3303) and
+                    // lets the load through when the STORE and LOAD pointers
+                    // are provably distinct; Rugra's full alias machinery is
+                    // unported (is_possible_alias_step is reserved), so
+                    // same-spacebase crossings are conservatively refused —
+                    // a SUPERSET of Ghidra's refusals. Over-materialization
+                    // fallout: canon-inlined field loads whose pointer is a
+                    // different base than the crossed store (httpd main
+                    // plVar12[9]/plVar12[10]) get materialized as explicit
+                    // temps here. Registered:
+                    // GETPARAM-STORECROSS-ALIASGATE-0001 (port
+                    // isPossibleAlias/isPossibleAliasStep,
+                    // coreaction.cc:3273-3330, then gate this refusal on
+                    // it).
                     let store_spacebase_off =
                         store_op.get_in(0).map(|v| v.read().unwrap().get_offset());
                     if load_spacebase_off == store_spacebase_off {
@@ -16220,6 +16282,13 @@ impl ActionStructureTransform {
     /// `<prefix>Var<n>` names as-is. Returns None when the high is unnamed
     /// or carries a raw register name (printc rewrites those through its own
     /// tables, which the action-time renderer cannot consult faithfully).
+    ///
+    /// Registered edge (GETPARAM-FORLOOP-GAPSET-0001 ⑤): the oracle
+    /// name resolution goes through pushSymbolDetail
+    /// (printlanguage.cc:238-262), which emits scope-qualified
+    /// whole/partial/mismatch SYMBOL forms for symbol-backed highs; this
+    /// slice renders only the plain high/symbol name. Loop counters in the
+    /// current corpus are plain locals, so no observable divergence today.
     fn for_header_var_name(
         vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<String> {
@@ -16269,6 +16338,14 @@ impl ActionStructureTransform {
     /// flip to the negated value when the two's-complement sign bit is set,
     /// values ≤ 10 print decimal, everything else prints hex exactly when
     /// mostNaturalBase is 16.
+    ///
+    /// Registered edge (GETPARAM-FORLOOP-GAPSET-0001 ④): the full
+    /// push_integer consults the high's Symbol for equate substitution and
+    /// displayFormat (printc.cc:1297-1320) plus force_unsigned_token/
+    /// force_sized_token (vn->isUnsignedPrint()/isLongPrint()) — none of
+    /// which this slice mirrors. Loop-counter constants carry no equate
+    /// symbols in the current corpus; a counter named via an equate would
+    /// render differently.
     fn for_header_const_text(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<String> {
         let vn_rg = vn.read().unwrap();
         if !vn_rg.is_constant() {
@@ -16344,6 +16421,101 @@ impl ActionStructureTransform {
         Some(format!("{} = {} + {}", lhs, rhs_var, rhs_const))
     }
 
+    // Ghidra: block.cc:3258 BlockWhileDo::testTerminal (explicit/printable half)
+    /// The testTerminal gates that are checkable without the op-relocation
+    /// machinery: the loopDef input at `slot` must be written, its root op
+    /// must not already be marked non-printing, the root varnode must be
+    /// EXPLICIT (:3271 `vn->isExplicit()`), and — per :3263-3269 — a
+    /// notPrinted COPY root is dug through to the COPY input's def, which
+    /// must then live in the same block as the COPY. The lastOp/
+    /// moveRespectingCover terminality half (:3277-3290) is registered as
+    /// GETPARAM-FORLOOP-GAPSET-0001 ①.
+    fn test_terminal_statement(
+        loop_def: &crate::op::PcodeOpRef,
+        slot: usize,
+    ) -> bool {
+        use crate::op::pcodeop_flags::NONPRINTING;
+        let slot_vn = match loop_def.0.read().unwrap().get_in(slot) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let mut vn = slot_vn;
+        let mut res_op = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return false, // cc:3261: !vn->isWritten()
+        };
+        // cc:3264-3269: `if (finalOp->code()==CPUI_COPY && finalOp->notPrinted())`
+        // — dig through a suppressed COPY to the value it forwards. Any dig
+        // failure (input unwritten, or the dug root outside the COPY's
+        // block) rejects, mirroring the `return 0` arms.
+        enum Dig {
+            NotNeeded,
+            Found(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                  std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>),
+            Reject,
+        }
+        let dig = {
+            let fg = res_op.read().unwrap();
+            if fg.opcode == crate::opcodes::OpCode::CPUI_COPY
+                && (fg.flags & NONPRINTING) != 0
+            {
+                match fg.get_in(0) {
+                    // cc:3265-3266: vn = finalOp->getIn(0); must be written.
+                    Some(dug) => {
+                        let dug_def = dug.read().unwrap().get_def();
+                        match dug_def {
+                            Some(dd) => {
+                                // cc:3267-3268: resOp must live in the same
+                                // block as the COPY (the slot's parent
+                                // block).
+                                let copy_parent =
+                                    fg.parent.as_ref().and_then(|w| w.upgrade());
+                                let dug_parent = dd
+                                    .read()
+                                    .unwrap()
+                                    .parent
+                                    .as_ref()
+                                    .and_then(|w| w.upgrade());
+                                let same_block = match (copy_parent, dug_parent) {
+                                    (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+                                    _ => false,
+                                };
+                                if same_block {
+                                    Dig::Found(dug.clone(), dd)
+                                } else {
+                                    Dig::Reject
+                                }
+                            }
+                            None => Dig::Reject,
+                        }
+                    }
+                    None => Dig::Reject,
+                }
+            } else {
+                Dig::NotNeeded
+            }
+        };
+        match dig {
+            Dig::NotNeeded => {}
+            Dig::Found(dug_vn, dug_def) => {
+                vn = dug_vn;
+                res_op = dug_def;
+            }
+            Dig::Reject => return false,
+        }
+        // cc:3271: if (!vn->isExplicit()) return 0;
+        if !vn.read().unwrap().is_explicit() {
+            return false;
+        }
+        // cc:3272-3273: if (resOp->notPrinted()) return 0; — the statement
+        // MUST still be printable (the extraction marks happen after this
+        // gate, mirroring finalizePrinting's order).
+        if (res_op.read().unwrap().flags & NONPRINTING) != 0 {
+            return false;
+        }
+        true
+    }
+
 }
 
 impl Action for ActionStructureTransform {
@@ -16383,16 +16555,16 @@ impl Action for ActionStructureTransform {
         }
         // The WhileDo for-header extraction (findLoopVariable /
         // findInitializer / finalizePrinting, block.cc:3158-3423) does NOT
-        // run here: Ghidra's finalTransform only RELOCATES ops at this
-        // point (block.cc:3381-3396) — a move Rugra's op bank cannot
-        // express — and the header statements are rendered at PRINT time
-        // (BlockWhileDo::finalizePrinting, invoked from Funcdata::print)
-        // when variable names are final. Rugra performs the whole
-        // extraction late, in the last coreaction action before print
-        // (`for_loop_finalize_printing`, hooked at
-        // ActionPrototypeWarnings: names are assigned by ActionNameVars
-        // :5734 and casts by ActionSetCasts :5735 by then; see the
-        // placement note there).
+        // run here. Ghidra's finalTransform at this position RELOCATES the
+        // iterate/initialize ops to be terminal statements of their blocks
+        // via opUninsert/opInsertAfter (block.cc:3381-3396) — a move
+        // Rugra's op bank cannot express and which stays UNDONE
+        // (registered: GETPARAM-FORLOOP-OPMOVE-0001). The header statements
+        // themselves are extracted later, at the oracle's
+        // ActionFinalStructure::apply → graph.finalizePrinting slot
+        // (blockaction.cc:2192, pipeline :5736 — see the placement note on
+        // `for_loop_finalize_printing` for Rugra's ActionPrototypeWarnings
+        // :5737 stand-in and the relocation plan).
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
     }
@@ -19597,6 +19769,13 @@ mod tests {
             make_high(&i_vn, "iVar3");
             make_high(&i_update, "iVar4");
         }
+        // Post-ActionMarkImplied state (oracle OPFLAGS witness: the init
+        // COPY output and iterate INT_ADD output are both explicit when
+        // finalizePrinting runs). testTerminal's isExplicit gate
+        // (block.cc:3271) reads these flags, so the fixture simulates the
+        // :5720 product directly.
+        i_init.write().unwrap().set_explicit();
+        i_update.write().unwrap().set_explicit();
         let exit = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             3,
             Address::new(0x3000),

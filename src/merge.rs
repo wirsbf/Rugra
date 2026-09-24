@@ -594,6 +594,15 @@ fn mark_high_cover_dirty(high: &Arc<RwLock<HighVariable>>) {
 }
 
 // Ghidra: variable.hh:294 HighVariable::getCover
+/// Raw stored-cover read. In the oracle every mutation that dirties a
+/// member Varnode cover propagates coverDirty to the owning high
+/// (varnode.cc:352-360 setFlags → high->coverDirty) so a clean stored
+/// product is always current; Rugra's mutation paths do not all maintain
+/// that propagation, so readers of this raw form can be served a stale
+/// aggregate. Known raw readers are being converted to fresh aggregation
+/// (inflate_test did); remaining ones are registered as
+/// MERGE-HIGHCOVER-PROPAGATION-0001 — do NOT add new readers of this
+/// helper for correctness-critical cover comparisons.
 fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let piece = high.read().unwrap().piece.clone();
     if let Some(piece) = piece {
@@ -934,7 +943,10 @@ impl Merge {
         // Sync HighVariable covers from member Varnode covers. Must run AFTER
         // all speculative merges finalize the instance sets so each
         // HighVariable's cover reflects all its members. ActionMarkImplied
-        // (run later in the pipeline) consults high.cover via checkImpliedCover.
+        // (run later in the pipeline) reads VARNODE covers directly (lazily
+        // rebuilt) and aggregates fresh inside inflate_test — it no longer
+        // depends on this stored product; the stored-field staleness debt is
+        // MERGE-HIGHCOVER-PROPAGATION-0001.
         self.update_high_covers(fd);
 
         // NOTE (FUNCDATA-LINKSYMBOL-TYPED-0001): Ghidra's merge sequence
@@ -1095,12 +1107,10 @@ impl Merge {
                 // flag clear (varnode.cc:365-374) — the caller (coreaction
                 // checkImpliedCover) holds a READ guard on this high for the
                 // whole call, so a member back-pointer write on it would
-                // self-deadlock. This is safe for the cached-test invariant:
-                // every intersection()/update_high gate runs inside the
-                // merge passes, which start from compute_varnode_covers'
-                // wholesale re-dirty (+sweep propagation), so no cached test
-                // can be served from a pre-refresh cover after this point in
-                // the cycle.
+                // self-deadlock. The always-fresh aggregation below makes
+                // this path independent of the stored `high.cover` product
+                // (whose staleness under missing dirty propagation is
+                // registered as MERGE-HIGHCOVER-PROPAGATION-0001).
                 Varnode::update_cover_locked(inst_arc);
             }
             let mut fresh = Cover::new();
