@@ -3452,6 +3452,192 @@ pub fn follow_flow_range(
 /// LowlevelError channel exactly as it escapes `recoverJumpTables` ->
 /// `generateOps` -> `followFlow` in Ghidra.
 // Ghidra: flow.cc:785 FlowInfo::generateOps
+// Ghidra: flow.cc:219 FlowInfo::newAddress
+/// Oracle case-destination split for the injected linear partition.
+/// `FlowInfo::newAddress` (flow.cc:228-233) marks an already-seen jumptable
+/// destination op STARTBASIC, and `FlowInfo::splitBasic` (flow.cc:996-1016)
+/// then lands every marked op at the head of its own basic block whose
+/// cover spans exactly its ops' addresses; the truncated head block keeps
+/// the leading ops and gains a fall-thru edge (collectEdges' nextstart arm,
+/// flow.cc:952-956, linked by connectBasic). The linear inject path builds
+/// its block partition before jump-table recovery, so this helper performs
+/// the equivalent split surgically on the existing graph: ops from the
+/// destination op onward move to a new tail block that inherits the head's
+/// out-edges (each paired incoming half re-pointed in place, so every
+/// surviving edge keeps its slot and list order), and the head keeps the
+/// leading ops with a fall-thru out-edge slot left for the caller to fill.
+/// The tail is inserted directly after its head in the block list so the
+/// address order splitBasic's dead-list walk produces is preserved.
+/// Returns `(dest_block, head_block)`; `head_block` is `Some` only when a
+/// split happened. `None` = the destination op has no parent block.
+fn split_block_at_case_dest(
+    fd: &mut Funcdata,
+    targ_op: &crate::op::PcodeOpRef,
+    switch_block: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+) -> Option<(
+    Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+)> {
+    let parent = targ_op
+        .0
+        .read()
+        .unwrap()
+        .parent
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)?;
+    // Locate the destination op in its parent; position 0 = already a
+    // block head, nothing to split (the oracle's mark names an existing
+    // partition boundary). The switch block itself is never a valid split
+    // parent: a table entry naming the switch's own computation would move
+    // the BRANCHIND out of the block the edge loop resolves it from.
+    let split_index = {
+        let parent_rg = parent.read().unwrap();
+        let bb = parent_rg
+            .as_any()
+            .downcast_ref::<crate::block::BlockBasic>()?;
+        bb.ops
+            .iter()
+            .position(|o| Arc::ptr_eq(&o.0, &targ_op.0))?
+    };
+    if split_index == 0 || Arc::ptr_eq(&parent, switch_block) {
+        return Some((parent, None));
+    }
+    // flow.cc:230: data.opMarkStartBasic(op) — the observable mark the
+    // oracle leaves on the destination op.
+    targ_op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+    // splitBasic's block creation (flow.cc:996/1005); repositioned below.
+    let tail: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> = fd.create_new_block();
+    // splitBasic's per-block ranges (flow.cc:999-1016): the op walk keeps
+    // `stop` monotonically growing, so the head keeps ops[..k] (last
+    // address = ops[k-1]) and the tail spans ops[k..] starting at the
+    // destination op's own address.
+    let (moved, parent_outgoing) = {
+        let mut parent_w = parent.write().unwrap();
+        let pbb = parent_w
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("case-destination split requires BlockBasic parents");
+        let head_stop = pbb.ops[split_index - 1].0.read().unwrap().get_addr();
+        let moved = pbb.ops.split_off(split_index);
+        let tail_stop = moved
+            .last()
+            .map(|o| o.0.read().unwrap().get_addr())
+            .unwrap_or(head_stop);
+        let dest_addr = targ_op.0.read().unwrap().get_addr();
+        let parent_start = pbb.get_start_addr();
+        pbb.set_initial_range(parent_start, head_stop);
+        // SWITCH_OUT tracks the block holding a BRANCHIND (the flag
+        // BlockBasic::insert maintains, block.cc:2292); recompute both
+        // halves after the move.
+        let parent_has_switch = pbb
+            .ops
+            .iter()
+            .any(|o| o.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND);
+        pbb.flags &= !crate::block::block_flags::SWITCH_OUT;
+        if parent_has_switch {
+            pbb.flags |= crate::block::block_flags::SWITCH_OUT;
+        }
+        let outgoing = std::mem::take(&mut pbb.outgoing);
+        let mut tail_w = tail.write().unwrap();
+        let tbb = tail_w
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("create_new_block yields BlockBasic");
+        tbb.ops = moved.clone();
+        tbb.set_initial_range(dest_addr, tail_stop);
+        if tbb
+            .ops
+            .iter()
+            .any(|o| o.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND)
+        {
+            tbb.flags |= crate::block::block_flags::SWITCH_OUT;
+        }
+        (moved, outgoing)
+    };
+    // Re-parent the moved ops to the tail (BlockBasic::insert's parent
+    // assignment, block.cc:2266 — add_block ran before the ops existed).
+    let tail_weak = std::sync::Arc::downgrade(&tail);
+    for op in &moved {
+        op.0.write().unwrap().parent = Some(tail_weak.clone());
+    }
+    // The tail inherits the head's out-edges. Re-point each paired incoming
+    // half in place: the reverse index still names the same outgoing slot
+    // (the move preserves outgoing order), so both lists keep every
+    // surviving edge's slot and order — the same end-state connectBasic
+    // (flow.cc:1021-1037) produces for the oracle's edge list.
+    for edge in &parent_outgoing {
+        let mut target_w = edge.point.write().unwrap();
+        let target_bb = target_w
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("basic-block graph edges connect BlockBasic nodes");
+        let slot = edge.reverse_index as usize;
+        if let Some(in_edge) = target_bb.incoming.get_mut(slot) {
+            in_edge.point = tail.clone();
+        }
+    }
+    {
+        let mut tail_w = tail.write().unwrap();
+        let tbb = tail_w
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("create_new_block yields BlockBasic");
+        tbb.outgoing = parent_outgoing;
+    }
+    // Insert the tail directly after its head so the block list keeps the
+    // address order splitBasic's dead-list walk produces (the linear
+    // partition is address-ordered, and the tail's range lies inside the
+    // head's original range).
+    if let Some(pos) = fd
+        .bblocks
+        .blocks
+        .iter()
+        .position(|b| Arc::ptr_eq(b, &parent))
+    {
+        if let Some(last) = fd.bblocks.blocks.pop() {
+            if Arc::ptr_eq(&last, &tail) {
+                fd.bblocks.blocks.insert(pos + 1, last);
+            } else {
+                fd.bblocks.blocks.push(last);
+            }
+        }
+    }
+    Some((tail, Some(parent)))
+}
+
+/// Post-load jump-table recovery for a driver that batch-injected its whole
+/// op bank (`Funcdata::inject_raw_ops`), i.e. the linear-lift driver path
+/// (HTTPD-MAIN-WARNUNREACH-JTEDGE-0001). Runs exactly the generateOps
+/// phase-2 sequence of `Funcdata::followFlow` (funcdata_op.cc:771
+/// `flow.generateOps()` — recovery happens there BEFORE `generateBlocks`,
+/// flow.cc:792-821) plus the two generateBlocks-tail observables a fused
+/// linear load could not produce: the per-entry switch out-edges
+/// (collectEdges' BRANCHIND arm, flow.cc:933-957) and the switchOver map
+/// (funcdata_op.cc:777-778 `switchOverJumpTables(flow)` ->
+/// jumptable.cc:2528).
+///
+/// Adapter deltas against the oracle sequence, all consequences of the
+/// caller's pre-lifted linear bank (the case bodies are already present;
+/// the oracle would lift them via `newAddress` + `fallthru`, flow.cc:806-809):
+///   * the ops are temporarily moved to the dead list (mark_dead/mark_alive
+///     cycle) so `Funcdata::truncatedFlow` — Ghidra's partial-clone source,
+///     which reads `obank.beginDead()` — sees the same "raw p-code on the
+///     dead list, nothing alive yet" state the oracle has at recovery time;
+///   * `newAddress`/`fallthru` are no-ops (every window instruction is
+///     already lifted and in the synthesized `visited` map);
+///   * block starts carry STARTBASIC (the xref walk's end-state, flow.cc
+///     469-477/570-572 — Ghidra marks every block start; the batch inject
+///     path never did), so the partial clone reproduces the source block
+///     partition in its own generateBlocks;
+///   * a table destination with no op in the injected window (outside the
+///     symbol span the linear lift covered) cannot resolve; its edge and
+///     its table's switchOver are skipped with a warning — the oracle
+///     cannot hit this (it lifts every destination in-range).
+///
+/// Returns the number of newly recovered tables. `Err` propagates the
+/// LowlevelError channel exactly as it escapes `recoverJumpTables` ->
+/// `generateOps` -> `followFlow` in Ghidra.
+// Ghidra: flow.cc:785 FlowInfo::generateOps
 pub fn recover_jump_tables_injected(fd: &mut Funcdata) -> crate::error::Result<usize> {
     // Fast no-op guard: nothing to recover (flow.cc:796 `while(!tablelist
     // .empty())` never runs, flow.cc:813/814 are observation-level no-ops
@@ -3688,10 +3874,12 @@ pub fn recover_jump_tables_injected(fd: &mut Funcdata) -> crate::error::Result<u
 
     // collectEdges' BRANCHIND arm (flow.cc:933-957) against the existing
     // block graph: for every live BRANCHIND's recovered table, one edge
-    // per address-table entry in table order, de-duplicated per target
-    // block (flow.cc:941-946's setMark run; block-level here because the
-    // linear partition cannot split a mid-block case target — the oracle
-    // always lands on block starts via newAddress's STARTBASIC mark).
+    // per address-table entry in table order, de-duplicated per target op
+    // (flow.cc:941-946's setMark run). The oracle lands every destination
+    // on a block start via newAddress's STARTBASIC mark + splitBasic; the
+    // linear partition predates recovery, so mid-block destinations are
+    // split on the spot by split_block_at_case_dest before the edge lands
+    // (JTEDGE-FUSED-DEST-SPLIT-0001).
     let mut unlinked_switch: std::collections::BTreeSet<u64> =
         std::collections::BTreeSet::new();
     for op in &dead_snapshot {
@@ -3725,8 +3913,7 @@ pub fn recover_jump_tables_injected(fd: &mut Funcdata) -> crate::error::Result<u
                 .map(|i| jt_rg.get_address_by_index(i))
                 .collect()
         };
-        let mut linked_targets: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> =
-            Vec::new();
+        let mut linked_ops: Vec<crate::op::PcodeOpRef> = Vec::new();
         for addr in entries {
             let Some(targ_op) = flow.target(addr) else {
                 eprintln!(
@@ -3737,22 +3924,28 @@ pub fn recover_jump_tables_injected(fd: &mut Funcdata) -> crate::error::Result<u
                 unlinked_switch.insert(op_addr.as_u64());
                 continue;
             };
-            let targ_block = targ_op
-                .0
-                .read()
-                .unwrap()
-                .parent
-                .as_ref()
-                .and_then(std::sync::Weak::upgrade);
-            let Some(targ_block) = targ_block else { continue };
-            if linked_targets
-                .iter()
-                .any(|linked| Arc::ptr_eq(linked, &targ_block))
-            {
+            // flow.cc:228-233 + 996-1016: mark the destination op and land
+            // it at a block head (no-op when it already is one).
+            let Some((targ_block, head_block)) =
+                split_block_at_case_dest(&mut flow.fd, &targ_op, &switch_block)
+            else {
+                continue;
+            };
+            // flow.cc:941-946: dedup per target op (setMark), in table
+            // entry order — post-split each destination op heads its own
+            // block, so this is the oracle's op-level dedup.
+            if linked_ops.iter().any(|o| Arc::ptr_eq(&o.0, &targ_op.0)) {
                 continue;
             }
-            linked_targets.push(targ_block.clone());
-            flow.fd.bblocks.add_edge(switch_block.clone(), targ_block);
+            linked_ops.push(targ_op.clone());
+            flow.fd.bblocks.add_edge(switch_block.clone(), targ_block.clone());
+            // The head→tail fall-thru edge (oracle: collectEdges' nextstart
+            // arm, flow.cc:952-956). connectBasic links it after the switch
+            // edge — the dead-list walk reaches the BRANCHIND before the
+            // case bodies — so append it in that order here too.
+            if let Some(head_block) = head_block {
+                flow.fd.bblocks.add_edge(head_block, targ_block);
+            }
         }
     }
 

@@ -2880,3 +2880,34 @@ A/B 同败）。新增 3 个单测：vhost 寄存器块 17 条目手工追踪、
 
 单测：printc 15/15。门禁见 lane 终报（httpd 1445→1405、curl 1329→1262，
 defects/numbering 全 0，五投影 MATCH，逐函数零回退）。
+
+## 2026-09-25（JTEDGE-FUSED-DEST-SPLIT-0001 / BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001）：case 出口语句的 oracle 语义恢复
+
+flow 侧 case 目的地分裂（docs/api/flow.md 同日节）落地后，switch case
+发射层的三个 oracle 缺口显形并修复：
+
+- **`emit_switch_case_body` 补 `BlockType::Goto` 臂 → `emit_block_goto`**
+  （printc.cc:3339-3341 `bl2->emit(this)` 的虚分派：t_goto case 组件必须
+  走 emitBlockGoto——wrapped 体在 no_branch 下发射 + `gotoPrints()` 成立时
+  的正式 goto/break 语句，printc.cc:2769-2778）。此前 Goto 组件落入
+  `_` 臂的 flat 走查，wrapped If/List 复合体被平铺（与
+  PRINTC-NESTED-DOWHILE-EMIT-0001 同类），goto 语句通道缺失。
+- **cc:3342-3345 的 switch 级 break 判定**：由"非 RETURN 终结即 break"
+  启发式改为 oracle `isExit(i)` 语义（block.hh:791 ← block.cc:3511-3514
+  `gt!=0→false; else isexit=(sizeOut()==1)`），叠加
+  BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 适配守卫：oracle 不变量是
+  "每 case 的出口流恰表达一次"（组件自身语句 / 链式直落 / cc:3342 break），
+  Rugra 结构化侧把多数 case 组件留成 Goto 包裹且 gototype 未受
+  scopeBreak 晋升（block.cc:2866-2873/3613-3630 的域），故从发射侧重新
+  推导：`case_exit_stmt_printed` 台账（`emit_block_goto` cc:2775 臂与
+  gt!=0 语句臂置位）+ RETURN 终结豁免（无出边=oracle isexit false）+
+  出口目标≠下一 case 入口（非链式直落，BlockSwitch::nextFlowAfter
+  block.cc:3639-3663 的发射序语义）→ break。结构化侧 Goto 包裹补齐后
+  本守卫应随 BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 一并退役。
+- **gt!=0 语句臂置位台账**（printc.cc:3334-3337 语句即 case 的出口）。
+
+观测：httpd main `case 0x4c:` 直落 `case 0x45:`（canon 形）、`case 0x53:`
+break（canon 形）、`goto switchD_..._caseD_40` 形恢复；curl getparameter
+383→381、glob_set 的 base 期语义错误 break（canon=直落 default 链）纠正为
+`goto caseD_5e`（形态 +2）；mirror 面 main CMOV 位由 goto+label 平铺形转
+clean if-block（向 direct-runner 纯库真值收敛 −9 行）。

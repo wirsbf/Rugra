@@ -852,6 +852,13 @@ pub struct PrintC {
     /// reject) — names a label no block can ever define
     /// (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001).
     code_block_starts: HashSet<u64>,
+    /// Per-case exit-statement ledger for emit_structured_switch's cc:3342
+    /// break decision: true once the case component expressed its own exit
+    /// flow (a formal goto/break/continue statement via emit_block_goto's
+    /// cc:2775-2778 arm or a goto-typed case's cc:3334-3337 statement).
+    /// Reset before each case body; read after it. See
+    /// BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001.
+    case_exit_stmt_printed: bool,
     /// Restructured local-variable scope (faithful port of varmap.cc). Built
     /// once per doc_function from the function's stack varnodes. When a symbol
     /// covers a stack offset, get_stack_variable_name prefers its name over the
@@ -1115,6 +1122,7 @@ impl PrintC {
             discovery_block_starts: HashSet::new(),
             pending_goto_labels: HashSet::new(),
             code_block_starts: HashSet::new(),
+            case_exit_stmt_printed: false,
             discovery_emit_id: 0,
             main_emit_id,
             scope: None,
@@ -6031,6 +6039,9 @@ impl PrintC {
                             .get(idx)
                             .copied()
                             .unwrap_or(0);
+                        // Per-case ledger reset: the body below (or the
+                        // goto-typed statement arm) may discharge the exit.
+                        self.case_exit_stmt_printed = false;
                         if case_gt != 0 {
                             self.emit.tag_line(0);
                             let target_addr =
@@ -6045,6 +6056,8 @@ impl PrintC {
                                 _ => crate::op::branch_type::GOTO,
                             };
                             self.emit_goto_statement(target_addr, bt);
+                            // cc:3336 discharged the case's exit flow.
+                            self.case_exit_stmt_printed = true;
                         } else {
                         if !body_already_emitted {
                             // cc:3339-3341: bl2->emit(this) — direct type
@@ -6058,24 +6071,73 @@ impl PrintC {
                             self.seen_return = saved_seen_return;
                         }
 
-                        // cc:3342-3345: isExit(i)&&(i!=numCaseBlocks-1) →
-                        // tagLine + break. isExit(i) (block.hh:791) is the
-                        // per-case "flows to the exit block" flag; Rugra's
-                        // BlockSwitch does not track per-case exits, so a
-                        // RETURN-terminated case (provably not flowing to the
-                        // exit block) suppresses the break, every other case
-                        // is treated as exiting. The last label (including a
-                        // trailing default) never gets a break — falling out
-                        // of the closing brace is legal and matches Ghidra.
+                        // cc:3342-3345: `bl->isExit(i)&&(i!=bl->getNumCaseBlocks()
+                        // -1)` → tagLine + break. isExit(i) (block.hh:791)
+                        // reads the per-case `isexit` flag set by
+                        // BlockSwitch::addCase (block.cc:3511-3514):
+                        // `gt != 0 → false; else isexit = (bl->sizeOut()==1)`.
+                        //
+                        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 adapter:
+                        // the oracle invariant behind cc:3342 is that every
+                        // case's exit flow is expressed exactly once — as
+                        // the component's own formal statement (a
+                        // scopeBreak-promoted `break`, block.cc:2866-2873/
+                        // 3613-3630, or `goto <label>` when the target is
+                        // not the switch exit), as the chained fall-thru
+                        // into the next case in emission order (no
+                        // statement; BlockSwitch::nextFlowAfter,
+                        // block.cc:3639-3663: "Blocks are printed in
+                        // fallthru order"), or as this switch-level break.
+                        // Rugra's structurer leaves most case components as
+                        // Goto wrappers whose gototype never received the
+                        // scopeBreak promotion and whose flat terminal
+                        // branch prints nothing (branch_type NONE) — so the
+                        // invariant is re-derived here from the emission
+                        // ledger: a break is needed when the component did
+                        // NOT discharge its own statement
+                        // (case_exit_stmt_printed), does not end in RETURN
+                        // (a RETURN-terminated case has no out-edge:
+                        // oracle isexit = sizeOut()==1 = false), and its
+                        // exit target is not the next case's entry (not a
+                        // fall-thru chain link).
+                        let oracle_case_isexit = {
+                            let gt = switch_data.case_gototypes.get(idx).copied().unwrap_or(0);
+                            gt == 0 && case_block.read().unwrap().size_out() == 1
+                        };
                         let ends_with_return = {
                             let cb = case_block.read().unwrap();
-                            (cb.get_flags() & crate::block::block_flags::RETURN_TERMINAL) != 0
-                                || cb
-                            .get_ops()
-                            .last()
-                            .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
-                                )
+                            cb.get_ops()
+                                .last()
+                                .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN)
                         };
+                        let case_exit_target = {
+                            let cb = case_block.read().unwrap();
+                            if let Some(g) =
+                                cb.as_any().downcast_ref::<crate::block::BlockGoto>()
+                            {
+                                g.target_dyn
+                                    .as_ref()
+                                    .and_then(|t| Self::flow_entry_address(t))
+                            } else {
+                                cb.get_ops().last().and_then(|o| {
+                                    let og = o.0.read().unwrap();
+                                    match og.opcode {
+                                        OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH => og
+                                            .get_in(0)
+                                            .map(|v| v.read().unwrap().get_offset()),
+                                        _ => None,
+                                    }
+                                })
+                            }
+                        };
+                        let next_case_start = if idx + 1 < switch_data.cases.len() {
+                            Self::flow_entry_address(&switch_data.cases[idx + 1])
+                        } else {
+                            None
+                        };
+                        let needs_switch_break = !ends_with_return
+                            && !self.case_exit_stmt_printed
+                            && case_exit_target.map_or(false, |t| next_case_start != Some(t));
                         // cc:3342 `i!=bl->getNumCaseBlocks()-1`: the FINAL
                         // label in the merged emission order (cases + the
                         // default at its sorted rank, block.cc:3591) never
@@ -6084,7 +6146,7 @@ impl PrintC {
                         // — the last case IS that final label.
                         let is_last_label =
                             idx + 1 == switch_data.cases.len() && (!has_default || def_pos < switch_data.cases.len());
-                        if !ends_with_return && !is_last_label {
+                        if (oracle_case_isexit || needs_switch_break) && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
                         }
@@ -6204,6 +6266,14 @@ impl PrintC {
             BlockType::List => self.emit_structured_list(case_block, graph, emitted),
             BlockType::Condition => self.emit_structured_condition(case_block, graph, emitted),
             BlockType::Switch => self.emit_structured_switch(case_block, graph, emitted),
+            // printc.cc:3339-3341: `bl2->emit(this)` — virtual dispatch, so a
+            // t_goto case component routes to PrintC::emitBlockGoto
+            // (printc.cc:2769-2778: wrapped body under no_branch, then the
+            // formal goto statement when gotoPrints()). A fall-thru chain
+            // member (grabCaseBasic, block.cc:3536-3546) prints nothing
+            // extra when the chained case follows — the oracle's switch
+            // fall-through form.
+            BlockType::Goto => self.emit_block_goto(case_block, graph, emitted),
             // Ghidra block.hh:588: delegation to getBlock(0) (the multigoto
             // is never itself a switch case body — nested switches resolve
             // first, blockaction.cc:1707 — but the dispatch is cheap to keep
@@ -14463,6 +14533,8 @@ impl PrintC {
                 _ => crate::op::branch_type::GOTO,
             };
             self.emit_goto_statement(target_addr, bt);
+            // cc:2775-2778 discharged: the component expressed its own exit.
+            self.case_exit_stmt_printed = true;
         }
     }
 
