@@ -1,5 +1,53 @@
 # `varmap.rs` API Reference
 
+## 2026-09-24：create_entry 符号尺寸改由数据类型决定（VARMAP-SPALIAS-RETYPE-0001，wt/spalias2）
+
+**结论先行（车道裁决）**：GK 移交的两个症状——①SP-alias 栈符号陷入
+`undefined1[32]` 自举固定点（canon golden `long local_c8[4]`）；②pass2+ 丢失
+-0xd0/-0xd8 alias——**均非 varmap 移植缺陷，而是 canon golden 的 headless 全程序
+分析环境差异**。证据=锁定 oracle（e40ed130）单函数 drill（stage_drill 变体，
+`-DOPACTION_DEBUG` + `Scope::turnOnDebug` 打开 `MapState::addRange` 的
+`Add Range: <st>:<sz> <type>` 流与 `ScopeLocal::restructure`/`adjustFit` 埋点，
+httpd main @0x2b820）：
+
+- **逐 pass hint 流双侧等价**：pass0=16 个别名、open hint 全 unknown1；
+  pass1=fixed undefined8@-0xd0（标记 store 转 COPY 后的直写 varnode）+
+  {-0xa8,-0x9c,-0x40} fixed；pass2+ **oracle 同样丢掉 -0xd0 fixed hint**、
+  open 集恒为 {-0xc8,-0x9c,-0xa8}（晚期元素类型 undefined8/undefined4）——
+  与 Rugra maplist 探针逐项相同。
+- **oracle 终态符号表与 Rugra 修复前仅差一处**：oracle
+  {axStack_c8[32]@-0xc8, xStack_a8 **8B**@-0xa8, axStack_9c 92B@-0x9c,
+  xStack_40 8B@-0x40}；Rugra 修复前 uStack_a8 为 **12B**。
+- `long`/`local_d0`/`local_d8` 在单函数 oracle 核心的 hint 流里**从未出现**
+  （无任何 TYPE_INT 元素 open hint）；direct-runner 产物（真 Ghidra 核心+
+  合成工厂）同样收敛到 `axStack_c8[32]`/无 d0/d8。canon golden 的 long 族
+  由 analyzeHeadless 整程序分析层（锁定类型/已提交签名，含 decompiler
+  parameter ID 循环）播种，golden 自身的已提交原型全是 undefined8*/int（如
+  `FUN_0012c520(undefined8*,int)`、`ap_setup_prelinked_modules(undefined8*)`），
+  说明种子经由更深的分析侧通道，非反编译器核心行为。
+
+**本提交修复（唯一真缺陷）**：`ScopeLocal::create_entry` 原来在 `add_symbol`
+之后用 `symbols[idx].size = hint.size` 覆写符号尺寸。Ghidra
+`ScopeLocal::createEntry`（varmap.cc:617-628）只把（可能数组包裹的）concrete
+类型交给 `addSymbol("",ct,addr,usepoint)`，符号/映射条目尺寸取自数据类型；
+open hint 在 `restructure` 里被 `cur.size = next->sstart-cur.sstart`
+（varmap.cc:1315）扩到下一个符号起点时经常非整（如 12B/undefined8 元素），
+createEntry 按 `num = a.size/align`（varmap.cc:623）向下取整到整元素数，尾部
+字节留空不映射（oracle drill 实测：-0xa8 hint 扩到 12、adjustFit longestFit=
+120 不缩，8B 符号完全来自类型尺寸，[-0xa0,-0x9c) 保持无符号洞）。修复=删除
+该覆写（`add_symbol` 已按 final_dt 定尺寸），Rugra 终态表与 oracle drill 逐项
+一致。E2E 输出恒等（两语料都不触及该洞）：curl 1438/0/0、httpd 1447/0/0 与
+亲父 cd071239 字节一致；五投影 MATCH×5；varmap 单测 45/45。
+
+**B2 证据（可复用方法）**：drill 变体源码+产物归档
+`/dev/shm/rugra-reports/sb-spalias2/`（stage_drill_scope_1204.cc：在
+stage_drill_1204.cc 基础上加 scope `turnOnDebug` 与终态符号表 dump；埋点版
+varmap.cc 仅存在于车道私有 /dev/shm 构建树，共享 sb-drill 树未触碰）。
+
+**登记移交（不属 varmap 域）**：SP-cast 印刷形（`(int *)x - 8` vs oracle
+direct 的 `(int8)x + -8` vs canon 的 `plVar12[-1]`）=cast/printc 域元素尺度
+发射差；long 族种子 = headless 分析环境（driver/fspec 域）。
+
 ## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
 
 剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
