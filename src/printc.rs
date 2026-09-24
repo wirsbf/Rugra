@@ -3151,10 +3151,23 @@ impl PrintC {
                         let mut symbol: Option<String> = None;
                         let mut symbol_type_array = false;
                         let mut symbol_type_code = false;
+                        // printc.cc:1086 pushSymbol(symbol,...) → cc:1919
+                        // pushSymbolScope(sym): the spacebase-arm symbol hit
+                        // prints the MINIMAL_NAMESPACES scope elements before
+                        // its display name — `::` when the base name is
+                        // occupied in the function's local nametree
+                        // (database.cc:323-359 getResolutionDepth via
+                        // ScopeInternal::isNameUsed cc:2417). PRINTC-
+                        // SPACEBASE-SCOPEPREFIX-0001: the decision reuses the
+                        // landed `symbol_scope_prefix` helper (leaf-priority
+                        // paths); the stack-spacebase ScopeLocal fallback
+                        // below leaves this empty (database.cc:326: a symbol
+                        // used in its own scope resolves depth 0).
+                        let mut scope_prefix = String::new();
                         {
                             let hit = self.symboltab.as_ref().and_then(|db| {
                                 let db = db.read().unwrap();
-                                db.query_container(
+                                db.query_container_entry(
                                     db.global_scope_id,
                                     crate::address::Address::new(in1const),
                                     1,
@@ -3164,12 +3177,26 @@ impl PrintC {
                                     crate::address::Address::new(0),
                                 )
                             });
-                            if let Some(hit) = hit {
-                                symbol = Some(hit.symbol_name.clone());
-                                symbol_type_array =
-                                    hit.type_metatype == TypeMetatype::Array;
-                                symbol_type_code =
-                                    hit.type_metatype == TypeMetatype::Code;
+                            if let Some((_hit_scope_id, entry_arc)) = hit {
+                                let sym_arc = entry_arc.read().unwrap().symbol.clone();
+                                let sym = sym_arc.read().unwrap();
+                                // container_hit parity: symbol_name =
+                                // getName, type_metatype falls out of the
+                                // same dtype (Unknown when unresolved — the
+                                // Array/Code tests read false).
+                                symbol = Some(sym.name.clone());
+                                symbol_type_array = sym
+                                    .dtype
+                                    .as_deref()
+                                    .map(|dt| dt.get_metatype() == TypeMetatype::Array)
+                                    .unwrap_or(false);
+                                symbol_type_code = sym
+                                    .dtype
+                                    .as_deref()
+                                    .map(|dt| dt.get_metatype() == TypeMetatype::Code)
+                                    .unwrap_or(false);
+                                scope_prefix =
+                                    self.symbol_scope_prefix(&sym, Some(&entry_arc));
                             }
                         }
                         // Stack-spacebase fallback: for a STACK TypeSpacebase
@@ -3290,8 +3317,13 @@ impl PrintC {
                             // start), so the branch is unreachable in this
                             // pipeline; registered in ALIGNMENT_ROADMAP.md
                             // (printc module residuals).
+                            // cc:1086 pushSymbol → cc:1919 pushSymbolScope +
+                            // displayName: scope_prefix carries the `::`
+                            // element for a locally-shadowed global (empty
+                            // for unshadowed globals and for the stack
+                            // spacebase ScopeLocal hits, database.cc:326).
                             let sym_atom = crate::printlanguage::Atom::with_field(
-                                &symbol.unwrap(),
+                                &format!("{}{}", scope_prefix, symbol.as_ref().unwrap()),
                                 crate::printlanguage::TagType::FieldToken,
                                 crate::printlanguage::SyntaxHighlight::NoColor,
                                 0,
@@ -13423,8 +13455,8 @@ impl PrintC {
                     // varnode's SymbolEntry (variable.cc:419-432 updateSymbol),
                     // so the Rust form consults the high's symbol field and
                     // falls back to the in(1) mapentry.
-                    let (symbol, sym_off) = match op.get_in(1) {
-                        None => (None, -1),
+                    let (symbol, sym_entry, sym_off) = match op.get_in(1) {
+                        None => (None, None, -1),
                         Some(a) => {
                             let in1_vn = a.read().unwrap();
                             let sym = in1_vn
@@ -13435,11 +13467,12 @@ impl PrintC {
                                         .get_symbol_entry()
                                         .map(|e| e.read().unwrap().get_symbol())
                                 });
+                            let entry = in1_vn.get_symbol_entry();
                             let off = in1_vn
                                 .get_high()
                                 .map(|h| h.read().unwrap().get_symbol_offset())
                                 .unwrap_or(-1);
-                            (sym, off)
+                            (sym, entry, off)
                         }
                     };
                     let mut valueon_arm = valueon;
@@ -13472,13 +13505,26 @@ impl PrintC {
                         // 1084-1093: off = high->getSymbolOffset();
                         //   off==0 -> pushSymbol; else pushPartialSymbol
                         //   (allowCast=false at this call site, printc.cc:1092).
+                        // Both oracle paths open with pushSymbolScope
+                        // (cc:1919 / the 1947 partial walk), so the display
+                        // name carries the same MINIMAL_NAMESPACES prefix
+                        // decision (PRINTC-SPACEBASE-SCOPEPREFIX-0001,
+                        // legacy sync of the RPN arm).
                         if sym_off == 0 {
-                            let name = sym.get_display_name().to_string();
+                            let name = format!(
+                                "{}{}",
+                                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                                sym.get_display_name()
+                            );
                             drop(sym);
                             self.push_symbol(&name, false, true, false, false);
                         } else {
                             let sym_type = sym.get_type().map(|t| t.as_ref().clone());
-                            let name = sym.get_display_name().to_string();
+                            let name = format!(
+                                "{}{}",
+                                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                                sym.get_display_name()
+                            );
                             drop(sym);
                             self.push_partial_symbol(
                                 &name,
