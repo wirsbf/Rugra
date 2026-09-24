@@ -4088,6 +4088,75 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 }
             }
         }
+        // DRIVER-SWITCHD-LABEL-0001: the headless DecompilerSwitchAnalysis
+        // pass consumes the decompiler's dumped <jumptable> XML
+        // (jumptable.cc:2769-2790 JumpTable::encode: one <dest> element per
+        // address-table entry, carrying the case label when it is not
+        // JumpValues::NO_LABEL) and creates LABEL symbols at every case
+        // destination named `caseD_<hex label>` inside the namespace
+        // `switchD_<dispatch addr>` (the BRANCHIND address), plus `default`
+        // at the default destination. Later decompile passes see those
+        // through PrintC::emitLabel's queryCodeLabel (printc.cc:3176) ->
+        // ScopeGhidra::findCodeLabel (database_ghidra.cc:308-325) remote
+        // lookup and print the qualified spelling
+        // `switchD_<dispatch>_caseD_<value>` / `switchD_<dispatch>_default`
+        // (golden: glob_set's 0x4c5e is both case 0x5e and the folded
+        // default target and prints `switchD_00104c45_caseD_5e`). The layer
+        // mirrors the analyzer from the recovered JumpTables: the first
+        // address-table entry wins a shared destination, `default` is only
+        // placed where no caseD label landed (default destination resolved
+        // as the default_block out-edge target of the BRANCHIND block), and
+        // the analyzer symbols override the plain disassembler LAB_
+        // defaults. Skipped under the raw-BFD mirror, which has no analyzer
+        // symbol layer (the mirror harness prints generic `code_r0x…`).
+        {
+            let fd_jt = fd_arc
+                .read()
+                .map_err(|_| "Funcdata read lock poisoned during label scan".to_string())?;
+            let mut switchd_labels: HashMap<u64, String> = HashMap::new();
+            for jt in &fd_jt.jump_tables {
+                let jt_rg = jt.read().unwrap();
+                if jt_rg.addresstable.is_empty() {
+                    continue;
+                }
+                let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
+                for (i, dest) in jt_rg.addresstable.iter().enumerate() {
+                    let case_value = jt_rg.label.get(i).copied();
+                    if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
+                        switchd_labels.entry(dest.as_u64()).or_insert_with(|| {
+                            format!("switchD_{:08x}_caseD_{:x}", dispatch, case_value.unwrap())
+                        });
+                    }
+                }
+                // Default destination: the default_block out-edge target of
+                // the BRANCHIND's basic block (-1 = undefined). Only placed
+                // where no caseD label landed (shared-target rule).
+                if jt_rg.default_block >= 0 {
+                    let default_addr = jt_rg.indirect.as_ref().and_then(|indirect| {
+                        let parent = indirect.read().unwrap().parent.clone()?;
+                        let blk = parent.upgrade()?;
+                        let blk_rg = blk.read().unwrap();
+                        let slot = jt_rg.default_block as usize;
+                        if slot >= blk_rg.size_out() {
+                            return None;
+                        }
+                        let edge = blk_rg.get_out(slot)?;
+                        let tgt = edge.point.read().unwrap();
+                        Some(tgt.get_start_addr().as_u64())
+                    });
+                    if let Some(default_addr) = default_addr {
+                        if !switchd_labels.contains_key(&default_addr) {
+                            switchd_labels.entry(default_addr).or_insert_with(|| {
+                                format!("switchD_{:08x}_default", dispatch)
+                            });
+                        }
+                    }
+                }
+            }
+            for (addr, name) in switchd_labels {
+                code_labels.insert(addr, name);
+            }
+        }
         printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
     }
     let fd_read = fd_arc
