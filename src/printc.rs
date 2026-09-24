@@ -811,6 +811,44 @@ pub struct PrintC {
     rpn_enabled: bool,
 }
 
+// Ghidra: printc.cc:1666-1687 PrintC::pushEnumConstant (matches-driven representation core)
+fn enum_match_text(val: u64, e: &crate::type_system::datatype::TypeEnum) -> Option<String> {
+    let mut rep = crate::type_system::datatype::EnumRepresentation::default();
+    e.get_matches(val, &mut rep);
+    enum_rep_text(&rep)
+}
+
+// RUGRA-GLUE: the representation-to-text half of pushEnumConstant's match
+// branch — pure string assembly, split out so the shift form (which
+// TypeEnum::getMatches itself never produces — its Representation keeps
+// the ctor's shiftAmount=0, same as type.cc:1370's rep) is still unit-
+
+fn enum_rep_text(rep: &crate::type_system::datatype::EnumRepresentation) -> Option<String> {
+    if rep.match_name.is_empty() {
+        return None;
+    }
+    let joined = rep.match_name.join("|");
+    let multi = rep.match_name.len() > 1;
+    let base = if rep.complement {
+        if multi {
+            format!("~({joined})")
+        } else {
+            format!("~{joined}")
+        }
+    } else if multi && rep.shift_amount != 0 {
+        format!("({joined})")
+    } else {
+        joined
+    };
+    Some(if rep.shift_amount != 0 {
+        format!("{base} >> {}", rep.shift_amount)
+    } else {
+        base
+    })
+}
+
+// RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
+
 impl PrintC {
     // Ghidra: printc.cc:123 PrintC::new
     /// Create a new PrintC instance
@@ -1683,18 +1721,15 @@ impl PrintC {
     /// `TypeEnum::getMatches`).
     fn enum_constant_text(&self, val: u64, ct: &Datatype) -> String {
         if let Datatype::Enum(e) = ct {
-            if let Some(name) = e.values.get(&val) {
-                return name.clone();
+            if let Some(text) = enum_match_text(val, e) {
+                return text;
             }
         }
         self.integer_text(val, ct.get_size(), false, display_format::DEFAULT)
     }
 
     // Ghidra: printc.cc:1730 PrintC::pushPtrCodeConstant
-    /// The text core of the function-name constant: resolve the pointer
-    /// value in the default code space and look up the function's display
-    /// name through the global scope (`Scope::queryFunction`,
-    /// printc.cc:1736). Returns `None` when no function sits at the address.
+
     fn ptr_code_constant_text(&self, val: u64, ct: &Datatype) -> Option<String> {
         // printc.cc:1733: AddrSpace *spc = glb->getDefaultCodeSpace();
         let spc = self
@@ -15692,9 +15727,9 @@ impl PrintC {
         &mut self, val: u64,
                                     ct: &crate::type_system::datatype::TypeEnum,
     ) {
-        if let Some(name) = ct.values.get(&val) {
-            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)).
-            self.emit.print(name);
+        if let Some(text) = enum_match_text(val, ct) {
+            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)) etc.
+            self.emit.print(&text);
         } else {
             // printc.cc:1684-1686: no named match -> push_integer.
             self.push_integer(val, ct.base.size, false, display_format::DEFAULT);
@@ -15702,28 +15737,7 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1744 PrintC::pushConstant
-    /// Dispatch a typed constant to the right pusher based on the datatype's
-    /// metatype. Faithful port of `PrintC::pushConstant` (printc.cc:1744-1816)
-    /// — the master constant-dispatch method (audit P0-2).
-    ///
-    /// Ghidra's switch on `ct->getMetatype()`:
-    ///   - TYPE_UINT/INT: charPrint -> pushCharConstant; enumType ->
-    ///     pushEnumConstant; else push_integer (signed for INT).
-    ///   - TYPE_UNKNOWN: push_integer(unsigned).
-    ///   - TYPE_BOOL: pushBoolConstant.
-    ///   - TYPE_VOID: throw.
-    ///   - TYPE_PTR/TYPE_PTRREL: option_NULL && val==0 -> nullToken; else if
-    ///     ptr-to-char pushPtrCharConstant, else if ptr-to-code
-    ///     pushPtrCodeConstant; else fall through to default.
-    ///   - TYPE_FLOAT: push_float.
-    ///   - default (struct/union/array/...): cast `(type)0xVAL`.
-    ///
-    /// Alignment evidence:
-    /// - Sort key: the metatype switch (printc.cc:1748-1805) is the
-    ///   load-bearing decision; each arm either `return`s or breaks to the
-    ///   default cast.
-    /// - Counter: default cast path pushes `typecast` op + pushType, then
-    ///   pushMod/setMod(force_hex)/push_integer/popMod (printc.cc:1807-1815).
+
     pub fn push_constant_typed(
         &mut self,
         val: u64,

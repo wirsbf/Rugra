@@ -1107,3 +1107,22 @@ ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
   本体（used-trial 走查、persist 臂、mark 清理、`update_this_pointer`）
   不变。回调签名 `&mut dyn FnMut` 保持单调用方（ActionInputPrototype）
   语义；无其他调用方。
+
+## 2026-09-24：update_output_types 的 None→undefined 折叠（Lane GG2）
+
+`pieces.ty = vn0.get_type()` 为 None 时折叠为 `get_base(size, Unknown)`
+（undefined<N>）——对应 Ghidra 高类型永不为空的不变量：每个无类型 Varnode
+自创建即携 `getBase(size,TYPE_UNKNOWN)`（Funcdata::newVarnode/newUnique/
+newConstant，funcdata_varnode.cc:83/148/…），未约束返回值因此定型
+`undefined8`（锁定 oracle 见证）。与输入侧 fspec.cc:4118 折叠约定一致。
+此前 None 走 set_output_parameter 的保留旧值路径（void）。
+
+## 2026-09-24（CR29 返工）：update_output_types 空表臂真 void 复位
+
+fspec.cc:4142 的 `store->clearOutput()` 是**无条件 void 输出**（ProtoStoreInternal
+:3389-3395 `ParameterBasic(voidtype)`；ProtoStoreSymbol:3262-3270 `getTypeVoid()`），
+此前委托 `clear_unlocked_output`（仅清锁标志）保留了陈旧 return_type——af6c5ee2
+Evidence 断言了未实现的行为（机制 D 红旗，CR29 件④子项①）。修正为该臂直接复位
+return_type=void 基类型。另登记 PROTOSTORE-SIZELOCK-UPGRADE-0001（locked+
+TYPE_UNKNOWN 态 Ghidra 可经 isSizeTypeLocked 臂升级而 Rugra 合流建模不可达；
+含 fspec.rs:1608 合流的解除条件）。

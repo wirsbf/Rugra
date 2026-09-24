@@ -597,6 +597,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the candidates happens after the prepass loops (see
     // is_function_entry below); here we only harvest const-space inputs.
     let mut const_code_refs: Vec<u64> = Vec::new();
+    // HTTPD-CODEPTR-LEA-0001: rip-relative lea targets landing in executable
+    // sections (see the prepass collection loop) — the Function-Start
+    // analyzer's code-pointer references.
+    let mut lea_codeptr_targets: std::collections::HashSet<u64> =
+        std::collections::HashSet::new();
+    let exec_ranges: Vec<(u64, u64)> = {
+        let mut ranges = Vec::new();
+        if let Object::Elf(ref elf) = obj {
+            for header in elf.section_headers.iter() {
+                if (header.sh_flags & 0x4) != 0 && header.sh_size > 0 {
+                    ranges.push((header.sh_addr, header.sh_addr + header.sh_size));
+                }
+            }
+        }
+        ranges
+    };
 
     for &(vaddr, size, file_offset, ref name) in functions.iter().take(max_functions + 50) {
         if size < 5 { continue; }
@@ -619,6 +635,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut lifter = X86Lifter::new();
         let mut raw_ops = Vec::new();
         for inst in &instructions {
+            // HTTPD-CODEPTR-LEA-0001: collect rip-relative `lea` targets that
+            // land in executable sections — the code-pointer references
+            // (callback arguments like ap_pregfree's apr_pool_cleanup_kill
+            // cleanup fn at 0x12dc80) Ghidra's Function Start analyzers
+            // promote into real Functions, so the decompiler's
+            // PrintC::pushPtrCodeConstant (printc.cc:1730-1744 queryFunction
+            // -> displayName) prints `FUN_0012dc80` at the reference site.
+            if inst.mnemonic == "lea" {
+                for operand in &inst.operands {
+                    if let rugra::disasm::Operand::Memory {
+                        base: Some(base),
+                        displacement,
+                        ..
+                    } = operand
+                    {
+                        if base == "rip" {
+                            let target = inst
+                                .address
+                                .as_u64()
+                                .wrapping_add(inst.length as u64)
+                                .wrapping_add(*displacement as u64);
+                            lea_codeptr_targets.insert(target);
+                        }
+                    }
+                }
+            }
             let mut ops = lifter.lift(inst);
             for op in &mut ops {
                 op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
@@ -751,6 +793,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             });
     }
+    // HTTPD-CODEPTR-LEA-0001 second half: seed default names for the
+    // code-pointer lea targets that land in executable sections and have no
+    // symbol yet (the callback reference sites — Ghidra's analyzers created
+    // Functions there, so pushPtrCodeConstant's queryFunction display-name
+    // print needs the same name channel). Thunks and named symbols keep
+    // their existing entries.
+    for &target in &lea_codeptr_targets {
+        if symbol_table.contains_key(&target) || plt_imports.contains(target) {
+            continue;
+        }
+        if !exec_ranges.iter().any(|&(start, end)| target >= start && target < end) {
+            continue;
+        }
+        symbol_table.insert(
+            target,
+            rugra::debugproto::analyze_headless_function_symbol_name(
+                target,
+                ANALYZE_HEADLESS_IMAGE_BASE,
+            ),
+        );
+    }
 
     // SB-CONSTBASE-0001: one tracked-context Architecture template per run
     // (built before the function loop; SLEIGH ctx stays on this thread).
@@ -785,6 +848,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         None
+    };
+    // HTTPD-ARCH-LOADER-0001: the default path's shared PT_LOAD image — the
+    // same vaddr-keyed construction the mirror path uses, built once and
+    // handed to every thread's Architecture clone.
+    let loader_image_shared: Option<Vec<u8>> = if mirror {
+        None
+    } else {
+        match &obj {
+            Object::Elf(elf) => Some(worker_memory_image_bytes(elf, &buffer)),
+            _ => None,
+        }
     };
     let mirror_fn_syms: Vec<(u64, String)> = if mirror {
         functions
@@ -909,6 +983,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SLEIGH + follow_flow_range inside the thread replace it.
         let mirror_fn = mirror;
         let mirror_img = mirror_image.clone();
+        let loader_img = loader_image_shared.clone();
         let mirror_syms = mirror_fn_syms.clone();
         // HTTPD-CODEREF-SYMBOLIZE-0001: per-thread share of the print-side
         // symbol Database (read-only at print time).
@@ -1005,6 +1080,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // recorded httpd cross-side divergence, see
             // /dev/shm/rugra-tests/sb-httpdff/cross_side_report.txt).
             let mut thread_arch = thread_arch;
+            {
+                // HTTPD-ARCH-LOADER-0001: Ghidra's BfdArchitecture maps
+                // every PT_LOAD segment and builds its StringManager over
+                // that loader BEFORE any Funcdata exists — the input
+                // contract holds for every decompilation, not only the
+                // single-function mirror harness. Attaching the same
+                // PT_LOAD image + arch.build_string_manager() on the
+                // default path restores the oracle channels that read
+                // through the loader: ActionConstantPtr's string lookup
+                // (RuleLoadVarnode::isString / PrintC::pushPtrCharConstant
+                // printc.cc:1698-1719, via the shared StringManager) typed
+                // `lea rip->"Apr 20 2024 20:23:43"` returns as char* and
+                // rendered the quoted literal in the oracle, while the
+                // loader-less arch left the constant undefined8 and printed
+                // `return 0x7e290;` with a `long` signature.
+                let image = mirror_img
+                    .clone()
+                    .or_else(|| loader_img.clone());
+                if let Some(image) = image {
+                    thread_arch.loader = Some(std::sync::Arc::new(
+                        rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image),
+                    ));
+                    thread_arch.build_string_manager();
+                }
+            }
             if mirror_fn {
                 let image = mirror_img
                     .as_deref()
@@ -1489,7 +1589,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let received = rx.recv_timeout(std::time::Duration::from_secs(15));
             match received {
                 Ok(Ok(Some(output))) => {
-                    println!("/* ---- 0x{:x}: default ({} bytes) ---- */", thunk_addr, thunk_size);
+                    println!(
+                        "/* ---- 0x{:x}: default ({} bytes) ---- */",
+                        ANALYZE_HEADLESS_IMAGE_BASE + thunk_addr, thunk_size
+                    );
                     println!("{}", output);
                     println!();
                     total_success += 1;

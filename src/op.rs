@@ -1614,6 +1614,23 @@ impl PcodeOpBank {
 
         let op_ref = PcodeOpRef(Arc::new(RwLock::new(op)));
         self.optree.insert(op_ref.clone());
+        // Ghidra cc:941-948 PcodeOpBank::create allocates WITHOUT an
+        // opcode; every op's opcode is later assigned via
+        // Funcdata::opSetOpcode -> changeOpcode (op.cc:1005-1012), whose
+        // addToCodeList (op.cc:881-900) registers STORE/LOAD/RETURN/
+        // CALLOTHER ops into their opcode-specific lists exactly once, in
+        // assignment order. Rugra's create() takes the opcode directly, so
+        // the same registration must happen HERE to preserve Ghidra's
+        // invariant that a code-list-worthy op is in its list from the
+        // moment its opcode exists — otherwise ops born through this path
+        // (e.g. inject_raw_ops) are invisible to begin_op(RETURN/LOAD/
+        // STORE/CALLOTHER) consumers: ActionReturnRecovery's RETURN walk
+        // (coreaction.cc:1919-1921) found zero RETURNs and every unlocked
+        // return value in the httpd corpus collapsed to `return;` with a
+        // void signature. change_opcode (op.cc:1005) still removes from the
+        // old list before re-adding, so a later op_set_opcode on the same
+        // op cannot double-register.
+        self.add_to_code_list(&op_ref);
         // Ghidra cc:946-947: setFlag(dead) + insert into deadlist.
         // Rugra historically inserts into alivelist (treats create as alive).
         // Changing this to deadlist would break many callers that assume

@@ -1608,8 +1608,23 @@ impl FuncProto {
         let outparm_is_size_locked = out_type_locked;
         if !out_type_locked {
             if triallist.is_empty() {
-                // store->clearOutput()
-                self.clear_unlocked_output();
+                // fspec.cc:4142 store->clearOutput() — unconditional void
+                // output: ProtoStoreInternal::clearOutput (fspec.cc:3389-
+                // 3395) replaces the outparam with ParameterBasic(voidtype);
+                // ProtoStoreSymbol::clearOutput (fspec.cc:3262-3270) sets
+                // pieces.type = getTypeVoid(). The return value itself
+                // resets to void — NOT just the lock flag (the former
+                // clear_unlocked_output delegation kept a stale type,
+                // af6c5ee2 Evidence 断言了未实现的行为, CR29 件④).
+                self.return_type = std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Void(
+                        crate::type_system::datatype::TypeBase::new(
+                            "void".to_string(),
+                            0,
+                            crate::type_system::TypeMetatype::Void,
+                        ),
+                    ),
+                );
                 return;
             }
         } else if outparm_is_size_locked {
@@ -1638,7 +1653,25 @@ impl FuncProto {
         {
             let vn0 = triallist[0].read().unwrap();
             pieces.addr = *vn0.get_addr();
-            pieces.ty = vn0.get_type();
+            // Ghidra: pieces.type = triallist[0]->getHigh()->getType()
+            // (fspec.cc:4155) — the HIGH type is never null because every
+            // untyped Varnode is created with getBase(size,TYPE_UNKNOWN)
+            // (Funcdata::newVarnode/newUnique/newConstant,
+            // funcdata_varnode.cc:83/148/…), so an unconstrained return
+            // value types as `undefined<N>`. Fold Rust's None to the same
+            // unknown base (the convention of the input-side port at
+            // fspec.cc:4118's updateInputNoTypes fold).
+            pieces.ty = Some(match vn0.get_type() {
+                Some(t) => t,
+                None => {
+                    let size = vn0.get_size();
+                    crate::type_system::typefactory::TypeFactory::shared_default()
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_base(size, crate::type_system::TypeMetatype::Unknown)
+                        .expect("factory always produces an unknown base type")
+                }
+            });
             pieces.flags = 0;
             piece_space = vn0.get_space();
         }

@@ -2253,6 +2253,45 @@ impl TypeOp for TypeOpReturn {
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_return(op);
     }
+
+    // Ghidra: typeop.cc:901 TypeOpReturn::getInputLocal
+    /// A RETURN input (slot >= 1) reads its local type from the enclosing
+    /// function's return-value parameter: `fp->getOutputType()`
+    /// (typeop.cc:918), kept only when it is not void and its size equals
+    /// the input's; every other case (slot 0, missing Funcdata) observes
+    /// the base default `getBase(size, TYPE_UNKNOWN)` (typeop.cc:271-275).
+    /// This is the seed that lets a DWARF-locked enum return type
+    /// (`CURLcode`, `main_init`'s `return CURLE_OK;`) reach the returned
+    /// constant through ActionInferTypes' buildLocaltypes/writeBack.
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let input_size = op.0.read().unwrap().get_in(slot)?.read().unwrap().get_size();
+        if slot == 0 {
+            // typeop.cc:907-908: slot 0 is the indeterminate marker input —
+            // base default getBase(size, TYPE_UNKNOWN) (typeop.cc:271-275).
+            return base_local_type(
+                &TypeFactory::shared_default(),
+                input_size,
+                TypeMetatype::Unknown,
+            );
+        }
+        // typeop.cc:918: ct = fp->getOutputType(); — the current output
+        // parameter's type (void when cleared/never set).
+        let ct = fd.funcp.return_type.clone();
+        if matches!(ct.as_ref(), Datatype::Void(_)) || ct.get_size() != input_size {
+            // typeop.cc:919-920: void or size mismatch -> base default.
+            return base_local_type(
+                &TypeFactory::shared_default(),
+                input_size,
+                TypeMetatype::Unknown,
+            );
+        }
+        Some(ct)
+    }
 }
 
 pub struct TypeOpPtradd {

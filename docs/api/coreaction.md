@@ -2995,3 +2995,17 @@ ActionReturnSplit 的 `self.count +=` 同样无收割覆盖（ActionDoNothing �
   6/23 均与基线恒等；三投影（match_url/next_url/parseconfig.constprop.0）
   与 EQ2 基线字节恒等 → MATCH 结构性继承；cargo test --lib 串行 1658P/
   18F=基线逐名同集。
+
+## 2026-09-24：ActionOutputPrototype 简表替换为 updateOutputTypes 真端口（Lane GG2）
+
+旧实现按 RETURN 输入尺寸硬编码 byte/int/long 三臂且只在现类型为 void 时写入
+——违反铁律 1.4 的简表（oracle 反例：httpd `switchD_0017766d::default`
+`mov eax,0xfffffffd; ret` 打印 `undefined8 ...(void) { return 0xfffffffd; }`
+而旧表打 `long`）。重写为 coreaction.cc:4765-4782 逐行端口：
+`getFirstReturnOp`（returnlist 插入序，跳 dead/HALT）取输入 1..n 构造
+triallist，交 `FuncProto::update_output_types`（fspec.cc:4136-4159）；
+未锁输出 + 空表 → clearOutput（void），与 Ghidra 同。
+
+## 2026-09-24（CR29 返工）：build_localtypes 注释锚行修正
+
+TypeOpReturn::getInputLocal 引用随 typeop.cc 901 修正（原 883）。无行为变化。

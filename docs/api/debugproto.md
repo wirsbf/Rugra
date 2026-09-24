@@ -425,3 +425,12 @@ E2E（httpd 29 函数口径）：uRam 调用 87→0（82 thunk + 5 发现函数�
 （3090/0/0）。单元测试 3 项（slot 重定位映射、image-base 命名、非 ELF 拒绝）
 锁 httpd 语料。前端 adapter 本身仍 `NO_ORACLE`/L2（无真实 Java analyzer
 对拍；oracle 证据=12.0.4 headless golden 的 thunk/默认名拼写与计数）。
+
+## 2026-09-24：DWARF 枚举补 ENUMTYPE 旗标（Lane GG2）
+
+`enum_type` 构造的 TypeBase 现置 `type_flags::ENUMTYPE`——Ghidra TypeEnum
+自带 enumtype 旗标（type.hh:490-494，isEnumType() 按旗标判定，type.hh:219），
+缺旗标的枚举对 pushConstant 的枚举臂不可见（打印退化为默认 cast）。
+另：前代 DWARF-VOID-UNKNOWN-MODEL-0001（0 参 DWARF 签名 → model "unknown"，
+golden 三函数 Unknown-calling-convention 警告见证）的单测期望已同步翻转
+（void_signature_dwarf_prototype_pins_unknown_model）。
