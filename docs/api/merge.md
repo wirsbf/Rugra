@@ -519,7 +519,7 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 
 ### 2026-07-04（续）：移植 snip/trim 子系统（copyTrims 填充链路）
 移植 Ghidra merge.cc 的 forced-merge + snip 数据流改写子系统：
-- `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。
+- `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。**2026-09-24（PM-F2S）**：基础类型通道补齐——cc:416 `ct = inVn->getType()` → cc:429 `newUnique(inVn->getSize(),ct)` 无条件传递（不属于 union 省略范围）；trim COPY 输出现在经 `Funcdata::new_unique_typed` 携带输入 varnode 的数据类型。
 - `snip_reads`（merge.cc:443）：截断一组读取到临时变量。INPUT 分支新 COPY 的
   SeqNum pc 取 block-0 `getStart()`（cc:456，2026-08-30 修正——原先传
   `Address::new(0)`，仅新 COPY 的 SeqNum 地址错，cover order 域不受影响）。
@@ -601,7 +601,7 @@ curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处
 ### 2026-07-04（续 5）：移植 mergeOp per-op forced-merge 路径
 移植 Ghidra mergeMarker 的 per-op forced-merge 子系统（merge.cc:656-902）：
 - `trim_op_input`（merge.cc:692）：在 op 前插入 COPY trim（经 allocateCopyTrim → 填 copy_trims），替换 slot 输入。MULTIEQUAL 时 pc 取入边块的 getStop，插入到入边块末尾。
-- `trim_op_output`（merge.cc:656）：把 op 输出移到 stubby unique，COPY 还原原输出。用原始 newOp（不填 copyTrims）。
+- `trim_op_output`（merge.cc:656）：把 op 输出移到 stubby unique，COPY 还原原输出。用原始 newOp（不填 copyTrims）。**2026-09-24（PM-F2S）**：cc:668/677 的 `ct = vn->getType()`（改线前读取）→ `newUnique(vn->getSize(),ct)` 类型通道补齐，stubby unique 携带原输出类型。
 - `merge_op`（merge.cc:719）：三阶段 forced merge — 非cover限制 trim → cover 限制迭代 trim（trimOpInput/trimOpOutput）→ 真正 merge。
 - `collect_inputs`（merge.cc:783）+ `snip_output_interference`（merge.cc:811）：INDIRECT 输出干扰检测 + snip。
 - `merge_indirect`（merge.cc:846）：snipOutputInterference + mergeOp。

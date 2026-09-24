@@ -4786,21 +4786,24 @@ impl ActionSetCasts {
     fn input_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::type_system::datatype::TypeMetatype;
         match opc {
-            // Integer arithmetic/logic/shift binary ops: metain = TYPE_INT.
-            // These are the ops where a pointer-typed operand must be cast to
-            // an integer (Ghidra TypeOpBinary metain, typeop.hh:206).
-            // Comparisons and extensions have op-specific getInputCast
-            // overrides not captured here, so they are excluded (return
-            // None) to avoid over-casting — faithful to the metain model
-            // for the arithmetic/logic subset only. (COPY is dispatched to
-            // copy_input_cast before reaching this fallback.)
+            // Integer/logic/shift binary+unary ops: metain comes from each
+            // TypeOp ctor's 4th ctor arg (typeop.cc:1168-1692), which is
+            // NOT uniformly TYPE_INT:
+            //   INT metain (typeop.cc:1168/1319/1381/1503/1568/1618/1652/1692):
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
-            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM
-            | OpCode::CPUI_INT_SREM
-            | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
-            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP
-            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => Some(TypeMetatype::Int)
-            ,
+            | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_SRIGHT => Some(TypeMetatype::Int),
+            //   UINT metain (typeop.cc:1395/1409/1442/1475/1528/1632/1672):
+            //   NEGATE, XOR, AND, OR, RIGHT, DIV, REM register
+            //   TypeOpBinary/Unary(...,TYPE_UINT,TYPE_UINT) — the old
+            //   uniform-Int table mistyped their inputTypeLocal base (and
+            //   thus the generic getInputCast reqtype), e.g. INT_AND slot0
+            //   reqtype int8 vs the oracle's uint8 (typeop.cc:1442).
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_INT_RIGHT
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => Some(TypeMetatype::Uint),
             // Boolean ops: metain = TYPE_BOOL
             OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
             | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => Some(TypeMetatype::Bool),

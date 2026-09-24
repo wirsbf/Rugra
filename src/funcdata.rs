@@ -2098,6 +2098,7 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:83 Funcdata::newUnique
     /// Create a new temporary Varnode (no defining op). Faithful to
     /// `Funcdata::newUnique` (funcdata_varnode.cc:83-95):
+    ///   if (ct == 0) ct = glb->types->getBase(s,TYPE_UNKNOWN);
     ///   Varnode *vn = vbank.createUnique(s, ct);
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
@@ -2106,6 +2107,38 @@ impl Funcdata {
         &mut self, s: usize,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create_unique(s);
+        // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
+        if s >= self.min_laned_size as usize {
+            let (space, addr) = {
+                let vn = vn.read().unwrap();
+                (
+                    vn.get_space(), crate::address::Address::new(vn.get_offset()),
+                )
+            };
+            self.check_for_laned_register(s, space, addr);
+        }
+        vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:83 Funcdata::newUnique
+    /// Typed overload of `new_unique` mirroring the full
+    /// `Funcdata::newUnique(int4 s, Datatype *ct)` signature: a null ct is
+    /// defaulted to the factory unknown base (cc:86-87) exactly as in
+    /// Ghidra; a non-null ct becomes the varnode's data-type via
+    /// `VarnodeBank::createUnique(s, ct)` (the ctor's `type = dt`,
+    /// varnode.cc:583). Callers that carry a source varnode's type
+    /// (e.g. Merge::allocateCopyTrim merge.cc:416/429, Merge::trimOpOutput
+    /// merge.cc:668/677) must use this form so the trim COPY's output
+    /// observes the same data-type as the oracle.
+    pub fn new_unique_typed(
+        &mut self, s: usize, ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:86-87: if (ct == (Datatype *)0) ct = getBase(s,TYPE_UNKNOWN)
+        let ct = ct.unwrap_or_else(|| {
+            crate::varnode::default_unknown_type(None, s)
+        });
+        let vn = self.vbank.create_unique_typed(s, ct);
         // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
         if s >= self.min_laned_size as usize {
@@ -6617,7 +6650,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::splitUses
+    // Ghidra: funcdata_varnode.cc:1540 Funcdata::splitUses
     ///
     /// If `vn` is defined by an op (e.g. INT_ADD) and has multiple
     /// descendants, duplicate the defining op so each reader gets its own
@@ -6633,22 +6666,22 @@ impl Funcdata {
             }
         };
 
-        // Collect descendant ops (readers), preserving order.
-        let descendents: Vec<(crate::op::PcodeOpRef, i32)> = {
+        // Collect descendant ops (readers), preserving order. Ghidra walks
+        // the live `descend` list while each rewrite erases the processed
+        // entry; since erase removes exactly one occurrence (one per input
+        // slot), the live walk processes precisely these entries in this
+        // order (funcdata_varnode.cc:1549-1552).
+        let descendents: Vec<crate::op::PcodeOpRef> = {
             let vn_g = vn.read().unwrap();
             vn_g.descend_iter()
-                .map(|op| {
-                    let opref = crate::op::PcodeOpRef(op.clone());
-                    let slot = self.op_get_slot(&opref, vn);
-                    (opref, slot)
-                })
+                .map(crate::op::PcodeOpRef)
                 .collect()
         };
         if descendents.len() <= 1 {
             return; // Only one (or zero) descendant — nothing to split.
         }
 
-        // Clone the defining op for each descendant except the last.
+        // Clone the defining op for each descendant.
         let num_inputs = def_arc.read().unwrap().inrefs.len();
         let def_addr = def_arc.read().unwrap().get_addr();
         let def_opcode = def_arc.read().unwrap().opcode;
@@ -6663,9 +6696,13 @@ impl Funcdata {
         // is advanced BEFORE each rewrite, so EVERY original descendant is
         // processed exactly once — there is no "keep the last reader on the
         // original op" special case; the original op is left dead for
-        // dead-code removal. Rugra snapshots the descendant list up front,
-        // which preserves the same one-pass order.
-        for (useop, slot) in descendents {
+        // dead-code removal. cc:1554 evaluates `slot = useop->getSlot(vn)`
+        // at the TOP of each iteration on the live op — AFTER earlier
+        // iterations already re-pointed their slots — so when one op reads
+        // `vn` in multiple slots (e.g. a MULTIEQUAL with duplicated RSP
+        // inputs), each iteration claims the next still-unclaimed slot.
+        for useop in descendents {
+            let slot = self.op_get_slot(&useop, vn);
             if slot < 0 {
                 continue;
             }
