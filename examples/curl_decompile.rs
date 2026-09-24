@@ -960,7 +960,11 @@ fn link_call_specs(
         // but must not overwrite a prior override.
         let mut installed = owner.read().unwrap().prototype.has_model();
         if !installed {
-            match libc_signatures.locked_proto(&name, &model_carrier, Some(type_names)) {
+            match libc_signatures.locked_proto(
+                &name,
+                &model_carrier,
+                Some(type_names),
+            ) {
                 Ok(Some(proto)) => {
                     owner.write().unwrap().prototype = proto;
                     signatures += 1;
@@ -1986,7 +1990,22 @@ fn build_worker_architecture(
         // and its trailing types->setupSizes() (architecture.cc:1350), using
         // the same locked cspec DOM parsed above.
         {
-            let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+            // GLIBC-PROTO-PARAMNAME-0001: Ghidra's Architecture owns exactly
+            // ONE TypeFactory (type.cc:3106) and every type source —
+            // cspec data_organization, platform signature data, DWARF
+            // imports, decompiler inference — resolves through it, so
+            // `char *` from any source is the same interned TypePointer
+            // object. Type identity keys ActionMergeType's same-type
+            // grouping (merge.cc:387 `ct == high->getType()`) and the
+            // lookForFuncParamNames merge-class gate (coreaction.cc:2887).
+            // Rugra's canonical single factory is TypeFactory::shared_default
+            // (the same handle Architecture::ensure_types installs); decoding
+            // the locked cspec data_organization into that singleton makes
+            // the worker architecture, the libc signature path
+            // (LibcSignatureTable::locked_proto) and the DWARF import paths
+            // (parse_type_names / DebugPrototypeDatabase / DebugGlobalDatabase)
+            // share one identity domain, the way the oracle does.
+            let types = rugra::type_system::typefactory::TypeFactory::shared_default();
             let data_org = root
                 .read()
                 .map_err(|_| "compiler spec element lock poisoned".to_string())?
@@ -2004,14 +2023,20 @@ fn build_worker_architecture(
                 rugra::marshal::IdRegistry::new()));
             let mut decoder =
                 rugra::marshal::TreeDecoder::new(data_org, registry);
-            types.decode_data_organization(&mut decoder);
-            types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
-                stack_spacebase_size: Some(8),
-                default_data_space_addr_size: 8,
-                default_size: 8,
-                far_pointer: None,
-            });
-            arch.set_types(Arc::new(std::sync::RwLock::new(types)));
+            types
+                .write()
+                .map_err(|_| "compiler spec factory lock poisoned".to_string())?
+                .decode_data_organization(&mut decoder);
+            types
+                .write()
+                .map_err(|_| "compiler spec factory lock poisoned".to_string())?
+                .setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+                    stack_spacebase_size: Some(8),
+                    default_data_space_addr_size: 8,
+                    default_size: 8,
+                    far_pointer: None,
+                });
+            arch.set_types(types);
         }
         let mut inject_lib =
             rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);

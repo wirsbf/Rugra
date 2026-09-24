@@ -1,5 +1,35 @@
 # `debugproto.rs` API Reference
 
+## 2026-09-24：GLIBC-PROTO-PARAMNAME-0001 签名类型工厂驻留（libc + DWARF 剩余碎片点）
+
+**根因（curl main 48 行 glibc 参数名族）**：canon headless（12.0.4/12.1.2 双证）在
+`ActionNameVars::lookForFuncParamNames`（coreaction.cc:2853-2897）只给
+`numMergeClasses==1` 的未命名局部挂 libc/DWARF 形参名（coreaction.cc:2887
+`high->getNumMergeClasses() > 1` 挡板）；多区复用的指针临时在 canon 里被
+`ActionMergeType`→`Merge::mergeLinear`（coreaction.hh:414 → merge.cc:272-292/359-402）
+按**类型指针恒等**（merge.cc:387 `ct == high->getType()`）投机合并成多类，从而
+**不**继承 `__haystack/__ptr/__filename/__s/nextarg` 之类名字；寄存器常驻单类值
+（main 的 R14/R15 FILE*）才得名 `__stream/__stream_00`。Rugra 侧
+`parse_c_type`（libc 24 表）此前**每次 `Arc::new` 裸铸**类型，per-call-site 身份
+碎片化使同型分组无法成组 → 临时恒单类 → 被过命名（main 多 4 名 48 行；
+`nextarg` 为 DWARF callee 同病）。**修复（本文件 3 处 + curl 驱动 1 处）**：
+①`parse_c_type` 全面走 `TypeFactory::shared_default()`——基础拼写按
+`find_by_name` 名树（grammar.cc:2989 lexer TYPE_NAME 规则的镜像），未命中经
+`factory_named_base`→`get_base_named`（findAdd 驻留，type.cc:3412），指针层走
+`get_type_pointer` 3 参匿名重载（grammar.cc:2402-2411 PointerModifier::modType →
+type.cc:3867-3875）；②`void_type` 改 `get_type_void()` 单例；③`dwarf_base_type`
+的 char 臂改经 `intern_named` 名驻留（DWARF char = 工厂 char 同一对象）；
+④curl 驱动 `build_worker_architecture` 的 cspec data_organization 解码目标由
+per-process 裸工厂改为 `shared_default()` 单例——与 `Architecture::ensure_types`
+既有的"canonical headless-oracle factory"口径合一，使管线推断/libc 签名/DWARF
+三通道共享一个身份域（Ghidra 每 Architecture 恰一个 TypeFactory，
+type.cc:3106）。**验收**：curl main 只剩 canon 同款 `__stream/__stream_00`；
+curl E2E 1740→**1561**/0/0、httpd **1698**/0/0、五投影 MATCH×5、双跑恒等。
+**移交**：`MERGE-SAMETYPE-COVER-PARITY-0001`（my_get_line +33/glob_range +7
+编号级联与 file2string/parseconfig 欠命名 = merge 覆盖粒度分歧双向残差，
+merge 域）。
+
+
 ## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
 
 剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），

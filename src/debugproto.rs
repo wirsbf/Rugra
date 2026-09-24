@@ -911,6 +911,12 @@ impl LibcSignatureTable {
             return Ok(None);
         };
         let address_size = 8usize;
+        // parse_c_type resolves through the canonical shared TypeFactory
+        // (Ghidra's ONE `glb->types`, grammar.cc:2989 bases / :2402-2411
+        // pointers) so the whole program shares ONE TypePointer object per
+        // pointee — ActionMergeType's same-type grouping and the
+        // lookForFuncParamNames merge-class gate key on that identity
+        // (GLIBC-PROTO-PARAMNAME-0001).
         let return_type = parse_c_type(signature.return_type, address_size, type_names)?;
         let mut parameters = Vec::new();
         for declaration in split_parameter_list(signature.parameters) {
@@ -998,61 +1004,113 @@ fn split_declaration(declaration: &str) -> Result<(&str, &str)> {
 }
 
 // RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
+// RUGRA-GLUE: resolves one signature base spelling through the Architecture
+// TypeFactory the way Ghidra's signature grammar does (lexer TYPE_NAME rule
+// hits glb->types->findByName, grammar.cc:2989). A factory name-tree hit
+// keeps the core type's identity; a miss interns a named base via
+// get_base_named -> findAdd (type.cc:3412).
+fn factory_named_base(
+    types: &std::sync::Arc<
+        std::sync::RwLock<crate::type_system::typefactory::TypeFactory>,
+    >,
+    size: usize,
+    metatype: TypeMetatype,
+    name: &str,
+) -> Arc<Datatype> {
+    {
+        let factory = types
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = factory.find_by_name(name) {
+            return existing;
+        }
+    }
+    let mut factory = types
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    factory
+        .get_base_named(size, metatype, name)
+        .unwrap_or_else(|_| {
+            Arc::new(Datatype::Base(TypeBase::new(
+                name.to_string(),
+                size,
+                metatype,
+            )))
+        })
+}
+
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
 fn parse_c_type(
     type_text: &str,
     address_size: usize,
     type_names: Option<&HashMap<String, Arc<Datatype>>>,
 ) -> Result<Arc<Datatype>> {
+    let types = crate::type_system::typefactory::TypeFactory::shared_default();
     let (base_text, pointer_depth) = split_pointer_depth(type_text);
+    // Ghidra parses every platform signature through the ONE Architecture
+    // TypeFactory: base spellings resolve via the name tree
+    // (`glb->types->findByName`, grammar.cc:2989) and declarator pointers
+    // via `PointerModifier::modType -> glb->types->getTypePointer(addrsize,
+    // base, wordsize)` (grammar.cc:2402-2411), whose `findAdd`
+    // (type.cc:3412) returns the ONE interned TypePointer object for a
+    // given pointee. That type identity keys ActionMergeType's same-type
+    // grouping (`ct == high->getType()` pointer equality, merge.cc:387) —
+    // the speculative merges from `Merge::mergeLinear` mark multi-region
+    // temps with >1 merge class, and ActionNameVars::lookForFuncParamNames
+    // then declines to rename them from callee parameter names
+    // (coreaction.cc:2887 `high->getNumMergeClasses() > 1`). Minting a
+    // fresh Arc per call site here fragmented the same-type groups, so
+    // main's pointer temps stayed single-class and inherited libc
+    // parameter names the canon oracle leaves unnamed
+    // (GLIBC-PROTO-PARAMNAME-0001).
     let mut datatype = match base_text {
-        "void" => Arc::new(Datatype::Void(TypeBase::new(
-            "void".to_string(),
-            0,
-            TypeMetatype::Void,
-        ))),
+        "void" => {
+            let factory = types
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            factory.get_type_void()
+        }
         // The generic_clib Program-database type named `char` is Ghidra's
         // character datatype, not a same-sized plain integer.  The C++
         // decompiler receives it as TypeChar (type.hh:348-357), whose
         // `chartype` flag drives PrintC::pushConstant.
-        "char" => Arc::new(Datatype::Base(TypeBase::new_char(
-            "char".to_string(),
-            TypeMetatype::Int,
-        ))),
-        "int" => Arc::new(Datatype::Base(TypeBase::new(
-            "int".to_string(),
-            4,
-            TypeMetatype::Int,
-        ))),
-        "long" => Arc::new(Datatype::Base(TypeBase::new(
-            "long".to_string(),
-            address_size,
-            TypeMetatype::Int,
-        ))),
-        "size_t" | "time_t" => Arc::new(Datatype::Base(TypeBase::new(
-            base_text.to_string(),
-            address_size,
-            TypeMetatype::Uint,
-        ))),
-        "ushort" => Arc::new(Datatype::Base(TypeBase::new(
-            "ushort".to_string(),
-            2,
-            TypeMetatype::Uint,
-        ))),
+        "char" => {
+            {
+                let factory = types
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(existing) = factory.find_by_name("char") {
+                    existing
+                } else if let Ok(core_char) = factory.get_type_char(1) {
+                    core_char
+                } else {
+                    drop(factory);
+                    let mut factory = types
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    factory
+                        .get_type_char_named("char")
+                        .expect("TypeFactory cannot build the char type")
+                }
+            }
+        }
+        "int" => factory_named_base(&types, 4, TypeMetatype::Int, "int"),
+        "long" => factory_named_base(&types, address_size, TypeMetatype::Int, "long"),
+        "size_t" | "time_t" => {
+            factory_named_base(&types, address_size, TypeMetatype::Uint, base_text)
+        }
+        "ushort" => factory_named_base(&types, 2, TypeMetatype::Uint, "ushort"),
         other => type_names
             .and_then(|index| index.get(other))
             .cloned()
             .unwrap_or_else(|| {
-                Arc::new(Datatype::Base(TypeBase::new(
-                    other.to_string(),
-                    address_size,
-                    TypeMetatype::Unknown,
-                )))
+                factory_named_base(&types, address_size, TypeMetatype::Unknown, other)
             }),
     };
     for _ in 0..pointer_depth {
         // Ghidra builds parsed declarator pointers through
         // PointerModifier::modType -> glb->types->getTypePointer(addrsize,
-        // base, wordsize) (grammar.cc:2403-2411), whose 3-arg overload
+        // base, wordsize) (grammar.cc:2402-2411), whose 3-arg overload
         // leaves the name EMPTY (type.cc:3867-3875) — the "char *" spelling
         // is syntax, not type identity, so the signature-parsed pointers
         // stay anonymous and PrintC renders them through the drilled
@@ -1060,11 +1118,10 @@ fn parse_c_type(
         // The former composed display names ("char *"/"char **") made these
         // NAMED single-layer pointers and printed `char * pcVar1` (oracle
         // printc_anonymous_pointer_decl_1204 named_ptr_contrast).
-        datatype = Arc::new(Datatype::Pointer(TypePointer::new(
-            address_size,
-            datatype,
-            1,
-        )));
+        let mut factory = types
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        datatype = factory.get_type_pointer(address_size, datatype, 1);
     }
     Ok(datatype)
 }
@@ -1517,9 +1574,13 @@ fn dwarf_base_type(
         } else {
             name
         };
-        return Ok(Arc::new(Datatype::Base(TypeBase::new_char(
-            resolved_name,
-            TypeMetatype::Int,
+        // GLIBC-PROTO-PARAMNAME-0001: interned by name so the DWARF char is
+        // the SAME type object the factory's signature/inference paths use
+        // (Ghidra resolves every `char` through its one TypeFactory,
+        // grammar.cc:2989); a fresh clone here fragmented same-type merge
+        // grouping.
+        return Ok(intern_named(Arc::new(Datatype::Base(
+            TypeBase::new_char(resolved_name, TypeMetatype::Int),
         ))));
     }
     Ok(base_type(name, size, metatype))
@@ -1786,13 +1847,15 @@ fn pointer_type(pointee: Arc<Datatype>, size: usize) -> Arc<Datatype> {
         .get_type_pointer(size, pointee, 1)
 }
 
-// RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target
+// RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target.
+// GLIBC-PROTO-PARAMNAME-0001: routed through the canonical shared factory
+// (Ghidra's single `void` core type) so `void *` pointee identity is the
+// factory's, not a per-parse clone.
 fn void_type() -> Arc<Datatype> {
-    Arc::new(Datatype::Void(TypeBase::new(
-        "void".to_string(),
-        0,
-        TypeMetatype::Void,
-    )))
+    crate::type_system::typefactory::TypeFactory::shared_default()
+        .read()
+        .unwrap()
+        .get_type_void()
 }
 
 // RUGRA-GLUE: fail-visible unknown DWARF type used only when a DIE omits a resolvable type reference
@@ -1922,6 +1985,7 @@ mod tests {
         ));
         carrier
     }
+
 
     #[test]
     fn libc_signature_table_covers_the_24_locked_imports() {
