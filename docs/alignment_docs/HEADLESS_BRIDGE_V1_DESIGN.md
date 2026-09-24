@@ -609,3 +609,68 @@ C1 载体与参数域的构造不相交原则（C2DWARF "栈参数不收（C3）
 | 双跑确定性 | cmp 恒等 | cmp 恒等 |
 src 零触碰（printc.rs/varmap.rs/debugproto.rs 全程只读；唯一临时 DBG
 eprintln 已 revert，default 输出 cmp 恒等双证）。
+
+### 13.6 消费域终局（Lane C3CONSUME，2026-09-25，基=master 8796274c SEEDFLIP 后，P-code 级归因）
+
+任务：§13.4 ①② 的消费链断点定位（varmap 假设检验）。**判决：varmap
+消费链无缺陷——断点全数在 printc 渲染 + coreaction/funcdata 联合体解析
+基础设施；varmap 域零改动，①② 修域移交**。
+
+**仪器**：`stage_c3_pcode.cc`（/dev/shm/rugra-tests/c3consume/，锁库
+e40ed130 BRIDGE1 对象链接，stage_c3_diag 同驱动协议 + 终态 P-code 逐
+op 转储：op 码/输入输出 varnode 的 high 类型/符号/符号偏移）。双
+witness 复跑字节恒等（match_url seeded + main callee-only）。
+
+**① match_url 28 行残差的 P-code 级分解**（oracle vs Rugra 同种子态）：
+
+- **顶层链 op 形完全一致**：`PTRSUB(RSP,#8){常量挂 sym=glob/304B}` →
+  `PTRSUB(·,#0x50)` → `PTRADD(·,sext(iVar),#0x18)` → `PTRSUB(·,#0)` →
+  `LOAD`——两侧逐 op 同形（Rugra RUGRA_DUMP_FUNC 转储对照）。glob 符号
+  挂接（linkSymbolReference 等价物）、字段名（pattern/type/content）、
+  标量字段（`glob.size` ✓）、常量下标形（main 的 `glob.pattern[8].type`
+  ✓）全部在位——**ScopeLocal/RangeHint 消费链工作正常**。
+- **残差 A（`.` vs `->` 与 `glob` vs `(&glob)` 基形态）**：canon 点形由
+  printc.cc:895-911 `isValueFlexible`（in0 隐式且 def=PTRSUB/PTRADD）+
+  :1039-1044 flex 臂 `pushVn(in0, m|print_load_value)`（基座翻转为
+  值形态，spacebase 臂 cc:1074 去掉 `&` 印 `glob`）产生。Rugra
+  printc.rs PTRSUB 臂明确注释"Rugra has no isValueFlexible; we treat
+  flex as false"（rpn 路径 printc.rs:2975 附近；legacy op_ptrsub
+  printc.rs:13135 同缺）——恒箭头形+基座无翻转 → `(&glob)->pattern[i]
+  ->type`。
+- **残差 B（联合体内字段名 `.Set.elements/.Set.size/.NumRange.ptr_n/
+  .Set.ptr_s`）**：oracle 走 12.0 ResolvedUnion 机制——coreaction.cc:
+  2490 `ActionSetCasts::resolveUnion`（读联合体指针的 op 前插
+  `PTRSUB(x,0)` 占位 + `Funcdata::setUnionField` 登记解析字段，
+  funcdata.cc:917-950 unionMap）+ printc.cc:979-990 opPtrsub 联合体臂
+  （`getUnionField` 取名）。**Rugra 无该机制**：内层偏移（content+2/
+  +4/+8/+0xa）退化为 `CAST(ptr→int8)+INT_ADD(·,c)+CAST(→ptr)` 链
+  （oracle 同位点为 `PTRSUB(·,#0:4)+PTRSUB(·,#c)` 规范式），LOAD 输出
+  类型停在 raw long（canon 为 char**/short 经解析字段类型传播）——
+  coreaction（resolveUnion+castOutput PTRSUB 规范化）+ funcdata
+  （unionMap）+ printc（联合体臂）三域联合缺口。
+- **残差 C（3 行 Unresolved 注释 + `&DAT_` vs 字面量 + LAB 缩进）**：
+  §12.4 预归属不变（注释通道/常量渲染/标签发射域）。
+
+**② main `&stack0x...fc78` 截断——判决：纯渲染，非 varmap 槽位分割**。
+Rugra op 形=canon 同形 `PTRSUB(RSP-input,#0xfffffffffffffc78)`，两侧
+符号解析**同样落空**（canon 也不挂 in_stack_...fc78 符号而印未名位
+置）；唯一差异=未名位置文本：canon 走 AddrSpace::printRaw（space.cc:
+206，`空间名+"0x"+offset` → `stack0xfffffffffffffc78`），Rugra
+printc.rs spacebase 未名回退印裸 `format!("0x{:x}", in1const)`
+（printc.rs:3121-3131 附近）→ `0xfffffffffffffc78`。
+
+**移交清单**（新登记 `PRINTC-C3FLEX-DOTFORM-0001`、
+`COREACT-C3-UNIONRES-0001`、`PRINTC-C3-UNNAMED-SPACE-NAME-0001`，
+见 TODO_BOARD C3-CONSUME 行）：
+1. printc.rs：isValueFlexible 移植 + flex 臂基座 `m|print_load_value`
+   翻转（`.name` 形；`&` 消除）——预期收敛残差 A 全族（~14 行）。
+2. coreaction.rs+funcdata.rs+printc.rs：ResolvedUnion（resolveUnion/
+   unionMap/getUnionField 联合体臂）+ castOutput PTRSUB 规范化——预期
+   收敛残差 B 全族（~10 行，含 decl 类型 char**/short 级联）。
+3. printc.rs：未名位置 space 前缀（AddrSpace::printRaw 形态）——收敛
+   main `&stack0x...` 族（1 行/处）。
+
+**门禁（C3CONSUME 亲测，基=master 8796274c，src 零改动归因 lane）**：
+默认脸（=SEEDFLIP 后种子态）curl **767/0/0**（main 129/match_url 28
+复现）；投影银行 **71/71 PASS**；gcc 审计 **104 OK/20 FAIL**（=基线
+fail 集）；双跑 cmp 恒等；witness 双复跑字节恒等。
