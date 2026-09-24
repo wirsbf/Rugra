@@ -769,3 +769,29 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 - 驱动接线：`examples/httpd_decompile.rs` 默认路径在 `inject_raw_ops` 后、
   action 管线前调用（httpd main 警告 30→0，switch case 体恢复）；MIRROR
   路径与其余驱动不变（curl 字节恒等实测）。
+
+## 2026-09-25（JTEDGE-FUSED-DEST-SPLIT-0001）：case 目的地块中分裂 —— `split_block_at_case_dest`
+
+- 新增私有 `fn split_block_at_case_dest(fd, targ_op, switch_block)`（Ghidra:
+  flow.cc:219 `FlowInfo::newAddress`）：`recover_jump_tables_injected` 的
+  collectEdges 等价段在逐 case 出边前，对落点不在块首的目的地 op 执行
+  oracle 的 newAddress→splitBasic 等价块外科——
+  - 目的地 op 补 STARTBASIC（flow.cc:230 `data.opMarkStartBasic(op)`）；
+  - `[targ_op..]` 移入新尾块（`create_new_block`，即 `newBlockBasic`），
+    尾块 cover=`[dest_addr..尾 op 地址]`、父块 cover 收缩到
+    `[原 start..保留尾 op 地址]`（splitBasic 的 per-block range，flow.cc:
+    999-1016）；
+  - 父块 out-edges 整体移交尾块，配对 incoming 半边原地改指（slot/顺序
+    全保——connectBasic 对 oracle 边表的等价终态，flow.cc:1021-1037）；
+  - 尾块插到父块后一位保持块表地址序（splitBasic 的 dead-list walk 序）；
+  - 出边顺序：先 switch→尾（BRANCHIND 臂表序），后 父→尾 fall-through
+    （collectEdges nextstart 臂在死表走查中晚于 BRANCHIND，flow.cc:952-956）；
+  - 去重从 per-block 改为 per-op（flow.cc:941-946 的 setMark 语义；分裂后
+    每目的地 op 即块首，两级去重等价）。
+- 观测（默认脸，本 worktree）：httpd main 的 5 个块中目的地
+  （0x2ba9f/0x2bafc/0x2bb0b/0x2bdbe/0x2bdf7）全部分裂，`case 0x45:` 空
+  标签消失、case 体与 canon 同形（0x4c 直落 0x45 族见 printc 侧）；其余
+  函数零分裂（默认驱动语料）。curl/mirror 不经此路径（0 分裂实测）。
+- 修订注记:本节初版提交的 doc 恢复脚本曾引入 follow_flow_range 尾部的
+  重复片段(纯注释性死码,同 commit 内已清除;可执行语义零变化——双语料
+  输出 cmp 恒等复证)。
