@@ -49,6 +49,7 @@ tests/fixtures/projections/
 | curl_register_tm_clones | register_tm_clones | 0x33d0 | 186 | 2,747 | bank sha256 (capture mode, cascade harvest) |
 | curl_GetStr | GetStr | 0x36d0 | 191 | 5,349 | bank sha256 (capture mode, cascade harvest) |
 | curl_my_fwrite | my_fwrite | 0x3460 | 268 | 7,788 | bank sha256 (capture mode, cascade harvest) |
+| curl_helpf | helpf | 0x3980 | 345 | 195,009 | bank sha256 (capture mode; PM-HF lane, mark_unaliased range-walk fix) |
 
 Common provenance (also recorded per manifest):
 
@@ -118,6 +119,8 @@ observation-equivalent (verified byte-identical on parseconfig).
 address form `0x<entry>` is observation-equivalent (verified byte-identical
 on parseconfig). The `file2string` entry's advisory-only `func_name` META
 difference is the same constprop-clone BFD/DWARF spelling class.
+`helpf` (local symbol; no spelling divergence — BFD and the driver's
+FuncInfo layer agree on this name).
 
 The 15 cascade-harvest entries (2026-09-24, lane HARVEST) were captured
 with the address-form selector `RUGRA_STAGE_FUNC=0x<entry>`

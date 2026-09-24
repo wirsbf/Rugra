@@ -219,7 +219,7 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `assign_default_names(base)` — **`ScopeInternal::assignDefaultNames`** (database.cc:2850)：nametree 顺序、共享 `int4 base` 计数器、二次运行幂等
 - `set_category(idx, cat, ind)` / `get_category_symbol(cat, ind)` / `get_category_size(cat)` — `ScopeInternal::setCategory`/`getCategorySymbol`/`getCategorySize` (database.cc:2824/2814/2806)
 - `symbols_in_nametree_order()` — RUGRA-GLUE：锁定 fixture 的 nametree 顺序只读观察口
-- `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332)，含 0xffff 距离启发式（alias_block_level 待接入）
+- `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332-1391) 忠实状态机：按 maptable 条目序（per-space rangemap `(first,size,subsort)` 升序）遍历；**跨条目 sticky 状态**（`aliason` 初 false、alias 游标 `i` 单调推进、rangeIter 不回退）；别名消费循环 `alias[i] <= curoff`（:1358-1361）；**range-tree 走查**（:1363-1375，"别名不穿过 unmapped 区域"：范围 `first > curalias && curoff >= first` 或被越过的范围 `last > curalias` 关闭 aliason，`last >= curoff` 时 break 且游标停在当前范围）；0xffff 距离启发式（:1378，**可变更 aliason 对后续条目生效**）；`setAttribute(nolocalalias)` **只置位不清位**（database.cc:2200-2207 |= 语义）；locked-type 阻断（:1381-1390，`glb->alias_block_level` 默认 2=struct+array 阻断，arch_lookup 接入，fixture 无 arch 回退 0）。2026-09-24 PM-HF 车道 oracle 探针实证（helpf：entry -0xf8 与 alias -0x228..-0x220 相距 <0xffff，仅 range-gap 规则可判 unaliased——旧实现按符号独立重算且无 range 走查，判 aliased 致 RuleIndirectCollapse 拒折 6 个 free-阻 INDIRECT，oppool1 count 118 vs 110）
 - `find_symbol(offset)` — 按偏移查找重构后的符号
 
 **命名状态字段**（database.hh:809/805, varmap.cc:345-348）：`nametree: BTreeMap<(String,u32),usize>`、

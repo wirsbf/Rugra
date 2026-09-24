@@ -4554,40 +4554,102 @@ impl ScopeLocal {
     }
 
     // Ghidra: varmap.cc:1332 ScopeLocal::markUnaliased
-    /// Mark symbols as unaliased based on alias starting offsets.
-    /// Faithful to `ScopeLocal::markUnaliased` (varmap.cc:1332).
-    ///
-    /// For each symbol, walk the sorted alias offsets: once an alias offset
-    /// reaches or passes the symbol's end, aliasing is "on" for that symbol.
-    /// A symbol far enough (0xffff bytes) past the last alias boundary is
-    /// considered unaliased (varmap.cc:1374). Locked struct/array types can
-    /// block aliasing, but Rugra does not yet model `alias_block_level`, so
-    /// only the distance heuristic is applied here.
     fn mark_unaliased(&mut self, aliases: &[u64]) {
-        if aliases.is_empty() {
-            // No aliases → all unaliased.
-            for sym in &mut self.symbols {
-                sym.unaliased = true;
-            }
-            return;
-        }
+        // int4 alias_block_level = glb->alias_block_level; (varmap.cc:1347) —
+        // default 2 = "block structs and arrays" (architecture.cc:1430). The
+        // fixture fallback 0 ("block none") only applies to scope probes
+        // without an attached Architecture.
+        let alias_block_level = self
+            .arch_lookup
+            .as_ref()
+            .map(|a| a.alias_block_level)
+            .unwrap_or(0);
 
-        for sym in &mut self.symbols {
-            let curoff = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
-            // Find the largest alias offset <= curoff.
-            let mut aliason = false;
-            let mut curalias = 0u64;
-            for &a in aliases {
-                if a <= curoff {
-                    aliason = true;
-                    curalias = a;
-                }
+        // EntryMap *rangemap = maptable[space->getIndex()]; — the per-space
+        // symbol-entry rangemap, iterated in (first, size, subsort) order
+        // (varmap.cc:1333-1334). Materializing from the insertion log
+        // reproduces the oracle's multiset order.
+        let entries: Vec<(u64, i32, usize)> = self
+            .materialize_maptable(self.space)
+            .iter()
+            .map(|e| (e.start, e.size, e.sym))
+            .collect();
+
+        // set<Range>::const_iterator rangeIter = getRangeTree().begin();
+        // (varmap.cc:1339) — the scope's symboltab range tree (union of the
+        // prototype's localRange/paramRange, narrowed by markNotMapped),
+        // already (first, last) inclusive and sorted by first. The iterator
+        // is STATEFUL across entries — it never resets inside the walk.
+        let ranges = self.local_range.clone();
+
+        let mut aliason = false;
+        let mut curalias = 0u64;
+        let mut i = 0usize;
+        let mut range_iter = 0usize;
+
+        for &(start, size, symi) in &entries {
+            let curoff = start.wrapping_add(size as u64).wrapping_sub(1);
+            // while ((i<alias.size()) && (alias[i] <= curoff)) { aliason =
+            // true; curalias = alias[i++]; } (varmap.cc:1358-1361) — the
+            // cursor i is shared across entries; aliason is sticky.
+            while i < aliases.len() && aliases[i] <= curoff {
+                aliason = true;
+                curalias = aliases[i];
+                i += 1;
             }
-            // Distance heuristic: far enough past the last alias → unaliased.
-            if aliason && curoff.saturating_sub(curalias) > 0xffff {
+            // Aliases shouldn't go thru unmapped regions of the local
+            // variables (varmap.cc:1363-1375): walking the (stateful) range
+            // iterator, an alias is turned off when the symbol sits in a
+            // mapped region that starts past the last alias, or when a
+            // passed-over region ends beyond the last alias. `break` leaves
+            // range_iter AT the containing range (no advance).
+            while range_iter < ranges.len() {
+                let (first, last) = ranges[range_iter];
+                if first > curalias && curoff >= first {
+                    aliason = false;
+                }
+                if last >= curoff {
+                    break; // Check if symbol past end of mapped range
+                }
+                if last > curalias {
+                    // If past end of range AND past last alias offset,
+                    // turn aliases off
+                    aliason = false;
+                }
+                range_iter += 1;
+            }
+            // Distance heuristic (varmap.cc:1378): a symbol far enough
+            // (0xffff) past the last alias turns aliasing off — and the
+            // mutation is sticky for subsequent entries.
+            if aliason && curoff.wrapping_sub(curalias) > 0xffff {
                 aliason = false;
             }
-            sym.unaliased = !aliason;
+            // if (!aliason) symbol->getScope()->setAttribute(symbol,
+            // Varnode::nolocalalias); (varmap.cc:1379) — setAttribute ORs
+            // the flag in (database.cc:2200-2207): it is never cleared, so
+            // a later pass that judges the symbol aliased keeps the mark.
+            if !aliason {
+                self.symbols[symi].unaliased = true;
+            }
+            // Locked data-types can block aliasing for subsequent entries
+            // (varmap.cc:1381-1390): level 3 blocks everything, level >= 1
+            // blocks structs, level > 1 (the default 2) also blocks arrays.
+            let sym = &self.symbols[symi];
+            if sym.typelock && alias_block_level != 0 {
+                if alias_block_level == 3 {
+                    aliason = false;
+                } else {
+                    let meta = sym.dtype.as_ref().map(|t| t.get_metatype());
+                    if meta == Some(crate::type_system::datatype::TypeMetatype::Struct) {
+                        aliason = false;
+                    } else if meta
+                        == Some(crate::type_system::datatype::TypeMetatype::Array)
+                        && alias_block_level > 1
+                    {
+                        aliason = false;
+                    }
+                }
+            }
         }
     }
 
@@ -5208,9 +5270,10 @@ mod tests {
     #[test]
     fn test_mark_unaliased_no_aliases() {
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(LocalSymbol::new("a", 0, 4, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(4, TypeMetatype::Int)), 0, None);
         scope.mark_unaliased(&[]);
-        assert!(scope.symbols[0].unaliased);
+        assert!(scope.symbols[s].unaliased);
     }
 
     #[test]
@@ -5218,9 +5281,10 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0,8), alias at offset 4 → curoff=7, alias<=7 → aliased,
         // and distance (7-4)=3 <= 0xffff → stays aliased.
-        scope.symbols.push(LocalSymbol::new("a", 0, 8, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(8, TypeMetatype::Int)), 0, None);
         scope.mark_unaliased(&[4]);
-        assert!(!scope.symbols[0].unaliased);
+        assert!(!scope.symbols[s].unaliased);
     }
 
     #[test]
@@ -5228,9 +5292,36 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0x20000, 4), alias at offset 4 → curoff=0x20003,
         // distance = 0x20003-4 > 0xffff → unaliased (distance heuristic).
-        scope.symbols.push(LocalSymbol::new("a", 0x20000, 4, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(4, TypeMetatype::Int)), 0x20000, None);
         scope.mark_unaliased(&[4]);
-        assert!(scope.symbols[0].unaliased);
+        assert!(scope.symbols[s].unaliased);
+    }
+
+    #[test]
+    // Ghidra: varmap.cc:1363-1375 markUnaliased range-tree walk
+    /// Aliases do not pass through unmapped regions: with an alias at 0x20
+    /// inside mapped range [0x10,0x2f], a symbol in a separate mapped range
+    /// [0x100,0x107] is UNALIASED — the stateful range walk turns aliasing
+    /// off when it passes the end of a range beyond the last alias
+    /// (`rng.getLast() > curalias`, varmap.cc:1371-1374). The helpf
+    /// projection lane (PM-HF) pinned this on the locked oracle: entry
+    /// -0xf8 unaliased despite aliases at -0x230..-0x220 within 0xffff.
+    fn test_mark_unaliased_range_gap_clears_alias() {
+        let mut scope = ScopeLocal::new();
+        // Two mapped regions: [0x10,0x2f] (alias zone) and [0x100,0x107].
+        scope.local_range = vec![(0x10, 0x2f), (0x100, 0x107)];
+        let in_zone = scope.add_symbol(crate::space::AddressSpace::Stack, "in_zone",
+            Some(int_dt(8, TypeMetatype::Int)), 0x20, None);
+        let beyond_gap = scope.add_symbol(crate::space::AddressSpace::Stack, "beyond",
+            Some(int_dt(8, TypeMetatype::Int)), 0x100, None);
+        scope.mark_unaliased(&[0x20]);
+        // In-zone symbol: alias 0x20 consumed, distance 7 <= 0xffff → aliased.
+        assert!(!scope.symbols[in_zone].unaliased);
+        // Beyond-gap symbol: sticky aliason from the zone, but the walk
+        // passes range [0x10,0x2f] whose last (0x2f) > curalias (0x20) →
+        // aliases off; the next range starts past curalias too.
+        assert!(scope.symbols[beyond_gap].unaliased);
     }
 
     // --- ScopeLocal.restructure via adjust_fit (varmap.cc:1294, 587) ---
