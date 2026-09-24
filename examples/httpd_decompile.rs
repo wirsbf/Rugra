@@ -242,12 +242,19 @@ fn harvest_data_references(
 /// bare-BFD harness registers no data symbols (mirror golden renders
 /// `xRam00000000000a1040`, not `ap_ugly_hack`).
 ///
-/// PARKED behind RUGRA_SYMDB=1 (not the default path): with the Database
-/// attached the E2E skeleton moves 1446 -> 1455 — suck_in_APR joins the
-/// zero-diff bank (ACTION-SYMDB-DATASYM-0001 acceptance proven end-to-end)
-/// and ap_fini_vhost_config improves 239 -> 225, but three channel-present
-/// defects in the fixture-era query channels regress other functions
-/// (ap_getparents 74 -> 114 dominates; registered on the TODO board):
+/// DEFAULT since the DFLIP promotion (2026-09-25; opt-out RUGRA_SYMDB=0):
+/// the opt-in era's channel-present defects are all cleared — FLAGBASE
+/// removed the spaceless-flagbase READONLY leak, XCROSS removed the
+/// cross-space merge garbage, DATASYMS fixed the render residuals and the
+/// readonly symbol flags, PREGFREE cleared ap_pregfree (gated state
+/// 1315/0/0 <= fold-only 1472/0/0; E2E evidence in the lane reports).
+/// Historical record kept for the acceptance trail: with the Database
+/// attached the fixture-era skeleton moved 1446 -> 1455 — suck_in_APR
+/// joined the zero-diff bank (ACTION-SYMDB-DATASYM-0001 acceptance proven
+/// end-to-end) and ap_fini_vhost_config improved 239 -> 225, but three
+/// channel-present defects in the fixture-era query channels regressed
+/// other functions (ap_getparents 74 -> 114 dominated; registered on the
+/// TODO board):
 ///   1. FUNCDATA-MAPGLOBALS-DISCOVERSCOPE-0001 (FIXED here): a built
 ///      Database must carry the global scope's ownership ranges
 ///      (PT_LOAD blocks) or Funcdata::mapGlobals throws "Could not
@@ -1545,12 +1552,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // linkSymbolReference funcdata_varnode.cc:1207) run channel-present.
     // The mirror keeps the print-only swap below (the bare-BFD direct
     // runner registers no data symbols).
-    // OPT-IN (RUGRA_SYMDB=1): the channel-present defects below keep the
-    // Database off the default path until they are fixed — the default
-    // canon run stays byte-identical to the fold-only driver.
-    let action_db_template: Option<rugra::database::Database> = if mirror
-        || std::env::var("RUGRA_SYMDB").ok().as_deref() != Some("1")
-    {
+    // DEFAULT-FLIP (ACTION-SYMDB-DATASYM-0001 promotion, DFLIP lane
+    // 2026-09-25): the action-side Database is now the DEFAULT canon
+    // assembly. The opt-in era ended with the functional residual list
+    // empty — CURB2 built the channel, FLAGBASE/XCROSS cleared the two
+    // HERITAGE P1s, DATASYMS cleared the render residuals, PREGFREE
+    // cleared ap_pregfree (gated 1315/0/0 <= default 1472/0/0, defects/
+    // numbering 0/0; lane reports archived under
+    // /dev/shm/rugra-reports/LANE_*_2026-09-25.md). Escape hatch:
+    // RUGRA_SYMDB=0 restores the historical fold-only face (no Database,
+    // no spacebase scope source, EmitNoMarkup stream) — the old face is
+    // opt-out, not deleted. The mirror keeps absolute precedence over
+    // both: any mirror component present => no Database, no attach, no
+    // emitter switch (bare-library truth channel).
+    let symdb_opt_out = std::env::var("RUGRA_SYMDB").ok().as_deref() == Some("0");
+    let action_db_template: Option<rugra::database::Database> = if mirror || symdb_opt_out {
         None
     } else {
         Some(build_action_data_symbol_db(
@@ -2004,9 +2020,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // call sites vs the analyzer-less direct-runner golden's
             // `0x2dc80`).
             // ACTION-SYMDB-DATASYM-0001: MIRROR-ONLY while the action DB is
-            // attached. When no action Database was attached (the default
-            // fold-only path), the historical print swap keeps serving the
-            // print-side code-ref channel exactly as before.
+            // attached. When no action Database was attached (the mirror,
+            // or the RUGRA_SYMDB=0 opt-out), the historical print swap
+            // keeps serving the print-side code-ref channel exactly as
+            // before.
             if mirror_fn || !action_db_attached {
                 let mut fd_write = fd_arc.write().unwrap();
                 if let Some(a) = fd_write.arch.clone() {
@@ -2049,10 +2066,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Oppen scan-queue inserts the golden's 100-column line breaks
             // (ap_set_name_virtual_host's CALL splits after
             // `&DAT_001a0820,`; EmitNoMarkup streams tokens unwrapped).
-            // Switched in ONLY with the action DB attached (RUGRA_SYMDB=1
-            // canon gate): the default fold-only path keeps the historical
-            // EmitNoMarkup byte stream (parent-identical), and the mirror
-            // keeps its own contract.
+            // DEFAULT-FLIP: EmitPrettyPrint rides the action DB default
+            // (the canon assembly the oracle always runs); the
+            // RUGRA_SYMDB=0 opt-out keeps the historical EmitNoMarkup
+            // byte stream, and the mirror keeps its own contract.
             let pretty_emit = action_db_attached;
             let mut printer = if pretty_emit {
                 PrintC::new(Box::new(rugra::prettyprint::EmitPrettyPrint::new()))
