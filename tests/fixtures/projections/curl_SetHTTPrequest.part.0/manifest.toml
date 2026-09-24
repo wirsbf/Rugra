@@ -1,0 +1,34 @@
+# B2BANK projection bank entry (mechanism B2 solidified fixture).
+# Frozen anchor: any byte change to the two .projection files must go
+# through re-capture from both producers and re-verification.
+function = "SetHTTPrequest.part.0"
+corpus = "curl"
+entry = "0x3c50"
+
+[oracle]
+side = "oracle"
+commit = "e40ed13014025f82488b1f8f7bca566894ac376b"
+tag = "Ghidra_12.0.4_build"
+producer_blob = "f6cb61d14fd3df7be2e65a74381c303326c3e0dc"
+capture_command = "RUGRA_STAGE_PROJECTION_OUT=tests/fixtures/projections/curl_SetHTTPrequest.part.0/oracle.projection bash tools/run_stage_projection_oracle.sh curl 3c50 SetHTTPrequest.part.0"
+pin_mode = "bank-pinned"
+date = "2026-09-24"
+
+[rugra]
+side = "rugra"
+driver_commit = "4a67708e80f961cc4989f9c80dd8bc2a6add256c"
+driver_profile = "fast-release"
+capture_command = "RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=0x3c50 RUGRA_STAGE_PROJ_OUT=tests/fixtures/projections/curl_SetHTTPrequest.part.0/rugra.projection cargo run --profile fast-release --example curl_decompile"
+date = "2026-09-24"
+
+[verification]
+tool = "tools/run_stage_bisect.sh (stage_bisect.py --v1 strict offsets)"
+status = "MATCH"
+stages = 191
+ops = 1655
+date = "2026-09-24"
+
+[integrity]
+oracle_sha256 = "47868689d58dedc1b1de6d176574c23e1d27e9d9b5be77daf2c213d6901a0eb1"
+rugra_sha256 = "ac8d42e7ea345df1022e43d957756af5b44ec23fa00479b0e233b562d956ae06"
+binary_sha256 = "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
