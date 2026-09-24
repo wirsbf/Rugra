@@ -10130,14 +10130,20 @@ impl Funcdata {
                 continue; // cc:129
             }
             // cc:131-135: the replacement varnode.
-            let (orig_size, orig_addr) = {
+            let (orig_size, orig_addr, orig_space) = {
                 let orig_rg = origvn.read().unwrap();
-                (orig_rg.get_size(), *orig_rg.get_addr())
+                (orig_rg.get_size(), *orig_rg.get_addr(), orig_rg.address_space)
             };
             let replacevn = if neednewunique {
                 self.new_unique(orig_size)
             } else {
-                self.new_varnode(orig_size, orig_addr)
+                // cc:135: newVarnode(origvn->getSize(),origvn->getAddr()) —
+                // the full storage address (space + offset) of origvn. The
+                // spaceless new_varnode adapter defaults to RAM, which
+                // fabricated cross-space varnodes (RAM@register-offset) out
+                // of pushed register-space MULTIEQUALs — the
+                // HERITAGE-CROSSSPACE-MERGE-0001 garbage family.
+                self.new_varnode_in_space(orig_size, orig_space, orig_addr)
             };
             // cc:136-148: one branch per in-edge of outblock: origvn on the
             // bb edge(s), replacevn on the (dominated) alternate edges.

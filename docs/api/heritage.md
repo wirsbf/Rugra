@@ -1489,3 +1489,39 @@ back 臂（同 oracle）；计数器=无；排序键=SeqNum(pc=call,uniq=创建�
 architecture.cc:565 `ptrdata.space->getDelay()+1` 中 ptrdata.space 是栈指针
 寄存器空间而非 ram basespace）。测试断言与注释同步改为 1；`Heritage`/
 `HeritageInfo` 生产代码零改动。
+
+## 2026-09-25：HERITAGE-CROSSSPACE-MERGE-0001 — guard 家族输出 varnode 空间限定
+
+**根因**（backtrace 探针实锤，wt/xcross lane）：CURB2 登记的"MULTIEQUAL 输出
+Ram@0x90、输入 Register@0x90"跨空间合并垃圾，注入点不在 collect/guard 的
+loc_tree 窗口（`HERITAGE-DRIVER-SWITCH-0001` 后已 space-correct），而在
+**guard/block-removal 家族的无空间 varnode 创建**：Rugra 的
+`new_varnode_out`/`new_varnode` 历史适配器分别 **Register-pin/implicit-RAM**，
+而 oracle 的 `newVarnodeOut(s, Address, op)`/`newVarnode(s, Address)` 携带
+完整 (space, offset)：
+
+| 位点 | oracle 行 | Address 的空间 | 修复 |
+|---|---|---|---|
+| `guard_call_overlapping_input` | cc:1229 | 守护 RANGE 空间 | `new_varnode_out_full(v_size, space, trunc_addr, …)` |
+| `guard_output_overlap` ×2 | cc:1264/1277 | 守护 RANGE 空间 | `new_varnode_out_full(…, space, addr, …)` |
+| `float_extension_write` | cc:2267 | join piece 自带空间 | `new_varnode_out_full(…, vdata.space, …)` |
+| `guard_output_overlap_stack` ×3 | cc:1330/1348/1370 | STACK（range） | `new_varnode_out_full(…, AddressSpace::Stack, …)` |
+| `try_output_stack_guard` ×2 | cc:1414/1423 | cc:1414=callspec 输出存储空间；cc:1423=RANGE 空间 | `_full(ret_space, …)` / `_full(space, …)` |
+
+对 REGISTER range（x86-64 上 guardOutputOverlap 的主战场）行为不变
+（Register-pin 恰好等于 range 空间）；对 STACK/RAM range 不再伪造
+Register@range偏移/Register@stack偏移 varnode。funcdata.rs `push_multiequals`
+cc:135 的 implicit-RAM 伪造（RAM@register 偏移 = 门控 ap_getparents 的
+`uRam0000000000000008/80/90` 族）见 docs/api/funcdata.md 同日节。
+
+**验收（亲父 7a63a1b1 双态对照）**：
+- 默认路径 httpd **1472/0/0 输出 cmp 字节恒等**（Register-pin 位点在语料
+  上只触 register-range，行为不变）；
+- 门控 `RUGRA_SYMDB=1` httpd **1561→1519**：ap_getparents 106→64（−42），
+  **小偏移 uRam(<0x10000)/unique0x/register0x 兜底名 0 处**，suck_in_APR
+  零差 ✓ 不回退，✓ 集合与亲父门控基线恒等；
+- curl 1099/0/0、bank 26/26 MATCH、cargo test --lib 1709P/1F（唯一失败
+  test_nonzeromask_pipeline_wiring 预存）。
+- 残差：门控 main +74 归 HERITAGE-FLAGBASE-SPACELESS-0001（另一 P1 阻塞，
+  flagbase 无空间查询域）；默认路径 ap_fini unique0x000a0830/register0x 族
+  与本根因无关（AFINI lane 已归因 X86LIFT/PRINTC/headless 桥接域）。

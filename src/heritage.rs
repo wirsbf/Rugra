@@ -3574,8 +3574,11 @@ impl Heritage {
         // cc:1228: opSetInput(subpieceOp, newConstant(4, truncateAmount), 1)
         let off_const = fd.new_constant(4, truncate_amount as u64);
         fd.op_set_input(&subpiece_op, off_const, 1);
-        // cc:1229: vn = newVarnodeOut(vData.size, truncAddr, subpieceOp)
-        let vn = fd.new_varnode_out(v_size as usize, trunc_addr, &subpiece_op);
+        // cc:1229: vn = newVarnodeOut(vData.size, truncAddr, subpieceOp) —
+        // truncAddr = addr + diff lives in the guarded RANGE's space (the
+        // oracle Address is space-qualified; the Register-pinned adapter
+        // fabricated cross-space varnodes, HERITAGE-CROSSSPACE-MERGE-0001).
+        let vn = fd.new_varnode_out_full(v_size as usize, space, trunc_addr, &subpiece_op);
         // cc:1230: opInsertBefore(subpieceOp, op)
         fd.op_insert_before(&subpiece_op, &call_op);
         // cc:1231: active->registerTrial(truncAddr, vData.size)
@@ -3642,10 +3645,17 @@ impl Heritage {
                 fd.op_set_input(&concat_front, front_vn.clone(), slot_new);
                 fd.op_set_input(&concat_front, collect_vn.clone(), 1 - slot_new);
             }
-            vn_collect = Some(fd.new_varnode_out(
+            // cc:1264: vnCollect = fd->newVarnodeOut(sizeFront+retSize,addr,
+            // concatFront) — the Address is the guarded RANGE's full storage
+            // address (space + offset). The spaceless Register-pinned adapter
+            // fabricated register-space varnodes at stack/ram range offsets
+            // (HERITAGE-CROSSSPACE-MERGE-0001).
+            vn_collect = Some(fd.new_varnode_out_full(
                 (size_front + ret_size) as usize,
+                space,
                 addr,
-                &concat_front));
+                &concat_front,
+            ));
             // cc:1265-1266: opInsertAfter(concatFront, callOp)
             fd.op_insert_after(&concat_front, call_op);
         }
@@ -3663,7 +3673,10 @@ impl Heritage {
                 fd.op_set_input(&concat_back, back_vn.clone(), slot_new);
                 fd.op_set_input(&concat_back, collect_vn.clone(), 1 - slot_new);
             }
-            vn_collect = Some(fd.new_varnode_out(size as usize, addr, &concat_back));
+            // cc:1277: vnCollect = fd->newVarnodeOut(size,addr,concatBack) —
+            // the range's full storage address (space-qualified, see
+            // cc:1264 note).
+            vn_collect = Some(fd.new_varnode_out_full(size as usize, space, addr, &concat_back));
             // cc:1278: opInsertAfter(concatBack, insertPoint)
             // insertPoint is the call when no front piece ran, else the
             // front concat; the front concat was inserted directly after
@@ -4156,8 +4169,17 @@ impl Heritage {
         let ext = fd.new_op(1, ext_addr);
         // cc:2267: opSetOpcode(FLOAT_FLOAT2FLOAT)
         fd.op_set_opcode(&ext, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
-        // cc:2268: newVarnodeOut(vdata.size, vdata.addr, ext)
-        let _out_vn = fd.new_varnode_out(vdata.size, Address::new(vdata.offset), &ext);
+        // cc:2267: newVarnodeOut(vdata.size, vdata.getAddr(), ext) — the
+        // piece's own full storage address (space + offset, register space
+        // for float pieces; the Register-pinned adapter happened to match
+        // but is kept honest via the piece's own space,
+        // HERITAGE-CROSSSPACE-MERGE-0001).
+        let _out_vn = fd.new_varnode_out_full(
+            vdata.size,
+            vdata.space,
+            crate::address::Address::new(vdata.offset),
+            &ext,
+        );
         // cc:2269: opSetInput(ext, vn, 0)
         fd.op_set_input(&ext, vn.clone(), 0);
         // cc:2270-2273: insert
@@ -4190,15 +4212,20 @@ impl Heritage {
         let size_back = size - ret_size - size_front;
         let op_addr = call_op.read().unwrap().get_addr();
 
-        // cc:1329: vnCollect = callOp->getOut() or newVarnodeOut. The read
-        // guard must be released (binding into a `let`) before
-        // new_varnode_out takes the write lock on the same call op — the
-        // previous one-expression unwrap_or_else self-deadlocked when the
-        // call had no output.
+        // cc:1329-1330: vnCollect = callOp->getOut() or
+        // newVarnodeOut(retSize, retAddr, callOp) — retAddr is a full STACK
+        // storage address on this path; the Register-pinned adapter
+        // fabricated register-space varnodes at stack offsets
+        // (HERITAGE-CROSSSPACE-MERGE-0001).
         let existing_out = call_op.read().unwrap().output.as_ref().cloned();
         let mut vn_collect = existing_out
             .unwrap_or_else(|| {
-            fd.new_varnode_out(ret_size as usize, ret_addr, &PcodeOpRef(call_op.clone()))
+            fd.new_varnode_out_full(
+                ret_size as usize,
+                AddressSpace::Stack,
+                ret_addr,
+                &PcodeOpRef(call_op.clone()),
+            )
         });
         // cc:1327: insertPoint = callOp — both PIECE concats insert after the
         // RUNNING insert point, not always after the call: cc:1349-1350
@@ -4263,7 +4290,14 @@ impl Heritage {
             // LE: newFront=slot1, vnCollect=slot0
             fd.op_set_input(&concat, new_front, 1);
             fd.op_set_input(&concat, vn_collect.clone(), 0);
-            vn_collect = fd.new_varnode_out((size_front + ret_size) as usize, addr, &concat);
+            // cc:1348: vnCollect = fd->newVarnodeOut(sizeFront+retSize,addr,
+            // concatFront) — stack-storage Address (see cc:1330 note).
+            vn_collect = fd.new_varnode_out_full(
+                (size_front + ret_size) as usize,
+                AddressSpace::Stack,
+                addr,
+                &concat,
+            );
             // cc:1349-1350: opInsertAfter(concatFront, insertPoint);
             // insertPoint = concatFront;
             fd.op_insert_after(&concat, &insert_point);
@@ -4325,7 +4359,9 @@ impl Heritage {
             // LE: newBack=slot0, vnCollect=slot1
             fd.op_set_input(&concat, new_back, 0);
             fd.op_set_input(&concat, vn_collect.clone(), 1);
-            vn_collect = fd.new_varnode_out(size as usize, addr, &concat);
+            // cc:1370: vnCollect = fd->newVarnodeOut(size,addr,concatBack) —
+            // stack-storage Address (see cc:1330 note).
+            vn_collect = fd.new_varnode_out_full(size as usize, AddressSpace::Stack, addr, &concat);
             // cc:1371: opInsertAfter(concatBack, insertPoint) — after the
             // front concat when one exists, else right after the call.
             fd.op_insert_after(&concat, &insert_point);
@@ -4411,7 +4447,7 @@ impl Heritage {
         // No recorded storage (unreachable in Ghidra: the cc:1487 gate
         // implies funcLinkOutput saw a spacebase outparam address,
         // coreaction.cc:1546-1549) keeps the conservative false fallback.
-        let Some((_, ret_storage_off)) = fd
+        let Some((ret_space, ret_storage_off)) = fd
             .get_call_specs(fc_idx)
             .and_then(|fc| fc.get_output_storage())
         else {
@@ -4435,15 +4471,23 @@ impl Heritage {
         // Bind the read guard's take into a `let` before the match: in
         // edition 2021 a match scrutinee temporary lives through the arms,
         // so an inline scrutinee would hold the read lock while
-        // new_varnode_out takes the write lock on the same op (the same
-        // self-deadlock guard_output_overlap_stack fixed at cc:1329).
+        // new_varnode_out_full takes the write lock on the same op (the
+        // same self-deadlock guard_output_overlap_stack fixed at cc:1329).
         let existing_out = call_op.0.read().unwrap().output.as_ref().cloned();
         let outvn = match existing_out {
             Some(existing) => existing,
             None => {
                 // cc:1413-1416: outvn = fd->newVarnodeOut(retSize, retAddr,
-                // callOp); vnFinal = outvn.
-                let created = fd.new_varnode_out(ret_size as usize, ret_addr, &call_op);
+                // callOp); vnFinal = outvn. retAddr is the call spec's
+                // output storage Address — carried with its own space
+                // (oracle cc:1407 getOutput()->getAddress());
+                // HERITAGE-CROSSSPACE-MERGE-0001.
+                let created = fd.new_varnode_out_full(
+                    ret_size as usize,
+                    ret_space,
+                    ret_addr,
+                    &call_op,
+                );
                 vn_final = Some(created.clone());
                 created
             }
@@ -4475,8 +4519,10 @@ impl Heritage {
             let off_const = fd.new_constant(4, truncate_amount as u64);
             fd.op_set_input(&sub_piece, off_const, 1);
             fd.op_set_input(&sub_piece, outvn, 0);
-            // cc:1423: vnFinal = fd->newVarnodeOut(size, addr, subPiece);
-            vn_final = Some(fd.new_varnode_out(size as usize, addr, &sub_piece));
+            // cc:1423: vnFinal = fd->newVarnodeOut(size, addr, subPiece) —
+            // addr is the guarded RANGE's full storage address
+            // (space-qualified, HERITAGE-CROSSSPACE-MERGE-0001).
+            vn_final = Some(fd.new_varnode_out_full(size as usize, space, addr, &sub_piece));
             // cc:1424: fd->opInsertAfter(subPiece, callOp);
             fd.op_insert_after(&sub_piece, &call_op);
         }
