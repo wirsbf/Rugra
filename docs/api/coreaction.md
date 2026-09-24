@@ -1,5 +1,32 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-24：SUBPIECE/PIECE 输出 token 覆写臂（MYPROGRESS-SETCASTS-ORD399-0001 / FV2）
+
+- `cast_output`（cc:2532-2616）token 分发补 **CPUI_SUBPIECE** 臂：新增
+  `subpiece_output_token`（`// Ghidra: typeop.cc:2142
+  TypeOpSubpiece::getOutputToken`）逐段镜像——①`find_truncation`（in0
+  read-facing 高类型、typeop.cc:2195-2207 的复合字节偏移 = 小端 lsb/大端
+  inSize-outSize-lsb、人工 slot 1、union 臂只读消费 `fd.union_map`
+  =TypeUnion::findTruncation type.cc:2185），字段类型尺寸与输出相等时即
+  token；②否则输出 DEF-facing 高类型（非 UNKNOWN）；③否则 factory INT
+  基型。**SUBPIECE 的 token 永不为 `undefinedN`**（覆写优先于 TypeOpFunc
+  构造器的 UNKNOWN 输出基 typeop.cc:2117），此前的
+  `output_metatype(SUBPIECE)=Unknown` 泛化臂让 implied SUBPIECE 输出走进
+  castOutput 的 cc:2569-2571 `updateType(undefined)` 降级臂，摧毁后续读点
+  的比较 cast 判定（myprogress ord399 `3519:99 INT_SLESSEQUAL` in1 多出
+  `3519:5fe CAST`，setcasts count 5v6）。
+- 同分发补 **CPUI_PIECE** 臂（`typeop.cc:2063
+  TypeOpPiece::getOutputToken`）：输出 DEF-facing 为 INT/UINT 时即 token，
+  否则 factory UINT 基型——同样不走 Unknown 泛化臂。
+- `output_metatype` 表保持不变（PIECE/SUBPIECE 由新臂拦截，INSERT 仍走
+  Unknown 泛化臂=TypeOpInsert 无覆写）。
+- 验证：myprogress 投影 **MATCH**（402 stages/84249 ops，首分歧 399 清零
+  非后移）；next_url/match_url/parseconfig 四投影全 MATCH；curl E2E
+  3994/0/0（对 9458a61b 亲测基线：6 函数 42 行文本 delta 全部
+  undefined→具体类型的 golden-closer 拼写升级，skeleton 总数不变）；
+  httpd E2E 与基线**逐字节恒等**；gcc 审计 101OK/21FAIL、6OK/23FAIL
+  ==基线；双跑字节恒等。
+
 ## 2026-09-23：五 Action count 收割族覆盖（ACTION-COUNTHARVEST-FAMILY-0001 / FD）
 
 FA2（GETPARAM-SWITCHNORM-0001，4e79535d）普查的五个"member count 无收割"残差，
