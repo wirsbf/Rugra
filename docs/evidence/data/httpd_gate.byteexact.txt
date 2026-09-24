@@ -1,0 +1,4 @@
+[httpd_gate] rugra_fns=32 golden_fns=2010 matched=32 unmatched_rugra=0
+[httpd_gate] BYTE-EXACT = 3 / 32 matched (9.4%)
+[httpd_gate]   real-code (3): ap_count_dirs, ap_pregfree, ap_stripprefix
+[httpd_gate]   import-stub (0): 

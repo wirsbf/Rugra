@@ -1,4 +1,95 @@
-# 对齐记分板 — 两级"完整对齐"清单快照（2026-09-24, master 5727faea）
+# 对齐记分板 — 两级"完整对齐"清单快照（2026-09-24 双快照：wave 终章 dc7a0d0a + GB 版 5727faea）
+
+- **快照 2（本文档上半，§A~§F）**: master **dc7a0d0a**（wave 终章,GL lane 合入点）· lane EVMANIFEST · worktree `wt/evmanifest`
+  · `cargo build --release --examples`（3m51s）· `CARGO_TARGET_DIR=/dev/shm/rugra-targets/sb-evmanifest`
+  · 产物 `/dev/shm/rugra-tests/sb-evmanifest/gates/`（关键 txt 已入库 `docs/evidence/data/`）
+- **快照 1（GB 版,原正文 §0~§8,基线 5727faea）**: 保留作历史对照,其数字不再代表当前 master。
+- **oracle**: Ghidra 12.0.4 tag `Ghidra_12.0.4_build` commit `e40ed13014025f82488b1f8f7bca566894ac376b`；
+  canon golden = `tests/golden/ghidra_{curl,httpd}_1204.c`；投影 oracle = `/dev/shm/rugra-tests/sb-oracle/`（RAM MUST-KEEP,
+  资产底册见 `docs/evidence/MANIFEST.md`）。
+
+---
+
+# 快照 2 — wave 终章（dc7a0d0a,2026-09-24 EVMANIFEST 亲测）
+
+## A. 双语素门禁实测（与任务书预期核对）
+
+| 门禁 | 实测 | 任务预期 | 判定 |
+|---|---|---|---|
+| curl E2E vs `ghidra_curl_1204.c` | **1438 / 0 defects / 0 numbering**（124/124 匹配） | 1438/0/0 | ✅ 一致 |
+| httpd 门禁面 vs `ghidra_httpd_1204.c` | **1447 / 0 / 0**（**32**/32 匹配,面从 29→32:GA/GJ switchD default 三函数新入面） | 1447/0/0 | ✅ 一致 |
+| curl 双跑确定性 | stdout `cmp` **恒等** | — | ✅ |
+| resid 判类自校验 | skeleton_identical 生成器 sum=1438/1447 与门禁总数精确相等 | — | ✅ |
+
+## B. 第一级（C 文本 diff=0）清单刷新 vs GB
+
+### curl gate 口径 **59/124（47.6%）**（GB 51 → +8,零丢失）
+
+新增 8 个全部是**真代码小函数**（GG2 车道战果在 master 复核确认）:`deregister_tm_clones, register_tm_clones,
+__do_global_dtors_aux, frame_dummy, my_fwrite, SetHTTPrequest, hugehelp, main_free`。真代码合计 **9**（含存量 `GetStr`）+ 桩 50。
+⚠ GG2 亲报的 `main_init`/`glob_url` 零差在 dc7a0d0a **回吐为 2 行**（同窗还有 `_init` 8 行、`FUN_00102020`/`__cxa_finalize`/
+`progressbarinit`/`SetHTTPrequest` 第二形态各 2 行）——回归窗 af6c5ee2→dc7a0d0a（GK/GL 集成带）,未派车道,建议 root bisect。
+
+### httpd 门禁面 gate 口径 **6/32（18.8%）**（GB 0/29 → 破零）
+
+真代码 3:`ap_pregfree`（GD）、`ap_stripprefix`、`ap_count_dirs`（后两者为 dc7a0d0a 新晋,归属车道待认领）;
+桩 3:三个 `switchD_…::default`（GA/GJ driver 符号层）。
+
+### 严格字节口径（GB byte_exact_scan 同口径,含空行,头行除外）
+
+- curl **47/124（37.9%）** = 10 dunder/EXTERNAL 单行桩 + **37 个 PLT-thunk 投影体逐字节同**（FU PLT 桩发射族+GJ 符号层战果;GB 时仅 4）。
+- httpd 门禁面 **3/32（9.4%）**,全为真代码（`ap_count_dirs/ap_pregfree/ap_stripprefix`）——httpd 真 L1 字节级从 0→3。
+
+## C. 第二级（阶段投影 MATCH）— **五投影 MATCH 确认（5/7）**
+
+| # | 函数 | stages | ops（ora=rug） | 判定 | vs GB |
+|---|---|---:|---:|---|---|
+| 1 | curl `next_url` | 335 | 96 457 | **MATCH** | 保持 |
+| 2 | curl `match_url` | 340 | 80 385 | **MATCH** | 保持 |
+| 3 | curl `parseconfig` | 335 | 130 099 | **MATCH** | 保持（注:GJ 符号层后投影名不带 `.constprop.0`,META func_name 差异为已知无害） |
+| 4 | curl `getparameter` | 371 | **913 373** | **MATCH** | **新晋**（GB ord186 +158 ops → GE 1b2cc000 修复后精确相等） |
+| 5 | curl `myprogress` | 402 | 84 249 | **MATCH** | **新晋**（GB ord399 setcasts 5v6 → FV/81cdfa2b 修复） |
+| 6 | curl `main` | 299 | 2 414 145 vs 2 413 571（−574） | 分歧 | 前沿不动:op-line 1792 `extrapopsetup` seqnum `2d04:c15` vs `2d04:c0e` |
+| 7 | httpd `main` | 294 | 878 973 vs 878 983（**+10**） | 分歧 | 首分歧仍 result/count 2 vs 1（round 0）;Δops 由 GB +1350 收窄至 +10 |
+
+MATCH 率 **5/7（71.4%）**,双侧 stages 恒等 7/7,restarts 全 0。GG2 亲报"五投影 MATCH"在 master dc7a0d0a 复核成立。
+
+## D. ⚠ 新开口项：httpd 全量面段错误（HTTPD-FULL-SEGV）
+
+`MAX_FUNCS=840 httpd_decompile` 在 **114/840 `ap_content_length_filter`** 段错误（exit 139,`[COLLAPSE] ruleBlockGoto`
++ `finalize_structure: 18 -> 1` 之后、打印期前;无 panic、无 TIMEOUT、无 not-settling）。GD2（1cc776b1）时全量 473 fn/
+25989 行可完 → 回归窗 1cc776b1..dc7a0d0a（GI/GJ/GK/GL 集成带）。**门禁面 32 fn 不受影响**。建议 root 登记 P0 TODO 并派 triage。
+
+## E. wave 全程趋势（gate 口径 skeleton 行数）
+
+| 检查点 | curl | httpd 门禁 | 备注 |
+|---|---:|---:|---|
+| wave 起点（任务书口径） | 3718/0/0 | 3576/0/0 | |
+| 8cf844a1（FP 残差图） | 2147/0/0 | 2059/0/0 | |
+| 9458a61b（FX） | 2145/0/0 | 2057/0/0 | |
+| 5727faea（GB 快照 1） | 2135/0/0 | 2057/0/0 | |
+| **dc7a0d0a（本快照）** | **1438/0/0** | **1447/0/0** | |
+
+**全 wave:curl −2280 行（−61.3%）、httpd −2129 行（−59.6%）,defects/numbering 全程 0。**
+
+## F. 记分板汇总（dc7a0d0a）
+
+| 层级 | 口径 | curl | httpd 门禁面 | 合计 |
+|---|---|---:|---:|---:|
+| L1 gate | 逐函数 skeleton diff=0 | **59**/124（47.6%） | **6**/32（18.8%） | 65/156（41.7%） |
+| L1 strict | 函数体逐字节相等 | 47/124（37.9%） | 3/32（9.4%） | 50/156（32.1%） |
+| L1 真代码 | gate 口径剔除桩 | **9** | **3** | **12** |
+| L2 投影 | stage+snapshot identical | **5/6**（curl 函数） | 0/1（httpd main） | **5/7（71.4%）** |
+| L2 结构 | stages 恒等 | 6/6 | 1/1 | 7/7 |
+
+**读法**:wave 终点的真实存量 = 5 个投影 MATCH + 12 个真代码文本零差（curl 9/httpd 3）+ 50 个桩形零差（含 37 个逐字节
+PLT-thunk 体）。两级互补:投影 MATCH 的 getparameter/parseconfig/myprogress 文本层仍有 79/64/45 行残差,文本零差的
+小函数未做投影级验证。**下一 wave 最高价值目标**:① HTTPD-FULL-SEGV triage（阻塞全量面一切度量）;② §B 2 行级微回归窗
+bisect（7 函数,小成本）;③ curl/httpd main 两投影前沿（−574 seqnum 时序 / result-count 2v1）。
+
+---
+
+# 快照 1 — GB 版原文（master 5727faea,2026-09-24,历史对照）
 
 - **性质**: 只读分析 + 文档交付（Lane GB；零 `src/` 改动）
 - **基线**: master `5727faea`（"core: switch case labels synthesized in driver symbol layer (FT lane)"）

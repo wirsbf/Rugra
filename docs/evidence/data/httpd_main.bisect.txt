@@ -1,0 +1,12 @@
+== stage_bisect v1.2: first divergence ==
+left:  /dev/shm/rugra-tests/sb-oracle/httpd.main.oracle.projection (stages=294, ops=878973)
+right: /dev/shm/rugra-tests/sb-evmanifest/gates/httpd_main.projection (stages=294, ops=878983)
+warning: META producer differs (left='f6cb61d14fd3df7be2e65a74381c303326c3e0dc', right='rugra-tree-dc7a0d0ad5ba94cebb9488549ff17db3a0a0c0ca,callspec_link=inject-path')
+warning: META unique_base differs (left='0x364200', right='10000000')
+warning: META unique_base differs; strict op offsets remain observable
+kind: V1_RESULT_COUNT_DIVERGENCE
+round: oracle=0 rugra=0
+stage ordinal: oracle=83 rugra=83
+tree-path: oracle=universal:fullloop:mainloop:condconst rugra=universal:fullloop:mainloop:condconst
+result/count: {'result': {'left': '2', 'right': '1'}, 'count': {'left': '2', 'right': '1'}}
+attribution: stage completion result/count/tests/apply differs

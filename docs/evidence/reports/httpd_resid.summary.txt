@@ -1,0 +1,50 @@
+== httpd: gate check sum(n_mc)=2059 (expected 2059) OK
+matched functions: 29; direct-distance total: 2702; canon<->direct divergence: 2597
+net_added totals : {'A_BRIDGE': 166, 'A_CAST': 24, 'A_GAP_STRICT': 512, 'A_OVER_BRIDGE': 5, 'A_OVER_CANON': 15, 'A_OVER_CAST': 70}
+net_removed totals: {'R_LOST_BOTH': 406, 'R_LOST_HEADLESS': 645}
+
+== top functions by canon residual (n_mc), with class decomposition ==
+function                            can  dir  c-d BRDG CAST O_BR O_CAO_CST  GAP |LBOTH LHEAD   skel m/c/d
+(* = function has NO direct-runner twin; its BRIDGE class is unreachable, GAP = no-library-evidence)
+main                                761  778  705   24    8    0    7   69  139|   203   221   355/532/527
+ap_fini_vhost_config                348  314  400   39    0    2    6    0   80|    24   103   211/211/267
+ap_update_vhost_from_headers        152  184  216   25    0    2    0    0   42|    15    66   125/137/171
+ap_getparents                       109  133   98   10    5    0    2    0   35|    26    31   138/143/143
+ap_pregsub                           91   99   86   13    0    0    0    0   24|    16    28   128/135/137
+ap_ht_time                           53  127  102    1    9    0    0    1   17|    11    14   76/73/125
+ap_strcasecmp_match                  51   50   33    4    0    0    0    0   18|    14    15   47/54/55
+ap_vhost_iterate_given_conn          48   36   30    8    0    0    0    0   19|     7    14   33/27/27
+ap_parse_vhost_addrs                 45  307  330    9    0    0    0    0   10|     3    23   31/38/304
+ap_update_vhost_given_ip             45   37   56    9    1    0    0    0   11|     1    23   38/41/41
+ap_strcasestr                        42   37   25    3    0    0    0    0   13|    14    12   29/39/40
+ap_strcmp_match                      40   42   22    2    0    0    0    0   16|    11     9   47/49/49
+ap_make_dirstr_prefix                40   40   16    0    0    0    0    0   10|    14     8   19/31/31
+ap_getword                           36   28   24    4    0    0    0    0    9|     6    11   35/39/39
+ap_field_noparam                     30   24   26    5    0    0    0    0   10|     4    11   23/23/27
+ap_os_is_path_absolute               28   35   41    4    0    0    0    0    7|     4    13   18/24/37
+ap_make_dirstr_parent                22   22   26    2    1    0    0    0    8|     0    11   18/18/20
+ap_matches_request_vhost             20   56   58    3    0    0    0    0    6|     2     9   20/22/50
+ap_count_dirs                        18   18    6    0    0    0    0    0    5|     8     3   10/16/16
+ap_init_vhost_config                 14   14   12    0    0    0    0    0    4|     4     6   8/14/14
+ap_pregcomp                          13   15    8    0    0    0    0    0    6|     4     3   11/12/12
+ap_stripprefix                       13   13    0    0    0    0    0    0    4|     9     0   20/25/25
+ap_is_matchexp                       11   11    2    1    0    1    0    0    6|     2     1   19/14/14
+ap_no2slash                          10   10    0    0    0    0    0    0    4|     4     0   29/29/29
+ap_set_name_virtual_host              5  218  221    0    0    0    0    0    2|     0     3   5/6/217
+
+== GAP+OVER lines by family (lines, functions, direct-corpus?, canon-corpus?) ==
+  ZSEXT        gap=   0 over=  44 total=  44 fns=10 direct=False canon=True
+  RAWSTACK     gap=   0 over=  38 total=  38 fns=7 direct=True canon=True
+  IN_REG       gap=   0 over=  32 total=  32 fns=9 direct=True canon=True
+  WARN         gap=   0 over=  31 total=  31 fns=1 direct=True canon=True
+  RVAL_ASSIGN  gap=   0 over=  27 total=  27 fns=5 direct=False canon=False
+  IN_RIP       gap=   0 over=  21 total=  21 fns=5 direct=False canon=False
+  DAT_LAB      gap=   0 over=  20 total=  20 fns=5 direct=False canon=True
+  SUBPIECE     gap=   0 over=   4 total=   4 fns=1 direct=True canon=True
+  RAM          gap=   0 over=   4 total=   4 fns=2 direct=True canon=False
+  FS_OFF       gap=   0 over=   3 total=   3 fns=6 direct=True canon=True
+  BADTYPE      gap=   0 over=   2 total=   2 fns=1 direct=True canon=False
+  CONCAT       gap=   0 over=   2 total=   2 fns=1 direct=True canon=True
+  EXTRAOUT     gap=   0 over=   1 total=   1 fns=1 direct=True canon=True
+
+detail -> /dev/shm/rugra-tests/sb-residmap/httpd_resid.detail.txt

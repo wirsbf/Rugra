@@ -1,0 +1,49 @@
+== curl: gate check sum(n_mc)=2147 (expected 2147) OK
+matched functions: 124; direct-distance total: 4236; canon<->direct divergence: 4379
+net_added totals : {'A_BRIDGE': 182, 'A_CAST': 44, 'A_GAP_STRICT': 688, 'A_OVER_BRIDGE': 5, 'A_OVER_CANON': 14}
+net_removed totals: {'R_LOST_BOTH': 72, 'R_LOST_HEADLESS': 790}
+
+== top functions by canon residual (n_mc), with class decomposition ==
+function                            can  dir  c-d BRDG CAST O_BR O_CAO_CST  GAP |LBOTH LHEAD   skel m/c/d
+(* = function has NO direct-runner twin; its BRIDGE class is unreachable, GAP = no-library-evidence)
+getparameter                        532  780  792   15    0    1    7    0  145|     5   165   469/471/397
+main                                487  923  860   21   16    0    1    0  151|    40   134   489/474/540
+file2string                         113  118  143   13    4    0    3    0   36|     0    55   109/108/103
+next_url                             92  147  145    3    9    0    0    0   33|     6    37   98/96/101
+parseconfig                          83  154  167    4    1    0    0    0   29|     0    41   94/101/98
+helpf                                77  199  204    4    0    0    0    0   36|     0    37   67/64/156
+glob_set                             71  196  195    6    0    0    0    0   25|     2    26   83/80/153
+glob_range                           69  115  106    1    0    1    0    0   30|     3    30   70/71/77
+myprogress                           65   97  104    6    5    1    0    0   22|     1    30   63/60/74
+my_get_token                         61   71   70    6    2    2    0    0   19|     7    25   57/60/58
+match_url                            50  110  126    6    1    0    0    0   15|     0    26   74/78/86
+my_get_line                          47  248  263    5    4    0    2    0   13|     1    22   66/65/234
+glob_word                            16  316  330    1    0    0    1    0    6|     0     8   62/62/276
+_start                               12   13    9    0    0    0    0    0    6|     2     4   9/9/10
+strcpy                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+strchr                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+strrchr                              11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+fgets                                11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+memcpy                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+malloc                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+realloc                              11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+fopen                                11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+strcat                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+strdup                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+strstr                               11    7   10    2    0    0    0    0    4|     0     5   8/7/7
+
+== GAP+OVER lines by family (lines, functions, direct-corpus?, canon-corpus?) ==
+  RAWSTACK     gap=   0 over=  71 total=  71 fns=8 direct=True canon=True
+  ZSEXT        gap=   0 over=  38 total=  38 fns=9 direct=False canon=False
+  DAT_LAB      gap=   0 over=  22 total=  22 fns=6 direct=False canon=True
+  SUBPIECE     gap=   0 over=  14 total=  14 fns=1 direct=True canon=True
+  WARN         gap=   0 over=  12 total=  12 fns=49 direct=True canon=True
+  IN_REG       gap=   0 over=   9 total=   9 fns=2 direct=False canon=True
+  CONCAT       gap=   0 over=   5 total=   5 fns=2 direct=True canon=True
+  BADTYPE      gap=   0 over=   2 total=   2 fns=2 direct=True canon=False
+  FS_OFF       gap=   0 over=   2 total=   2 fns=7 direct=True canon=True
+  IN_STK       gap=   0 over=   1 total=   1 fns=1 direct=True canon=True
+  RAM          gap=   0 over=   1 total=   1 fns=1 direct=True canon=False
+  CODEREF      gap=   0 over=   1 total=   1 fns=1 direct=True canon=False
+
+detail -> /dev/shm/rugra-tests/sb-residmap/curl_resid.detail.txt

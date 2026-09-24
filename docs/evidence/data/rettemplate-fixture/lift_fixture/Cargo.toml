@@ -1,0 +1,10 @@
+[package]
+name = "lift_fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rugra = { path = "/dev/shm/rugra-worktrees/rettemplate" }
+anyhow = "1"
+
+[workspace]

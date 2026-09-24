@@ -1,0 +1,137 @@
+Rugra functions: 124
+Ghidra functions: 124
+Matched: 124
+
+  ✗ _init                          diff=10   defects=0 numbering=0
+  ✗ FUN_00102020                   diff=2    defects=0 numbering=0
+  ✗ __cxa_finalize                 diff=2    defects=0 numbering=0
+  ✗ free                           diff=5    defects=0 numbering=0
+  ✗ __vfprintf_chk                 diff=4    defects=0 numbering=0
+  ✗ strcpy                         diff=11   defects=0 numbering=0
+  ✗ puts                           diff=9    defects=0 numbering=0
+  ✗ isatty                         diff=9    defects=0 numbering=0
+  ✗ curl_easy_perform              diff=4    defects=0 numbering=0
+  ✗ curl_slist_append              diff=4    defects=0 numbering=0
+  ✗ fclose                         diff=9    defects=0 numbering=0
+  ✗ strlen                         diff=9    defects=0 numbering=0
+  ✗ __stack_chk_fail               diff=4    defects=0 numbering=0
+  ✗ strchr                         diff=11   defects=0 numbering=0
+  ✗ strrchr                        diff=11   defects=0 numbering=0
+  ✗ maprintf                       diff=4    defects=0 numbering=0
+  ✗ fputc                          diff=9    defects=0 numbering=0
+  ✗ fgets                          diff=11   defects=0 numbering=0
+  ✗ strtol                         diff=9    defects=0 numbering=0
+  ✗ memcpy                         diff=11   defects=0 numbering=0
+  ✗ time                           diff=9    defects=0 numbering=0
+  ✗ fileno                         diff=9    defects=0 numbering=0
+  ✗ __xstat                        diff=9    defects=0 numbering=0
+  ✗ malloc                         diff=11   defects=0 numbering=0
+  ✗ __isoc99_sscanf                diff=4    defects=0 numbering=0
+  ✗ curl_easy_init                 diff=4    defects=0 numbering=0
+  ✗ curl_getenv                    diff=4    defects=0 numbering=0
+  ✗ realloc                        diff=11   defects=0 numbering=0
+  ✗ __printf_chk                   diff=4    defects=0 numbering=0
+  ✗ curl_version                   diff=4    defects=0 numbering=0
+  ✗ curl_slist_free_all            diff=4    defects=0 numbering=0
+  ✗ fopen                          diff=11   defects=0 numbering=0
+  ✗ strcat                         diff=11   defects=0 numbering=0
+  ✗ curl_easy_setopt               diff=4    defects=0 numbering=0
+  ✗ curl_getdate                   diff=4    defects=0 numbering=0
+  ✗ exit                           diff=5    defects=0 numbering=0
+  ✗ fwrite                         diff=9    defects=0 numbering=0
+  ✗ __fprintf_chk                  diff=4    defects=0 numbering=0
+  ✗ curl_easy_cleanup              diff=4    defects=0 numbering=0
+  ✗ strdup                         diff=11   defects=0 numbering=0
+  ✗ strequal                       diff=4    defects=0 numbering=0
+  ✗ curl_formparse                 diff=4    defects=0 numbering=0
+  ✗ strstr                         diff=11   defects=0 numbering=0
+  ✗ strnequal                      diff=4    defects=0 numbering=0
+  ✗ __ctype_b_loc                  diff=11   defects=0 numbering=0
+  ✗ __sprintf_chk                  diff=4    defects=0 numbering=0
+  ✗ main                           diff=487  defects=0 numbering=0
+  ✗ _start                         diff=12   defects=0 numbering=0
+  ✗ deregister_tm_clones           diff=4    defects=0 numbering=0
+  ✗ register_tm_clones             diff=4    defects=0 numbering=0
+  ✗ __do_global_dtors_aux          diff=8    defects=0 numbering=0
+  ✗ frame_dummy                    diff=4    defects=0 numbering=0
+  ✗ my_fwrite                      diff=4    defects=0 numbering=0
+  ✗ myprogress                     diff=65   defects=0 numbering=0
+  ✓ GetStr                         diff=0    defects=0 numbering=0
+  ✗ my_get_token                   diff=61   defects=0 numbering=0
+  ✗ my_get_line                    diff=47   defects=0 numbering=0
+  ✗ helpf                          diff=77   defects=0 numbering=0
+  ✗ file2string.part.0             diff=113  defects=0 numbering=0
+  ✗ SetHTTPrequest.part.0          diff=2    defects=0 numbering=0
+  ✗ parseconfig.constprop.0        diff=83   defects=0 numbering=0
+  ✗ getparameter.constprop.0       diff=532  defects=0 numbering=0
+  ✗ main_init                      diff=3    defects=0 numbering=0
+  ✗ main_free                      diff=1    defects=0 numbering=0
+  ✗ SetHTTPrequest                 diff=4    defects=0 numbering=0
+  ✗ progressbarinit                diff=4    defects=0 numbering=0
+  ✗ hugehelp                       diff=1    defects=0 numbering=0
+  ✗ glob_word                      diff=16   defects=0 numbering=0
+  ✗ glob_set                       diff=71   defects=0 numbering=0
+  ✗ glob_range                     diff=69   defects=0 numbering=0
+  ✗ glob_url                       diff=2    defects=0 numbering=0
+  ✗ next_url                       diff=92   defects=0 numbering=0
+  ✗ match_url                      diff=50   defects=0 numbering=0
+  ✗ __libc_csu_init                diff=9    defects=0 numbering=0
+  ✓ __libc_csu_fini                diff=0    defects=0 numbering=0
+  ✓ _fini                          diff=0    defects=0 numbering=0
+  ✓ free                           diff=0    defects=0 numbering=0
+  ✓ __vfprintf_chk                 diff=0    defects=0 numbering=0
+  ✓ _ITM_deregisterTMCloneTable    diff=0    defects=0 numbering=0
+  ✓ strcpy                         diff=0    defects=0 numbering=0
+  ✓ puts                           diff=0    defects=0 numbering=0
+  ✓ isatty                         diff=0    defects=0 numbering=0
+  ✓ curl_easy_perform              diff=0    defects=0 numbering=0
+  ✓ curl_slist_append              diff=0    defects=0 numbering=0
+  ✓ fclose                         diff=0    defects=0 numbering=0
+  ✓ strlen                         diff=0    defects=0 numbering=0
+  ✓ __stack_chk_fail               diff=0    defects=0 numbering=0
+  ✓ strchr                         diff=0    defects=0 numbering=0
+  ✓ strrchr                        diff=0    defects=0 numbering=0
+  ✓ maprintf                       diff=0    defects=0 numbering=0
+  ✓ fputc                          diff=0    defects=0 numbering=0
+  ✓ __libc_start_main              diff=0    defects=0 numbering=0
+  ✓ fgets                          diff=0    defects=0 numbering=0
+  ✓ __gmon_start__                 diff=0    defects=0 numbering=0
+  ✓ strtol                         diff=0    defects=0 numbering=0
+  ✓ memcpy                         diff=0    defects=0 numbering=0
+  ✓ time                           diff=0    defects=0 numbering=0
+  ✓ fileno                         diff=0    defects=0 numbering=0
+  ✓ __xstat                        diff=0    defects=0 numbering=0
+  ✓ malloc                         diff=0    defects=0 numbering=0
+  ✓ __isoc99_sscanf                diff=0    defects=0 numbering=0
+  ✓ curl_easy_init                 diff=0    defects=0 numbering=0
+  ✓ curl_getenv                    diff=0    defects=0 numbering=0
+  ✓ realloc                        diff=0    defects=0 numbering=0
+  ✓ __printf_chk                   diff=0    defects=0 numbering=0
+  ✓ curl_version                   diff=0    defects=0 numbering=0
+  ✓ curl_slist_free_all            diff=0    defects=0 numbering=0
+  ✓ fopen                          diff=0    defects=0 numbering=0
+  ✓ strcat                         diff=0    defects=0 numbering=0
+  ✓ curl_easy_setopt               diff=0    defects=0 numbering=0
+  ✓ curl_getdate                   diff=0    defects=0 numbering=0
+  ✓ exit                           diff=0    defects=0 numbering=0
+  ✓ fwrite                         diff=0    defects=0 numbering=0
+  ✓ __fprintf_chk                  diff=0    defects=0 numbering=0
+  ✓ _ITM_registerTMCloneTable      diff=0    defects=0 numbering=0
+  ✓ curl_easy_cleanup              diff=0    defects=0 numbering=0
+  ✓ strdup                         diff=0    defects=0 numbering=0
+  ✓ strequal                       diff=0    defects=0 numbering=0
+  ✓ curl_formparse                 diff=0    defects=0 numbering=0
+  ✓ strstr                         diff=0    defects=0 numbering=0
+  ✓ strnequal                      diff=0    defects=0 numbering=0
+  ✓ __ctype_b_loc                  diff=0    defects=0 numbering=0
+  ✓ __sprintf_chk                  diff=0    defects=0 numbering=0
+  ✓ __cxa_finalize                 diff=0    defects=0 numbering=0
+
+============================================================
+Total skeleton diff lines: 2147
+Total Rugra defects: 0 (in 0/124 functions)
+Total Rugra numbering issues: 0
+
+NOTE: skeleton diff > 0 不一定是对齐缺陷 (for↔while 等价变换).
+      defects > 0 是真实质量缺陷 (空else/寄存器泄漏/调用丢失).
+      numbering issues > 0 是 181538f 类编号 bug (per-prefix 计数器 / 重复声明).
