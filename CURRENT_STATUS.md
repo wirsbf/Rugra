@@ -1,6 +1,6 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（DFLIP 默认脸快照）
+**日期**: 2026-09-25（DFLIP 默认脸快照 + HSEED 阶梯补充）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
@@ -33,6 +33,28 @@ emitter，纯库真值通道）。
 | DWARFSEED 原型种子 | `RUGRA_DWARFSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持 | curl |
 | STRUCTSEED 结构复合种子 | `RUGRA_STRUCTSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持 | curl |
 | mirror 裸库真值 | `RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR` | 在场即恒裸（压制一切 SYMDB 形态），维持 | httpd/curl |
+
+**2026-09-25 HSEED 阶梯补充（Lane HSEED，wt/hseed @ master 33894226 亲测）**——SYMDB 默认脸 ×
+TYPESEED 的叠加态首次实测：
+
+| 阶梯（httpd E2E canon） | env | skeleton/defects/numbering |
+|---|---|---|
+| 新默认脸 | （无） | **1315/0/0**（==DFLIP final 逐字节；双跑 cmp 恒等） |
+| +TYPESEED | `RUGRA_TYPESEED=1` | **1197/0/0**（−118 全部由 6 个播种函数贡献：main 644→622、ap_fini_vhost_config 191→158、ap_update_vhost_from_headers 81→56、ap_parse_vhost_addrs 27→9、ap_os_is_path_absolute 23→7、ap_ht_time 17→13；逐函数零回退；gcc 审计函数名集与默认脸逐名相同 14OK/15FAIL） |
+| 逃生门+TYPESEED | `RUGRA_SYMDB=0 RUGRA_TYPESEED=1` | **1360/0/0**（==BRIDGE1 历史 opt-in 见证精确复现，通道完整性再证） |
+| mirror×TYPESEED | `RUGRA_MIRROR=1 RUGRA_TYPESEED=1` | 输出 cmp 恒等基线 mirror（门在 mirror 下正确拒载；新默认脸下投影纯度保持） |
+| +DWARFSEED/+STRUCTSEED | — | **语料级不可用**（见下） |
+
+**httpd 语料事实（HSEED 判决，机器可复核）**：`examples/httpd`（sha256 `805f89cd…`，与 golden
+provenance 钉值一致）为 **stripped 二进制——零 `.debug_*` 节**，curl 的 C2(DWARF 名)/C4(结构体)
+种子公式输入端（`.debug_info`）在 httpd 语料不存在；`tools/harvest_local_manifest.py --dwarf/--struct`
+对 httpd 实测产出 **0 函数 / 0 种子 / 0 drops**（工具已加固：DWARF-less 语料显式 WARNING，不再静默
+空收）。canon golden 声明层为纯合成名（`local_*`/`*Stack_*`/`xVar*`），唯二结构体类型声明
+（`sigaction local_b8`@ap_fatal_signal_setup、`sigset_t local_c0`@ap_mpm_run）因 DWARF 命名类型集
+为空被 --struct 规则正确丢弃（工厂名树无源，parse_c_type 无回退 bail=死条目）。解锁路径=引入带
+DWARF 的 httpd 语料 + 重生成 canon golden（root 级语料决策，登记 TODO `HTTPD-CORPUS-DWARF-0001`）；
+curl 侧两通道不受影响（重收割字节恒等复证）。
+
 
 文本级钉板重钉清单（emitter 转正影响面亲查）：**空**——银行 71 项全部 curl 语料且采集命令带
 `RUGRA_MIRROR=1`（裸径，转正不改其再生成契约）；`tests/golden/` 为 oracle 侧输出；
