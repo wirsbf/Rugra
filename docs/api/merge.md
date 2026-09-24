@@ -982,3 +982,31 @@ merge:: 8/8 + coreaction:: 57/57 测试绿；全量 --lib 18 失败为主仓同�
 预存在（/home/ls/Rugra d3fbe924 复跑同集合）。改动函数 B2=NO_ORACLE
 （无逐函数双侧 oracle fixture;证据=oracle 逐阶段 census 探针 + 双语料
 E2E 差分门禁）。
+
+### 2026-09-24（GE / MERGE-LIVEREAD-ORD351-0001）：merge_op Phase 1 输入改活读
+`merge_op`（merge.cc:719）Phase 1 的两处输入读取由**循环前快照**改为
+**逐迭代活读** `op.0.read().unwrap().inrefs`，逐字镜像 cc:731
+`op->getIn(i)->getHigh()` 与 cc:737 `op->getIn(j)->getHigh()`（C++ 每次经
+op 解引用取当前 slot 的 Varnode/HighVariable）。原实现把 inrefs 克隆成
+`inputs` vec 后在 i/j 两层循环里复用，导致**早先 slot 的 trim 不可见**：
+`trim_op_input(op, 0)` 已把 slot 0 换成 trim COPY 输出（allocateCopyTrim
+经 wire_unique_high 给全新 HighVariable，无 input/addrtied 旗标），而 j 层
+仍拿旧快照里 slot 0 的原 Varnode（如 RSI 函数参数，`is_input=true` 且非
+addr-tied）去测后续 slot——`merge_test_required`（cc:125-127
+`high_out->isInput() && high_in->isAddrTied() && !high_out->isAddrTied()`）
+误判冲突，把本应与 phi 输出同 high 直接合并的 addr-tied 栈读也 trim 成
+unique 临时。
+
+**可观测修复**（gp 投影 ord351，getparameter.constprop.0，
+universal:mergerequired 阶段）：phi@3f80:189a
+`out=n:stack:…fa48 in=[RSI(i), n:stack:…fa48(4030:1892)]`——oracle 仅
+trim slot 0（u:10000645=RSI），slot 1（回边栈读）从 SNAP 351 到终态
+SNAP 371 保持原栈读直接合并；Rugra 旧代码额外产出
+`u:1000064d = s:stack:…fa48(4030:1892)`（trim COPY@4043:1c91）。修复后
+gp 投影与锁定 oracle **全 371 阶段逐 snapshot 零差异**（ops 913395→
+913373==oracle，MATCH），ord351 首分歧消除；next_url/match_url/
+parseconfig 三投影 MATCH 保持，myprogress ord399（setcasts，FV2 域）
+不动。curl/httpd E2E 输出与亲父 b25bce7a **cmp 逐字节相同**（1995/0/0、
+2072/0/0，corpus-neutral：该 trim COPY 在下游本会被清掉，差异仅在
+B2 投影可观测维度）；单测 1687/18 == 亲父同 flaky 集。快照 `inputs` vec
+随之删除（唯一消费方即 Phase 1）。
