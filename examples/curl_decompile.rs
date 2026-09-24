@@ -3565,6 +3565,11 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // B3-COREACTION-CONSTANTPTR-0001 (b): the architecture built above with
     // the Program-DB symbol graph + loader-backed StringManager.
     fd.set_arch(worker_arch);
+    // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden addresses
+    // are this driver's base-0 addresses + 0x100000 (same delta the
+    // code-label layer carries); warning texts that embed an address render
+    // through Funcdata::print_raw_code_addr.
+    fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
     // FLOW-SHAREDRETURN-0001: the controller supplies the out-of-band
     // `<flowoverridelist>` projection for exactly this function. Seed it
     // before FlowInfo construction because Ghidra's constructor caches

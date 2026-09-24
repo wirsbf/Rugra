@@ -4806,25 +4806,30 @@ impl JumpTable {
         // Ghidra cc:2626: recoverModel(fd); jmodel==0 → LowlevelError。
         // recoverModel 内部的 LowlevelError(如 readonly 救援读 LoadImage
         // 失败)在 Ghidra 直接穿透 recoverAddresses,Rust 用 `?` 同语义。
+        // 消息内地址按 oracle jumptable.cc:2627 的 `opaddress` 流式拼写
+        // (printRaw),经 fd.print_raw_code_addr(0x + 零填充 + 显示基址)。
         if !self.recover_model(fd, maxtablesize)? {
             return Err(JumpTableRecoveryError::Lowlevel {
                 message: format!(
                     "Could not recover jumptable at {}. Too many branches",
-                    self.opaddress
+                    fd.print_raw_code_addr(self.opaddress.as_u64())
                 ),
             });
         }
         // Ghidra cc:2632-2635: getTableSize()==0 → LowlevelError。
         if self.jmodel.as_ref().map_or(0, |model| model.get_table_size()) == 0 {
             return Err(JumpTableRecoveryError::Lowlevel {
-                message: format!("Jumptable with 0 entries at {}", self.opaddress),
+                message: format!(
+                    "Jumptable with 0 entries at {}",
+                    fd.print_raw_code_addr(self.opaddress.as_u64())
+                ),
             });
         }
         let Some(indop) = self.indirect.clone() else {
             return Err(JumpTableRecoveryError::Lowlevel {
                 message: format!(
                     "Could not recover jumptable at {}. Too many branches",
-                    self.opaddress
+                    fd.print_raw_code_addr(self.opaddress.as_u64())
                 ),
             });
         };

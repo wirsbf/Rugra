@@ -415,6 +415,18 @@ pub struct Funcdata {
     /// `ActionSetCasts::apply` (coreaction.cc:2728).
     pub cast_phase_index: u32,
 
+    // RUGRA-GLUE: display_image_base (RESIDMAP-PRINTBATCH-0001 transport; no
+    // single Ghidra counterpart — the oracle's Funcdata Addresses ARE the
+    // loaded analyzeHeadless addresses, while Rugra's pipeline runs on
+    // ELF-relative offsets (ADDRESS-0001) and the drivers add the image-base
+    // delta at display time, exactly like PrintC::code_label_base for
+    // labels). Warning texts that embed an address (funcdata_block.cc:374
+    // "Removing unreachable block", jumptable "Could not recover jumptable
+    // at", flow.cc:1380 "Possible PIC construction at") render the oracle's
+    // printRaw spelling through this delta: 0 = ELF-relative harness contract
+    /// (direct-runner golden), 0x100000 = canon analyzeHeadless golden.
+    pub display_image_base: u64,
+
     /// Bank of all varnodes in this function
     pub vbank: VarnodeBank,
     /// Bank of all P-code operations in this function
@@ -585,6 +597,7 @@ impl Funcdata {
             flags: 0,
             high_level_index: 0,
             cast_phase_index: 0,
+            display_image_base: 0,
             vbank: VarnodeBank::new(),
             obank: PcodeOpBank::new(),
             bblocks: BlockGraph::new(),
@@ -1144,6 +1157,33 @@ impl Funcdata {
             self.op_insert_input(&sub, offset, 1);
         }
         Ok(())
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Render an offset the way the oracle's `AddrSpace::printRaw` renders a
+    /// ram-space Address: `"0x"` + zero-padded hex of `2*sz` digits, where sz
+    /// shrinks from the space's address size (8 for x86-64 ram) to 4 bytes
+    /// when the offset's top 32 bits are zero, or 6 bytes when the top 48
+    /// are (space.cc:210-215). Wordsize > 1 would append `+cut`, but ram's
+    /// wordsize is 1 so the branch is unreachable for code addresses.
+    /// `display_image_base` transports the loader delta (see the field doc).
+    pub fn print_raw_code_addr(&self, offset: u64) -> String {
+        let display = offset.wrapping_add(self.display_image_base);
+        let sz = if display >> 32 == 0 {
+            4
+        } else if display >> 48 == 0 {
+            6
+        } else {
+            8
+        };
+        format!("0x{:0width$x}", display, width = 2 * sz)
+    }
+
+    // RUGRA-GLUE: set_display_image_base (RESIDMAP-PRINTBATCH-0001; driver
+    // handoff for print_raw_code_addr — canon analyzeHeadless drivers install
+    /// 0x100000, ELF-relative harness paths keep the default 0).
+    pub fn set_display_image_base(&mut self, base: u64) {
+        self.display_image_base = base;
     }
 
     // Ghidra: funcdata.cc:135 Funcdata::warningHeader
@@ -3833,12 +3873,24 @@ impl Funcdata {
         for blk in &list {
             blk.write().unwrap().set_flags(block_flags::DEAD);
             if issuewarning {
+                // cc:372-378: ostringstream s; s << "Removing unreachable
+                // block ("; s << bb->getStart().getSpace()->getName();
+                // s << ','; bb->getStart().printRaw(s); s << ')'.
+                // Space name: Rugra block covers carry spaceless
+                // ELF-relative addresses (ADDRESS-0001); code blocks live in
+                // ram, so a tagged address prints its own space name and the
+                // spaceless transport prints the oracle's "ram". The offset
+                // renders through printRaw + the display base delta
+                // (print_raw_code_addr).
                 let (space_name, start_raw) = {
                     let blk_rg = blk.read().unwrap();
                     let start = blk_rg.get_start_addr();
                     (
-                        start.get_space().map(|s| s.get_name()).unwrap_or_default(),
-                        format!("{:x}", start.as_u64()),
+                        start
+                            .get_space()
+                            .map(|s| s.get_name())
+                            .unwrap_or_else(|| "ram".to_string()),
+                        self.print_raw_code_addr(start.as_u64()),
                     )
                 };
                 self.warning_header(&format!(

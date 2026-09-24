@@ -2593,3 +2593,22 @@ funcdata` 批（单线程）17 failed==master 逐字（branch 40 passed 含新�
   与既有 "Overlapping input varnodes" 同通道。
 - 实测：curl（default+MIRROR）/httpd 全语料零触发（生长环按构造仅向下扩、
   尾部固定，跨尾输入在 oracle 同样 throw——两侧对非法状态同判）。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— printRaw 地址渲染 + display_image_base 传输
+
+- 新增 `print_raw_code_addr(offset) -> String`（`// Ghidra: space.cc:206
+  AddrSpace::printRaw`）：ram 空间代码地址的 oracle `printRaw` 拼写——
+  `"0x"` + `2*sz` 位零填充十六进制，sz 从空间地址大小（x86-64 ram=8）按
+  `display>>32==0 → 4`、`display>>48==0 → 6` 收缩（space.cc:210-215）；
+  wordsize>1 的 `+cut` 分支对 ram（wordsize=1）不可达，未移植。
+- 新增 `display_image_base: u64` 字段 + `set_display_image_base` setter
+  （`// RUGRA-GLUE` 传输层）：oracle 的 Funcdata 地址本身就是 analyzeHeadless
+  装载地址，而 Rugra 管线跑 ELF 相对偏移（ADDRESS-0001），代码标签层
+  （`PrintC::code_label_base`）由驱动在显示期加 0x100000 基址差。警告文本中
+  嵌地址的三族（"Removing unreachable block" funcdata_block.cc:374 /
+  jumptable "Could not recover jumptable at" / flow "Possible PIC construction
+  at"）现经同一 delta 渲染：canon 驱动装 0x100000，ELF 相对 harness 保持 0。
+- `remove_unreachable_blocks` 的警告拼写对齐 cc:372-378：`(spaceName,printRaw)`
+  —— 无空间名传输打印 "ram"（代码块全在 ram），偏移走
+  `print_raw_code_addr`。curl 语料 `(,2be0d)` 旧形 12 处全数转
+  `(ram,0x0012be0d)` canon 同形。

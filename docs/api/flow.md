@@ -722,3 +722,13 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   ActionSwitchNorm 的 default_block 派生、BlockStruct 阶段的
   `switch_case_basic_coords` isdefault 判定与 label 管道
   （BlockSwitch::finalizePrinting）均消费该数据。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— PIC 警告 printRaw 拼写 + partial 克隆基址继承
+
+- flow.cc:1380-1384 的 "Possible PIC construction at <opaddr>: Changing call
+  to branch" 警告：op 地址改经 `Funcdata::print_raw_code_addr` 渲染
+  （oracle `Address::printRaw`，space.cc:206），替换旧的 spaceless Display
+  十六进制形；经 `display_image_base` 传输 canon 驱动的 0x100000 基址差。
+- `FlowInfo::clone_function`（partial 克隆）继承源函数的 `display_image_base`：
+  partial 的 jumptable LowlevelError 文本（recover_addresses_classified，
+  jumptable.cc:2629）与父函数保持同一 oracle printRaw 拼写。

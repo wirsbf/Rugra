@@ -673,3 +673,12 @@ docs/api/block.md / blockaction.md。
   annotation-drift 尾巴，限本 write-set 内）。
 - `nzm` 读取无行为差：`get_nzm()` 与 `get_nz_mask()` 均返回裸字段
   （varnode.hh:231 inline），包装的"raw nzm"注释与正典实现等价。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— 恢复失败消息的 opaddress printRaw 拼写
+
+- `recover_addresses_classified`（cc:2626-2640 镜像）三处错误消息
+  （"Could not recover jumptable at {}. Too many branches" ×2 与 "Jumptable with
+  0 entries at {}"）中的 `opaddress` 改经 `fd.print_raw_code_addr` 渲染
+  （oracle 对 `opaddress` 流式输出走 `Address::printRaw`，space.cc:206），
+  携带 `display_image_base` 的 canon 基址差；行为语义（LowlevelError 通道、
+  触发条件、table size 判零）零改动。

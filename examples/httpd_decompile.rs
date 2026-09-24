@@ -886,6 +886,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fd.funcp.effects = default_effects;
             if !mirror_fn {
                 fd.external_prototypes = proto_db;
+                // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden
+                // addresses are this driver's base-0 addresses + 0x100000.
+                // Warning texts that embed an address render through
+                // Funcdata::print_raw_code_addr (oracle printRaw spelling),
+                // so install the same delta the code-label layer carries.
+                fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
             }
             // RUGRA-FLOW-MIRROR-0001: under the gate the symbol set is the
             // dynsym-defined functions only (registerDynamicFunctionSymbols
