@@ -769,39 +769,6 @@ impl EmitNoMarkup {
                 }
             }
 
-<<<<<<< HEAD
-            // Apply inlining (reverse order to preserve indices)
-            for (assign_idx, var_name, rhs) in to_inline.iter().rev() {
-                // Remove the assignment line
-                inlined[*assign_idx] = String::new();
-                
-                // Replace the use of var_name with rhs in all other lines
-                for i in 0..inlined.len() {
-                    if i == *assign_idx { continue; }
-                    let line = &inlined[i];
-                    let t = line.trim();
-                    // Skip declaration lines. HTTPD-FULLEMPTY-ELSE-0001
-                    // residual: the old `contains(" uVarN;")` predicate
-                    // also matched USE lines whose tail is the bare var
-                    // (`*ptr + off = uVar5;`, `return uVar5;`), so the
-                    // inline pass deleted both the assignment AND its only
-                    // use site — the surviving empty `else {}` defect
-                    // (ap_get_server_name L21). A declaration line is a
-                    // pure type head (`undefined8`, `undefined8 *`, ...)
-                    // followed by the var: no operators, parens, commas,
-                    // or statement keywords.
-                    if Self::is_declaration_line(t, var_name) {
-                        inlined[i] = String::new();
-                        continue;
-                    }
-                    if line.contains(var_name.as_str()) {
-                        inlined[i] = Self::replace_word(&line, var_name, rhs);
-                    }
-                }
-            }
-
-=======
->>>>>>> wt/pltstub
             // Apply dead code elimination
             for (assign_idx, var_name) in to_dead_elim.iter().rev() {
                 inlined[*assign_idx] = String::new();
