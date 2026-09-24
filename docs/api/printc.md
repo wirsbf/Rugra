@@ -2853,3 +2853,30 @@ uVar15/in_RIP/unique 集形状）的 LCS 位置性残差，非 printc 排序缺�
 --lib 1708P/1F（唯一失败 test_nonzeromask_pipeline_wiring 为基线预存，
 A/B 同败）。新增 3 个单测：vhost 寄存器块 17 条目手工追踪、外扩片捕获
 形态、addrtied 最小 subsort。
+
+## 2026-09-24 (Lane MAIN2) — cast render reads the def-facing type; PTRSTAMP stops overwriting finalized casts
+
+三件修复（PRINTC-CASTDEF-0001 / PRINTC-PTRSTAMP-CAST-OVERWRITE-0001 / 附带 deref 装饰拼写）：
+
+1. **CAST 内联臂改读 def-facing 高类型**（`emit_inline_expr` 的
+   `OpCode::CPUI_CAST` 臂）：oracle `PrintC::opTypeCast`（printc.cc:448-464）
+   读 `op->getOut()->getHighTypeDefFacing()` 并经 `pushType` 的结构化拼写
+   渲染，从不读 varnode 的 v_type 原名。旧臂打印 `v_type.get_name()`，会把
+   印刷期 fallback 戳的合成 `int *` 名泄漏成 `(int *)`。现走
+   `cast_type_string`（与 RPN 臂 `rpn_op_type_cast` 同一拼写核心），无类型
+   时保持 `long` 兜底。
+2. **load_addr_direct 戳排除 CAST 定义**（两处收集臂：直连地址槽成员 +
+   INT_ADD 输入成员）：ActionSetCasts 定型的 CAST 输出携带终态 cast 目标
+   （coreaction.cc:2702-2712；Ghidra 在 setcasts 之后没有任何类型写者）。
+   旧截记把 `long` 覆写成合成 `int *`，SP-alias 地址链印成
+   `(int *)puVar10 - 8`（4× 偏移语义错误 + 非 oracle cast 形）。CAST def
+   现与 ZEXT/SEXT/SUBPIECE/PIECE/INSERT 并列排除（INDPTR lane A/B 预验
+   44 行方向）。修复后 httpd main 该族 44 行印
+   `*(undefined8 *)((long)puVar10 + -8) = …`，与 canon
+   `((long)plVar11 + -8)` 逐字同形（仅变量名/基址差）。
+3. **typed dereference 装饰改用结构拼写**（legacy LOAD/STORE 地址装饰）：
+   `cast_type_string` 替代 `get_name()`，对匿名工厂指针不再产出空名
+   `*( *)` 形。
+
+单测：printc 15/15。门禁见 lane 终报（httpd 1445→1405、curl 1329→1262，
+defects/numbering 全 0，五投影 MATCH，逐函数零回退）。
