@@ -1052,7 +1052,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut stage_seen = false;
 
-    // HEADLESS-BRIDGE-V1-TYPESEED (C1 TYPE-SEED-LOCAL): opt-in committed-
+    // HEADLESS-BRIDGE-V1-TYPESEED (C1 TYPE-SEED-LOCAL): committed-
     // local seeding for the canon (analyzeHeadless) convergence direction.
     // The headless golden is the C++ library PLUS the Java analyzer stack's
     // committed symbols transported over `<localdb>` (funcdata.cc:804-810);
@@ -1061,14 +1061,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tests/golden/ghidra_httpd_1204.c, oracle-validated via the seeded
     // stage_seed_diag harness) into Funcdata::committed_locals, which
     // ActionRestructureVarnode materializes as name+type-locked stack
-    // symbols at scope construction. Default (env unset) = the exact
-    // historical bare load, byte-identical. The mirror gate stays clean:
-    // RUGRA_MIRROR/RUGRA_FLOW_MIRROR runs never seed (the five projections
-    // must remain byte-identical).
-    let typeseed_active = std::env::var("RUGRA_TYPESEED").is_ok();
+    // symbols at scope construction. SEEDFLIP (DFLIP precedent, opt-out
+    // polarity): the gate is default-on — the manifest ships in-repo.
+    // RUGRA_SEEDS=0 is the global bare-face escape hatch (exact historical
+    // bare load, byte-identical); RUGRA_TYPESEED=0 opts this single channel
+    // out; the legacy RUGRA_TYPESEED=1 explicit form remains equivalent to
+    // the new default. A binary without a harvested manifest is a loud
+    // no-op ("seeding disabled") and decompiles as the bare face (the
+    // httpd corpus has no DWARF/STRUCT manifests — HSEED verdict — so
+    // those channels simply do not exist here). The mirror gate stays
+    // clean: RUGRA_MIRROR/RUGRA_FLOW_MIRROR runs never seed (the five
+    // projections must remain byte-identical).
+    let typeseed_active = if mirror_flow_enabled() {
+        eprintln!("[TYPESEED] seed gate ignored under the mirror gate (projection purity)");
+        false
+    } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        false
+    } else {
+        std::env::var("RUGRA_TYPESEED").ok().as_deref() != Some("0")
+    };
     let typeseed_manifest: Option<
         std::sync::Arc<std::collections::HashMap<String, Vec<rugra::funcdata::CommittedLocal>>>,
-    > = if typeseed_active && !mirror_flow_enabled() {
+    > = if typeseed_active {
         let path = std::env::var("RUGRA_TYPESEED_MANIFEST")
             .unwrap_or_else(|_| "tests/golden/manifests/local_seed_httpd_1204.json".to_string());
         match std::fs::read_to_string(&path) {
@@ -1127,9 +1141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        if typeseed_active && mirror_flow_enabled() {
-            eprintln!("[TYPESEED] RUGRA_TYPESEED ignored under the mirror gate (projection purity)");
-        }
+        // Opted out (RUGRA_SEEDS=0 global / RUGRA_TYPESEED=0 per-gate) or
+        // mirror-suppressed above: the exact historical bare load.
         None
     };
 

@@ -81,9 +81,11 @@ fn mirror_fixture_data_enabled() -> bool {
 // name+type-locked stack symbols. Isolated workers inherit the controller
 // environment (Command::new default env), so the subprocess reads the same
 // gate; the prototype pre-pass never seeds (hermetic param inference — the
-// httpd driver likewise seeds only its decompile threads). Default (env
-// unset) = the exact historical load: no manifest IO, the OnceLock caches
-// None, committed_locals stays empty, byte-identical output. Any mirror
+// httpd driver likewise seeds only its decompile threads). SEEDFLIP: the
+// gate is default-on (the manifest ships in-repo); RUGRA_SEEDS=0 restores
+// the exact historical bare load (no manifest IO, the OnceLock caches
+// None, committed_locals stays empty, byte-identical output) and
+// RUGRA_TYPESEED=0 opts just this channel out. Any mirror
 // component (bundle/flow/bare/fixture-data) keeps the gate closed — the
 // five-projection bank must stay byte-identical.
 static TYPESEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
@@ -94,19 +96,31 @@ static TYPESEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<Committed
 // the controller's cache). Shared by every committed-local seed gate
 // (W1b TYPESEED, C2 DWARFSEED): identical decode walk, distinct env gates
 // and default manifests so each channel's contribution stays independently
-// attributable (RUGRA_TYPESEED=1 alone must keep reproducing the W1b
-// witness).
+// attributable (SEEDFLIP opt-out form: RUGRA_TYPESEED=0 alone removes the
+// W1b channel while the other gates stay on).
 fn load_committed_local_manifest(
     gate_env: &str,
     manifest_env: &str,
     default_path: &str,
     tag: &str,
 ) -> Option<HashMap<String, Vec<CommittedLocal>>> {
-    if !std::env::var(gate_env).is_ok() {
+    // SEEDFLIP (DFLIP precedent, opt-out polarity): the committed-local seed
+    // gates are default-on — the manifests ship in-repo under
+    // tests/golden/manifests/. Decision order: mirror components
+    // short-circuit first and suppress every seed form (including the
+    // legacy explicit =1); RUGRA_SEEDS=0 is the global bare-face escape
+    // hatch; <gate>=0 is the single-gate opt-out; any other value — the
+    // legacy =1 witness included — leaves the gate on. A missing manifest
+    // file stays a loud no-op ("seeding disabled"), so an arbitrary
+    // binary without a harvested manifest decompiles as the bare face.
+    if mirror_flow_enabled() || mirror_bare_load_enabled() || mirror_fixture_data_enabled() {
+        eprintln!("[{}] seed gate {} ignored under the mirror gate (projection purity)", tag, gate_env);
         return None;
     }
-    if mirror_flow_enabled() || mirror_bare_load_enabled() || mirror_fixture_data_enabled() {
-        eprintln!("[{}] {} ignored under the mirror gate (projection purity)", tag, gate_env);
+    if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        return None;
+    }
+    if std::env::var(gate_env).ok().as_deref() == Some("0") {
         return None;
     }
     let path = std::env::var(manifest_env).unwrap_or_else(|_| default_path.to_string());
@@ -192,11 +206,13 @@ fn typeseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal>
 // stage_seed_diag <localdb> seeding) and decompile_request extends
 // fd.committed_locals with the canon-address-keyed seeds after the W1b
 // TYPESEED attach. Gates are additive and independently attributable:
-// RUGRA_TYPESEED=1 alone keeps the exact W1b witness; RUGRA_DWARFSEED=1
-// layers the DWARF-named slots (disjoint from local_ slots by construction
+// RUGRA_TYPESEED=0 alone removes just the W1b channel;
+// RUGRA_DWARFSEED=0 removes just the DWARF-named slots (disjoint from
+// local_ slots by construction
 // — canon prints a DWARF name wherever one exists, local_ otherwise).
-// Mirror components keep the gate closed (five-projection purity); the
-// default path is constructively identical (no manifest IO, empty field).
+// Mirror components keep the gate closed (five-projection purity); SEEDFLIP
+// makes the gates default-on, with RUGRA_SEEDS=0 as the global bare-face
+// escape hatch (no manifest IO, empty field).
 static DWARFSEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
     std::sync::OnceLock::new();
 
@@ -231,9 +247,9 @@ fn dwarfseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal
 // oracle-verified domain judgment). Gate form mirrors C2 exactly:
 // additive after TYPESEED/DWARFSEED, offset collisions are loud manifest
 // defects, mirror components keep the gate closed (five-projection
-// purity), default path is constructively identical (no manifest IO,
-// empty field, no factory-name lookups fire — the existing manifests
-// carry only table-served spellings).
+// purity), SEEDFLIP default-on with RUGRA_SEEDS=0 / RUGRA_STRUCTSEED=0
+// opt-outs (no manifest IO, empty field, no factory-name lookups fire —
+// the existing manifests carry only table-served spellings).
 static STRUCTSEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
     std::sync::OnceLock::new();
 
@@ -4049,8 +4065,10 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // transport position (the httpd driver attaches the same carrier at its
     // per-function decompile thread spawn). Manifest keys are
     // analyzeHeadless addresses = this driver's base-0 vaddr + 0x100000.
-    // Unseeded default: the table is None, the field stays empty, and the
-    // run is byte-identical to the pre-gate build.
+    // SEEDFLIP: the seed gates are default-on; the opt-out forms
+    // (RUGRA_SEEDS=0 global / <gate>=0 per-channel) leave the table None,
+    // the field stays empty, and the run is byte-identical to the
+    // historical bare load.
     if let Some(table) = typeseed_local_table() {
         if let Some(seeds) =
             table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
