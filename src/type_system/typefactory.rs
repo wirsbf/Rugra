@@ -265,8 +265,22 @@ impl TypeFactory {
         self.init_core_types_flavor(flavor);
     }
 
-    // RUGRA-GLUE: local projection of the compiler-supplied `<coretypes>`
-    // stream used by ArchitectureGhidra::buildCoreTypes (ghidra_arch.cc:328).
+    // RUGRA-GLUE: local projection of the headless Java client's
+    // `<coretypes>` stream (the canon-golden contract). Ghidra's C++ side
+    // receives this from PcodeDataTypeManager.encodeCoreTypes
+    // (PcodeDataTypeManager.java:1238-1256, built by generateCoreTypes
+    // :1154-1228): signed = AbstractIntegerDataType.getSignedDataTypes
+    // (sbyte,short,int3,int,int5,int6,int7,sqword→longlong→long,int16 under
+    // the x86-64 gcc data organization shortSize=2/integerSize=4/longSize=8/
+    // longLongSize=8 — the same-size longlong slot is overwritten by long,
+    // AbstractIntegerDataType.java:544-566), unsigned analogous
+    // (byte,ushort,uint3,uint,uint5,6,7,ulong,uint16, :616-638),
+    // Undefined.getUndefinedDataTypes = undefined1..8 (Undefined.java:31-38),
+    // float(4)/double(8)/longdouble(16), code, char(1,int,ASCII),
+    // wchar_t(4,int,UTF — wide≠2 ⇒ wchar16 unregistered, wide≠4 satisfied by
+    // wchar_t itself), bool, void. The names drive printC spelling and
+    // Datatype::printNameBase prefixes (type.hh:273 — long→'l', short→'s',
+    // byte→'b'), so this table must match the Java names exactly.
     fn init_data_org_core_types(&mut self) {
         // Void type
         let mut void_base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
@@ -281,28 +295,42 @@ impl TypeFactory {
         )));
         self.add_core_type(bool_type);
 
-        // Standard integer types
-        let int_sizes = [1, 2, 4, 8];
-        for &size in &int_sizes {
-            // Signed integers
-            let s_name = if size == 4 { "int".to_string() } else { format!("int{}", size) };
-            let s_type = Arc::new(Datatype::Base(TypeBase::new(
-                s_name, size, TypeMetatype::Int,
-            )));
-            self.add_core_type(s_type);
-
-            // Unsigned integers
-            let u_name = if size == 4 { "uint".to_string() } else { format!("uint{}", size) };
-            let u_type = Arc::new(Datatype::Base(TypeBase::new(
-                u_name, size, TypeMetatype::Uint,
-            )));
-            self.add_core_type(u_type);
+        // Integer types: exact Java coreBuiltin projection (see doc comment).
+        const INT_TYPES: &[(&str, usize, TypeMetatype)] = &[
+            ("sbyte", 1, TypeMetatype::Int),
+            ("short", 2, TypeMetatype::Int),
+            ("int3", 3, TypeMetatype::Int),
+            ("int", 4, TypeMetatype::Int),
+            ("int5", 5, TypeMetatype::Int),
+            ("int6", 6, TypeMetatype::Int),
+            ("int7", 7, TypeMetatype::Int),
+            ("long", 8, TypeMetatype::Int),
+            ("int16", 16, TypeMetatype::Int),
+            ("byte", 1, TypeMetatype::Uint),
+            ("ushort", 2, TypeMetatype::Uint),
+            ("uint3", 3, TypeMetatype::Uint),
+            ("uint", 4, TypeMetatype::Uint),
+            ("uint5", 5, TypeMetatype::Uint),
+            ("uint6", 6, TypeMetatype::Uint),
+            ("uint7", 7, TypeMetatype::Uint),
+            ("ulong", 8, TypeMetatype::Uint),
+            ("uint16", 16, TypeMetatype::Uint),
+        ];
+        for &(name, size, metatype) in INT_TYPES {
+            self.add_core_type(Arc::new(Datatype::Base(TypeBase::new(
+                name.to_string(), size, metatype,
+            ))));
         }
 
         // The locked Java/headless oracle supplies an ASCII `char`.  Register
         // it through setCoreType so TypeChar flags, hash identity, and
         // canonical object selection match the decoded core-type path.
         if let Err(message) = self.set_core_type_result("char", 1, TypeMetatype::Int, true) {
+            panic!("LowlevelError: {message}");
+        }
+        // wchar_t: UTF (ATTRIB_UTF → TypeUnicode on the C++ decode side,
+        // PcodeDataTypeManager.java:1203-1205); x86-64 gcc wchar size is 4.
+        if let Err(message) = self.set_core_type_result("wchar_t", 4, TypeMetatype::Int, true) {
             panic!("LowlevelError: {message}");
         }
 
@@ -315,6 +343,10 @@ impl TypeFactory {
             "double".to_string(), 8, TypeMetatype::Float,
         )));
         self.add_core_type(f_type8);
+        let f_type16 = Arc::new(Datatype::Base(TypeBase::new(
+            "longdouble".to_string(), 16, TypeMetatype::Float,
+        )));
+        self.add_core_type(f_type16);
 
         // The compiler-supplied data organization observed by the canonical
         // headless gate names these `undefined1/2/4/8`.
@@ -4828,9 +4860,78 @@ mod tests {
             .expect("ordinary one-byte signed core type");
         assert_eq!(preferred_char.get_name(), "char");
         assert!(preferred_char.is_char_print());
-        assert_eq!(non_character.get_name(), "int1");
+        assert_eq!(non_character.get_name(), "sbyte");
         assert!(!non_character.is_char_print());
         assert!(!Arc::ptr_eq(&preferred_char, &non_character));
+    }
+
+    #[test]
+    fn test_data_org_core_inventory_matches_java_coretypes() {
+        // Java coreBuiltin projection (PcodeDataTypeManager.generateCoreTypes
+        // under x86-64 gcc data organization).
+        let factory = TypeFactory::new(8);
+        let expected = [
+            ("sbyte", 1, TypeMetatype::Int),
+            ("short", 2, TypeMetatype::Int),
+            ("int3", 3, TypeMetatype::Int),
+            ("int", 4, TypeMetatype::Int),
+            ("int5", 5, TypeMetatype::Int),
+            ("int6", 6, TypeMetatype::Int),
+            ("int7", 7, TypeMetatype::Int),
+            ("long", 8, TypeMetatype::Int),
+            ("byte", 1, TypeMetatype::Uint),
+            ("ushort", 2, TypeMetatype::Uint),
+            ("uint3", 3, TypeMetatype::Uint),
+            ("uint", 4, TypeMetatype::Uint),
+            ("uint5", 5, TypeMetatype::Uint),
+            ("uint6", 6, TypeMetatype::Uint),
+            ("uint7", 7, TypeMetatype::Uint),
+            ("ulong", 8, TypeMetatype::Uint),
+            ("double", 8, TypeMetatype::Float),
+            ("longdouble", 16, TypeMetatype::Float),
+            ("undefined8", 8, TypeMetatype::Unknown),
+            ("wchar_t", 4, TypeMetatype::Int),
+        ];
+        for (name, size, metatype) in expected {
+            let datatype = factory
+                .find_by_name(name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(
+                (datatype.get_size(), datatype.get_metatype()),
+                (size, metatype)
+            );
+        }
+        // cacheCoreTypes ASCII preference and (submeta,size) cache slots.
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Int)
+                .expect("signed 8-byte core"),
+            &factory.find_by_name("long").expect("long")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Uint)
+                .expect("unsigned 8-byte core"),
+            &factory.find_by_name("ulong").expect("ulong")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(2, TypeMetatype::Int)
+                .expect("signed 2-byte core"),
+            &factory.find_by_name("short").expect("short")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(1, TypeMetatype::Uint)
+                .expect("unsigned 1-byte core"),
+            &factory.find_by_name("byte").expect("byte")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Float)
+                .expect("8-byte float core"),
+            &factory.find_by_name("double").expect("double")
+        ));
     }
 
     #[test]

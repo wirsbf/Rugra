@@ -1,5 +1,32 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-09-24：DataOrg core-type 表改为 Java headless `<coretypes>` 精确投影（Lane GH）
+
+`init_data_org_core_types` 的整数命名不再用 `int{N}`/`uint{N}` 约定式拼写，改为
+正典 golden 背后的 Java 客户端 `PcodeDataTypeManager.generateCoreTypes`
+（PcodeDataTypeManager.java:1154-1228）在 x86-64 gcc data organization
+（short=2/int=4/long=8/longlong=8）下的精确注册表：
+
+- signed: `sbyte(1) short(2) int3(3) int(4) int5(5) int6(6) int7(7) long(8) int16(16)`
+  （AbstractIntegerDataType.java:544-566 的 longSize 覆写使 `longlong` 槽位被
+  `long` 取代，表中无 `longlong`）
+- unsigned: `byte(1) ushort(2) uint3(3) uint(4) uint5(5) uint6(6) uint7(7) ulong(8) uint16(16)`
+- `undefined1..8`（Undefined.java:31-38，无 10/16）、`float(4) double(8) longdouble(16)`、
+  `code`、`char(1,int,ASCII)`、`wchar_t(4,int,UTF)`、`bool`、`void`
+
+语义影响链：类型名直接进 printC 拼写（`int8`→`long`、`uint8`→`ulong`、
+`int2`→`short`、`uint1`→`byte`），并经 `Datatype::printNameBase`（type.hh:273，
+取 name 首字符）改变默认变量名前缀（`iVar`↔`lVar/sVar`、`uVar`↔`bVar`）。
+canon golden（headless Java 桥）全量使用该表拼写；direct-runner golden（纯 C++
+库，SLEIGH standalone 表 `int8/uint8`）不受影响——两 golden 契约差异已在
+GOLDEN-CONTRACT-PUSHABSORB-0001/FI 判例框架内登记。E2E：curl 1910→1847、
+httpd 1960→1782（defects/numbering 双零保持，逐函数零回退）；五投影
+（next_url/match_url/parseconfig/getparameter/myprogress，RUGRA_MIRROR=1 正典
+bundle）MATCH 保持——投影快照不含核心类型名。新单测
+`test_data_org_core_inventory_matches_java_coretypes` 固定表与 cache 槽位
+（`get_base(8,Int)==long`、`get_base(2,Int)==short`、`get_base(1,Uint)==byte`、
+`get_base(8,Float)==double`）。
+
 ## 2026-09-22：`intern_imported` — DWARF 导入边界的工厂注册（HERITAGE-PROMOTE-SYMBOLTAIL-0001 配套）
 
 新 `pub(crate) fn intern_imported(candidate)`：`find_add(candidate, true)` 的公共包装，
