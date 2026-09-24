@@ -1658,6 +1658,18 @@ impl PrintC {
                     self.integer_text(val, sz, true, display_format::DEFAULT)
                 }
             }
+            // Ghidra stores enums as TYPE_INT/TYPE_UINT + the enumtype flag
+            // (TypeEnum ctor/decode, type.hh:490-494 / type.cc:1475), so its
+            // TYPE_UINT/TYPE_INT arms reach pushEnumConstant
+            // (printc.cc:1756/1763). Rugra's Enum metatype IS that
+            // enum-int/uint collapse, so it takes the same named path: the
+            // getMatches representation (enum_match_text — `A`, `A|B`,
+            // `~(A|B)`, `... >> n`), else the unsigned integer
+            // (printc.cc:1684-1686). Locked witnesses: `return CURLE_OK;`
+            // (main_init), `*store != HTTPREQ_UNSPEC` (SetHTTPrequest).
+            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm
+            // (printc.cc:1801 break).
+            TypeMetatype::Enum => self.enum_constant_text(val, &ct),
             TypeMetatype::Unknown => {
                 // HTTPD-CODEREF-SYMBOLIZE-0001: same function-entry
                 // resolution as the untyped arm (see the None arm comment).
@@ -15817,8 +15829,19 @@ impl PrintC {
                 // emit FLOAT_UNKNOWN (printc.cc:1386 sentinel).
                 self.emit.print("FLOAT_UNKNOWN");
             }
+            // Rugra's Enum metatype is Ghidra's enum-int/uint collapse
+            // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.hh:490-494),
+            // so pushConstant's TYPE_UINT/TYPE_INT arms reach
+            // pushEnumConstant (printc.cc:1756/1763) — the getMatches
+            // named representation (enum_match_text), else the unsigned
+            // integer (printc.cc:1684-1686, `false` for enum_int too).
+            TypeMetatype::Enum => {
+                let text = self.enum_constant_text(val, ct);
+                self.emit.print(&text);
+            }
             _ => {
-                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
+                // Struct/Union/Array/Code/Spacebase/PartialEnum-meta:
+                // default cast.
                 self.emit_default_cast_constant(val, ct);
             }
         }

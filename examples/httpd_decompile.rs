@@ -892,6 +892,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             switchd_default_fns.len()
         );
     }
+    // DRIVER-SWITCHD-CASEFN-0002: same-analyzer case-0 handler functions
+    // (see the scan helper for the locked-oracle rule). Empty under the
+    // raw-BFD mirror and on corpora without DEFFN guard pairs (curl).
+    let switchd_cased_fns: Vec<(u64, usize, u64)> = if mirror {
+        Vec::new()
+    } else {
+        scan_switch_cased_handlers(&obj, &buffer, &functions, &switchd_default_fns)
+    };
+    if !switchd_cased_fns.is_empty() {
+        eprintln!(
+            "[PREPASS] {} switchD caseD-handler functions discovered",
+            switchd_cased_fns.len()
+        );
+    }
 
     // PLT sections for tail-call detection: PLT stubs
     // (apr_pool_cleanup_kill@plt 0x2a970, ...) carry no .symtab entries
@@ -1466,10 +1480,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -0001 FUN_ channel. Skipped entirely for stage single-function runs
     // and empty under the mirror gate.
     if stage_selector.is_none() {
-        for &(thunk_addr, thunk_size, dispatch) in &switchd_default_fns {
+        // DRIVER-SWITCHD-DEFFN-0001 defaults + DRIVER-SWITCHD-CASEFN-0002
+        // caseD handlers share this emission channel; the tag is the
+        // analyzer symbol's base name (`default` / `caseD_0`).
+        let mut named_switchd_fns: Vec<(u64, usize, u64, &str)> = switchd_default_fns
+            .iter()
+            .map(|&(a, s, d)| (a, s, d, "default"))
+            .collect();
+        named_switchd_fns.extend(
+            switchd_cased_fns
+                .iter()
+                .map(|&(a, s, d)| (a, s, d, "caseD_0")),
+        );
+        for &(thunk_addr, thunk_size, dispatch, tag) in &named_switchd_fns {
             let qualified_name = format!(
-                "switchD_{:08x}::default",
-                ANALYZE_HEADLESS_IMAGE_BASE + dispatch
+                "switchD_{:08x}::{}",
+                ANALYZE_HEADLESS_IMAGE_BASE + dispatch,
+                tag
             );
             eprintln!(
                 "[DECOMP] switchD default handler {} @0x{:x}",
@@ -1516,7 +1543,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let thread_arch = tracked_arch.clone();
             let handle = std::thread::spawn(move || -> Option<String> {
                 let mut fd = Funcdata::new(
-                    &format!("switchD_{:08x}::default", ANALYZE_HEADLESS_IMAGE_BASE + dispatch),
+                    &format!("switchD_{:08x}::{}", ANALYZE_HEADLESS_IMAGE_BASE + dispatch, tag),
                     Address::new(thunk_addr),
                     thunk_size as i32,
                 );
@@ -1590,8 +1617,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match received {
                 Ok(Ok(Some(output))) => {
                     println!(
-                        "/* ---- 0x{:x}: default ({} bytes) ---- */",
-                        ANALYZE_HEADLESS_IMAGE_BASE + thunk_addr, thunk_size
+                        "/* ---- 0x{:x}: {} ({} bytes) ---- */",
+                        ANALYZE_HEADLESS_IMAGE_BASE + thunk_addr, tag, thunk_size
                     );
                     println!("{}", output);
                     println!();
@@ -1601,7 +1628,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     total_fail += 1;
                 }
                 Err(_) => {
-                    println!("/* ---- 0x{:x}: default TIMEOUT (>15s) ---- */", thunk_addr);
+                    println!("/* ---- 0x{:x}: {} TIMEOUT (>15s) ---- */", thunk_addr, tag);
                     total_fail += 1;
                 }
             }
@@ -1777,6 +1804,258 @@ fn scan_switch_default_handlers(
             continue;
         }
         found.entry(target).or_insert((size, dispatch));
+    }
+    let mut handlers: Vec<(u64, usize, u64)> =
+        found.into_iter().map(|(addr, (size, dispatch))| (addr, size, dispatch)).collect();
+    handlers.sort_unstable();
+    handlers
+}
+
+// ===========================================================================
+// DRIVER-SWITCHD-CASEFN-0002: analyzer-named switch case-0 handler functions
+// (driver-side analyzer emulation; no decompiler .cc counterpart — the
+// mirrored oracle mechanism is the same headless DecompilerSwitchAnalysis
+// pass that produces the DRIVER-SWITCHD-DEFFN-0001 defaults: it creates a
+// `caseD_<hex>` symbol per labelled address-table destination in the
+// `switchD_<dispatch>` namespace, and a destination that is an independent
+// function entry takes that symbol as its FUNCTION name, printing
+// `switchD_<dispatch>::caseD_0(void)` with header base name `caseD_0`
+// (golden httpd 0x154470 = switchD_00154265::caseD_0, 25 bytes, and
+// 0x177520 = switchD_00177493::caseD_0, 16 bytes).
+//
+// Locked-oracle rule (12.0.4 e40ed130; calibrated on the corpus the same way
+// the DEFFN scan is, because the Java analyzer source is outside the cpp
+// oracle tree):
+//   * switch discovery: the GCC switch-lowering sequence `cmp $bound`;
+//     guard cbranch; `lea table(%rip)`; `movslq (%tbl,%idx,4)`; `add`;
+//     `jmp *%rax` — the table base and bound are read straight from the
+//     instructions, destinations = table_base + int32 rel (the movslq+add
+//     semantics), n = bound+1 entries.
+//   * jumptable.cc:1373-1398 foldInOneGuard precondition: the guard's
+//     non-switch out-edge target must NOT already be an address-table
+//     destination (otherwise the default is folded into the table and every
+//     destination stays an in-function case label — main's switchD_0012ba94
+//     etc.).
+//   * emission channel: the dispatch must be one of the DEFFN guard pairs
+//     (its guard target escapes every entry span = the default-handling
+//     FUNCTION already discovered by scan_switch_default_handlers) — the
+//     exact corpus witnesses are dispatch 0x154265 (default 0x12b7fa) and
+//     0x177493 (default 0x12b804). The third guard pair 0x17766d
+//     (pcre_config) is excluded because its case-0 block terminates in a
+//     plain `ret` (an in-function case value cell), not the tail-jump
+//     rejoin shape.
+//   * case-0 shape: the first destination's block must terminate in a
+//     direct in-.text `jmp` (the handler tail-rejoins shared code — both
+//     golden bodies end `...; FUN_x(); return;`); block extent = entry to
+//     that first terminal (matches the golden 25/16-byte sizes exactly).
+//   * RESIDUAL (registered on DRIVER-SWITCHD-CASEFN-0002): golden's third
+//     caseD function switchD_00154229::caseD_0 @0x154380 (244 bytes) sits
+//     on a dispatch whose guard target 0x54243 does NOT escape spans (the
+//     default chains into the next switch guard — a cascade); emitting it
+//     faithfully needs Ghidra's flow-derived body (sum-of-blocks size, the
+//     structured switch over the chained table's cells) which the linear
+//     span approximation cannot reproduce; its case-0 tail target equals
+//     the guard target (the distinguishing structural marker found in the
+//     calibration census), so the channel stays open for a flow-body pass.
+// Corpus check: exactly the golden two on httpd (plus the registered
+// residual), zero on curl (the curl driver has no switchD layer at all —
+// constructive no-op, curl_decompile.rs untouched). Skipped under the
+// raw-BFD mirror (no analyzer symbol layer).
+// ===========================================================================
+fn scan_switch_cased_handlers(
+    obj: &Object,
+    buffer: &[u8],
+    functions: &[(u64, usize, u64, String)],
+    default_fns: &[(u64, usize, u64)],
+) -> Vec<(u64, usize, u64)> {
+    // .text bounds (vaddr, file offset, length) — same construction as the
+    // DEFFN scan.
+    let mut text: Option<(u64, usize, usize)> = None;
+    if let Object::Elf(elf) = obj {
+        for header in elf.section_headers.iter() {
+            let is_text = elf
+                .shdr_strtab
+                .get_at(header.sh_name)
+                .map(|n| n == ".text")
+                .unwrap_or(false);
+            if is_text {
+                text = Some((header.sh_addr, header.sh_offset as usize, header.sh_size as usize));
+                break;
+            }
+        }
+    }
+    let Some((text_va, text_off, text_len)) = text else { return Vec::new() };
+    if text_off >= buffer.len() || text_off + text_len > buffer.len() {
+        return Vec::new();
+    }
+    let text_end = text_va + text_len as u64;
+
+    let mut disasm = X86_64Disassembler::new();
+    let Ok(insns) = disasm.disassemble(&buffer[text_off..text_off + text_len], Address::new(text_va)) else {
+        return Vec::new() };
+    let insn_at: HashMap<u64, usize> = insns
+        .iter()
+        .enumerate()
+        .map(|(idx, inst)| (inst.address.as_u64(), idx))
+        .collect();
+
+    // Entry candidates (ELF symbols ∪ endbr64) — c0 must not already be a
+    // function start.
+    let mut entries: Vec<u64> = functions.iter().map(|f| f.0).collect();
+    entries.extend(
+        insns
+            .iter()
+            .filter(|inst| inst.mnemonic == "endbr64")
+            .map(|inst| inst.address.as_u64()),
+    );
+    entries.retain(|addr| *addr >= text_va && *addr < text_end);
+    entries.sort_unstable();
+    entries.dedup();
+    let is_entry = |addr: u64| -> bool { entries.binary_search(&addr).is_ok() };
+
+    // Section lookup for reading the table bytes at a vaddr.
+    let section_file_off = |vaddr: u64| -> Option<usize> {
+        if let Object::Elf(elf) = obj {
+            for header in elf.section_headers.iter() {
+                if vaddr >= header.sh_addr && vaddr < header.sh_addr + header.sh_size {
+                    return Some((header.sh_offset + (vaddr - header.sh_addr)) as usize);
+                }
+            }
+        }
+        None
+    };
+
+    let mut found: HashMap<u64, (usize, u64)> = HashMap::new();
+    for (idx, inst) in insns.iter().enumerate() {
+        // BRANCHIND: a jmp with no direct target (`jmp *%rax`).
+        if !inst.is_branch() || inst.is_call() || inst.branch_target().is_some() {
+            continue;
+        }
+        let dispatch = inst.address.as_u64();
+        // Walk back through contiguous instructions for the table load:
+        // `lea table(%rip),%rXX` and `cmp $bound,...`; the guard cbranch is
+        // the instruction right after the cmp.
+        let mut table_base: Option<(u64, u64)> = None;
+        let mut guard_target: Option<u64> = None;
+        let mut case_count: usize = 0usize;
+        let mut cur_start = dispatch;
+        for back in (0..idx).rev().take(8) {
+            let prev = &insns[back];
+            if prev.address.as_u64() + prev.length as u64 != cur_start {
+                break; // not the GCC switch-lowering adjacency
+            }
+            cur_start = prev.address.as_u64();
+            if prev.mnemonic.starts_with("lea") {
+                if let Some(rugra::disasm::Operand::Memory { base: Some(b), displacement, .. }) =
+                    prev.operands.get(1)
+                {
+                    if b == "rip" {
+                        // iced's memory_displacement64 for RIP-relative lea
+                        // resolves to the absolute target in this build
+                        // (observed 0x88e84 for `lea rcx,[rip+0x34c62]` at
+                        // 0x5421b); keep the raw-relative candidate too and
+                        // resolve after the section lookup.
+                        table_base = Some((*displacement as u64, prev.address.as_u64()
+                            + prev.length as u64
+                            + *displacement as u64));
+                    }
+                }
+            } else if prev.mnemonic.starts_with("cmp") {
+                // Intel operand order puts the immediate last (`cmp r/m, imm`
+                // / `cmp reg, imm`) — take the first immediate present.
+                if let Some(value) = prev.operands.iter().find_map(|o| {
+                    if let rugra::disasm::Operand::Immediate { value, .. } = o {
+                        Some(*value)
+                    } else {
+                        None
+                    }
+                }) {
+                    if value >= 0 {
+                        case_count = value as usize + 1;
+                    }
+                }
+                // The guard cbranch sits immediately after the cmp.
+                if let Some(g) = insns.get(back + 1) {
+                    if g.is_branch() && !g.is_call() && g.branch_target().is_some() {
+                        guard_target = g.branch_target().map(|a| a.as_u64());
+                    }
+                }
+                break; // cmp is the earliest member of the sequence
+            }
+        }
+        let (Some(table_candidates), Some(guard_target)) = (table_base, guard_target) else { continue };
+        if case_count == 0 || case_count > 4096 {
+            continue;
+        }
+        // Resolve which lea candidate is the mapped table base (absolute
+        // vs raw-relative).
+        let mut table_base: Option<u64> = None;
+        let mut table_off: Option<usize> = None;
+        for cand in [table_candidates.0, table_candidates.1] {
+            if let Some(off) = section_file_off(cand) {
+                if off + case_count * 4 <= buffer.len() {
+                    table_base = Some(cand);
+                    table_off = Some(off);
+                    break;
+                }
+            }
+        }
+        let (Some(table_base), Some(table_off)) = (table_base, table_off) else { continue };
+        // foldInOneGuard precondition: the guard's non-switch out-edge
+        // target must not itself be an address-table destination.
+        let mut dests: Vec<u64> = Vec::with_capacity(case_count);
+        for k in 0..case_count {
+            let raw = u32::from_le_bytes([
+                buffer[table_off + k * 4],
+                buffer[table_off + k * 4 + 1],
+                buffer[table_off + k * 4 + 2],
+                buffer[table_off + k * 4 + 3],
+            ]);
+            let rel = raw as i32 as i64; // movslq: sign-extended int32
+            dests.push((table_base as i64 + rel) as u64);
+        }
+        if dests.contains(&guard_target) {
+            continue; // default folded into the table — in-function switch
+        }
+        // Emission channel: the dispatch must be a DEFFN guard pair (its
+        // default-handling function was already discovered).
+        if !default_fns.iter().any(|&(_, _, d)| d == dispatch) {
+            continue;
+        }
+        let c0 = dests[0];
+        if c0 < text_va || c0 >= text_end || is_entry(c0) {
+            continue;
+        }
+        if default_fns.iter().any(|&(a, _, _)| a == c0) {
+            continue;
+        }
+        // Case-0 shape: entry to first terminal must be a direct in-.text
+        // unconditional jmp (tail-rejoin), sizing matches the golden bytes.
+        let Some(start) = insn_at.get(&c0).copied() else { continue };
+        let mut size = 0usize;
+        let mut tail_target: Option<u64> = None;
+        let mut shape_ok = false;
+        for probe in &insns[start..] {
+            size += probe.length;
+            let direct_jmp =
+                probe.mnemonic == "jmp" && probe.branch_target().is_some() && !probe.is_call();
+            if probe.is_return() || (probe.is_branch() && !probe.is_call()) {
+                shape_ok = direct_jmp;
+                tail_target = probe.branch_target().map(|a| a.as_u64());
+                break;
+            }
+            if size > 256 {
+                break;
+            }
+        }
+        if !shape_ok {
+            continue;
+        }
+        let Some(tail) = tail_target else { continue };
+        if tail < text_va || tail >= text_end {
+            continue;
+        }
+        found.entry(c0).or_insert((size, dispatch));
     }
     let mut handlers: Vec<(u64, usize, u64)> =
         found.into_iter().map(|(addr, (size, dispatch))| (addr, size, dispatch)).collect();
