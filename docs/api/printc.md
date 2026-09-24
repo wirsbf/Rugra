@@ -1,5 +1,21 @@
 # `printc.rs` API Reference
 
+## 2026-09-24：sanitize_c_ident 放行 `:`——限定名保真（DRIVER-SWITCHD-DEFFN-0001）
+
+`sanitize_c_ident`（RUGRA-GLUE，无 Ghidra 对应物）此前把一切非
+`[A-Za-z0-9_]` 字符折叠为 `_`，包括命名空间分隔符 `::`。Ghidra 的打印器
+对函数名**不做任何标识符消毒**：`PrintC::docFunction` 经
+`emit->tagFuncName(fd->getDisplayName(), ...)`（printc.cc:1141 一带）原样
+发射数据库送入的限定名，锁定 golden httpd 因此打印
+`switchD_00154265::default(void)`（0x12b7fa/0x12b804/0x12b80e 三处分析器
+命名函数）。现在 `:` 直接通过，`switchD_...::default` 不再被改写成
+`switchD_...__default`。影响面封闭：三个调用点（符号表快照
+`set_*_from_funcdata`、`doc_function` 的函数显示名、参数名）中，当前只有
+函数显示名通道可能见到 `:`（符号/参数名均为普通标识符）；curl 语料零
+`:` 名，E2E 输出与改动前逐字节相同；httpd 仅新增的三个 switchD default
+处理函数变化。原始缺口与命名规则、驱动侧发现通道见
+DRIVER-SWITCHD-DEFFN-0001（httpd 驱动，docs/TODO_BOARD.md）。
+
 ## 2026-09-23：emitBlockGoto 目标切换 target_dyn + emitLabel 取址链（PRINTC-GOTOPRINTS-0001 收官，joined_/dup_ 形态族）
 
 `emit_block_goto` 的 goto 目标地址此前读 legacy 类型化投影
