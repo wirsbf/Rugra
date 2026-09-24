@@ -9,7 +9,7 @@ entry = "0x3f00"
 side = "oracle"
 commit = "e40ed13014025f82488b1f8f7bca566894ac376b"
 tag = "Ghidra_12.0.4_build"
-producer_blob = "f6cb61d14fd3df7be2e65a74381c303326c3e0dc"
+producer_blob = "24a4bec28f2786d0b0f4b23e540c67228519b92f"
 capture_command = "RUGRA_STAGE_PROJECTION_OUT=tests/fixtures/projections/curl_getparameter.constprop.0/oracle.projection bash tools/run_stage_projection_oracle.sh curl 3f00 getparameter.constprop.0"
 pin_mode = "metadata-pinned"
 date = "2026-09-24"
@@ -29,6 +29,6 @@ ops = 913373
 date = "2026-09-24"
 
 [integrity]
-oracle_sha256 = "4464f2fff9088f3ed52fd08c4a5839237da6bcc1540f112df7f13ccfad205fa2"
+oracle_sha256 = "62d5298d44ba352a5ec13c19f520e27e6ccfb579dd0a4c74a06f4df7f733c165"
 rugra_sha256 = "ebf0dc086c3a8dada2cdf82a608cc3ce946eaf1f939088998a44a7f092162d68"
 binary_sha256 = "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"

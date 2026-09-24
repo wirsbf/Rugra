@@ -20,7 +20,7 @@ tests/fixtures/projections/
     manifest.toml                    <- provenance + sha256 pins + status
 ```
 
-## Banked functions (all MATCH, verified 2026-09-24; 10 original + 15 cascade-harvest = 25)
+## Banked functions (all MATCH; 10 original + 15 cascade-harvest + helpf + 45 PLT-thunk address-arm harvest = 71)
 
 | entry | function | entry addr | stages | ops | oracle pin |
 |---|---|---|---|---|---|
@@ -50,6 +50,62 @@ tests/fixtures/projections/
 | curl_GetStr | GetStr | 0x36d0 | 191 | 5,349 | bank sha256 (capture mode, cascade harvest) |
 | curl_my_fwrite | my_fwrite | 0x3460 | 268 | 7,788 | bank sha256 (capture mode, cascade harvest) |
 | curl_helpf | helpf | 0x3980 | 345 | 195,009 | bank sha256 (capture mode; PM-HF lane, mark_unaliased range-walk fix) |
+
+PLT-thunk entries (2026-09-25, lane ADDRARM2; all captured through the
+oracle harness **address-only arm** — these entries carry no BFD symbol
+in any table, so the runner CLI passes `-` as the function token and the
+fixture registers the function at the entry exactly like the console
+`load <addr>` command; the rugra side uses the address-form selector).
+44 of the 45 share the uniform stub shape 186 stages / 742 ops; PLT0 is
+richer (191 / 1,240):
+
+| entry | function | entry addr | stages | ops |
+|---|---|---|---|---|
+| curl_plt_plt0 | FUN_00102020 (PLT0 header) | 0x2020 | 191 | 1,240 |
+| curl_plt___cxa_finalize | __cxa_finalize (.plt.got) | 0x22e0 | 186 | 742 |
+| curl_plt_free | free | 0x22f0 | 186 | 742 |
+| curl_plt___vfprintf_chk | __vfprintf_chk | 0x2300 | 186 | 742 |
+| curl_plt_strcpy | strcpy | 0x2310 | 186 | 742 |
+| curl_plt_puts | puts | 0x2320 | 186 | 742 |
+| curl_plt_isatty | isatty | 0x2330 | 186 | 742 |
+| curl_plt_curl_easy_perform | curl_easy_perform | 0x2340 | 186 | 742 |
+| curl_plt_curl_slist_append | curl_slist_append | 0x2350 | 186 | 742 |
+| curl_plt_fclose | fclose | 0x2360 | 186 | 742 |
+| curl_plt_strlen | strlen | 0x2370 | 186 | 742 |
+| curl_plt___stack_chk_fail | __stack_chk_fail | 0x2380 | 186 | 742 |
+| curl_plt_strchr | strchr | 0x2390 | 186 | 742 |
+| curl_plt_strrchr | strrchr | 0x23a0 | 186 | 742 |
+| curl_plt_maprintf | maprintf | 0x23b0 | 186 | 742 |
+| curl_plt_fputc | fputc | 0x23c0 | 186 | 742 |
+| curl_plt_fgets | fgets | 0x23d0 | 186 | 742 |
+| curl_plt_strtol | strtol | 0x23e0 | 186 | 742 |
+| curl_plt_memcpy | memcpy | 0x23f0 | 186 | 742 |
+| curl_plt_time | time | 0x2400 | 186 | 742 |
+| curl_plt_fileno | fileno | 0x2410 | 186 | 742 |
+| curl_plt___xstat | __xstat | 0x2420 | 186 | 742 |
+| curl_plt_malloc | malloc | 0x2430 | 186 | 742 |
+| curl_plt___isoc99_sscanf | __isoc99_sscanf | 0x2440 | 186 | 742 |
+| curl_plt_curl_easy_init | curl_easy_init | 0x2450 | 186 | 742 |
+| curl_plt_curl_getenv | curl_getenv | 0x2460 | 186 | 742 |
+| curl_plt_realloc | realloc | 0x2470 | 186 | 742 |
+| curl_plt___printf_chk | __printf_chk | 0x2480 | 186 | 742 |
+| curl_plt_curl_version | curl_version | 0x2490 | 186 | 742 |
+| curl_plt_curl_slist_free_all | curl_slist_free_all | 0x24a0 | 186 | 742 |
+| curl_plt_fopen | fopen | 0x24b0 | 186 | 742 |
+| curl_plt_strcat | strcat | 0x24c0 | 186 | 742 |
+| curl_plt_curl_easy_setopt | curl_easy_setopt | 0x24d0 | 186 | 742 |
+| curl_plt_curl_getdate | curl_getdate | 0x24e0 | 186 | 742 |
+| curl_plt_exit | exit | 0x24f0 | 186 | 742 |
+| curl_plt_fwrite | fwrite | 0x2500 | 186 | 742 |
+| curl_plt___fprintf_chk | __fprintf_chk | 0x2510 | 186 | 742 |
+| curl_plt_curl_easy_cleanup | curl_easy_cleanup | 0x2520 | 186 | 742 |
+| curl_plt_strdup | strdup | 0x2530 | 186 | 742 |
+| curl_plt_strequal | strequal | 0x2540 | 186 | 742 |
+| curl_plt_curl_formparse | curl_formparse | 0x2550 | 186 | 742 |
+| curl_plt_strstr | strstr | 0x2560 | 186 | 742 |
+| curl_plt_strnequal | strnequal | 0x2570 | 186 | 742 |
+| curl_plt___ctype_b_loc | __ctype_b_loc | 0x2580 | 186 | 742 |
+| curl_plt___sprintf_chk | __sprintf_chk | 0x2590 | 186 | 742 |
 
 Common provenance (also recorded per manifest):
 
@@ -83,7 +139,9 @@ as warnings by the bisect, never identity failures): `side`, `producer`
 its allocation base; strict op offsets still compare), and
 `func_name` for the two GCC constprop clones (the rugra driver's FuncInfo
 layer carries the DWARF spelling `parseconfig`/`getparameter`; the oracle
-fixture carries the BFD spelling — identity is entry-address based).
+fixture carries the BFD spelling — identity is entry-address based), and
+`func_name` for the PLT-thunk entries (oracle `func_0x…` nameFunction
+default vs driver ledger spelling — same entry-address identity basis).
 
 ## Re-capture recipes (byte-identical reproduction)
 
@@ -99,6 +157,10 @@ contract; `/tmp/rugra-ghidra-bfd-2.38` is the usual include root):
 RUGRA_STAGE_PROJECTION_OUT=tests/fixtures/projections/curl_<fn>/oracle.projection \
   bash tools/run_stage_projection_oracle.sh curl <entry-hex> <function>
 # next_url may equivalently use the zero-arg default mode (same bytes).
+# PLT-thunk entries (no BFD symbol): pass "-" as the function token to
+# take the address-only arm, e.g. ... curl 22f0 -   (see curl_plt_*).
+# Batch drivers may set RUGRA_STAGE_PROJECTION_BUILD=<dir> to cache the
+# instrumented oracle build across invocations.
 ```
 
 Rugra side (cwd = repo root; projection lands via RUGRA_STAGE_PROJ_OUT;
@@ -144,15 +206,33 @@ recorded for later lanes; not banked):
 | _start | 0x3370 | result-count | ordinal 149 `universal:fullloop:mainloop:constantptr`: result/count/apply 3/3/1 vs 0/0/0 (ACTION-SYMDB-DATASYM-0001 class) |
 | progressbarinit | 0x49a0 | op-line | ordinal 123 `universal:fullloop:activereturn` op 9: CALL out `n:register:0:8` vs `u:0:8` |
 
-Oracle-side capture limitation observed in the same pass: PLT thunk
-functions (the 1-byte `.plt.sec` stubs and the 11-byte `.plt` entries,
-e.g. `free@0x22f0`) carry no BFD symbol, so
-`tools/run_stage_projection_oracle.sh` cannot target them by
-`STAGE_PROJ_FUNC` (BFD name lookup misses; probe logged "free was not
-found in the BFD symbol table"). The ~90 curl PLT-thunk functions stay
-unreachable for the bank until the harness grows an address-only
-target arm (STAGE_PROJ_FUNC unset + STAGE_PROJ_ADDR; only the
-zero-argument default mode exercises that path today).
+Oracle-side capture limitation observed in the 2026-09-24 harvest pass
+and **resolved 2026-09-25 (lane ADDRARM2)**: PLT thunk functions (the
+`.plt.sec`/`.plt.got` stubs and the PLT0 header, e.g. `free@0x22f0`)
+carry no BFD symbol in any table (static `.symtab` has nothing; the
+dynamic table only carries the undefined import), so the harness's
+`STAGE_PROJ_FUNC` name lookup could not target them. The runner now has
+an address-only arm: `bash tools/run_stage_projection_oracle.sh curl
+<entry-hex> -` passes `STAGE_PROJ_ADDR` without `STAGE_PROJ_FUNC`, and
+the fixture then registers the function at the entry exactly like the
+Ghidra console `load <addr>` command (IfcAddrrangeLoad,
+ifacedecomp.cc:496-514: `Architecture::nameFunction` default name +
+global-scope `addFunction`). The full ledger-populated thunk population
+(45 entries, 0x2020 + 0x22e0-0x2590 nm-form) was swept through this arm
+and every one of them matched on first verification (see the PLT table
+above). The `func_name` META field differs by construction on these
+entries (oracle `func_0x000022f0`-style default vs the driver's ledger
+spelling) and is advisory under the bisect contract — the same class as
+the constprop BFD/DWARF spellings. The remaining out-of-reach golden
+corpus entries are the EXTERNAL-block pseudo functions at 0x19xxx-nm
+(they have no backing ELF section at all — no code to follow on either
+side; the driver prints stub sections, the oracle has nothing to load).
+
+Fixture producer re-pin (same lane): the fixture grew the address arm,
+so its git blob (the META `producer=` value inside every oracle
+projection) changed from `f6cb61d1…` to `24a4bec2…`; all 26 pre-existing
+entries' oracle projections were re-captured and re-pinned with the
+producer line verified as the only byte difference.
 
 ## Adding a function
 

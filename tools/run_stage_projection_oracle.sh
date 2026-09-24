@@ -10,6 +10,7 @@
 #   run_stage_projection_oracle.sh curl 4ff0 next_url       #   curl next_url @0x4ff0
 #   run_stage_projection_oracle.sh curl 0x25a0 main         # parameterized target
 #   run_stage_projection_oracle.sh httpd 0x2b820 main
+#   run_stage_projection_oracle.sh curl 22f0 -              # address-only target
 #
 # corpus is curl|httpd -> examples/<corpus>; entry_addr is hex (0x optional).
 # The zero-argument / next_url form keeps the legacy fully-pinned mode
@@ -20,6 +21,23 @@
 # a target absent from the map runs in capture mode: full structural
 # validation only (META keys / seq contiguity / LIFO nesting / @SNAP counts /
 # v1.2.1 grammar), sha256 + counts reported for later pinning.
+#
+# Address-only targets (func_name "-", mode=address) pass STAGE_PROJ_ADDR
+# without STAGE_PROJ_FUNC: the fixture keeps the address query first and,
+# when no symbol covers the entry (PLT thunks), registers the function at
+# the address the way the console `load <addr>` command does.  They always
+# run in capture mode (the address carries no name identity to pin a
+# "functions" key on; the bank manifest is the pin of record) and the META
+# func_name field is left unvalidated here: the fixture derives it via
+# Architecture::nameFunction, the rugra driver carries the ledger spelling,
+# and the bisect treats func_name as advisory (the same contract as the
+# BFD/DWARF constprop spelling differences).
+#
+# RUGRA_STAGE_PROJECTION_BUILD=<dir> optionally caches the instrumented
+# oracle build (extracted tree + libdecomp.a + linked fixture) across
+# invocations.  Batch drivers set it once and rebuild only when the fixture
+# changes: the tree inside is produced from the locked commit + sha-pinned
+# instrumentation only, so a cached binary equals a fresh build.
 #
 # Canonical capture recipe (baked in; mirrors tools/run_stage_drill_oracle.sh,
 # Lane AT broadcast): cwd=repo_root, argv=sleigh_specs examples/<corpus>
@@ -38,6 +56,9 @@ usage: tools/run_stage_projection_oracle.sh [corpus entry_addr func_name]
   corpus:      curl | httpd (examples/<corpus> binary)
   entry_addr:  hex entry of the function (0x prefix optional)
   func_name:   BFD symbol name (STAGE_PROJ_FUNC target of the harness)
+               "-": address-only target (STAGE_PROJ_ADDR arm; the fixture
+                    registers the function at the entry when no BFD symbol
+                    covers it -- PLT thunks)
   no arguments: pinned default capture of curl next_url @0x4ff0
 EOF
 }
@@ -55,6 +76,15 @@ elif [[ $# -eq 3 ]]; then
 else
   usage
   exit 2
+fi
+addr_only=no
+if [[ "$func" == "-" ]]; then
+  if [[ "$mode" != "parameterized" ]]; then
+    echo "address-only target '-' needs the parameterized form" >&2
+    exit 2
+  fi
+  addr_only=yes
+  mode=address
 fi
 case "$corpus" in
   curl|httpd) ;;
@@ -85,6 +115,8 @@ spec_root="$repo_root/sleigh_specs"
 analysis_options=default
 if [[ "$mode" == "default" ]]; then
   projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/next_url.oracle.projection}
+elif [[ "$mode" == "address" ]]; then
+  projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/${corpus}.addr${entry_norm}.oracle.projection}
 else
   projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/${corpus}.${func}.oracle.projection}
 fi
@@ -229,6 +261,26 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# Optional build cache (see the header comment): batch drivers set
+# RUGRA_STAGE_PROJECTION_BUILD so the instrumented tree + libdecomp.a +
+# linked fixture are built once per fixture change instead of once per
+# target.  A cached binary is produced from the locked commit + sha-pinned
+# instrumentation + the same fixture the pre-run block just hash-verified,
+# so it equals a fresh build; the run scratch (projection.txt / stderr)
+# stays in the per-invocation mktemp dir.
+build_cache=${RUGRA_STAGE_PROJECTION_BUILD:-}
+oracle_bin="$oracle_tmp/stage_projection_1204"
+if [[ -n "$build_cache" && -x "$build_cache/stage_projection_1204" ]]; then
+  oracle_bin="$build_cache/stage_projection_1204"
+fi
+
+if [[ "$oracle_bin" == "$oracle_tmp/stage_projection_1204" ]]; then
+  if [[ -n "$build_cache" ]]; then
+    # First invocation with an empty cache: build here, then populate the
+    # cache with the finished binary (atomic mv).
+    mkdir -p "$build_cache"
+  fi
+
 git -C "$ghidra_root" archive --format=tar --output="$oracle_tmp/ghidra.tar" \
   "$oracle_commit" Ghidra/Features/Decompiler/src/decompile/cpp
 mkdir -p "$oracle_tmp/oracle"
@@ -309,6 +361,12 @@ g++ -std=c++11 -O2 -I"$bfd_include" -I"$oracle_cpp" \
   "$oracle_cpp/loadimage_bfd.cc" \
   "$oracle_cpp/libdecomp.a" "$bfd_library" -lz \
   -o "$oracle_tmp/stage_projection_1204"
+if [[ -n "$build_cache" ]]; then
+  # Populate the cache only after a fully successful build.
+  cp "$oracle_tmp/stage_projection_1204" "$build_cache/stage_projection_1204.tmp"
+  mv "$build_cache/stage_projection_1204.tmp" "$build_cache/stage_projection_1204"
+fi
+fi # end of the (uncached) build branch
 
 binary_sha=$(sha256sum "$binary" | cut -d' ' -f1)
 producer=$(git hash-object "$cpp_fixture")
@@ -326,9 +384,11 @@ cd "$repo_root"
 target_env=()
 if [[ "$mode" == "parameterized" ]]; then
   target_env+=(STAGE_PROJ_FUNC="$func" STAGE_PROJ_ADDR="$entry_norm")
+elif [[ "$mode" == "address" ]]; then
+  target_env+=(STAGE_PROJ_ADDR="$entry_norm")
 fi
 if ! setarch "$(uname -m)" -R env -i "${target_env[@]}" \
-  "$oracle_tmp/stage_projection_1204" sleigh_specs "examples/$corpus" \
+  "$oracle_bin" sleigh_specs "examples/$corpus" \
   "$entry_arg" "$oracle_tmp/projection.txt" "$binary_sha" "$producer" \
   "$analysis_options" 2>"$oracle_tmp/run.stderr"; then
   cat "$oracle_tmp/run.stderr" >&2
@@ -382,6 +442,13 @@ fields = {
     "unique_base": metadata["input"]["unique_base"],
     "func_name": metadata["input"]["function"] if mode == "default" else func,
 }
+if mode == "address":
+    # Address-only target: the fixture derives the name via
+    # Architecture::nameFunction while the rugra driver carries the ledger
+    # spelling, so func_name is advisory-only here (the same bisect
+    # contract as the constprop BFD/DWARF spellings); every identity key
+    # (func_entry above, binary, oracle pins) stays validated.
+    del fields["func_name"]
 for key, value in fields.items():
     if meta.get(key) != value:
         raise SystemExit(f"META field {key} drifted: {meta.get(key)!r} != {value!r}")
@@ -516,8 +583,9 @@ else:
     if mode == "default":
         raise SystemExit("default mode requires projection_expectations")
 pin_state = "pinned" if pin is not None else "capture(unpinned)"
+target_label = f"{corpus}/addr:{entry_norm}" if mode == "address" else f"{corpus}/{func}"
 print(
-    f"stage_projection_1204: target={corpus}/{func} entry={entry_norm} "
+    f"stage_projection_1204: target={target_label} entry={entry_norm} "
     f"mode={pin_state}"
 )
 print(
@@ -537,9 +605,13 @@ then
   drift_dir=/dev/shm/rugra-tests/sb-oracle/drift
   mkdir -p "$drift_dir"
   drift_tag=$(date +%Y%m%d_%H%M%S)
-  cp "$oracle_tmp/projection.txt" "$drift_dir/${corpus}.${func}.${drift_tag}.projection"
-  cp "$oracle_tmp/run.stderr" "$drift_dir/${corpus}.${func}.${drift_tag}.stderr"
-  echo "drift artifacts preserved in $drift_dir/${corpus}.${func}.${drift_tag}.*" >&2
+  drift_tag_name=${func}
+  if [[ "$mode" == "address" ]]; then
+    drift_tag_name=addr${entry_norm}
+  fi
+  cp "$oracle_tmp/projection.txt" "$drift_dir/${corpus}.${drift_tag_name}.${drift_tag}.projection"
+  cp "$oracle_tmp/run.stderr" "$drift_dir/${corpus}.${drift_tag_name}.${drift_tag}.stderr"
+  echo "drift artifacts preserved in $drift_dir/${corpus}.${drift_tag_name}.${drift_tag}.*" >&2
   exit 1
 fi
 

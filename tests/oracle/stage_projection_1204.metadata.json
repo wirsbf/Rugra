@@ -26,7 +26,7 @@
  },
  "input_fingerprint": "sha256:0345105fb08b02e6747738929049506a0316a02d7b91016c2ccb145bd8b9725d",
  "comparand_sha256": {
-  "cpp_fixture": "9457bf886fede60aaafb81b03ea693b985c5dce1bb0029afdb41fe032bbb3003",
+  "cpp_fixture": "ebff6f2001be7293cf359a5eb8ccf2661a15accbf1d72e721a4cb22400e15bc7",
   "ghidra_instrumented_action_hh_sha256": "33a0404322e3641111f91187eb0bd0f49192fc93ef59f8c355d15a97dcfa47f3",
   "ghidra_instrumented_sleigh_arch_hh_sha256": "43eadf844d38e110c88b3b14c18b87e285059a2bb449ce791355654f6cdb2fc0"
  },
@@ -41,8 +41,8 @@
  },
  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
  "projection_expectations": {
-  "producer_blob": "f6cb61d14fd3df7be2e65a74381c303326c3e0dc",
-  "sha256": "a76cc9f8cc6a587e808f46a8cb69a5053013b21f82c39214de88627800c9732a",
+  "producer_blob": "24a4bec28f2786d0b0f4b23e540c67228519b92f",
+  "sha256": "105dd75ead1202360b78dd685f11f12b9c89cd69a78f4ff31d662a0ffad8ba99",
   "bytes": 6081486,
   "begins": 335,
   "ends": 335,
@@ -62,7 +62,7 @@
    "entry": "0x25a0",
    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "projection_expectations": {
-    "sha256": "bd9f682098077411ee48c3a6729805d6c1a85750d965f558fcc926aca44d704d",
+    "sha256": "e3c9038a4d652fb40faabfb0cd30327aa3a00278ad39c506e5f2909172818918",
     "bytes": 194406394,
     "begins": 299,
     "ends": 299,
@@ -80,7 +80,7 @@
    "entry": "0x3f00",
    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "projection_expectations": {
-    "sha256": "4464f2fff9088f3ed52fd08c4a5839237da6bcc1540f112df7f13ccfad205fa2",
+    "sha256": "62d5298d44ba352a5ec13c19f520e27e6ccfb579dd0a4c74a06f4df7f733c165",
     "bytes": 74304236,
     "begins": 371,
     "ends": 371,
@@ -98,7 +98,7 @@
    "entry": "0x2b820",
    "binary_sha256": "805f89cdbdce827f8f6ccd877aa7c344ff1105713b7bf7b0e6f313affa93b1c1",
    "projection_expectations": {
-    "sha256": "3815f999ef5676a5b17a85f0be60938fad3dfa1e7dabc9be5cefca007d95d8a3",
+    "sha256": "9eaeb61b7a681579d6515e24e2176445274a5fd864a47c5ad2e711030821357a",
     "bytes": 67659546,
     "begins": 294,
     "ends": 294,

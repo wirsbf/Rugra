@@ -1,0 +1,39 @@
+# B2BANK projection bank entry (mechanism B2 solidified fixture).
+# Frozen anchor: any byte change to the two .projection files must go
+# through re-capture from both producers and re-verification.
+function = "fileno"
+corpus = "curl"
+entry = "0x2410"
+# PLT thunk: no BFD symbol in any table; captured through the oracle
+# harness address-only arm (STAGE_PROJ_ADDR registration, console
+# "load <addr>" mirror). func_name META differs by construction
+# (oracle nameFunction default vs driver ledger spelling) and is
+# advisory under the bisect contract, like the constprop spellings.
+
+[oracle]
+side = "oracle"
+commit = "e40ed13014025f82488b1f8f7bca566894ac376b"
+tag = "Ghidra_12.0.4_build"
+producer_blob = "24a4bec28f2786d0b0f4b23e540c67228519b92f"
+capture_command = "RUGRA_STAGE_PROJECTION_OUT=tests/fixtures/projections/curl_plt_fileno/oracle.projection bash tools/run_stage_projection_oracle.sh curl 2410 -"
+pin_mode = "bank-sha256"
+date = "2026-09-25"
+
+[rugra]
+side = "rugra"
+driver_commit = "4f04875085cea77c8a00b87e70674c687641546b"
+driver_profile = "fast-release"
+capture_command = "RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=0x2410 RUGRA_STAGE_PROJ_OUT=tests/fixtures/projections/curl_plt_fileno/rugra.projection cargo run --profile fast-release --example curl_decompile"
+date = "2026-09-25"
+
+[verification]
+tool = "tools/run_stage_bisect.sh (stage_bisect.py --v1 strict offsets)"
+status = "MATCH"
+stages = 186
+ops = 742
+date = "2026-09-25"
+
+[integrity]
+oracle_sha256 = "3c78e17926a4375a777b665456adb609be58ac739a1094e7669ca9a90f92dd99"
+rugra_sha256 = "6d30fd593d94ae16a1dc06e5cbb574c42a4bcef8eaae06b3e224e208f02a4975"
+binary_sha256 = "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
