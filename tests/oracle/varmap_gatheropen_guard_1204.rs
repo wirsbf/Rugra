@@ -168,6 +168,39 @@ impl GatherOpenScope {
         op
     }
 
+    /// A guarded LOAD whose address input is deliberately UNTYPED — v_type
+    /// stays None (the Rust modeling of the oracle newUnique factory
+    /// unknown base with no updateType, funcdata_varnode.cc:83-93).  This is
+    /// the input shape that drives add_guard's None-ct branch: the factory
+    /// unknown base of the address varnode's width stands in for the oracle
+    /// value of getIn(1)->getTypeReadFacing (varmap.cc:1009).
+    fn untyped_load(&mut self, outsize: usize, pc: u64) -> rugra::op::PcodeOpRef {
+        let op = self.fd.new_op(2, Address::new(pc));
+        self.fd.op_set_opcode(&op, OpCode::CPUI_LOAD);
+        let spaceid = self.fd.new_constant(8, 0);
+        self.fd.op_set_input(&op, spaceid, 0);
+        let addr = self.fd.new_unique(8);
+        self.fd.op_set_input(&op, addr, 1);
+        let out = self.fd.new_unique(outsize);
+        self.fd.op_set_output(&op, out);
+        self.insert_op(&op);
+        op
+    }
+
+    /// A guarded STORE whose address input is deliberately UNTYPED.
+    fn untyped_store(&mut self, valsize: usize, pc: u64) -> rugra::op::PcodeOpRef {
+        let op = self.fd.new_op(3, Address::new(pc));
+        self.fd.op_set_opcode(&op, OpCode::CPUI_STORE);
+        let spaceid = self.fd.new_constant(8, 0);
+        self.fd.op_set_input(&op, spaceid, 0);
+        let addr = self.fd.new_unique(8);
+        self.fd.op_set_input(&op, addr, 1);
+        let val = self.fd.new_constant(valsize, 0x41);
+        self.fd.op_set_input(&op, val, 2);
+        self.insert_op(&op);
+        op
+    }
+
     /// Append a LoadGuard record (the shape Heritage's guard loads/stores
     /// leave behind, heritage.hh:159-161 `set`).
     fn add_guard_record(
@@ -263,6 +296,30 @@ impl GatherOpenScope {
         }
         parts.join(";")
     }
+
+    /// Render the scope's symbols with canonical type tokens — the
+    /// untyped-arm comparand projection `start:size:unkA[num]` (element
+    /// token then element count for arrays), mirroring
+    /// symbols_token_text in the .cc fixture.
+    fn symbols_token_text(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for i in Self::ordered_entry_indices(&self.scope) {
+            let entry = &self.scope.mapentry_log[i];
+            let sym = match self.scope.symbols.get(entry.sym) {
+                Some(s) => s,
+                None => continue,
+            };
+            let type_tok = match sym.dtype.as_deref() {
+                Some(Datatype::Array(a)) => {
+                    format!("{}[{}]", type_token(a.array_of.as_ref()), a.num_elements)
+                }
+                Some(dt) => type_token(dt),
+                None => "null".to_string(),
+            };
+            parts.push(format!("{:x}:{}:{}", entry.start, entry.size, type_tok));
+        }
+        parts.join(";")
+    }
 }
 
 fn pairs_text(pairs: &[(u64, u64)]) -> String {
@@ -271,6 +328,18 @@ fn pairs_text(pairs: &[(u64, u64)]) -> String {
         .map(|&(first, last)| format!("{:x}-{:x}", first, last))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// Canonical cross-fixture type projection: the Rust factory spells its
+/// unknown bases "undefinedN" while the oracle fixture spells them
+/// "xunknownN" — both TYPE_UNKNOWN of the same width — so the untyped-arm
+/// cases print metatype + element width, never the name.
+fn type_token(dt: &Datatype) -> String {
+    if dt.get_metatype() == TypeMetatype::Unknown {
+        format!("unk{}", dt.get_align_size())
+    } else {
+        format!("other:{}", dt.get_name())
+    }
 }
 
 // case=guard_open_hints
@@ -284,7 +353,8 @@ fn run_guard_open_hints() {
     t.add_guard_record(&store, 1, 0xffffffffffffffc0, 0xffffffffffffffff, false, true);
     let rejected = t.guarded_load(GatherOpenScope::int_t(), 8, 0x2030);
     t.add_guard_record(&rejected, 4, 0xfffffffffffffff8, 0xffffffffffffffff, true, false);
-    t.scope.restructure_varnode(&mut t.fd);
+    // aliasyes=true mirrors the .cc restructureVarnode(true).
+    t.scope.restructure_varnode(&mut t.fd, true);
     println!("case=guard_open_hints|symbols=[{}]", t.symbols_text());
 }
 
@@ -294,7 +364,7 @@ fn run_gather_symbols_reinput() {
     t.install_symbol("locked_local", GatherOpenScope::long_t(), 0xffffffffffffffd0, true, true, -1);
     t.stack_copy(0xffffffffffffffd0, GatherOpenScope::long_t(), 0x2100);
     t.stack_copy(0xffffffffffffffc0, GatherOpenScope::int_t(), 0x2108);
-    t.scope.restructure_varnode(&mut t.fd);
+    t.scope.restructure_varnode(&mut t.fd, true);
     println!(
         "case=gather_symbols_reinput|symbols=[{}]|names=[{}]",
         t.symbols_text(),
@@ -308,7 +378,7 @@ fn run_category_clears() {
     t.install_symbol("unlocked_param", GatherOpenScope::int_t(), 0x10, false, false, symbol_category::FUNCTION_PARAMETER);
     t.install_symbol("locked_param", GatherOpenScope::int_t(), 0x20, true, true, symbol_category::FUNCTION_PARAMETER);
     t.install_symbol("old_fake", GatherOpenScope::int_t(), 0x30, false, false, symbol_category::FAKE_INPUT);
-    t.scope.restructure_varnode(&mut t.fd);
+    t.scope.restructure_varnode(&mut t.fd, true);
     println!("case=category_clears|names=[{}]", t.symbol_names_text());
 }
 
@@ -318,14 +388,14 @@ fn run_check_unaliased_return() {
     let retvn = t.stack_copy(0x30, GatherOpenScope::long_t(), 0x2200);
     t.spacebase_pointer_add(0x10, 0x2210);
     t.return_op(&retvn, 0x2220);
-    t.scope.restructure_varnode(&mut t.fd);
+    t.scope.restructure_varnode(&mut t.fd, true);
     let marked = pairs_text(&t.scope.local_range);
 
     let mut t2 = GatherOpenScope::new("check_unaliased_return_aliased", 0xa400);
     let retvn2 = t2.stack_copy(0x30, GatherOpenScope::long_t(), 0x2300);
     t2.spacebase_pointer_add(0x34, 0x2310);
     t2.return_op(&retvn2, 0x2320);
-    t2.scope.restructure_varnode(&mut t2.fd);
+    t2.scope.restructure_varnode(&mut t2.fd, true);
     let unmarked = pairs_text(&t2.scope.local_range);
 
     println!(
@@ -340,7 +410,7 @@ fn run_annotate_raw_stack_ptr() {
     t.fd.set_type_recovery_started();
     let eq = t.raw_stack_ptr_use(0x2400);
     t.stack_copy(0xfffffffffffffff8, GatherOpenScope::long_t(), 0x2410);
-    t.scope.restructure_varnode(&mut t.fd);
+    t.scope.restructure_varnode(&mut t.fd, true);
     let desc = {
         let eq_op = eq.0.read().unwrap();
         let in0 = eq_op.inrefs[0].clone();
@@ -393,6 +463,68 @@ fn run_derive_boundaries() {
     );
 }
 
+// case=guard_untyped_hints — add_guard's None-ct arm through the production
+// path (the .cc fixture's case 7): a range-locked LOAD with step == element
+// width keeps the address width (unk8, minItems 15); an unanalyzed LOAD
+// whose outSize divides the step re-steps to 4 and re-types to unk4; an
+// unanalyzed STORE re-types to unk2 and extends up to the next hint; an
+// outSize>step LOAD stays rejected and leaves no trace.
+fn run_guard_untyped_hints() {
+    let mut t = GatherOpenScope::new("guard_untyped_hints", 0xa700);
+    let locked = t.untyped_load(8, 0x2600);
+    t.add_guard_record(&locked, 8, 0xffffffffffffff80, 0xffffffffffffffff, true, false);
+    let unanalyzed = t.untyped_load(4, 0x2610);
+    t.add_guard_record(&unanalyzed, 8, 0xffffffffffffff40, 0xffffffffffffffff, false, false);
+    let store = t.untyped_store(2, 0x2620);
+    t.add_guard_record(&store, 2, 0xffffffffffffff20, 0xffffffffffffffff, false, true);
+    let rejected = t.untyped_load(16, 0x2630);
+    t.add_guard_record(&rejected, 8, 0xfffffffffffffff8, 0xffffffffffffffff, true, false);
+    t.scope.restructure_varnode(&mut t.fd, true);
+    println!("case=guard_untyped_hints|symbols=[{}]", t.symbols_token_text());
+}
+
+// case=guard_untyped_dump — the field-by-field None-ct arm comparand (the
+// .cc fixture's case 8): the same four untyped guards fed to a hand-built
+// MapState (build_map_state mirrors the varmap.cc:1260-1261 construction
+// with the param-range subtraction), dumping every collected RangeHint in
+// gatherOpen insertion order (loads then stores): start/sstart/size/flags/
+// range_type/high_ind/type token.
+fn run_guard_untyped_dump() {
+    let mut t = GatherOpenScope::new("guard_untyped_dump", 0xa800);
+    let locked = t.untyped_load(8, 0x2700);
+    t.add_guard_record(&locked, 8, 0xffffffffffffff80, 0xffffffffffffffff, true, false);
+    let unanalyzed = t.untyped_load(4, 0x2710);
+    t.add_guard_record(&unanalyzed, 8, 0xffffffffffffff40, 0xffffffffffffffff, false, false);
+    let store = t.untyped_store(2, 0x2720);
+    t.add_guard_record(&store, 2, 0xffffffffffffff20, 0xffffffffffffffff, false, true);
+    let rejected = t.untyped_load(16, 0x2730);
+    t.add_guard_record(&rejected, 8, 0xfffffffffffffff8, 0xffffffffffffffff, true, false);
+    let types = TypeFactory::shared_default();
+    let mut state = t.scope.build_map_state(&t.fd, &types);
+    for guard in &t.fd.heritage.load_guard {
+        state.add_guard(guard, OpCode::CPUI_LOAD, &types);
+    }
+    for guard in &t.fd.heritage.store_guard {
+        state.add_guard(guard, OpCode::CPUI_STORE, &types);
+    }
+    let parts: Vec<String> = state
+        .hints()
+        .iter()
+        .map(|h| {
+            let tok = h
+                .dtype
+                .as_deref()
+                .map(type_token)
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{:x}:{}:{}:{}:{}:{}:{}",
+                h.start, h.sstart, h.size, h.flags, h.range_type as i32, h.high_ind, tok
+            )
+        })
+        .collect();
+    println!("case=guard_untyped_dump|hints=[{}]", parts.join(";"));
+}
+
 // Keep the shared factory alive for the symbol-entry type identity domain.
 fn _factory_anchor() -> Arc<RwLock<TypeFactory>> {
     TypeFactory::shared_default()
@@ -406,4 +538,6 @@ fn main() {
     run_check_unaliased_return();
     run_annotate_raw_stack_ptr();
     run_derive_boundaries();
+    run_guard_untyped_hints();
+    run_guard_untyped_dump();
 }
