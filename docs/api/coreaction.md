@@ -3082,3 +3082,48 @@ skip+eprintln：损坏/不可解析的 manifest 条目降级为"该 local 不播
 拼写）；自 BRIDGE1-TYPESEED-PIDT 修复移除 parse_c_type 的静默
 address_size 回退后，该臂同时是未来不可解析基拼写的指定响亮处理路径
 （见 docs/api/debugproto.md 同日节）。
+
+## 2026-09-25（SPACEFIX lane）：buildReturnOutput 两段 join 空间构造（COREACTION-JOINSPACE-0001）
+
+CR-XCROSS 复核登记的 P2 空间钉死残留位：`build_return_output` 两段拼接臂
+（coreaction.cc:1850-1868）此前自创「取 lo/hi varnode 偏移最小值 + Register
+空间」并注释声明 Register space——对 oracle 是错误声明。cc:1855-1857 的
+`getArch()->constructJoinAddress(translate, trialhi.getAddress(),trialhi.getSize(),
+triallo.getAddress(),triallo.getSize())` 以 **trial 存储地址**（非 varnode 偏移）
+进入 `AddrSpaceManager::constructJoinAddress`（translate.cc:817-860）。
+
+新增两个自由函数（coreaction.rs，ActionReturnRecovery 结构体旁）：
+
+- `return_join_address(arch, hi, lo)`（// Ghidra: translate.cc:817）——四分支
+  1:1 镜像：①空间合法性守卫（cc:824-826 LowlevelError 臂对输出 trial 结构上
+  不可达，violation 响亮记录后仍 join）；②usejoinspace（spacebase=stack 或
+  默认代码空间=ram 分片迫使可映射空间合并，cc:827-830）；③连续性
+  （address.cc:173 `Address::isContiguous`：同空间+wrapOffset 算术）——可映射
+  空间返回最早地址（LE lo/BE hi，cc:832-835），register 空间先查覆盖父寄存器
+  名（`Architecture::get_register_name` ← sleighbase.cc:144-168）有名即返回该
+  分片地址（cc:837-845）；④否则 findAddJoin([hi,lo],0) → **Join 空间**
+  unified 偏移（cc:848-859）。
+- `join_unified_offset(hi, lo)`（RUGRA-GLUE）——unified 偏移的无状态
+  splitmix64 派生：同分片四元组恒映射同一 join 地址（保留 findAddJoin
+  splitset 去重对下游可观察的合并恒等语义——本函数两处触发同偏移实证），
+  异分片映射到互异 16 字节对齐槽（translate.cc:708 roundsize 对齐）。**残差**
+  （TODO 行登记）：oracle 偏移是进程全局 `joinallocate` 计数器顺序值；
+  Rugra 生产 Architecture 无可变 join 表（`join_db` 经共享 Arc 只读），无状态
+  派生兼得并行线程竞态免疫；数值差异当前不可观察（join_db 恒空，无 findJoin
+  消费方可比较偏移）。
+
+`newVarnodeOut(hisz+losz, joinaddr, newop)`（cc:1860）随之改走
+`new_varnode_out_full(total, join_space, join_off, newop)`——三元组同源：
+size=两 trial 尺寸和、space/offset=constructJoinAddress 结果。
+
+- 探针实证（已回滚）：curl 0 触发；**httpd 默认+SYMDB 各 2 次触发**，均为
+  `ap_vhost_iterate_given_conn` 的 RDX(0x10):RAX(0x0) 8+8 寄存器对（非连续、
+  无覆盖父名 → join 空间，与 oracle 判定一致），两处触发去重为同一 join 偏移。
+- 可观察效果：该函数 join 整体 var 的命名槽位从 Register@0 钉死的第 4 位
+  （auVar4）移至真实 Join 空间序（所有 register var 之后，auVar8），
+  存活变量编号 lVar4/plVar5/puVar6/puVar7 **与 golden 前缀逐一吻合**
+  （亲父为 lVar5/plVar6 off-by-one）——向 oracle 收敛；门禁骨架计数逐函数
+  恒等（httpd 1472/0/0 双方同值，ap_vhost_iterate_given_conn diff=49 双方同值），
+  SYMDB 1328/0/0 不回退，curl 字节恒等。残余 auVar8[16] 打印本体是
+  heritage processJoins 拆分 stub 的既有登记残差（golden 侧 join 读被拆分，
+  C 文本无 16 字节 var）。

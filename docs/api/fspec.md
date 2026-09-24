@@ -1126,3 +1126,20 @@ Evidence 断言了未实现的行为（机制 D 红旗，CR29 件④子项①）
 return_type=void 基类型。另登记 PROTOSTORE-SIZELOCK-UPGRADE-0001（locked+
 TYPE_UNKNOWN 态 Ghidra 可经 isSizeTypeLocked 臂升级而 Rugra 合流建模不可达；
 含 fspec.rs:1608 合流的解除条件）。
+
+## 2026-09-25（SPACEFIX lane）：buildInputFromTrials SUBPIECE 输出空间修正（FSPEC-DEALLOC-SPACE-0001）
+
+CR-XCROSS 复核登记的 P2 空间钉死残留位：`build_input_from_trials` 过大参数
+SUBPIECE 截断臂（fspec.cc:5720-5732，x86-64 little-endian 臂 cc:5726）此前经
+spaceless 适配器 `new_varnode_out` 把 outvn 钉死 Register 空间。oracle 的
+`data.newVarnodeOut(sz,vn->getAddr(),newop)` 中 `vn->getAddr()` 是**当前参数
+varnode 的完整存储地址**（空间+偏移）——栈传参即 stack 空间、寄存器传参即
+register 空间。修正为在读锁快照内一并捕获 `vn_r.get_space()`，改走
+`new_varnode_out_full(sz, vn_space, vn_off, newop)`（与 XCROSS/OPZERO 同族
+三元组同源修法：size 用参数型 sz、space/offset 用 vn 自身存储）。
+
+- 探针实证（已回滚）：curl / httpd-default / httpd-SYMDB 三态 0 次触发
+  （触发条件=USED 试验的现 varnode 大于参数型且需截断；现语料 call 参数
+  均按槽位精确装载）——位点语料休眠，correct-by-construction。
+- 门禁：三态输出与亲父 e452244d cmp 字节恒等（curl 1099/0/0、httpd
+  1472/0/0、SYMDB 1328/0/0）；bank 26/26。

@@ -2536,8 +2536,8 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 
 ## 2026-09-25 CR-XCROSS 复核登记（独立 reviewer，条件项）
 - **FUNCDATA-OPZEROMULTI-SPACE-0001** | ~~P1 待认领~~ → **DONE 2026-09-25**(wt/opzero Lane OPZERO,上表 DONE 行收口;零输入臂三态探针 0 触发=位点语料休眠,构造修正 correct-by-construction;待独立 CR)
-- **FSPEC-DEALLOC-SPACE-0001** | P2 | fspec.rs:2857（fspec.cc:5725-5728）| newVarnodeOut 用 vn 自身 space（栈传参即 stack），Rust Register 钉死 | owner: 待认领
-- **COREACTION-JOINSPACE-0001** | P2 | coreaction.rs:14408（coreaction.cc:1854-1860）| Ghidra constructJoinAddress→join space，Rust Register 且注释声明错误 | owner: 待认领
+- **FSPEC-DEALLOC-SPACE-0001** | ~~P2~~ → **DONE 2026-09-25**(wt/spacefix Lane SPACEFIX,commit 见 `git log --grep SPACEFIX`;fspec.rs:2857 SUBPIECE 截断臂改 `new_varnode_out_full(sz, vn 自身 space, vn_off)`——cc:5726 `vn->getAddr()` 完整存储地址,三元组同源;探针实证三态(curl/httpd-def/httpd-SYMDB)0 触发=位点休眠,correct-by-construction;门禁=三态 cmp 亲父 e452244d 字节恒等+bank 26/26;fspec 非白名单,机制 C 豁免)
+- **COREACTION-JOINSPACE-0001** | ~~P2~~ → **DONE 2026-09-25**(wt/spacefix Lane SPACEFIX,同 commit;coreaction build_return_output 两段臂改走 `return_join_address`(translate.cc:817-860 四分支镜像:合法性守卫/usejoinspace/连续+覆盖父名/findAddJoin→**Join 空间**)+`new_varnode_out_full`;join 偏移=无状态 splitmix64 派生(同分片恒同偏移=splitset 去重语义,httpd 双触发同偏移实证;**残差**:oracle 为全局 joinallocate 计数器值,Rugra 无可变 join 表,数值差异 join_db 恒空不可观察,本行即登记);探针实证:curl 0 触发,**httpd 双态各 2 触发(ap_vhost_iterate_given_conn RDX:RAX 8+8,与 oracle 同判 join 空间)**;可观察=该函数存活变量编号 lVar4/plVar5 与 golden 前缀吻合(亲父 off-by-one),门禁 1472/0/0+1328/0/0 逐函数恒等+curl 字节恒等+bank 26/26;残余 auVar8[16] 打印=processJoins stub 既有登记;coreaction 主管线域,**机制 C 待独立 CR**(单点构造修法,先例 CR-XCROSS 同构,复核点=translate.cc:817-860 四分支+coreaction.cc:1855-1860 trial 地址源))
 - **FAMILY-AUDIT-SPACELESS-SITES-0001** | P3 | flow.rs:3858 / transform.rs:431 / ruleaction×4 / double_precis×3 / coreaction 其余 Register 钉死 + push_multiequals cc:118-120 spaceless offset 比较（Address::operator== 含 space）| 逐一对照 Ghidra 地址 space | owner: 待认领
 
 ## 2026-09-25 CR-RANGEHINT 复核登记（独立 reviewer，APPROVE 条件项）
@@ -2559,3 +2559,11 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 - **FLAGBASE-CR-F1** | P3 | heritage.rs 臂(4) 残差注释 | 补"开放尾 Ram range"（pspec range="X:" → getLastAddrOpen invalid → 末分区非零无闭合）也会使折 0 偏离; 触发条件=pspec 出现开放属性 range | owner: 待认领
 - **FLAGBASE-CR-F2** | P3 | database.rs:3712-3723 vs heritage.rs 注释 | flagbase 键空间形态统一约定: 生产全 None 形态行为无空间,但任一侧改 with_space 会因 None 恒排 Some 前而静默错序; 建议 debug_assert 键形态或 phase3 迁全带 tag 键 | owner: 待认领
 - **FLAGBASE-CR-F3** | P3 | examples 驱动 | oracle getReadonly 装所有 SEC_RDONLY section（.eh_frame/.dynstr 等）,驱动只装 rodata_span; SYMDB 数据源完备性备注 | owner: 待认领
+
+## 2026-09-25 CR-SPACEFIX 复核登记（独立 reviewer，APPROVE 条件项）
+- **SPACEFIX-CR-F1** | P3 | coreaction.rs:14502-14519 | join_unified_offset 文档块不可观察论证措辞错误: join_db 有消费方（heritage split_join_read/write 四处+ruleaction.rs:12398）,真因=全为 stub/死代码; registry print/encode 为 panic-on-unlinked 但仅 registry 世界可达。下次 coreaction 触碰时改写注释 | owner: 待认领
+- **SPACEFIX-CR-F2** | P3 | join_unified_offset 预混合位布局 | off≥2^32 时与 size 字段 XOR 重叠非单射; 寄存器/栈片偏移≪2^32 无害——并入 COREACTION-JOINSPACE 残差行备注 | owner: 待认领
+- **SPACEFIX-CR-F3** | P3 | space.rs:82 Overlay→SPACEID_OTHER 混叠 | x86-64 不可达; 备注于 join 残差 | owner: 待认领
+- **SPACEFIX-CR-F4** | P3 | fspec BE 截断臂未实现（cc:5723-5724）| BE arch 引入时必补; 注释已声明 | owner: 待认领
+- **SPACEFIX-CR-F5** | P3 | 守卫分歧: oracle throw vs Rust log+join; arch=None unwrap_or_default 跳过父名 | 输出试验寄存器存储下结构不可达,维持现状 | owner: 待认领
+- **SPACEFIX-CR-F6** | P3 | join varnode 生产暴露面扩大: processJoins stub 残差+RulePullsubMulti join 臂 None 回退（hash 偏移当普通偏移用）+registry print/encode panic 面 | 在既有 processJoins/JoinRecord 基建 TODO 追加两条款 | owner: 待认领

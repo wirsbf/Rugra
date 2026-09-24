@@ -2847,14 +2847,19 @@ impl FuncCallSpecs {
                 // type — insert a SUBPIECE truncate before the call.
                 let vn_size = slot_vn.read().unwrap().get_size() as i32;
                 if vn_size > sz {
-                    let (op_addr, vn_off) = {
+                    let (op_addr, vn_off, vn_space) = {
                         let (op_r, vn_r) = (call_op.0.read().unwrap(), slot_vn.read().unwrap());
-                        (op_r.get_addr(), vn_r.get_offset())
+                        (op_r.get_addr(), vn_r.get_offset(), vn_r.get_space())
                     };
                     let newop = fd.new_op(2, op_addr);
                     // x86-64 is little-endian: outvn at vn->getAddr() (the
                     // big-endian +size-sz alternative is fspec.cc:5725-5726).
-                    let outvn = fd.new_varnode_out(sz as usize, Address::new(vn_off), &newop);
+                    // vn->getAddr() is the parameter varnode's FULL storage
+                    // address — its own space (stack space for stack-passed
+                    // parameters, register space for register params), not a
+                    // pinned register space (FSPEC-DEALLOC-SPACE-0001).
+                    let outvn =
+                        fd.new_varnode_out_full(sz as usize, vn_space, Address::new(vn_off), &newop);
                     fd.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_SUBPIECE);
                     fd.op_set_input(&newop, slot_vn.clone(), 0);
                     let trunc_const = fd.new_constant(1, 0);
