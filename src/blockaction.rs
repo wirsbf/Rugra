@@ -4577,6 +4577,8 @@ impl<'a> CollapseStructure<'a> {
                     sw.default_case.clone(),
                     sw.case_gototypes.clone(),
                     sw.default_gototype,
+                    sw.case_isexit.clone(),
+                    sw.default_isexit,
                     sw.case_values.clone(),
                     sw.index_varnode.clone(),
                     sw.jump.clone(),
@@ -4607,11 +4609,13 @@ impl<'a> CollapseStructure<'a> {
                     default_case: new_default,
                     case_gototypes: sw_fields.4,
                     default_gototype: sw_fields.5,
-                    jump: sw_fields.8,
-                    case_order: sw_fields.9,
-                default_label: None,
-                    case_values: sw_fields.6,
-                    index_varnode: sw_fields.7,
+                    case_isexit: sw_fields.6,
+                    default_isexit: sw_fields.7,
+                    jump: sw_fields.10,
+                    case_order: sw_fields.11,
+                    default_label: None,
+                    case_values: sw_fields.8,
+                    index_varnode: sw_fields.9,
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
@@ -5375,11 +5379,21 @@ impl<'a> CollapseStructure<'a> {
         // a BlockMultiGoto no matter how many out edges remain
         // (BLOCKSTRUCT-MULTIGOTO-0001).
         if block.read().unwrap().get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
+            let peeled_target_addr = block
+                .read()
+                .unwrap()
+                .get_out(goto_edge.unwrap())
+                .and_then(|e| {
+                    crate::block::front_leaf(&e.point)
+                        .map(|l| crate::block::dbg_front_leaf_start_addr(&l))
+                })
+                .unwrap_or(0);
             self.new_block_multigoto(i, goto_edge.unwrap());
             eprintln!(
-                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled switch edge {}",
+                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled switch edge {} -> @{:#x}",
                 self.name,
-                goto_edge.unwrap()
+                goto_edge.unwrap(),
+                peeled_target_addr
             );
             return true;
         }
@@ -5450,9 +5464,12 @@ impl<'a> CollapseStructure<'a> {
         // (BLOCK-RECIPROCAL-OOB-0001).
         self.graph.remove_edge_blocks(&goto_block, &goto_target);
         self.structure_change_count += 1;
+        let la = crate::block::front_leaf(&goto_block)
+            .map(|l| crate::block::dbg_front_leaf_start_addr(&l))
+            .unwrap_or(0);
         eprintln!(
-            "[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})",
-            self.name, idx, size_out
+            "[COLLAPSE] {} ruleBlockGoto: wrapped block {} @{:#x} (size_out={})",
+            self.name, idx, la, size_out
         );
         true
     }
@@ -6336,6 +6353,14 @@ impl<'a> CollapseStructure<'a> {
         });
         let mut cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
         let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+        // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) for gt==0
+        // cases — captured HERE, before identify_internal consumes the case
+        // blocks (selfIdentify's replaceInEdge half-deletes their external
+        // out-edge halves, block.cc:160-173, so post-consumption sizeOut is
+        // 0 and the flag is not re-derivable at print time). gt!=0 (the
+        // multigoto arm, appended below) sets isexit=false (cc:3512).
+        let mut case_isexit: Vec<bool> = Vec::new();
+        let mut default_isexit = false;
         let exit_idx = exitblock;
         for j in 0..sizeout {
             let curbl = match block.read().unwrap().get_out(j) {
@@ -6346,14 +6371,30 @@ impl<'a> CollapseStructure<'a> {
             if Some(cur_idx) == exit_idx {
                 continue;
             }
-            let is_default_edge = switch_basic
-                .as_ref()
-                .map(|sb| sb.read().unwrap().is_default_branch(j))
-                .unwrap_or(false);
+            // cc:3506-3515 (addCase): the case's coordinates resolve on the
+            // UNDERLYING basic-block graph — `inindex =
+            // basicbl->getInIndex(switchbl)`, `outindex =
+            // basicbl->getInRevIndex(inindex)`, `isdefault =
+            // switchbl->isDefaultBranch(outindex)` — never on the
+            // structured graph's slot index j: newBlockMultiGoto peels
+            // goto-marked dispatch edges out of the structured out list
+            // (removeEdge, block.cc:1746), shifting every later slot down,
+            // so a slot-indexed isDefaultBranch(j) would read the ORIGINAL
+            // edge flags against SHIFTED targets. Observed: httpd main's
+            // post-peel slot 1 held case 0x43's block while orig slot 1 was
+            // the peeled default — 0x43 got diverted into the default slot
+            // and its case vanished (BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001
+            // symptom family). switch_case_basic_coords performs the same
+            // basic-graph in-edge walk.
+            let (is_default_edge, _outindex, _basic) =
+                Self::switch_case_basic_coords(&switch_basic, &curbl);
+            let isexit_flag = curbl.read().unwrap().size_out() == 1;
             if is_default_edge {
                 default_case = Some(curbl);
+                default_isexit = isexit_flag;
                 continue;
             }
+            case_isexit.push(isexit_flag);
             cases.push(curbl);
         }
 
@@ -6402,6 +6443,10 @@ impl<'a> CollapseStructure<'a> {
                 // parallel array must be cases-length from construction.
                 case_gototypes: vec![0; num_regular_cases],
                 default_gototype: 0,
+                // cc:3513-3514 addCase: isexit captured pre-consumption
+                // (see the collection loop above).
+                case_isexit,
+                default_isexit,
                 jump,
                 case_order,
                 default_label: None,
@@ -6481,6 +6526,8 @@ impl<'a> CollapseStructure<'a> {
                 let mut sw = switch_block.write().unwrap();
                 let sw_ref = sw.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
                 sw_ref.case_gototypes = vec![0; sw_ref.cases.len()];
+                // case_isexit keeps its pre-consumption captures; only the
+                // appended goto-arm cases below set their own (cc:3512).
                 for target in gotoedges {
                     let (isdefault, outindex, basic) =
                         Self::switch_case_basic_coords(&switch_basic, &target);
@@ -6493,11 +6540,15 @@ impl<'a> CollapseStructure<'a> {
                         // needed (documented divergence, block.rs).
                         sw_ref.default_case = Some(target);
                         sw_ref.default_gototype = crate::block::goto_type::GOTO_GOTO;
+                        // cc:3512: gt != 0 → isexit = false.
+                        sw_ref.default_isexit = false;
                     } else {
                         sw_ref.cases.push(target);
                         sw_ref
                             .case_gototypes
                             .push(crate::block::goto_type::GOTO_GOTO);
+                        // cc:3512: gt != 0 → isexit = false.
+                        sw_ref.case_isexit.push(false);
                         // Placeholder label coordinate = the basic-level
                         // out-edge slot (the oracle's real labels come from
                         // the jumptable index map in finalizePrinting,
@@ -7450,6 +7501,8 @@ impl<'a> CollapseStructure<'a> {
                     // cc:3510-3511 addCase: regular cases carry gototype 0.
                     case_gototypes: vec![0; num_cases_here],
                     default_gototype: 0,
+                    case_isexit: vec![false; num_cases_here],
+                    default_isexit: false,
                     jump,
                     case_order,
                 default_label: None,
@@ -7743,6 +7796,8 @@ impl<'a> CollapseStructure<'a> {
                     default_case,
                     case_gototypes: Vec::new(),
                     default_gototype: 0,
+                    case_isexit: Vec::new(),
+                    default_isexit: false,
                     jump: None,
                     case_order: Vec::new(),
                     default_label: None,
@@ -7922,6 +7977,8 @@ impl<'a> CollapseStructure<'a> {
                 let ctrl = sw.control.clone();
                 let cgt = sw.case_gototypes.clone();
                 let dgt = sw.default_gototype;
+                let cie = sw.case_isexit.clone();
+                let die = sw.default_isexit;
                 let cv = sw.case_values.clone();
                 let iv = sw.index_varnode.clone();
                 let jmpz = sw.jump.clone();
@@ -7936,6 +7993,8 @@ impl<'a> CollapseStructure<'a> {
                         default_case: new_def,
                         case_gototypes: cgt,
                         default_gototype: dgt,
+                        case_isexit: cie,
+                        default_isexit: die,
                         jump: jmpz,
                         case_order: jo,
                         default_label: None,

@@ -481,11 +481,10 @@ pub fn graph_sibling_successors(
 ///   is a break statement in the flow"). Arm ③-⑤: a `t_goto` case is looked
 ///   up in the case order — oracle `caseblocks`, label/depth stable_sort at
 ///   finalizePrinting (block.cc:3591) after ActionFinalStructure's
-///   `finalizePrinting` call (blockaction.cc:2192); Rugra prints cases in
-///   component order (cases + appended default, printc emit_block_switch),
-///   so the component order IS the print/fallthru order here — and the
-///   next caseblock's front leaf; the LAST caseblock defers to the parent
-///   arm `succ` ("flow is to exit of switch").
+///   `finalizePrinting` call (blockaction.cc:2192); the merged SORTED order
+///   (cases + default at its label rank, the print order) supplies the next
+///   caseblock's front leaf; the LAST caseblock defers to the parent arm
+///   `succ` ("flow is to exit of switch").
 // pub for the bilateral goto_prints_nextflowafter_1204 fixture — the
 // oracle side queries the per-parent virtual dispatch directly, and this
 // is the Rust-visible projection of that dispatch for every parent kind.
@@ -539,23 +538,75 @@ pub fn next_flow_after_successors(
         }
         BlockType::Switch => {
             let mut v: Vec<Option<_>> = Vec::with_capacity(n);
-            for (pos, component) in components.iter().enumerate() {
-                // cc:3646-3647: non-t_goto case → null ("Otherwise there is
-                // a break statement in the flow"). cc:3649-3657: a t_goto
-                // case is fall-thru to the NEXT caseblock in print order
-                // (component order here — see doc comment); cc:3659-3660:
-                // the last caseblock defers to the parent arm. No
-                // dispatch-root arm: Rust components[0] is the first case,
-                // not cs[0].
-                let is_goto = component.read().unwrap().get_type() == BlockType::Goto;
-                if !is_goto {
-                    v.push(None);
-                } else {
-                    v.push(match components.get(pos + 1) {
-                        Some(next) => front_leaf(next),
-                        None => succ.clone(),
-                    });
+            // cc:3643-3661 walk the SORTED caseblocks order — the merged
+            // print order (cases with the default at its label rank, the
+            // same def_pos recipe printc uses for emission, block.cc:3591
+            // stable sort + printc.cc:3331-3332) — not the raw component
+            // list: the oracle's caseblocks include the default as an
+            // ordinary member, so the LAST caseblock defers to the parent
+            // arm (cc:3659-3660 "flow is to exit of switch") and the
+            // default's own successor is the case at its rank + 1. With the
+            // default appended last instead, the final real case would
+            // compare against the default's front leaf and lose its goto
+            // statement when the default is its goto target (observed:
+            // httpd main case 0x66's `goto switchD_.._caseD_40;` silenced,
+            // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 symptom ③).
+            let merged: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                let r = node.read().unwrap();
+                let sw = r
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockSwitch>()
+                    .unwrap();
+                let mut m: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = sw.cases.clone();
+                if let Some(dc) = &sw.default_case {
+                    let def_pos: usize = match sw.default_label {
+                        Some(dl) if sw.case_order.len() == sw.cases.len() => {
+                            sw.case_order.iter().filter(|co| co.label < dl).count()
+                        }
+                        _ => sw.cases.len(),
+                    };
+                    let pos = def_pos.min(m.len());
+                    m.insert(pos, dc.clone());
                 }
+                m
+            };
+            let merged_succ: Vec<Option<_>> = {
+                let leaves: Vec<Option<_>> = merged
+                    .iter()
+                    .map(|c| front_leaf(c))
+                    .collect();
+                let mut ms: Vec<Option<_>> = Vec::with_capacity(merged.len());
+                for (pos, component) in merged.iter().enumerate() {
+                    let is_goto =
+                        component.read().unwrap().get_type() == BlockType::Goto;
+                    if !is_goto {
+                        // cc:3646-3647: non-t_goto case → null ("Otherwise
+                        // there is a break statement in the flow").
+                        ms.push(None);
+                    } else {
+                        ms.push(match leaves.get(pos + 1) {
+                            Some(Some(next)) => Some(next.clone()),
+                            // cc:3659-3660: last caseblock defers to the
+                            // parent arm `succ` ("flow is to exit of
+                            // switch").
+                            _ => succ.clone(),
+                        });
+                    }
+                }
+                ms
+            };
+            // Map the merged-order successors back onto the component list
+            // order the caller iterates (component_list_dyn = cases + the
+            // appended default): identity match by Arc pointer.
+            for component in components.iter() {
+                let mut found: Option<Option<_>> = None;
+                for (pos, mc) in merged.iter().enumerate() {
+                    if Arc::ptr_eq(mc, component) {
+                        found = Some(merged_succ[pos].clone());
+                        break;
+                    }
+                }
+                v.push(found.unwrap_or(None));
             }
             v
         }
@@ -7742,6 +7793,20 @@ pub struct BlockSwitch {
     /// peeled as an unstructured goto (newBlockMultiGoto's setDefaultGoto
     /// path). Same promotion rules as `case_gototypes`.
     pub default_gototype: u32,
+    /// Ghidra `CaseOrder::isexit` (block.hh:763) per regular case: captured
+    /// by `BlockSwitch::addCase` (block.cc:3513-3514) at grabCaseBasic time —
+    /// BEFORE newBlockSwitch's identifyInternal consumes the case blocks and
+    /// selfIdentify's replaceInEdge half-deletes their external out-edge
+    /// halves (block.cc:160-173) — so `bl->sizeOut()==1` still sees the
+    /// pre-consumption edge count. The flag is the permanent transport the
+    /// printer reads (`isExit(i)`, block.hh:791, printc.cc:3342); it is NOT
+    /// re-derivable post-collapse (components keep zero external edges).
+    /// `gt != 0 → false` (cc:3512); `gt == 0 → bl->sizeOut() == 1`. Parallel
+    /// to `cases`.
+    pub case_isexit: Vec<bool>,
+    /// `CaseOrder::isexit` for the default slot (cc:3512-3514 applied to
+    /// Rugra's separate default arm).
+    pub default_isexit: bool,
     /// Ghidra `BlockSwitch::jump` (block.hh:753): the jump table associated
     /// with this switch, captured by the ctor (`jump = ind->getJumptable()`,
     /// block.cc:3488, via `FlowBlock::getJumptable`, block.cc:630-639, which
@@ -8030,6 +8095,7 @@ impl BlockSwitch {
         });
         let new_cases: Vec<_> = perm.iter().map(|&i| self.cases[i].clone()).collect();
         let new_gototypes: Vec<_> = perm.iter().map(|&i| self.case_gototypes[i]).collect();
+        let new_isexit: Vec<_> = perm.iter().map(|&i| self.case_isexit[i]).collect();
         let new_values: Vec<_> = perm.iter().map(|&i| self.case_values[i].clone()).collect();
         let new_order: Vec<_> = perm.iter().map(|&i| {
             std::mem::replace(
@@ -8039,6 +8105,7 @@ impl BlockSwitch {
         }).collect();
         self.cases = new_cases;
         self.case_gototypes = new_gototypes;
+        self.case_isexit = new_isexit;
         self.case_values = new_values;
         self.case_order = new_order;
         // Materialize the print-time label groups (block.hh:780/787):
