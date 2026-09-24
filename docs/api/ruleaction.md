@@ -1698,3 +1698,39 @@ flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate
   ord150 myprogress 三处 oppool2 ptrarith 常量差 8 族（FG 归因
   LANE_FG_TABLEADDR_2026-09-23.md：oracle 对 aliases[].letter 链 -0x4f0
   向前吸附 -0x4e8 数组符号 extra=-8，Rugra 全 miss extra=0）。
+
+## 2026-09-24：AddTreeState 累加器宽度镜像 + SPACEBASE 臂无符号除（RULEARITH-ADDTREE-NUMWIDTH-0001，CR24 R1/R2）
+
+- **R1 累加器截断时点**（CR24 R1）：`biggest_non_mult_coeff` 字段
+  u64→u32，镜像 ruleaction.hh:54 的 `uint4 biggestNonMultCoeff`。三站点
+  分别镜像 oracle 的混合截断时点：
+  - cc:6145（checkMultTerm vncoeff 站点）`uint4 vncoeff = (sval < 0) ?
+    (uint4)-sval : (uint4)sval;` ——幅度**先截断到 uint4 再比较**
+    （`sval.wrapping_neg() as u32` 后 u32 比较）；
+  - cc:6158-6159/6210-6211（checkMultTerm 不常数 fallthrough 与
+    checkTerm fallthrough 的 treeCoeff 站点）`if (treeCoeff >
+    biggestNonMultCoeff) biggestNonMultCoeff = treeCoeff;` ——uint4 字段
+    提升到 uint8 **全宽比较，存储时截断回 uint4**
+    （`tree_coeff > field as u64` 后 `tree_coeff as u32`）。
+  - cc:6132-6137 的 `val >= size` 门给出结构性保护：size≠0 时
+    |sval|≥2³² 到不了累加器，病理输入仅在 size==0（变长基类型）可达；
+    行为锁单测用 0x100000003 后跟 5 的终值=5（u64 全宽实现会永驻
+    0x100000003）。
+  - `has_matching_sub_type` 两调用点 arrayHint 实参补 `as u64`
+    （uint4 字段→uint4 形参，低 32 位结构性存活）。
+- **R2 SPACEBASE 臂无符号除**（CR24 R2）：calc_subtype SPACEBASE 臂
+  extra 回转换用 cc:6294 的 `AddrSpace::byteToAddress(extra, ws)` ——
+  **uintb 重载按位模式无符号除**（space.hh:523-525 `return val/ws;`），
+  旧实现为 i64 wrapping_div（有符号，byteToAddressInt 语义）。仅
+  extra<0 且 ws>1 时分叉（当前全部空间 ws=1，属 latent）；STRUCT 臂
+  cc:6311 的 `byteToAddressInt`（有符号）保持不动。行为锁单测：
+  ScopeLocal 播种 int[8]@0x2000，offset 0xFF8（ws=2→offsetbytes
+  0x1FF0），forward walk 探 +32 命中数组符号，extra=-16 →
+  0xFFFFFFFFFFFFFFF0/2=0x7FFFFFFFFFFFFFF8（有符号会得 -8），断言
+  offset=0x8000000000001000、correct=0x8000000000000008。
+- **验收**（基线=亲父 781046c2 并集树 pristine worktree 亲测）：
+  curl E2E 2145/0/0、httpd E2E 2057/0/0，双侧 cmp 字节恒等；gcc 审计
+  82OK/25FAIL==亲父；六投影方向（getparameter/myprogress/next_url/
+  match_url/parseconfig/main）defects=0 numbering=0 且逐名==亲父；
+  cargo test --lib 18 失败==亲父失败集（+3 过=新单测）。两修均为
+  latent 输入行为差异，语料内不可达 ⇒ 输出恒等即预期。
