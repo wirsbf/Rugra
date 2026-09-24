@@ -264,6 +264,26 @@ update_intersections（其取 owning high 写锁——同线程读后写即死�
 靠 merge 周期起点的 `compute_varnode_covers` 全量重脏兜底（缓存门都在 merge 期内,
 不会吃到跨周期陈旧 cover）。
 
+**2026-09-25（CR 补丁）**: 陈旧前提清理——原注释「every intersection()/
+update_high gate runs inside the merge passes, which start from
+compute_varnode_covers' wholesale re-dirty」在 Action 序列管线中不成立
+（compute_varnode_covers 仅遗留 merge_all 调用）；`high_cover()` 原始读取
+helper 加警示头；update_high_covers 处对 checkImpliedCover 的依赖描述更正
+（读 varnode cover + inflate 内现聚合）。剩余原始聚合读者可服陈旧 → 登记
+`MERGE-HIGHCOVER-PROPAGATION-0001`（缺 varnode.cc:352-360 setFlags→
+high->coverDirty 传播不变量的完整补齐）。
+
+**2026-09-25（CANARY-EXPLICIT 级联）**: 上一段的「否则直读存储 cover」分支删除，
+改为无条件从惰性重建的成员 cover 现聚合——Rugra 的变体路径没有完整维护
+Ghidra 的「成员 cover 变脏必传播 high dirty」不变量（varnode.cc:352-360
+setFlags → high->coverDirty，由 addDescend/eraseDescend/calcCover 触发），
+重建后的成员 cover 留下「干净但陈旧」的 high 聚合：for-header 迭代临时件
+（PTRADD/PTRSUB out）自身 cover 正确止于唯一 COPY 读点，陈旧聚合却到块底，
+inflateTest 把边界相触（oracle 判 1 放行、保持 implied、canon 内联
+`ppuVar12 = ppuVar12 + 1`）误判整区间相交（==2 拒绝）→ 循环体临时件显式化。
+无条件现聚合=oracle 不变量下的恒等乘积，只比陈旧存储新。
+
+
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
 Locked `Merge::mergeAddrTied`（`merge.cc:609-648`）入口。它按

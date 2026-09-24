@@ -594,6 +594,15 @@ fn mark_high_cover_dirty(high: &Arc<RwLock<HighVariable>>) {
 }
 
 // Ghidra: variable.hh:294 HighVariable::getCover
+/// Raw stored-cover read. In the oracle every mutation that dirties a
+/// member Varnode cover propagates coverDirty to the owning high
+/// (varnode.cc:352-360 setFlags → high->coverDirty) so a clean stored
+/// product is always current; Rugra's mutation paths do not all maintain
+/// that propagation, so readers of this raw form can be served a stale
+/// aggregate. Known raw readers are being converted to fresh aggregation
+/// (inflate_test did); remaining ones are registered as
+/// MERGE-HIGHCOVER-PROPAGATION-0001 — do NOT add new readers of this
+/// helper for correctness-critical cover comparisons.
 fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let piece = high.read().unwrap().piece.clone();
     if let Some(piece) = piece {
@@ -934,7 +943,10 @@ impl Merge {
         // Sync HighVariable covers from member Varnode covers. Must run AFTER
         // all speculative merges finalize the instance sets so each
         // HighVariable's cover reflects all its members. ActionMarkImplied
-        // (run later in the pipeline) consults high.cover via checkImpliedCover.
+        // (run later in the pipeline) reads VARNODE covers directly (lazily
+        // rebuilt) and aggregates fresh inside inflate_test — it no longer
+        // depends on this stored product; the stored-field staleness debt is
+        // MERGE-HIGHCOVER-PROPAGATION-0001.
         self.update_high_covers(fd);
 
         // NOTE (FUNCDATA-LINKSYMBOL-TYPED-0001): Ghidra's merge sequence
@@ -1058,22 +1070,26 @@ impl Merge {
             return false; // a has no HighVariable — no intersection possible
         };
         let ahigh = ahigh_arc.read().unwrap();
-        // merge.cc:1621-1622: testCache.updateHigh(high); const Cover
-        // &highCover(high->internalCover). The oracle's updateHigh lazily
-        // rebuilds the high's internal cover from its member Varnodes'
-        // lazily-rebuilt covers, and reads it ONLY when the high was dirty —
-        // a clean high's internalCover already equals the union of its
-        // members' current covers (the setFlags/coverDirty propagation
-        // invariant, varnode.cc:352-361). Mirror both halves: dirty-scan the
-        // members, and only materialize the refreshed product when the scan
-        // hits (or the high's own flag is set); otherwise read the stored
-        // cover directly, exactly as the oracle reads internalCover.
         let high_instances: Vec<Arc<RwLock<Varnode>>> = high.instances.clone();
-        let high_needs_refresh = high.is_cover_dirty()
-            || high_instances.iter().any(|inst| {
-                (inst.read().unwrap().flags & crate::varnode::varnode_flags::COVERDIRTY) != 0
-            });
-        let high_cover_fresh: Cover = if high_needs_refresh {
+        // merge.cc:1621-1622: testCache.updateHigh(high); const Cover
+        // &highCover(high->internalCover). The oracle's updateHigh
+        // (variable.cc:1146) rebuilds internalCover only when the high is
+        // dirty, relying on the invariant that EVERY mutation which dirties
+        // a member Varnode cover also propagates coverDirty to the owning
+        // high (varnode.cc:352-360 setFlags → high->coverDirty, fired by
+        // addDescend/eraseDescend/calcCover). Rugra's mutation paths do not
+        // all maintain that propagation (a rebuilt member cover leaves the
+        // high "clean" with a stale stored aggregate — the
+        // CANARY-EXPLICIT/loop-temp family: the PTRADD/PTRSUB for-header
+        // temps' own covers end at their single COPY read, but the stored
+        // high aggregate still ran to the block bottom, making
+        // inflateTest see a whole-interval intersection where the oracle
+        // sees a boundary touch and keeps the temp implied). Aggregate
+        // fresh from the lazily-rebuilt member covers unconditionally:
+        // the product equals the oracle's internalCover under its
+        // maintained invariant, and can only be MORE current than the
+        // stale stored form.
+        let high_cover_fresh: Cover = {
             for inst_arc in &high_instances {
                 // Oracle chain: updateHigh → updateCover → member getCover()
                 // rebuild. NOTE LOCK DISCIPLINE: unlike refresh_cover_lazy,
@@ -1081,12 +1097,10 @@ impl Merge {
                 // flag clear (varnode.cc:365-374) — the caller (coreaction
                 // checkImpliedCover) holds a READ guard on this high for the
                 // whole call, so a member back-pointer write on it would
-                // self-deadlock. This is safe for the cached-test invariant:
-                // every intersection()/update_high gate runs inside the
-                // merge passes, which start from compute_varnode_covers'
-                // wholesale re-dirty (+sweep propagation), so no cached test
-                // can be served from a pre-refresh cover after this point in
-                // the cycle.
+                // self-deadlock. The always-fresh aggregation below makes
+                // this path independent of the stored `high.cover` product
+                // (whose staleness under missing dirty propagation is
+                // registered as MERGE-HIGHCOVER-PROPAGATION-0001).
                 Varnode::update_cover_locked(inst_arc);
             }
             let mut fresh = Cover::new();
@@ -1103,8 +1117,6 @@ impl Merge {
                 }
             }
             fresh
-        } else {
-            high.cover.clone()
         };
         // First loop: instances of a's HighVariable (merge.cc:1623-1632).
         // Snapshot the instance arcs, then drop the read guard BEFORE the

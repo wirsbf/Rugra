@@ -1165,6 +1165,82 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - 依赖前提：HighVariable.cover（variable.rs，对齐 variable.hh:143）+ update_internal_cover（variable.cc:324），由 Merge::update_high_covers 在 merge_by_cover 后同步。
 - 这是 Ghidra implied 机制的核心——控制 printc 哪些 varnode 的 def 表达式内联、哪些作为命名赋值输出。printc.cc:2704 跳过 implied output 的 op。
 
+
+## 2026-09-25：checkImpliedCover 惰性 cover 重建（CANARY-EXPLICIT 族根因修复）
+
+- `ActionMarkImplied::check_implied_cover`（coreaction.cc:3376）此前直读
+  `vn.cover` 原始字段——Action 序列管线（每个 merge 步骤独立 Action，
+  action.rs :5717-5729）在该时点没有 eager cover 物化，post-calcCover 的
+  空壳 cover（COVERDIRTY 置位、blocks 为空）使 LOAD 跨 CALL/STORE 两查
+  永不触发，全函数跨度 load（典型：入口 canary 读，唯一使用点是出口
+  compare）被误标 implied，`lVar2 = *(long *)(in_FS_OFFSET + 0x28)` 显式
+  语句与命名变量一并丢失。修复=读前调用 `Varnode::update_cover_locked`
+  （varnode.hh:202 getCover → varnode.cc:233 updateCover → cover->rebuild
+  的惰性重建语义）。oracle 侧 OPFLAGS 见证（锁定库 stage 诊断
+  harness）：入口 canary LOAD 与 `*flag` LOAD 均 explicit，出口第二个
+  canary LOAD implied——Rugra 修复后判定一致。
+- 管线级效应：curl 三门 767→720、默认 1096→1077、httpd 默认 1315→1469
+  （httpd main 显式临时变量族=canon 方向（golden httpd main `lVar2 =
+  plVar6[2]` 显式形态），残余形状差=typeprop/varmap/printc 域，登记移交）。
+
+
+## 2026-09-25（CR 补丁）：for-header 提取的 oracle 门补齐 + 触发点更正
+
+- **触发点更正**：finalizePrinting 的 oracle 触发点是
+  **blockaction.cc:2192 ActionFinalStructure::apply →
+  graph.finalizePrinting(data)**（管线位 :5736，先于 scopeBreak :2193），
+  此前 PLACEMENT NOTE 误写为 Funcdata::print。Rugra 挂点维持
+  ActionPrototypeWarnings（:5737，晚一个 Action、无中间 IR 变更）；迁移
+  计划改为「迁 ActionFinalStructure 内对应点位（blockaction.rs 对
+  blockaction.cc:2192 的移植处）」。finalTransform 的 op 搬移语义
+  （block.cc:3381-3396 opUninsert/opInsertAfter）丢弃 → 登记
+  `GETPARAM-FORLOOP-OPMOVE-0001`。
+- **findLoopVariable 两门补齐**：①根 def（条件比较 op）`is_call() ||
+  is_marker()` 弃权（block.cc:3174-3176）；②loopDef 候选必须
+  `opcode == CPUI_MULTIEQUAL`（block.cc:3189——head 内非 MULTIEQUAL def 走
+  DFS 降层臂，不得作 loopDef）。
+- **testTerminal 显式/可打印门**：渲染门前对 loopDef 两输入跑
+  `test_terminal_statement`——COPY-notPrinted 挖根（block.cc:3264-3269，
+  挖根失败拒绝）+ `vn->isExplicit()`（:3271）+ 根 op 仍可打印
+  （:3272-3273）；lastOp/moveRespectingCover 终端性半边登记
+  `GETPARAM-FORLOOP-GAPSET-0001 ①`。
+- **缺口 ID 化**：`GETPARAM-FORLOOP-GAPSET-0001`
+  （①testTerminal 终端性半边 ②4 层 DFS 仅直连输入 1 层 ③isMoveable
+  INT_ADD 近似 ④push_integer equate/displayFormat 边缘 ⑤pushVnExplicit
+  partial-symbol 形态）；`GETPARAM-STORECROSS-ALIASGATE-0001`
+  （check_implied_cover 同 spacebase 即拒 vs oracle cc:3396
+  isPossibleAlias 放行可分辨指针对——httpd main canon 内联的
+  plVar12[9]/[10] 被 Rugra 物化为显式临时件的根因）。
+
+## 2026-09-25：for-header 提取迁移（ActionStructureTransform → for_loop_finalize_printing）
+
+- 旧 `ActionStructureTransform::apply`（:5715）在动作期用
+  `format!("var_{:x}", offset)` 裸偏移伪造 for-header init/iter 文本
+  （`for (var_8; lVar10 != 0; var_8 = var_8 + 18446744073709551615)`）——
+  名字非符号、常量未按类型取符号（-1 打成 u64 全量值）。根因：名字要到
+  ActionNameVars（:5734）、cast 要到 ActionSetCasts（:5735）才终局，动作期
+  渲染结构上不可能正确；Ghidra 在 Funcdata::print 入口（BlockWhileDo::
+  finalizePrinting，block.cc:3399-3423）才渲染 initializeOp/iterateOp。
+- 修复=整段迁移到 `pub fn for_loop_finalize_printing(fd)`（coreaction.rs，
+  挂在最后一个 coreaction Action `ActionPrototypeWarnings`（:5737）尾部；
+  printc.rs 本轮车道冻结，print 入口不可用，见函数内 PLACEMENT NOTE）：
+  ①findLoopVariable（block.cc:3158）+ findInitializer（block.cc:3218）忠实
+  移植（head MULTIEQUAL + tail 迭代 op + 仅流入 head 的 init 块 + 单出边）；
+  ②render 仅接受 COPY-const 初始化与 INT_ADD(var,±const) 迭代两形态，
+  其余 fail-closed（等价 testTerminal/testIterateForm 拒绝——while 形保持
+  语句可见）；③名字=printc pushVnExplicit Priority-1 名字切片
+  （printlanguage.cc:218，typed-auto `[a-z]+Var<n>` 或 symbol-backed，其余
+  bail）；④常量=push_integer 文本核（printc.cc:1288：按类型符号翻转、
+  ≤10 十进制、mostNaturalBase==16 十六进制）；⑤两个 op 均标 NONPRINTING
+  （block.cc:3421-3423）。`ActionStructureTransform::apply` 回归 Ghidra 语义
+  （finalTransform 仅搬移 op，Rugra 无跨块搬移，保持 no-op）。
+- 见证：getparameter `for (lVar11 = 0x96; lVar11 != 0; lVar11 = lVar11 + -1)`
+  与 canon 逐字节一致；oracle OPFLAGS 证实 init COPY `explicit NONPRINTING`
+  与迭代 INT_ADD `explicit NONPRINTING`。已知限制：init-less 循环（Ghidra
+  可打 `for (;cond;iter)`）因 printc has_for 门需双 Some 而 fail-closed
+  （printc 域，登记）；CAST 包裹常量（canon main `(Configurable *)0x26`）
+  fail-closed。
+
 ## 2026-06-30：checkImpliedCover 补 isCall() 跨 CALL 分支（Gap B，coreaction.cc:3401-3406）
 
 - 忠实 1:1 移植 Ghidra `checkImpliedCover` 第二段：若 varnode 的 def 是 CALL/CALLIND/LOAD，且其 live cover（vn.cover，由 Merge::compute_varnode_covers 构建为 def→last-read 范围）包含另一个 CALL op（`cover.contain(call_bi, call_order)`，对齐 `vn->getCover()->contain(callop, 2)`），则不能 implied。
