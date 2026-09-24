@@ -2364,6 +2364,15 @@ pub struct FuncCallSpecs {
     /// varnode. Used by abortSpacebaseRelative to clean up placeholders
     /// after heritage resolves the actual stack values.
     pub stack_placeholder_slot: i32,
+    /// Was the call originally a jump-table we couldn't recover? Faithful to
+    /// `FuncCallSpecs::isbadjumptable` (fspec.hh:1660), initialized false by
+    /// the constructor (fspec.cc:4945), set true only by
+    /// `FlowInfo::truncateIndirectJump`'s default failure arm
+    /// (`fc->setBadJumpTable(true)`, flow.cc:754) and carried across a clone
+    /// (fspec.cc:4974). Consumed by `ActionNameVars::lookForBadJumpTables`
+    /// (coreaction.cc:2786) to rename the switch variable's symbol to
+    /// "UNRECOVERED_JUMPTABLE".
+    pub is_bad_jump_table: bool,
     /// Do we have a locked output on the stack? Faithful to
     /// `FuncCallSpecs::isstackoutputlock` (fspec.hh:1661), initialized
     /// false by `FuncCallSpecs::init` (fspec.cc:4946) and set true by
@@ -2405,6 +2414,8 @@ impl FuncCallSpecs {
             stackoffset: OFFSET_UNKNOWN,
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
+            // fspec.cc:4945 `isbadjumptable = false`
+            is_bad_jump_table: false,
             is_stack_output_locked: false,
             // fspec.cc:4927 `effective_extrapop = ProtoModel::extrapop_unknown`
             effective_extrapop: EXTRAPOP_UNKNOWN_FULL,
@@ -2647,6 +2658,23 @@ impl FuncCallSpecs {
     /// when the locked output storage is in the spacebase space.
     pub fn is_stack_output_lock(&self) -> bool {
         self.is_stack_output_locked
+    }
+
+    // Ghidra: fspec.hh:1701 FuncCallSpecs::setBadJumpTable
+    /// Toggle whether \b call site looked like an indirect jump. Faithful
+    /// inline mutator `setBadJumpTable` (fspec.hh:1701). Set by
+    /// `FlowInfo::truncateIndirectJump`'s default failure arm (flow.cc:754);
+    /// read by `ActionNameVars::lookForBadJumpTables` (coreaction.cc:2786)
+    /// for the "UNRECOVERED_JUMPTABLE" rename decision.
+    pub fn set_bad_jump_table(&mut self, val: bool) {
+        self.is_bad_jump_table = val;
+    }
+
+    // Ghidra: fspec.hh:1702 FuncCallSpecs::isBadJumpTable
+    /// Return \b true if \b this call site looked like an indirect jump.
+    /// Faithful inline accessor `isBadJumpTable` (fspec.hh:1702).
+    pub fn bad_jump_table(&self) -> bool {
+        self.is_bad_jump_table
     }
 
     // Ghidra: fspec.hh:1703 FuncCallSpecs::setStackOutputLock
@@ -3966,8 +3994,8 @@ impl FuncCallSpecs {
     /// Produce the covered identity/lifecycle clone slice, rebound to a new
     /// call op. This corresponds to `clone` (fspec.cc:4964-4977): it allocates
     /// a distinct owner, rebinds the exact op identity, copies the modeled
-    /// entry/stackoffset/`FuncProto`, and resets active-input/output state.
-    /// Funcdata/name plus effective extrapop, paramshift, and isbadjumptable
+    /// entry/stackoffset/isbadjumptable/`FuncProto`, and resets active-input/
+    /// output state. Funcdata/name plus effective extrapop and paramshift
     /// remain unmodeled `CALLSPEC-0001` fields, so this is not the complete
     /// 1:1 clone contract.
     pub fn clone_for_op(&self, new_op: &crate::op::PcodeOpRef) -> FuncCallSpecs {
@@ -3984,7 +4012,8 @@ impl FuncCallSpecs {
         res.entry_addr = self.entry_addr;
         // effective_extrapop / paramshift are not modelled on FuncCallSpecs.
         res.stackoffset = self.stackoffset;
-        // isbadjumptable is not modelled.
+        // fspec.cc:4974 `res->isbadjumptable = isbadjumptable`.
+        res.is_bad_jump_table = self.is_bad_jump_table;
         // res.copy(*this) — prototype already cloned via new().
         res
     }

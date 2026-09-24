@@ -1143,3 +1143,54 @@ register 空间。修正为在读锁快照内一并捕获 `vn_r.get_space()`，�
   均按槽位精确装载）——位点语料休眠，correct-by-construction。
 - 门禁：三态输出与亲父 e452244d cmp 字节恒等（curl 1099/0/0、httpd
   1472/0/0、SYMDB 1328/0/0）；bank 26/26。
+
+## 2026-09-25（CALLSPEC lane）：FuncCallSpecs badjumptable 数据面建模（CALLSPEC-0001）
+
+JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
+参数命名缺口）的 fspec 侧数据面补齐——四件落地，零行为变化（无 setter
+调用点/无消费者接线，Rugra 生产侧恒 false = oracle 构造初值）：
+
+- `is_bad_jump_table` 字段（fspec.hh:1660 `isbadjumptable`），置于
+  `is_stack_output_locked` 之前保持 oracle 字段序（1658-1661:
+  isinputactive/isoutputactive/isbadjumptable/isstackoutputlock）。
+- 构造初值 `false`（fspec.cc:4945 `isbadjumptable = false`）。
+- `set_bad_jump_table(bool)` / `bad_jump_table()` 访问器
+  （fspec.hh:1701/1702 内联原样）。oracle 生产者 =
+  `FlowInfo::truncateIndirectJump` 默认失败臂（flow.cc:754
+  `fc->setBadJumpTable(true)`，Rugra 侧 flow.rs 截断臂仍 TODO 登记——
+  flow 租约不在本 lane 写域）；oracle 消费者 =
+  `ActionNameVars::lookForBadJumpTables`（coreaction.cc:2779-2803，按
+  `sym->getScope()==localmap && !isNameLocked` 门把 CALLIND in(0) 的符号
+  重命名 `UNRECOVERED_JUMPTABLE`，coreaction 侧同属移交）。
+- `clone_for_op` 携带（fspec.cc:4974 `res->isbadjumptable =
+  isbadjumptable`），文档注释同步撤下"isbadjumptable not modelled"。
+
+### CALLSPEC 族残差量化与根因（车道证据，移交在案）
+
+- 亲测基线（默认脸 1123/0/0，PDOTFORM 后）：ap_vhost_iterate_given_conn
+  diff=50。族残差四桶：①循环路径真实 CALLIND（0x2daa5 `call *%r12`）
+  零实参（canon/direct-runner 双 golden 均 3 实参
+  `(param_3,param_1,iVar2)`）；②param_2 命名 `void(*)()param_2` vs
+  `code *UNRECOVERED_JUMPTABLE`；③返回 join RDX:RAX 16B 存活
+  （`auVar8._0_8_` 截断）vs canon 8B `xVar3`；④push 门店面
+  （`*puVar6=0x2daa8` + puVar6/puVar7/uStack_40/auStack_38 追踪链）。
+- ①的根因（本 lane A/B 亲证）：`inject_raw_ops` 相位 1.5 锚定环只认
+  `CPUI_CALL`（funcdata.rs，CALLSPEC-DRIVER-0001 时代注释"lifter 只产
+  CALL"已过期——iced lifter 对寄存器间接调用产 `CPUI_CALLIND`，
+  x86_lift.rs:4890-4894），lifter 出生 CALLIND 全程无 FuncCallSpecs →
+  ActionFuncLink 不激活输入恢复 → heritage guardCalls 不注册
+  RDI/RSI/RDX 试验 → 打印零实参。补 CALLIND 锚定臂（flow.cc:340-342
+  xrefControlFlow CALLIND 臂 → setupCallindSpecs 无 in(0) 换写的镜像）
+  A/B 实测：ap_vhost 50→**14**、main 间接调用点
+  `(*(code *)pVar8)();`→`iVar2 = (*(code *)pVar8)((long)plVar9+0x34,*plVar9);`
+  （==canon 逐形），curl 727/0/0 与 bank 391/391 不动；但 httpd 总量
+  1123→**1175**（main +88 = MERGE-COPYNOISE-DIFFHIGH-0001 吸收缺口的
+  新表面：canon 把 killedbycall 栈重载拷贝吸收进命名高变量
+  `strcasecmp(pcVar13,...)`，Rugra 读槽位 `strcasecmp(plVar9[3],...)` +
+  自赋值店面换形 + 对齐回声）——违反默认脸不回退门，**该锚定臂已回滚
+  暂存于车道证据**，解锁条件=MERGE-COPYNOISE 吸收域（merge 相 Cover）
+  落地后重放。
+- ②需 flow.rs 截断臂 setter + coreaction lookForBadJumpTables 消费者
+  （均不在本 lane 写域，随本字段一并在案）；③=activereturn/processJoins
+  存根（COREACTION-JOINSPACE 残差行）；④与 ①同根（无 spec →
+  callOpIndirectEffect 极性保守 → 栈屏障 INDIRECT 全开）。
