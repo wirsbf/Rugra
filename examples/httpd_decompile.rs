@@ -1767,7 +1767,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // symboltab unset through the pipeline (bare-BFD parity).
             let action_db_attached = action_db.is_some();
             if let Some(db) = action_db {
-                thread_arch.set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(db)));
+                let db_arc = std::sync::Arc::new(std::sync::RwLock::new(db));
+                // HTTPD-SBSCOPE-TOKEN-0001: TypeSpacebase::getSubType
+                // (type.cc:2947) resolves a spacebase-relative PTRSUB's
+                // field type through the global scope — TypeOpPtrsub::
+                // getOutputToken's downChain (typeop.cc:2357) depends on it
+                // to hand back the FunctionSymbol's code type, which makes
+                // the token EQUAL the spacebase-constant typelocked output
+                // high type and hits the ActionSetCasts::castOutput
+                // short-circuit (coreaction.cc:2544 — no CAST on the
+                // `FUN_0012dc80` callback argument; oracle probe C: locked
+                // e40ed130 + flow-override CALL at the PLT tail-jmp prints
+                // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)`).
+                // Without this handle the spacebase types carry an empty map,
+                // the token degrades to the anonymous 1-byte unknown fallback
+                // (type.cc:2360), and castOutput's implied+typelock force
+                // arm prints `(BADTYPE *)FUN_0012dc80` — ap_pregfree's
+                // 2-line gated residual. The curl driver wires the same
+                // handle at curl_decompile.rs:2476; mirror keeps the factory
+                // slot empty (bare-BFD parity).
+                if let Some(types) = thread_arch.types.as_ref() {
+                    types
+                        .write()
+                        .unwrap()
+                        .set_spacebase_scope_source(Some(db_arc.clone()));
+                }
+                thread_arch.set_symboltab(db_arc);
             }
             fd.set_arch(std::sync::Arc::new(thread_arch));
             // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
