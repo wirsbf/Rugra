@@ -1193,21 +1193,47 @@ pub(crate) fn parse_c_type(
         "__pid_t" => factory_named_base(&types, 4, TypeMetatype::Int, "__pid_t"),
         other => match type_names.and_then(|index| index.get(other)) {
             Some(data_type) => data_type.clone(),
-            // A bare name carries no size anywhere the oracle would honor:
-            // the <localdb>/<type> transport reads size only from the
-            // explicit ATTRIB_SIZE (Datatype::decodeBasic, type.cc:623-637,
-            // reached via the default arm of TypeFactory::decodeTypeNoRef,
-            // type.cc:4536-4543), and the C-signature path resolves a named
-            // base through glb->types->findByName (grammar.cc:2989) — an
-            // unresolved name lexes as a plain IDENTIFIER and the parse
-            // fails. Neither oracle path ever mints an address-sized
-            // unknown base from a spelling, so an unresolvable base here is
-            // a parse error the seed caller reports and skips
-            // (BRIDGE1-TYPESEED-PARSEFAIL downgrade; the silent 8B mint is
-            // what made BRIDGE1-TYPESEED-PIDT latent-poisonous).
-            None => bail!(
-                "unresolved base spelling `{other}`: not a committed core/seed base and no known-type entry (the oracle transports an explicit size; a bare name never mints one)"
-            ),
+            // C4 STRUCT-SEED (HEADLESS-BRIDGE-V1 C3NEXT): a named composite
+            // (URLGlob/OutStruct/stat/LongShort/va_list/...) resolves through
+            // the ONE shared TypeFactory's name tree — the same resolution
+            // Ghidra's C parser performs for a TYPE_NAME token
+            // (`glb->types->findByName`, grammar.cc:2989). The factory's name
+            // tree is populated by the DWARF import boundary
+            // (parse_type_names -> resolve_type -> intern_named), which the
+            // curl driver runs unconditionally before any request, so a
+            // struct spelling seeded from the manifest finds the same interned
+            // Arc<struct> the signature path's type_names index holds — one
+            // type identity domain. The lookup is read-only and only fires
+            // for spellings outside the core table above, so a bare-load /
+            // no-DWARF run keeps the historical bail below.
+            None => {
+                let existing = {
+                    let factory = types
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    factory.find_by_name(other)
+                };
+                match existing {
+                    Some(data_type) => data_type,
+                    // A bare name carries no size anywhere the oracle would
+                    // honor: the <localdb>/<type> transport reads size only
+                    // from the explicit ATTRIB_SIZE (Datatype::decodeBasic,
+                    // type.cc:623-637, reached via the default arm of
+                    // TypeFactory::decodeTypeNoRef, type.cc:4536-4543), and
+                    // the C-signature path resolves a named base through
+                    // glb->types->findByName (grammar.cc:2989) — an
+                    // unresolved name lexes as a plain IDENTIFIER and the
+                    // parse fails. Neither oracle path ever mints an
+                    // address-sized unknown base from a spelling, so an
+                    // unresolvable base here is a parse error the seed
+                    // caller reports and skips (BRIDGE1-TYPESEED-PARSEFAIL
+                    // downgrade; the silent 8B mint is what made
+                    // BRIDGE1-TYPESEED-PIDT latent-poisonous).
+                    None => bail!(
+                        "unresolved base spelling `{other}`: not a committed core/seed base and no known-type entry (the oracle transports an explicit size; a bare name never mints one)"
+                    ),
+                }
+            }
         },
     };
     for _ in 0..pointer_depth {
@@ -1891,6 +1917,40 @@ fn enum_type(name: String, size: usize, values: BTreeMap<u64, String>) -> Arc<Da
 fn intern_named(candidate: Arc<Datatype>) -> Arc<Datatype> {
     let name = candidate.get_name().to_string();
     if name.is_empty() {
+        return candidate;
+    }
+    // Ghidra's transport decode derives the id when the name is present and
+    // no explicit id traveled (type.cc:675-676 `id = hashName(name); //
+    // There must be some kind of id`, Datatype::decodeBasic) — and
+    // TypeFactory::findAdd rejects a zero id outright (type.cc:3417-3425
+    // "Datatype must have a valid id"). Rugra's DWARF constructors
+    // (base_type/struct_type/union_type/enum_type) leave the fresh
+    // TypeBase id at 0, so without this derivation the findAdd below
+    // errors and the candidate silently stays UNREGISTERED — invisible
+    // to the HashMap-carried consumers but a None lookup for every
+    // name-tree resolution (parse_c_type's findByName mirror, the C4
+    // struct-seed channel's spelling resolver; OUTSTRUCT-ID0). The
+    // typedef path (alias_type) already hashes explicitly, matching this
+    // rule; deriving here makes every import-boundary candidate follow
+    // the same decodeBasic contract.
+    let candidate = if candidate.get_id() == 0 {
+        let mut derived = (*candidate).clone();
+        derived.base_record_mut().id = Datatype::hash_name(&name);
+        Arc::new(derived)
+    } else {
+        candidate
+    };
+    // Ghidra's DWARF front end never feeds an incomplete (zero-size)
+    // composite to TypeFactory::findAdd — findAdd's layout pass would hit
+    // getPrimitiveAlignSize(0), a division by the default alignment map's
+    // zero entry (type.cc:3429-3437); the declaration-only DIEs stay
+    // unregistered stubs on the Java side. Rugra's resolve_type still
+    // builds zero-size candidates for DW_AT_declaration composites (the
+    // anonymous forward refs inside field graphs), so they keep the
+    // historical unregistered course here too: returned as-is, invisible
+    // to the name tree, harmless to the HashMap-carried consumers
+    // (OUTSTRUCT-ID0 follow-up guard).
+    if candidate.get_size() == 0 {
         return candidate;
     }
     let factory = crate::type_system::typefactory::TypeFactory::shared_default();
