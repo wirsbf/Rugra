@@ -1,10 +1,40 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（SEEDFLIP 种子门默认转正快照 + DFLIP/HSEED 历史快照）
+**日期**: 2026-09-25（CURLSYM curl 侧 SYMDB 移植快照 + SEEDFLIP/DFLIP/HSEED 历史快照）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-25 SEEDFLIP 种子门默认转正快照（当前事实源）
+## 2026-09-25 CURLSYM curl 侧 SYMDB 移植快照（当前事实源）
+
+**curl worker 的 action 侧符号库三件**（Lane CURLSYM，wt/curlsym @ master bdf2bd7f）：httpd
+DFLIP 已转正的 `build_action_data_symbol_db` 形态复制到 curl 驱动——①**R-only PT_LOAD 段范围**
+（loader 派生 readonly：属性区间+段内符号旗标；含 RX text 段、`.eh_frame_hdr/.eh_frame` 尾段
+与头段——闭 FLAGBASE-CR-F3 的 curl 半边）②**四类符号 + 段派生 READONLY 旗标**（dynsym
+OBJECT/GOT PTR_/rodata char[]/DAT_ 引用标签早已在库；OBJECT 臂补 mark_readonly 形态）③
+**FunctionSymbol 层进 ACTION DB** + spacebase scope source 解析面（PREGFREE 通道形态；print
+swap 降级为历史脸回退，httpd `mirror_fn || !action_db_attached` 同款门）。**默认开**；
+`RUGRA_SYMDB=0` 逃生门拿回历史 fold-only 脸；mirror 分量恒压制（含显式 =1）。
+
+**实测结论（诚实计量，"以亲测为准"）**：curl 默认脸 **767/0/0 不变**（输出与基线 **cmp 字节
+恒等**；逐函数零回退=平凡成立）。根因＝派单前提已被历史车道超越——curl worker 早已通过
+B3-COREACTION-CONSTANTPTR-0001(b)/MAINDIFF-GLOBAL-0001/STRCONST-SPANNONOVERLAP/
+PLTSTUB-THUNKRELRO-0001 等车道携带 DB 实质（四类符号+readonly+scope source），打印侧
+fn 符号层（CURL-CODEREF-SYMBOLIZE-0001）已覆盖 code-ref 渲染通道；本次补齐的 httpd 形态
+三件在本语料上可证惰性（无 PTRSUB-函数地址查询点→fn 符号 action 侧通道无消费者；
+`.eh_frame`/头段无反编译引用；curl 定义 OBJECT 全在 RW 段→段旗标形式 no-op）。结构性价值：
+两驱动 SYMDB 形态对齐（默认开+逃生门+mirror 恒裸），后续通道扩展（如 getSubType 命中面
+扩大）无需再动驱动装配。
+
+| 门禁（fast-release 亲测，@ master bdf2bd7f + CURLSYM） | 数字 | 说明 |
+|---|---|---|
+| curl E2E（默认脸） | **767 / 0 / 0**（124 函数） | ==基线 cmp 字节恒等；双跑 cmp 恒等；SYMDB 层装 3 R-only 段区间 + 76 action 侧函数符号/函数（亲见 stderr 日志） |
+| curl 逃生门 RUGRA_SYMDB=0 | **767 / 0 / 0** | ==旧默认脸 cmp 字节恒等（层跳过，print swap 恢复历史通道） |
+| curl mirror（RUGRA_MIRROR=1） | 输出 cmp 恒等基线 mirror | 层零安装（mirror 分量短路左侧）；裸库真值通道不受影响 |
+| curl gcc 审计（默认脸） | 104 OK / 20 FAIL | ==基线 fail 函数名集逐名相同（字节恒等的直接推论，亲验） |
+| 投影银行（B2+HBANK2 钉板） | **391/391 MATCH** | sha 钉板 + mirror 裸径采集契约 → 不受本层影响（亲验） |
+| httpd E2E（默认脸） | **1125 / 0 / 0**（34 函数） | curl 驱动单文件改动，httpd 驱动未触；@bdf2bd7f 本 lane 亲跑（优于派单快照 1243 与 SEEDFLIP 快照 1197——基线间提交所致，非本 lane 贡献） |
+
+## 2026-09-25 SEEDFLIP 种子门默认转正快照（数字被 CURLSYM 节继承）
 
 **种子门默认转正**（Lane SEEDFLIP，wt/seedflip @ master 898a975b）：committed-local 种子门
 （curl 的 TYPESEED/DWARFSEED/STRUCTSEED 三门 + httpd 的 TYPESEED 门）自本快照起为**默认行为**

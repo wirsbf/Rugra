@@ -2570,6 +2570,12 @@ fn build_worker_architecture(
         // getBase/findAdd consumer runs. The spacebase scope source gives
         // TypeSpacebase::get_sub_type the global scope snapshot Ghidra
         // resolves dynamically (getMap, type.cc:2935-2945).
+        // CURLSYM: since the SYMDB curl port the program DB this handle
+        // resolves against carries the action-side FunctionSymbol layer
+        // (decompile_request's CURLSYM pieces), so get_sub_type hits the
+        // FunctionSymbol code types exactly as the oracle's global scope
+        // does — the PREGFREE channel (no forced anonymous-Code CAST on
+        // spacebase-relative function addresses).
         {
             let mut tf = types.write().unwrap();
             tf.set_default_alignment_map();
@@ -3622,6 +3628,49 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // Program-DB construction — its names/types feed the DB merge below.
     let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF globals: {error}"))?;
+    // CURLSYM (SYMDB curl port, 2026-09-25): the action-side Database
+    // additions of the httpd driver's DEFAULT-promoted
+    // build_action_data_symbol_db (DFLIP 791611bf), applied to the
+    // worker Program DB below BEFORE the architecture attach. Three
+    // pieces, httpd form:
+    //  (1) FunctionSymbols in the ACTION DB — "every discovered
+    //      function as a global-scope FunctionSymbol" (the canon print
+    //      DB's entry set). The curl front-end set is
+    //      request.fn_symbol_entries (ledger ∩ exec sections — the same
+    //      set the print layer mirrors). With the symbols action-side,
+    //      the spacebase scope source installed at the worker build
+    //      (tf.set_spacebase_scope_source below) resolves
+    //      TypeSpacebase::getSubType (type.cc:2947-2967) against
+    //      FunctionSymbol code types — the PREGFREE channel that keeps
+    //      ActionSetCasts::castOutput's short-circuit
+    //      (coreaction.cc:2544) for spacebase-relative function
+    //      addresses (no forced anonymous-Code CAST) — and the print
+    //      phase resolves code refs through the same attached DB (the
+    //      print swap below becomes the historical-face fallback).
+    //  (2) R-only PT_LOAD segment ranges — the loader-derived readonly
+    //      property ranges (Architecture::fillinReadOnlyFromLoader,
+    //      architecture.cc:1371-1383): every R-only PT_LOAD, not
+    //      hand-picked section spans. curl's R-only segments cover
+    //      .rodata AND .eh_frame_hdr/.eh_frame (0x6000..0x15148) plus
+    //      the header segment [0,0x1af0); the .rodata/.got spans in
+    //      the DB below cover only the sections.
+    //  (3) per-symbol READONLY flags by segment (httpd mark_readonly):
+    //      mapped data symbols landing in an R-only PT_LOAD take the
+    //      transport's readonly="true" symbol flag (database.cc:435-
+    //      437) — the entry-hit arm of Scope::queryProperties folds it
+    //      into the readonly answers RulePtrsubCharConstant
+    //      (ruleaction.cc:7372) and PrintC::pushPtrCharConstant
+    //      (printc.cc:1709) consume.
+    // DEFAULT-ON (DFLIP shape): RUGRA_SYMDB=0 restores the historical
+    // fold-only face (layer skipped, the print swap below runs);
+    // every mirror component keeps absolute precedence over both (the
+    // bare-library truth channel — the additions never install under
+    // any mirror env).
+    let symdb_opt_out = std::env::var("RUGRA_SYMDB").ok().as_deref() == Some("0");
+    let symdb_default_on = !symdb_opt_out
+        && !mirror_bundle_enabled()
+        && !mirror_flow_enabled()
+        && !mirror_bare_load_enabled();
     let program_db: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>> =
         if mirror_bare_load_enabled() {
             // ORD185-CONSTANTPTR-BAREDB (RUGRA-FLOW-MIRROR-0001 / bare-load
@@ -3723,6 +3772,29 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     Address::new(u64::MAX)) {
                     db.add_range(global, rng);
                 }
+                // CURLSYM piece (2)/(3) source list: the R-only PT_LOAD
+                // segments [(vaddr, vaddr+filesz)] — computed once for the
+                // per-symbol mark (OBJECT arm below) and the readonly
+                // property ranges (after the got_span block). The PT_LOAD
+                // permission walk is the fillinReadOnlyFromLoader form
+                // (architecture.cc:1371-1383 -> LoadImageBfd::getReadonly),
+                // where the loader — not a section-name pick — decides the
+                // extent. Unconditional compute (pure read); the APPLY sites
+                // below are gated on symdb_default_on.
+                let symdb_ronly: Vec<(u64, u64)> = {
+                    const PT_LOAD: u32 = 1;
+                    const PF_W: u32 = 2;
+                    const PF_R: u32 = 4;
+                    elf.program_headers
+                        .iter()
+                        .filter(|ph| {
+                            ph.p_type == PT_LOAD
+                                && (ph.p_flags & PF_R) != 0
+                                && (ph.p_flags & PF_W) == 0
+                        })
+                        .map(|ph| (ph.p_vaddr, ph.p_vaddr + ph.p_filesz))
+                        .collect()
+                };
                 let mut typed = 0usize;
                 // The strings-analyzer split: untyped referenced data gets
                 // the DAT label's undefined8 (pointer-slot width — see the
@@ -3945,7 +4017,38 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                             }
                         }
                     } else {
-                        db.add_symbol_mapped(global, name, dtype, Address::new(address), size);
+                        let mapped = db.add_symbol_mapped(
+                            global,
+                            name,
+                            dtype,
+                            Address::new(address),
+                            size,
+                        );
+                        // CURLSYM piece (3): segment-derived per-symbol
+                        // readonly flag for defined OBJECT entries (httpd
+                        // mark_readonly over the dynsym OBJECT arm) — the
+                        // XML transport serializes every symbol in an
+                        // R-only memory block with readonly="true"
+                        // (database.cc:435-437). curl's defined OBJECTs
+                        // live in the RW PT_LOAD, so the flag never lands
+                        // on this corpus (form parity with the httpd arm;
+                        // the queryProperties entry-hit arm is the
+                        // consumer).
+                        if symdb_default_on {
+                            if let Some(symbol_id) = mapped {
+                                if symdb_ronly
+                                    .iter()
+                                    .any(|&(lo, hi)| address >= lo && address < hi)
+                                {
+                                    db.set_symbol_flag(
+                                        global,
+                                        symbol_id,
+                                        rugra::database::symbol_flags::READONLY,
+                                        true,
+                                    );
+                                }
+                            }
+                        }
                     }
                     seeded_db_symbols += 1;
                 }
@@ -3996,6 +4099,42 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                             rng);
                     }
                 }
+                // CURLSYM pieces (2)+(1): the loader-derived readonly
+                // property ranges over every R-only PT_LOAD (wider than
+                // the .rodata/.got spans above — the .eh_frame_hdr/
+                // .eh_frame tail of curl's second R-only segment and the
+                // header segment join the flagbase), then the
+                // FunctionSymbol layer into the ACTION DB — the entry set
+                // the print swap below used to install only post-action.
+                // Installed here (BEFORE the attach below) so the action
+                // pipeline's query channels run channel-present: the
+                // spacebase scope source resolves getSubType against the
+                // code types, mapGlobals/linkSymbolReference see the same
+                // global scope the oracle's front-end built. consume
+                // size 1 (glb->min_funcsymbol_size, the httpd layer's
+                // contract).
+                let mut symdb_fn_symbols = 0usize;
+                if symdb_default_on {
+                    for &(lo, hi) in &symdb_ronly {
+                        if hi > lo {
+                            if let Some(rng) = rugra::address::Range::new(
+                                Address::new(lo),
+                                Address::new(hi - 1),
+                            ) {
+                                db.set_property_range(
+                                    rugra::database::symbol_flags::READONLY,
+                                    rng,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(scope) = db.get_global_scope_mut() {
+                        for &(entry_addr, ref entry_name) in &request.fn_symbol_entries {
+                            scope.add_function(Address::new(entry_addr), entry_name, 1);
+                            symdb_fn_symbols += 1;
+                        }
+                    }
+                }
                 eprintln!(
                     "[PREPASS] {} program-DB symbol graph: {} .rodata entries ({} string-typed) + {} global symbols ({} DWARF-typed) + readonly range",
                     target.name,
@@ -4004,6 +4143,14 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     seeded_db_symbols,
                     dwarf_display_names.len()
                 );
+                if symdb_default_on {
+                    eprintln!(
+                        "[PREPASS] {} CURLSYM SYMDB layer: {} R-only PT_LOAD ranges + {} action-side function symbols (RUGRA_SYMDB=0 restores the fold-only face)",
+                        target.name,
+                        symdb_ronly.len(),
+                        symdb_fn_symbols
+                    );
+                }
             }
             Some(db_arc)
         };
@@ -4519,7 +4666,14 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // FunctionSymbols, so no print-side data channel regresses. The
     // consume size is 1 (glb->min_funcsymbol_size default, the same
     // contract the httpd driver's layer uses).
-    {
+    // CURLSYM: with the SYMDB layer default-on the attached action DB
+    // already carries the function symbols (installed BEFORE the
+    // pipeline), so the print phase resolves code refs through it and
+    // the swap stays the historical-face fallback — exactly the httpd
+    // gating form (mirror_fn || !action_db_attached). The mirror, the
+    // RUGRA_SYMDB=0 opt-out, and the no-program-DB shape all keep the
+    // swap (byte-identical historical print channel).
+    if !symdb_default_on || program_db.is_none() {
         let mut print_symbol_db = match &program_db {
             Some(db_arc) => db_arc.read().unwrap().clone(),
             None => rugra::database::Database::new(false),
