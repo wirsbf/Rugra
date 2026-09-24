@@ -244,6 +244,39 @@ fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
     // setupSizes (:1350).
     {
         let mut arch = rugra::arch::Architecture::new();
+        // HTTPD-DRIVER-ARCH-INIT-0001 (single-function leg): install the
+        // Architecture::init items the curl worker builds
+        // (curl_decompile.rs:1877-1900) — archid, register_xref, commentdb —
+        // alongside the TypeFactory below. SLEIGH register catalog: same
+        // enumeration as the curl worker (B3-VARMAP-REGNAME-0001):
+        // getAllRegisters -> varnode_xref (sleighbase.cc:182-186), the table
+        // Architecture::get_register_name (sleighbase.cc:144-168) walks for
+        // ScopeLocal::buildVariableName's register queries.
+        let sleigh = rugra::sleigh_ffi::SleighCtx::new()
+            .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
+        let mut register_xref: Vec<(i32, u64, i32, String)> = Vec::new();
+        for index in 0..sleigh.num_registers() {
+            let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+                continue;
+            };
+            register_xref.push((space, offset, size, name.to_string()));
+        }
+        // SleighArchitecture::resolveArchitecture (sleigh_arch.cc:322-341)
+        // establishes archid from the target ("x86:LE:64:default" for the
+        // locked x86-64 corpus).
+        arch.archid = "x86:LE:64:default".to_string();
+        arch.set_register_xref(register_xref);
+        // Ghidra: sleigh_arch.cc:241-245 SleighArchitecture::buildCommentDB,
+        // called by Architecture::init at architecture.cc:1400 before any
+        // Funcdata exists (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①).
+        // Funcdata::warningHeader (funcdata.cc:135-145) then stores into
+        // this database instead of falling back to stderr, and
+        // PrintC::docFunction's setupFunctionList (printc.cc:2650) emits the
+        // stored header comments — the comment channel every oracle run
+        // uses.
+        arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::comment::CommentDatabaseInternal::new(),
+        )));
         let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
             .map_err(|e| format!("unable to read compiler spec: {e}"))?;
         let mut store = rugra::marshal::DocumentStorage::new();
