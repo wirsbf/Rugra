@@ -2786,3 +2786,25 @@ push_enum_constant_named）走 BTreeMap 精确单名切片且注释误称"无 ge
 enum_match_text_renders_getmatches_representations +
 enum_rep_text_covers_shift_forms 单测（shift 形态经 rep 直驱——getMatches
 自身恒产 shiftAmount=0，同 type.cc:1370 构造默认）。
+## 2026-09-24：枚举成员名臂与 MapIterator end 序键自 GG merge 丢失中恢复（Lane REGWIN）
+260a046c（GG lane 集成）合并冲突解决取 mainline 侧 printc 重构时，静默丢失
+GG2/CR29 三个 hunk，致 dc7a0d0a 起 main_init/glob_url/SetHTTPrequest.part.0
+各回吐 2 行（INFRA-3 记分板"7 函数微回归窗"中的真实回退子集；其余 4 个
+——_init 8/FUN_00102020 2/__cxa_finalize 2/progressbarinit 2——为窗口内
+未动的存量残差）。恢复+强化：
+1. `constant_leaf_text` 与 direct-emit 常量 match 的 `TypeMetatype::Enum` 臂
+   （枚举成员名渲染，`return CURLE_OK;`/`HTTPREQ_UNSPEC`）两处恢复——
+   oracle 依据 printc.cc:1750-1764 TYPE_UINT/TYPE_INT 臂 isEnumType() 分流 +
+   TypeEnum 构造器/decode 把 metatype 归一为 INT/UINT（type.hh:487-491、
+   type.cc:1475），Rugra Enum 元类型为该折叠的建模，落 `_` 兜底臂即成
+   `(CURLcode)0x0` cast 形。
+2. statics 排序键改为 (space rank, end, usepoint)——较丢失的 GG2 4 键
+   (space, start, end, usepoint) 更贴 oracle：MapIterator 按 space 表序 ×
+   空间内 AddrRange (last, subsort) 纯 end 序（database.hh:377-389、
+   rangemap.hh:88-91），start 不参与键。glob_url 声明块（iVar1=EAX[0,4)
+   先于 sVar2=RAX[0,8)）由 end 分量恢复。
+E2E：curl 1438→1334（−104，3 目标函数归零，main 285→267、getparameter
+433→385、next_url 65→57、match_url 40→32，零新增回退）；httpd 门禁面
+1447→1441（−6）；双跑恒等；defects/numbering 双侧 0。已知代价：httpd
+ap_fini_vhost_config 237→239（iVar7 声明移位，LCS 位置性 +2，函数存量
+残差 237 行远未清零；登记 REGWIN-VHOST-DECLORDER-0001）。

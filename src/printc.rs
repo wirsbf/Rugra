@@ -1669,6 +1669,13 @@ impl PrintC {
             // (main_init), `*store != HTTPREQ_UNSPEC` (SetHTTPrequest).
             // TYPE_PARTIALENUM keeps Ghidra's default-cast arm
             // (printc.cc:1801 break).
+            // (TypeEnum ctor/decode, type.hh:487-491 + type.cc:1475), so its
+            // TYPE_UINT/TYPE_INT arms reach pushEnumConstant (printc.cc
+            // 1756/1763). Rugra's Enum metatype IS that enum-int/uint
+            // collapse, so it takes the same named path: the getMatches
+            // representation (enum_match_text), else the unsigned integer
+            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm (printc.cc
+            // 1801 -> 1806-1815).
             TypeMetatype::Enum => self.enum_constant_text(val, &ct),
             TypeMetatype::Unknown => {
                 // HTTPD-CODEREF-SYMBOLIZE-0001: same function-entry
@@ -6358,12 +6365,16 @@ impl PrintC {
     /// - References/output params: `sym_scope` borrowed read-only; emits via
     ///   `&mut self.emit`. Returns `notempty` (cc:2521/2574).
     /// - Loop bounds/order: address-map walk first, dynamic list second
-    ///   (cc:2535 then cc:2554); map order = (space index, start offset,
-    ///   usepoint subsort); category branch in category slot order (cc:2525).
+    ///   (cc:2535 then cc:2554); map order = (space index, AddrRange
+    ///   `last` end boundary, usepoint subsort) per MapIterator over the
+    ///   per-space EntryMap list (database.hh:377-389) and AddrRange
+    ///   operator< (rangemap.hh:88-91); category branch in category slot
+    ///   order (cc:2525).
     /// - Counter/accumulator: single `bool notempty`, set once per emitted
     ///   decl, never reset inside the walk (cc:2521/2530/2551).
-    /// - Sort/compare key: rangemap (first offset, EntrySubsort usepoint);
-    ///   symbol identity for multi-entry dedup = first whole map only.
+    /// - Sort/compare key: rangemap (last end boundary, EntrySubsort
+    ///   usepoint); symbol identity for multi-entry dedup = first whole
+    ///   map only.
     pub fn emit_scope_local_var_decls(
         &mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32,
     ) -> bool {
@@ -6374,13 +6385,22 @@ impl PrintC {
             return notempty;
         }
         // cc:2535-2553: full MapIterator walk, emulated as a stable sort of
-        // the scope's non-dynamic symbols by (space rank, start, usepoint).
+        // the scope's non-dynamic symbols. MapIterator walks the per-space
+        // EntryMap list (database.hh:377-389); within one map the rangemap
+        // multiset orders AddrRange by (last, subsort) — rangemap.hh:88-91,
+        // the end boundary decides first — so among overlapping entries
+        // the one whose range ENDS sooner is visited first (iVar1=EAX[0,4)
+        // before sVar2=RAX[0,8) in glob_url's declaration block). Projected
+        // as key (space rank, end, usepoint-subsort).
         let mut statics: Vec<&crate::varmap::LocalSymbol> = sym_scope
             .symbols
             .iter()
             .filter(|s| !s.is_dynamic)
             .collect();
-        statics.sort_by_key(|s| (local_maptable_space_rank(s.space), s.start, s.usepoint));
+        statics.sort_by_key(|s| {
+            let end = s.start.saturating_add(s.size.max(0) as u64);
+            (local_maptable_space_rank(s.space), end, s.usepoint)
+        });
         for sym in statics {
             // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
             if sym.category != cat {
@@ -15835,6 +15855,10 @@ impl PrintC {
             // pushEnumConstant (printc.cc:1756/1763) — the getMatches
             // named representation (enum_match_text), else the unsigned
             // integer (printc.cc:1684-1686, `false` for enum_int too).
+            // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.cc:1475),
+            // so printConstant's TYPE_UINT/TYPE_INT arms reach
+            // pushEnumConstant (printc.cc:1756/1763) — member name on exact
+            // match, unsigned integer otherwise (printc.cc:1666-1691).
             TypeMetatype::Enum => {
                 let text = self.enum_constant_text(val, ct);
                 self.emit.print(&text);
@@ -15842,6 +15866,7 @@ impl PrintC {
             _ => {
                 // Struct/Union/Array/Code/Spacebase/PartialEnum-meta:
                 // default cast.
+                // Struct/Union/Array/Code/Spacebase: default cast.
                 self.emit_default_cast_constant(val, ct);
             }
         }
