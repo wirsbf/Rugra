@@ -26,7 +26,7 @@
  },
  "input_fingerprint": "sha256:0345105fb08b02e6747738929049506a0316a02d7b91016c2ccb145bd8b9725d",
  "comparand_sha256": {
-  "cpp_fixture": "9457bf886fede60aaafb81b03ea693b985c5dce1bb0029afdb41fe032bbb3003",
+  "cpp_fixture": "ebff6f2001be7293cf359a5eb8ccf2661a15accbf1d72e721a4cb22400e15bc7",
   "ghidra_instrumented_action_hh_sha256": "33a0404322e3641111f91187eb0bd0f49192fc93ef59f8c355d15a97dcfa47f3",
   "ghidra_instrumented_sleigh_arch_hh_sha256": "43eadf844d38e110c88b3b14c18b87e285059a2bb449ce791355654f6cdb2fc0"
  },
@@ -41,7 +41,7 @@
  },
  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
  "projection_expectations": {
-  "producer_blob": "f6cb61d14fd3df7be2e65a74381c303326c3e0dc",
+  "producer_blob": "24a4bec28f2786d0b0f4b23e540c67228519b92f",
   "sha256": "a76cc9f8cc6a587e808f46a8cb69a5053013b21f82c39214de88627800c9732a",
   "bytes": 6081486,
   "begins": 335,

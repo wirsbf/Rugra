@@ -15,6 +15,15 @@
  *   registering dynamic-table function symbols before the lookup; the entry
  *   identity is cross-checked against the resolved symbol so a name
  *   collision in the "::" namespace cannot capture the wrong function body.
+ *   Address-only arm: with STAGE_PROJ_FUNC unset, STAGE_PROJ_ADDR set, and
+ *   the address query still missing (PLT thunks carry no BFD symbol in any
+ *   table: static .symtab has no entry and the dynamic table only carries
+ *   the undefined import), the fixture registers the function at the
+ *   address exactly like the console `load <addr>` command
+ *   (IfcAddrrangeLoad, ifacedecomp.cc:496-514): Architecture::nameFunction
+ *   picks the default name and the global scope owns the FunctionSymbol.
+ *   The historical argv-entry path (both env unset) never takes the arm, so
+ *   the pinned default capture is untouched.
  */
 
 #include <bits/stdc++.h>
@@ -353,8 +362,9 @@ static int run(const string &specRoot,const string &binary,uintb entry,
   const string funcName = (funcEnv != (const char *)0 && *funcEnv != '\0')
       ? string(funcEnv) : string();
   const char *addrEnv = std::getenv("STAGE_PROJ_ADDR");
+  const bool addrOverride = addrEnv != (const char *)0 && *addrEnv != '\0';
   uintb entryAddr = entry;
-  if (addrEnv != (const char *)0 && *addrEnv != '\0')
+  if (addrOverride)
     entryAddr = parseEntryAddress(addrEnv);
   vector<string> specPaths(1,specRoot);
   startDecompilerLibrary(specPaths);
@@ -370,6 +380,27 @@ static int run(const string &specRoot,const string &binary,uintb entry,
     if (!fd && !funcName.empty()) {
       registerDynamicFunctionSymbols(architecture,binary);
       fd = architecture.symboltab->getGlobalScope()->queryFunction(funcName);
+    }
+    if (!fd && funcName.empty() && addrOverride) {
+      // Address-only arm: the batch driver targeted an entry address that
+      // no symbol source covers (PLT thunks: static .symtab has nothing,
+      // dynsym only carries the undefined import).  Register the function
+      // at the address as an exact mirror of the console `load <addr>`
+      // command (IfcAddrrangeLoad, ifacedecomp.cc:496-514):
+      // Architecture::nameFunction (architecture.cc:538-545) builds the
+      // default name, then the global scope addFunction owns the symbol.
+      // The unbounded followFlow below then runs the same
+      // IfaceDecompData::followFlow(s,0) walk the console performs
+      // (ifacedecomp.cc:436-457).  Entry identity is by construction (the
+      // address just registered); the META func_name field carries the
+      // derived name and stays advisory in the bisect contract, like the
+      // BFD/DWARF constprop spelling differences.
+      string defaultName;
+      architecture.nameFunction(
+          Address(architecture.getDefaultCodeSpace(),entryAddr),defaultName);
+      fd = architecture.symboltab->getGlobalScope()->addFunction(
+          Address(architecture.getDefaultCodeSpace(),entryAddr),
+          defaultName)->getFunction();
     }
     if (!fd)
       throw std::runtime_error(funcName.empty()
@@ -529,7 +560,9 @@ int main(int argc,char **argv)
     std::cerr << "usage: stage_projection_1204 SPEC_ROOT BINARY ENTRY OUTPUT "
                  "BINARY_SHA PRODUCER OPTIONS\n"
                  "  target via STAGE_PROJ_FUNC / STAGE_PROJ_ADDR"
-                 " (unset: argv ENTRY address lookup)\n";
+                 " (unset: argv ENTRY address lookup; STAGE_PROJ_ADDR only:"
+                 " address arm registers the function when no symbol"
+                 " carries it)\n";
     return 2;
   }
   uintb entry = 0;
