@@ -4,9 +4,8 @@ Per-function stage-projection fixture bank: for each banked function, the
 frozen oracle-side and rugra-side v1.2 stage projections plus a manifest
 that pins provenance and byte identity. This directory is the durable,
 in-repo form of the RAM-disk lane evidence (the `/dev/shm/rugra-tests/sb-*`
-projection products are lost on reboot); it exists so that the wave's
-six proven-MATCH functions cannot silently regress.
-proven-MATCH functions cannot silently regress.
+projection products are lost on reboot); it exists so that every
+banked proven-MATCH function cannot silently regress.
 
 ## Layout
 
@@ -30,6 +29,7 @@ tests/fixtures/projections/
 | curl_getparameter.constprop.0 | getparameter.constprop.0 | 0x3f00 | 371 | 913,373 | metadata functions map |
 | curl_glob_set | glob_set | 0x4bc0 | 366 | 141,943 | bank sha256 (capture-mode first, then frozen) |
 | curl_glob_word | glob_word | 0x4a60 | 335 | 208,414 | bank sha256 (capture mode, re-capture byte-verified) |
+| curl_glob_range | glob_range | 0x4d60 | 299 | 68,330 | bank sha256 (capture mode, double-run byte-verified) |
 | curl_file2string.part.0 | file2string.part.0 | 0x3a90 | 340 | 87,957 | bank sha256 (== sb-oracle pin c0981445…) |
 
 Common provenance (also recorded per manifest):
@@ -94,8 +94,8 @@ RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=<selector> \
 Selector spellings: `next_url`, `match_url`, `myprogress`, `glob_set`,
 `parseconfig` (DWARF spelling of `parseconfig.constprop.0`),
 `getparameter` (DWARF spelling of `getparameter.constprop.0`),
-`glob_word`; the address form `0x<entry>` is observation-equivalent
-(verified byte-identical on parseconfig).
+`glob_word`, `glob_range`; the address form `0x<entry>` is
+observation-equivalent (verified byte-identical on parseconfig).
 `file2string` (DWARF spelling of `file2string.part.0`); the
 address form `0x<entry>` is observation-equivalent (verified byte-identical
 on parseconfig). The `file2string` entry's advisory-only `func_name` META
