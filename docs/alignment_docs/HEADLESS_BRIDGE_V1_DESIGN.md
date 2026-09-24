@@ -514,3 +514,98 @@ canon 形（`pCVar13 = (Configurable *)aliases; ... ->useragent`）。
 - httpd C2/C4 种子域=**空（语料性质）**，非通道缺陷；curl 侧两通道不受影响。
 - `sigaction`/`sigset_t` 两 golden decl（C4 字段形在场）=语料解锁后的首批
   种子候选；当前无工厂名树不可服务。
+## §13 C3GLOB 交付记录（Lane C3GLOB，2026-09-25，基=亲父 199b23b1）
+通道判定：§12.4 的 C3 域残差（glob×2：main glob 槽位发现 + match_url
+glob 栈形参）oracle 级预验证**双证 CONFIRMED**——但 Rugra 侧 C3 数据传输
+通道**已在位**（master 的 DWARF 原型锁 + 平台参数符号安装 + callee 传播），
+残差重新归属到**库消费/渲染域**；**v1 不设第四门**（committed_locals 载体
+对参数槽实测有害，见 §13.3）。零 src/ 改动（docs/tools 域收口）。
+### 13.1 oracle 级预验证判决（先行，BRIDGE1/C3NEXT 方法论照做）
+仪器：`stage_c3_diag.cc`（锁定库 e40ed130，BRIDGE1 diag-build 对象链接；
+`/dev/shm/rugra-tests/c3glob/`：harness + `gen_c3_seed_xml.py` + 两个
+witness）——扩展 C1 harness 两处安装路径，均为真 funcdata.cc:789-810
+decode 链：`STAGE_SEED_XML`（`<localdb>` 参数符号）与
+`STAGE_CALLEE_PROTOS`（callee Funcdata 上的成对安装，供
+ActionDefaultParams coreaction.cc:2322-2330 copy 传播）。
+**协议发现（真传输形态）**：Java→C++ committed-signature 传输 =
+①`<localdb>` **cat="0" index=N 参数符号**（名字/typelock/namelock/锁定
+存储 `<addr>` + 全内联 `<type>` 图——ProtoStoreSymbol::getNumInputs 直读
+scope 的 function_parameter 类别，fspec.hh:1283-1285）+ ②`<prototype>`
+**仅 returnsym**（model+modellock；symbol-backed store 拒绝
+`<internallist>`，fspec.cc:3302 "Do not decode symbol-backed prototype
+through this interface"；返回值走 ProtoStoreSymbol::setOutput）。参数存储
+无 `<addr>` 时走 ProtoStoreInternal::decode 的 addressesdetermined=false
+臂（fspec.cc:3495-3520，model 从类型派生）——但该臂属 internal store，
+live Funcdata 的 funcp（ProtoStoreSymbol，funcdata.cc:69 setScope）只能
+收 localdb 符号路径。
+**Q1 match_url 判决：CONFIRMED**（witness `oracle_match_url_seeded.c`）。
+锁 `<localdb>`{filename cat=0 RDI char*、glob cat=0 stack+8[304] URLGlob
+全图} + returnsym(char* RAX) 后，canon 签名与体字段形**逐形复现**：
+`char * match_url(char * filename,URLGlob glob)`、
+`glob.size/2<=iVar4`、`glob.pattern[iVar4].type`、
+`.content.Set.elements/.Set.size/.Set.ptr_s/.NumRange.ptr_n`、
+`UPTCharRange/UPTNumRange/UPTSet` 枚举名。消融判决（`cat="-1"` 变体
+`oracle_match_url_nocat.c`）：**类别只管签名**（cat=-1 时签名退化单参），
+**体字段形只需 typelocked 符号盖住 stack+8[304]**——与类别无关。
+**Q2 main 判决：CONFIRMED，且槽位发现无需任何 main 侧种子**
+（witness `oracle_main_c3.c`，仅 callee 安装、main 零 localdb）：
+`URLGlob glob;` decl + **-0x388 槽**（= match_url 出栈区，rep movsq 目的
+`&stack0xfffffffffffffc78` 逐字节复现）+ `glob.literal[0..9]`/
+`glob.pattern[N].type/_4_4_/content` 族 + `glob._296_8_` + 计数器
+`for (iVar9 = 0x26; ...)` 形 + `match_url(pcRam...,glob)` 调用形全量。
+**glob 槽位/名字/类型的来源钉死**：结构=callee（match_url）DWARF 类型图
+（URLGlob 304B：literal[10]@0/pattern[9]@80/size@296，readelf 盘点）；
+槽位=**call 指令自身的出栈访问**（decompiler 自行派生 -0x388，非 DWARF
+非 analyzer——main 的 DWARF 子树实测无 glob 变量，25 个实体盘点为零命中）；
+名字=**callee 参数符号经 FuncProto::copy→ActionDefaultParams 传播**
+（ProtoStoreSymbol::clone 保 callee scope 指针，fspec.cc:3280-3295）。
+canon 的 in_stack 读/glob 写同区二元性（`glob.pattern[0].type =
+axVar19._0_4_` + `axVar19 = in_stack_...fc78._80_24_`）oracle 同构复现。
+### 13.2 Rugra 侧现状（探针证据，临时 DBG 后 revert）
+- **match_url 传输已在位**：`[PREPASS] applied locked DWARF prototype:
+  2 params`（默认态日志）→ set_pieces → model 派生 **Stack+0x8[304]**
+  （临时 `[DBG-C3PROBE]` 探针实证 `param[1] glob space=Stack offset=0x8
+  type=URLGlob size=304`）→ coreaction.rs:1509 平台参数符号臂安装
+  （typelock/namelock/cat=0，与 oracle localdb 符号状态等价）。签名
+  `char * match_url(char *filename,URLGlob glob)` 三门态已 canon 形。
+- **main 传播已在位**：link_call_specs callee 半边（GETPARAM-CALLEE-DWARF
+  判例资产）→ 三门态 main 已打印 `glob.pattern[8].content.Set.elements =
+  (char **)in_stack_...fd90` 等字段族 + `match_url(::config.outfile,glob)`，
+  与 canon 同构（§12.3 witness 内已实证，本车道复核确认）。
+- **残差全部在消费/渲染域**（见 §13.4），不在 C3 数据通道。
+### 13.3 为什么没有第四门（v1 边界判决）
+C3GLOB 门原设计 = committed_locals 运输 match_url 的 glob@+8 种子。
+探针（`probe_seed_matchurl.json` 经 RUGRA_TYPESEED_MANIFEST 覆写实测）
+证明该载体对参数槽是**错误传输**：与 coreaction.rs:1509 平台参数符号
+（同址 stack+8[304]）**重复**，实测 match_url 28→40 行——字段形退化为
+raw offset 形（`*(long *)(&glob + lVar6 + 0x58)`）**且枚举名丢失**
+（`iVar2 == 2` vs `UVar2 == UPTCharRange`）。正确传输（平台安装）已存在
+⇒ 第四门 = no-op 或有害，不 ship。**"四门 767 下降"预期不成立于本域**：
+预期建立在"C3 数据缺失"假设上；实测数据已在位，缺的是库消费（§13.4）。
+C1 载体与参数域的构造不相交原则（C2DWARF "栈参数不收（C3）"）由此获得
+正向证据：参数槽的正确运输者是原型锁路径，不是 localdb-locals 载体。
+### 13.4 残差重归属（出本车道写域；登记 TODO `HEADLESS-BRIDGE-C3-CONSUME-0008`）
+- **match_url 指针形字段访问**（三门态 28 行）：`(&glob)->pattern[iVar5]
+  ->type` + `*(long *)&((&glob)->pattern+iVar5)->content` vs canon
+  `glob.pattern[iVar5].type/.content.Set.elements`。同符号状态（typelock
+  304B stack+8 cat=0）oracle 产 canon 形；Rugra **标量字段解析、变址
+  数组字段读不解析**（`glob.size` ✓ vs `glob.pattern[i]` ✗）。域=
+  restructure/typeprop/printc 的符号消费（varmap/printc 白名单模块）。
+- **main `&0xfffffffffffffc78` 截断**（1 行）：canon `&stack0x...`（空间
+  名前缀，Ghidra AddrSpace::printRaw space.cc:206 `name+"0x"+offset`）；
+  Rugra 印裸 hex。print 域（printc.rs 地址常量渲染路径）。
+- **union 名拼写**（main 9 行）：`union_5a7`（Rugra offset 命名）vs
+  `anon_union_16_3_e2f18bb4_for_content`（Java DWARF 导入器合成名）。
+  名字组件部分可观察（size=16/序数/hash/member 名）但 hash 算法在 Java
+  侧（decompile/cpp 之外、本仓 ghidra/ 树无 Java）→ **不可推导登记**，
+  除非引入 Java 侧证据（W0 消融时顺带钉）。
+- 计数器分型/Unresolved 注释/`Configurable *config` 寄存器变量/
+  sec_offset：§12.4 预归属不变。
+### 13.5 验证（亲测，基=亲父 199b23b1）
+| 门禁 | 默认（无 env） | 三门全开 |
+|---|---|---|
+| curl E2E canon | **1096/0/0**，cmp 亲父字节恒等（docs/tools-only，构造性恒等；临时探针 revert 后重建 cmp 实证） | **767/0/0**（=C3NEXT 见证复现） |
+| gcc 审计 | — | **104 OK/20 FAIL**（=三门基线，fail 集不变） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+src 零触碰（printc.rs/varmap.rs/debugproto.rs 全程只读；唯一临时 DBG
+eprintln 已 revert，default 输出 cmp 恒等双证）。
