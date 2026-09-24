@@ -1638,7 +1638,25 @@ impl FuncProto {
         {
             let vn0 = triallist[0].read().unwrap();
             pieces.addr = *vn0.get_addr();
-            pieces.ty = vn0.get_type();
+            // Ghidra: pieces.type = triallist[0]->getHigh()->getType()
+            // (fspec.cc:4155) — the HIGH type is never null because every
+            // untyped Varnode is created with getBase(size,TYPE_UNKNOWN)
+            // (Funcdata::newVarnode/newUnique/newConstant,
+            // funcdata_varnode.cc:83/148/…), so an unconstrained return
+            // value types as `undefined<N>`. Fold Rust's None to the same
+            // unknown base (the convention of the input-side port at
+            // fspec.cc:4118's updateInputNoTypes fold).
+            pieces.ty = Some(match vn0.get_type() {
+                Some(t) => t,
+                None => {
+                    let size = vn0.get_size();
+                    crate::type_system::typefactory::TypeFactory::shared_default()
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_base(size, crate::type_system::TypeMetatype::Unknown)
+                        .expect("factory always produces an unknown base type")
+                }
+            });
             pieces.flags = 0;
             piece_space = vn0.get_space();
         }

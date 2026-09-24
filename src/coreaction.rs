@@ -7286,13 +7286,24 @@ impl ActionInferTypes {
             // only path that can set it; a successful exact-piece lookup leaves
             // it false.
             let mut needs_block = false;
+            // TypeOpReturn::getInputLocal (typeop.cc:883-897) reads RETURN
+            // inputs' local types from the enclosing function's current
+            // return-value parameter (fp->getOutputType() = funcp.return_type,
+            // void when cleared) — the fd channel Ghidra reaches through
+            // op->getParent()->getFuncdata().
+            let fd_output_type = Some(fd.funcp.return_type.clone());
             let local_type = if let Some(exact_piece) = exact_piece {
                 Some(exact_piece)
             } else {
                 vn_arc
                     .read()
                     .unwrap()
-                    .get_local_type(&mut needs_block, &type_factory, userops.as_ref())
+                    .get_local_type(
+                        &mut needs_block,
+                        &type_factory,
+                        userops.as_ref(),
+                        fd_output_type.as_ref(),
+                    )
                     .map_err(|error| crate::error::Error::Lowlevel(error.to_string()))?
             };
             if needs_block {
@@ -10520,58 +10531,51 @@ impl Action for ActionOutputPrototype {
 
     // Ghidra: coreaction.cc:4765 ActionOutputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
-        // If the return type is NOT locked, derive it from the first RETURN op.
-        // If RETURN has >1 input, the function has a return value (slot 1).
-        // Update FuncProto.return_type based on the return varnode's size/type.
-        use crate::opcodes::OpCode;
-
-        // Find the first RETURN op with a return value.
-        let return_vn = fd.obank.alivelist.iter()
-            .find_map(|r| {
-                let op = r.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_RETURN { return None; }
-                if op.is_dead() { return None; }
-                if op.num_input() < 2 { return None; }
-                op.inrefs.get(1).cloned()
-            });
-
-        if let Some(vn_arc) = return_vn {
-            let vn = vn_arc.read().unwrap();
-            let size = vn.get_size();
-            // Determine return type from varnode size
-            let new_return_type = match size {
-                0 => fd.funcp.return_type.clone(), // Keep existing
-                1 => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "byte".to_string(), 1,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-                4 => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "int".to_string(), 4,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-                _ => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(), size,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-            };
-            // Only update if the current return type is void or unknown
-            let is_void = matches!(
-                fd.funcp.return_type.as_ref(),
-                crate::type_system::datatype::Datatype::Void(_)
-            );
-            if is_void {
-                fd.funcp.return_type = new_return_type;
-            }
+        // Faithful port of ActionOutputPrototype::apply (coreaction.cc:4765
+        // -4782). When the output parameter is not type-locked (Rugra models
+        // Ghidra's isSizeTypeLocked as output_type_locked with a size-derived
+        // TYPE_UNKNOWN return; update_output_types applies the same
+        // size-lock override rule), rebuild the return value from the first
+        // non-dead, non-halt RETURN op's inputs (coreaction.cc:4769-4775
+        // getFirstReturnOp + the 1..numInput input walk) via
+        // FuncProto::updateOutputTypes (fspec.cc:4136-4159):
+        //   - empty trial list -> clearOutput() (void return);
+        //   - otherwise pieces.type = the RETURN input's high type, which in
+        //     Ghidra is the varnode's own type — every untyped varnode is
+        //     CREATED with getBase(size,TYPE_UNKNOWN) (Funcdata::newVarnode/
+        //     newUnique/newConstant, funcdata_varnode.cc:83/148/…), so an
+        //     unconstrained return value yields `undefined8` — the locked
+        //     12.0.4 witness for the httpd switchD_0017766d::default stub
+        //     (`undefined8 ...(void) { return 0xfffffffd; }`). The former
+        //     simplified int/long size table printed `long` there.
+        if !fd.funcp.output_type_locked {
+            // Funcdata::getFirstReturnOp (funcdata.cc): first RETURN in the
+            // code-list's insertion order, skipping dead and halt ops.
+            let first_return_inputs: Vec<
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            > = fd
+                .obank
+                .returnlist
+                .iter()
+                .find(|op_ref| {
+                    let op = op_ref.0.read().unwrap();
+                    // Funcdata::getFirstReturnOp: skip isDead() and
+                    // getHaltType()!=0 (the Rugra HALT flag stands in for
+                    // Ghidra's halt marker).
+                    !op.is_dead() && (op.flags & crate::op::pcodeop_flags::HALT) == 0
+                })
+                .map(|op_ref| {
+                    let op = op_ref.0.read().unwrap();
+                    op.inrefs.iter().skip(1).cloned().collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            fd.funcp
+                .update_output_types(&first_return_inputs, &|_proto| {
+                    // Size-lock override lookups are unreachable on this
+                    // path (output_type_locked == false); the callback is a
+                    // dead parameter for the not-locked entry branch.
+                    (crate::address::Address::new(0), 0, false)
+                });
         }
         Ok(action_status::NO_CHANGE)
     }

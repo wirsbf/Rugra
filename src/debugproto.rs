@@ -750,6 +750,34 @@ impl DebugPrototypeDatabase {
             }
             source_index += 1;
         }
+        // DWARF-VOID-UNKNOWN-MODEL-0001: a 0-param DWARF signature with no
+        // return-location DIE takes Ghidra's StorageVerification downgrade
+        // path (funcfixup/StorageVerificationDWARFFunctionFixup.java:
+        // `isEmptySignature = params.isEmpty() && retval.isMissingStorage()`
+        // → CommitMode.FORMAL → updateFunctionSignature runs with
+        // DYNAMIC_STORAGE_ALL_PARAMS, so hasCustomVariableStorage() is
+        // false), and the DWARF analyzer passes callingConventionName=null
+        // (DWARFImportOptions defaultCC is blank and DW_AT_calling_convention
+        // is absent) — FunctionDB.updateFunction(null,...) keeps the
+        // never-assigned convention, and FunctionPrototype.grabFromFunction
+        // (FunctionPrototype.java:129-141) reads it back as "unknown",
+        // sending the decompiler model="unknown", which
+        // FuncProto::decode routes to createUnknownModel (architecture.cc:
+        // 1159-1166; "unknown" is printInDecl=false). grabFromFunction also
+        // derives voidinputlock = (sigSource != DEFAULT) && paramCount == 0
+        // → true (already set by set_pieces' set_input_lock on the empty
+        // list). The combined observable, via ActionPrototypeWarnings
+        // (coreaction.cc:4901-4908), is the golden's
+        // "WARNING: Unknown calling convention -- yet parameter storage is
+        // locked" on exactly the three 0-param DWARF locals (main_init,
+        // main_free, hugehelp). Param'd DWARF signatures keep STORAGE commit
+        // mode (custom storage, custom_storage flag suppresses the warning
+        // in the oracle) and Rugra keeps the resolved default model name,
+        // which suppresses the warning identically — so the pin applies to
+        // the empty-signature case only.
+        if debug_proto.parameters.is_empty() {
+            proto.set_model_name("unknown");
+        }
         Ok(proto)
     }
 }
@@ -1640,8 +1668,15 @@ fn union_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype
 
 // RUGRA-GLUE: constructs an enum Datatype with its DWARF enumerator value table for constant-name rendering
 fn enum_type(name: String, size: usize, values: BTreeMap<u64, String>) -> Arc<Datatype> {
+    let mut base = TypeBase::new(name, size, TypeMetatype::Enum);
+    // Ghidra's TypeEnum sets the `enumtype` flag (type.hh:490-494 /
+    // TypeFactory decode paths); isEnumType() is flag-based, so an enum
+    // without the flag is invisible to PrintC::pushConstant's enum arm
+    // (printc.cc:1756/1763) and prints as a default cast. Mirrors the
+    // decode-side flagging in the factory (datatype.rs ENUMTYPE sets).
+    base.flags |= crate::type_system::datatype::type_flags::ENUMTYPE;
     intern_named(Arc::new(Datatype::Enum(TypeEnum {
-        base: TypeBase::new(name, size, TypeMetatype::Enum),
+        base,
         values,
     })))
 }
@@ -2297,8 +2332,15 @@ mod tests {
     // bound by the caller. FuncProto::decode only constructs an unknown model
     // for an explicit, unresolved ATTRIB_MODEL value; voidinputlock merely
     // contributes to modellock (fspec.cc:4681-4698, 4737-4738, 4776-4777).
+    // DWARF-VOID-UNKNOWN-MODEL-0001 supersedes the "keeps the bound model"
+    // expectation for the 0-param DWARF locals: the headless analyzer hands
+    // the decompiler model="unknown" (StorageVerification's empty-signature
+    // downgrade + FunctionDB.updateFunction(null,...) keeping the never-
+    // assigned convention), and the locked golden witnesses it as the
+    // "WARNING: Unknown calling convention -- yet parameter storage is
+    // locked" header on exactly main_init/main_free/hugehelp.
     #[test]
-    fn void_signature_dwarf_prototype_keeps_bound_model() {
+    fn void_signature_dwarf_prototype_pins_unknown_model() {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         for (name, address) in
@@ -2313,7 +2355,10 @@ mod tests {
             assert!(db
                 .apply(&mut fd)
                 .expect("apply void-signature prototype"));
-            assert!(!fd.funcp.is_model_unknown(), "{name} keeps the bound model");
+            assert!(
+                fd.funcp.is_model_unknown(),
+                "{name} pins the oracle's unknown model (golden warning witness)"
+            );
             assert!(
                 fd.funcp.is_model_locked(),
                 "{name} void parameter list locks the bound model"

@@ -593,3 +593,20 @@ TypeOpStore::getInputCast cc:546-548 的 cast-already-in-place 测试——依�
 实例相等；无工厂的 detached fixture 回退原构造）。旧 `propagate_to_pointer`
 （alttype 尺寸、非 intern）保留给既有调用点（typeop.rs spacebase 臂族 twin，
 留待该域收敛；coreaction.rs LOAD/STORE 臂已全部切换到 _sized 版本）。
+
+## 2026-09-24：TypeOpReturn 输入本地类型接通 proto 输出（Lane GG2 / sb-smallfns）
+
+`TypeOpReturn` 此前缺 `getInputLocal` 覆写——Ghidra `TypeOpReturn::getInputLocal`
+（typeop.cc:883-897）对 slot≥1 的 RETURN 输入返回**所在函数当前返回值参数类型**
+（`fp->getOutputType()`，fspec.hh:1538；非 void 且尺寸匹配时保留，否则基类默认
+`getBase(size,TYPE_UNKNOWN)`）。这是 DWARF 锁定枚举返回类型（`CURLcode`）经
+`ActionInferTypes::buildLocaltypes`→`writeBack` 到达 `return CURLE_OK;` 常量的
+唯一播种通道。Rugra 以 `get_input_local_in_fd`（fd 经 build_localtypes 显式穿线，
+因 Rust PcodeOp 无 parent→Funcdata 链）补齐该覆写；fd-缺失形态保持 Ghidra
+`bb==0` 回退（基 undefined）。
+
+## 2026-09-24：比较传播链核对（Lane GG2 只读复核）
+
+`TypeOpEqual::propagateAcrossCompare`（typeop.cc:963-986）的 compare_op_impl!
+端口在位：`*store != HTTPREQ_UNSPEC` 的常量类型经 INT_EQUAL/NOTEQUAL 输入间
+传播获得枚举类型（枚举 ENUMTYPE 旗标修复后自然接通）。

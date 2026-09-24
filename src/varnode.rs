@@ -317,6 +317,7 @@ pub fn op_input_type_local(
     slot: usize,
     type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
+    fd_output_type: Option<&Arc<Datatype>>,
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     // Size of the queried input varnode, shared by every base/meta lookup.
@@ -379,6 +380,25 @@ pub fn op_input_type_local(
                 // cc:862: null -> TypeOp::getInputLocal base default
                 // `getBase(in(slot).size, TYPE_UNKNOWN)` (typeop.cc:271-275).
                 None => local_base(type_factory, input_size, TypeMetatype::Unknown),
+            }
+        }
+        // typeop.cc:883-897 TypeOpReturn::getInputLocal — a RETURN input
+        // (slot >= 1) reads its local type from the enclosing function's
+        // return-value parameter (fp->getOutputType()), kept only when not
+        // void and size-matched; this bare-&PcodeOp table has no parent
+        // Funcdata chain, so the fd-less form mirrors Ghidra's bb==0
+        // fallback (base undefined) and the fd-carrying dispatch in
+        // ActionInferTypes::build_localtypes routes through
+        // TypeOpReturn::get_input_local_in_fd instead.
+        (OpCode::CPUI_RETURN, slot @ 1..) => {
+            match fd_output_type {
+                Some(ct)
+                    if !matches!(ct.as_ref(), Datatype::Void(_))
+                        && ct.get_size() == input_size =>
+                {
+                    Some(ct.clone())
+                }
+                _ => local_base(type_factory, input_size, TypeMetatype::Unknown),
             }
         }
         // typeop.cc:687-718 — delegate to the reviewed D1 port.
@@ -1981,6 +2001,7 @@ impl Varnode {
         block_up: &mut bool,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
         userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
+        fd_output_type: Option<&Arc<Datatype>>,
     ) -> Result<Option<Arc<Datatype>>> {
         // cc:906-907: Our type is locked, don't change. Not a partial lock,
         // return the locked type (no blockup touch, no def/descend consult).
@@ -2034,7 +2055,7 @@ impl Varnode {
             let Some(slot) = slot else { continue };
             let newct = {
                 let op = descend_op.read().unwrap();
-                op_input_type_local(&op, slot, type_factory, userops)
+                op_input_type_local(&op, slot, type_factory, userops, fd_output_type)
             };
             match (&ct, newct) {
                 // cc:926-927: first non-null candidate wins unconditionally.

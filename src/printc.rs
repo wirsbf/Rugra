@@ -309,9 +309,13 @@ fn sanitize_c_ident(name: &str) -> String {
             // printer emits the function name string raw via
             // emit->tagFuncName(fd->getDisplayName(), ...) with no
             // identifier sanitization, so the scope separator `::` survives.
-            // DRIVER-SWITCHD-DEFFN-0001. No other caller can see a `:` today
+            // DRIVER-SWITCHD-DEFFN-0001. `.` passes for the same reason:
+            // the golden prints ELF function symbols verbatim
+            // (`int SetHTTPrequest.part.0(HttpReq,HttpReq *)`, curl
+            // 0x103c50) — Ghidra never rewrites a display name into a C
+            // identifier. No other caller can see a `:` today
             // (symbol/param names are plain identifiers).
-            if c.is_ascii_alphanumeric() || c == '_' || c == ':' { c } else { '_' }
+            if c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '.' { c } else { '_' }
         })
         .collect()
 }
@@ -1561,6 +1565,44 @@ impl PrintC {
             vn.get_high_type_read_facing(read_op, slot as i32)
         });
         let Some(ct) = read_facing else {
+            // Untyped constant leaf. The atom transport bypasses
+            // push_varnode's Priority-0 address proxy, but the oracle prints
+            // a .rodata-pointing constant as the quoted string whenever the
+            // propagated type is char* (pushConstant's TYPE_PTR arm ->
+            // pushPtrCharConstant, printc.cc:1781-1784 -> 1698-1719,
+            // resolveConstant + shared StringManager), and a code-space
+            // constant addressing a known function prints the function's
+            // display name (pushPtrCodeConstant, printc.cc:1730-1744 ->
+            // queryFunction). Rugra's string/code typing layer does not
+            // reach leaf constants yet, so the same fd-side stand-ins
+            // push_varnode's Priority-0 arm uses (symbol first, then
+            // string, same formatting) answer here. Bitwise contexts keep
+            // the integer (bitmask, not a string address) — same gate as
+            // push_varnode's arm.
+            let is_bitwise_context = op.is_some_and(|read_op| {
+                matches!(
+                    read_op.opcode,
+                    OpCode::CPUI_INT_XOR
+                        | OpCode::CPUI_INT_AND
+                        | OpCode::CPUI_INT_OR
+                        | OpCode::CPUI_INT_LEFT
+                        | OpCode::CPUI_INT_RIGHT
+                        | OpCode::CPUI_INT_SRIGHT
+                )
+            });
+            if !is_bitwise_context {
+                if let Some(sym_name) = self.symbol_table.get(&val) {
+                    return sym_name.clone();
+                }
+                if let Some(str_val) = self.string_table.get(&val) {
+                    let display = if str_val.len() > 80 {
+                        format!("{} (continues)", &str_val[..60])
+                    } else {
+                        str_val.clone()
+                    };
+                    return format!("\"{}\"", escape_c_string(&display));
+                }
+            }
             return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
         };
         let sz = ct.get_size();
@@ -1583,6 +1625,16 @@ impl PrintC {
                     self.integer_text(val, sz, true, display_format::DEFAULT)
                 }
             }
+            // Ghidra stores enums as TYPE_INT/TYPE_UINT + the enumtype flag
+            // (TypeEnum::decode, type.cc:1475), so its TYPE_UINT/TYPE_INT
+            // arms reach pushEnumConstant (printc.cc:1756/1763). Rugra's
+            // Enum metatype IS that enum-int/uint collapse, so it takes the
+            // same member-name path: exact-match enumerator name, else the
+            // unsigned integer (printc.cc:1666-1691 pushEnumConstant's
+            // no-match else). Locked witnesses: `return CURLE_OK;`
+            // (main_init), `*store != HTTPREQ_UNSPEC` (SetHTTPrequest).
+            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm.
+            TypeMetatype::Enum => self.enum_constant_text(val, &ct),
             TypeMetatype::Unknown => self.integer_text(val, sz, false, display_format::DEFAULT)
             ,
             TypeMetatype::Bool => {
@@ -2144,25 +2196,20 @@ impl PrintC {
                 }
                 } // end deref_form field_access substitute guard
                 if !field_access {
-                    // cc:509-513: `*` prefix only in the dereference form;
-                    // subscript form lets the implied PTRADD/PTRSUB def emit
-                    // `p[i]` itself (its ` = ` RHS follows below).
+                    // cc:500-518 PrintC::opStore: pushOp(&assignment) (the
+                    // inline ` = ` separator below), then — only in the
+                    // dereference form — pushOp(&dereference,op); pushVn
+                    // pushes EACH input exactly once: value (in2) with plain
+                    // mods, address (in1) with m. The former extra
+                    // tag_op("*") + a first un-recursed rpn_push_in(in1)
+                    // left a stray operand on the RPN stack that drained
+                    // when the dereference token was pushed, printing the
+                    // whole lvalue twice (`*urlnum*urlnum = ...`,
+                    // `pCVar16->useragentpCVar16->useragent = ...`).
                     if deref_form {
-                        self.emit.tag_op("*");
+                        self.rpn_push_op(self.rpn_tok_dereference);
                     }
                     self.rpn_push_in(op_arc, op, 1, m);
-                    // printc.cc:512 pushOp(&dereference,op): route the STORE
-                    // address under the unary dereference TOKEN so the token
-                    // protocol's parentheses() decision (printlanguage.cc:287
-                    // -292, unary_prefix prec 62 vs the address op's token)
-                    // wraps every lower-precedence address expression — a
-                    // PTRADD/INT_ADD address prints `*(puVar4 + 3)`, a legal
-                    // lvalue, instead of the rvalue `*puVar4 + 3` the old
-                    // hand-emitted tag_op("*") produced (equal-preference
-                    // unary/cast addresses and leaf atoms stay paren-free,
-                    // exactly matching the oracle token table pairing).
-                    self.rpn_push_op(self.rpn_tok_dereference);
-                    self.rpn_push_in(op_arc, op, 1, self.mods);
                     self.rpn_recurse();
                 }
                 self.emit.tag_op(" = ");
@@ -6257,13 +6304,22 @@ impl PrintC {
             return notempty;
         }
         // cc:2535-2553: full MapIterator walk, emulated as a stable sort of
-        // the scope's non-dynamic symbols by (space rank, start, usepoint).
+        // the scope's non-dynamic symbols. The oracle iterates Scope's
+        // rangemap of SymbolEntry (EntryMap, database.hh:164), whose
+        // AddrRange ordering is (last, subsort) — rangemap.hh:100-102 — so
+        // among entries sharing a start address the one whose range ENDS
+        // sooner is visited first (iVar1=EAX[0,4) before sVar2=RAX[0,8) in
+        // glob_url's declaration block). Projected as key
+        // (space rank, start, end, usepoint-subsort).
         let mut statics: Vec<&crate::varmap::LocalSymbol> = sym_scope
             .symbols
             .iter()
             .filter(|s| !s.is_dynamic)
             .collect();
-        statics.sort_by_key(|s| (local_maptable_space_rank(s.space), s.start, s.usepoint));
+        statics.sort_by_key(|s| {
+            let end = s.start.saturating_add(s.size.max(0) as u64);
+            (local_maptable_space_rank(s.space), s.start, end, s.usepoint)
+        });
         for sym in statics {
             // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
             if sym.category != cat {
@@ -15648,8 +15704,18 @@ impl PrintC {
                 // emit FLOAT_UNKNOWN (printc.cc:1386 sentinel).
                 self.emit.print("FLOAT_UNKNOWN");
             }
+            // Rugra's Enum metatype is Ghidra's enum-int/uint collapse
+            // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.cc:1475),
+            // so printConstant's TYPE_UINT/TYPE_INT arms reach
+            // pushEnumConstant (printc.cc:1756/1763) — member name on exact
+            // match, unsigned integer otherwise (printc.cc:1666-1691).
+            TypeMetatype::Enum => {
+                let text = self.enum_constant_text(val, ct);
+                self.emit.print(&text);
+            }
             _ => {
-                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
+                // Struct/Union/Array/Code/Spacebase/PartialEnum-meta:
+                // default cast.
                 self.emit_default_cast_constant(val, ct);
             }
         }

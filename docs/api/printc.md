@@ -2637,3 +2637,21 @@ httpd **1899/0/0**（−160）、gcc 82OK/25FAIL 恒等；next_url 92/match_url 
   族 EQ3 ⑤，非本域）/httpd 9OK/20FAIL（基线 21，−1=ap_make_dirstr_prefix）。
   register0x token 族：curl 9→0、httpd 4→2（残 2=main 未恢复跳表的 RAX 开关
   变量，I 族 JUMPTABLE-TABLEAPI 域）。
+
+## 2026-09-24：枚举元类型常量走成员名臂（Lane GG2）
+
+`constant_leaf_text` 与 `push_constant_typed` 增 `TypeMetatype::Enum` 臂：
+精确成员名，否则无符号整数（printc.cc:1666-1691 pushEnumConstant 的 no-match
+else）。Ghidra 把枚举存为 TYPE_INT/TYPE_UINT + enumtype 旗标（TypeEnum::decode
+type.cc:1475），故其 TYPE_UINT/TYPE_INT 臂可达 pushEnumConstant（cc:1756/1763）
+——Rugra 的 Enum 元类型即该 enum-int/uint 折叠，取同一成员名路径。锁定见证：
+`return CURLE_OK;`（main_init）、`*store != HTTPREQ_UNSPEC`（SetHTTPrequest）。
+TYPE_PARTIALENUM 保持 Ghidra 的默认 cast 臂。同时移除 lane 前代遗留的
+[DBGSTR] TEMP-DBG 块。
+
+## 2026-09-24：STORE 左值双打印修复 + MapIterator end 键（前代 WIP 收编核证）
+
+opStore cc:500-518 端口修正：deref 形先 pushOp(dereference) 再单次
+rpn_push_in(op,1,m)——旧实现 tag_op("*") + 未递归首推 + 二次输入推送使 RPN
+栈残留重复左值（`*urlnum*urlnum = ...`）。maptable 静态序键增 end（rangemap.hh
+:100-102 AddrRange (last,subsort) 序：同 start 先结束者先访问）。

@@ -1474,3 +1474,8 @@ match_url Phase 2 mirror 首分歧（ordinal 12 heritage，op-idx 0）：双侧 
 （sizeFront=0，sizeBack=8，`CONCAT88(Qb[create], Qa[create])`，drill 双侧
 窗口逐行同构）。四类核对：引用参数=indOp 句柄（非拷贝）；遍历序=front 臘后
 back 臂（同 oracle）；计数器=无；排序键=SeqNum(pc=call,uniq=创建序)。
+
+## 2026-09-24：TEMP-DBG 清理（Lane GG2）
+
+移除 guard_returns 输入处的 [DBGRD] 环境门调试块（lane 前代遗留；提交规范
+要求临时 TAG 提交前删除）。无行为变化。

@@ -1197,3 +1197,13 @@ E2E:curl 3119→3115,defects/numbering 保持 0(此前因祸得福的 Address(0)
 queryProperties/inUse 差异)。
 
 - 2026-09-23: getAddr anchor corrected to header inline definition.
+
+## 2026-09-24：op_input_type_local 增 RETURN 臂 + fd 输出类型穿线（Lane GG2）
+
+`op_input_type_local` 新增 `fd_output_type: Option<&Arc<Datatype>>` 参数与
+`(CPUI_RETURN, slot@1..)` 臂（typeop.cc:883-897 的表格化镜像：proto 输出类型
+非 void 且尺寸匹配→该类型；否则 `local_base(size, Unknown)`）。`get_local_type`
+同步穿线；唯一生产调用方 `coreaction.rs build_localtypes` 传
+`Some(fd.funcp.return_type.clone())`（Ghidra 的 op→getParent()→getFuncdata()
+通道）。slot 0（indeterminate marker）走 `_` 默认臂，与 Ghidra slot==0 →
+基类默认一致。

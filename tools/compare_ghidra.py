@@ -89,7 +89,13 @@ def match_functions(rugra_funcs, ghidra_funcs, base_offset=0x100000):
     matched = []
     for addr, name, size, body in rugra_funcs:
         key = strip_gcc_suffix(name)
-        ghidra = by_addr.get(addr) or by_name.get(key)
+        # The Rugra header's address may be base-0 (historical driver form,
+        # direct key hit) or image-based (the golden's own convention,
+        # e.g. 0x1022f0 — try both normalizations before falling back to
+        # the name key, whose last-wins dict would mispair duplicate names
+        # like the free/puts PLT-thunk vs EXTERNAL-stub pairs).
+        ghidra = (by_addr.get(addr) or by_addr.get(addr - base_offset)
+                  or by_addr.get(addr + base_offset) or by_name.get(key))
         if ghidra:
             matched.append((addr, name, body, ghidra[0], ghidra[1]))
     return matched

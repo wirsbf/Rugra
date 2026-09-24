@@ -1086,3 +1086,12 @@ addlflags `concat_root` = 0x100，常量此前已存在但无访问器与使用�
 RulePieceStructure::applyOp 顶部闸门（ruleaction.cc:7610）+ 建树前
 `setPartialRoot()`（:7642）——CONCAT 树只重排一次；缺失该闸门时
 cleanup 池对同一根反复返回 change 导致 universal 尾部不收敛。
+
+## 2026-09-24：create 即注册 code-list（前代 WIP 收编核证）
+
+Ghidra cc:941-948 PcodeOpBank::create 无操作码分配；操作码经 opSetOpcode→
+changeOpcode（op.cc:1005-1012）的 addToCodeList（op.cc:881-900）注册进
+STORE/LOAD/RETURN/CALLOTHER 专用表。Rugra create() 直接收操作码，故在
+create 处补 add_to_code_list 以维持"可列表操作码自诞生即在表中"不变量
+（否则 inject_raw_ops 出生的 RETURN 对 begin_op(RETURN) 消费者不可见，
+httpd 语系未锁返回值全体塌缩 `return;`）。change_opcode 的先删后加防双注册。
