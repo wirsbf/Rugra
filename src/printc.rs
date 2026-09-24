@@ -8234,7 +8234,7 @@ impl PrintC {
                             .v_type
                             .as_ref()
                             .and_then(|t| {
-                                if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(t.get_name().to_string()) } else { None }
+                                if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(Self::cast_type_string(t)) } else { None }
                             });
                         if let Some(ref ptr_name) = addr_type_name {
                             self.emit
@@ -8313,16 +8313,26 @@ impl PrintC {
             // inserts these (coreaction.cc:2702) when an op's expected input
             // type differs from the feeding varnode's high type.
             OpCode::CPUI_CAST => {
-                // Emit "(typename)". The output varnode's v_type (set by
-                // castInput to reqtype) is the cast target type.
-                let type_name = def_op
+                // Emit "(typename)". printc.cc:448-464 opTypeCast reads the
+                // output varnode's DEF-FACING high type (getHighTypeDefFacing)
+                // and renders it through pushType's structural spelling —
+                // never the raw v_type name. The pre-PRINTC-CASTDEF-0001 arm
+                // printed v_type.get_name(), which surfaced the print-time
+                // "int *" fallback-stamp name (printc.rs load_addr_direct
+                // glue) as `(int *)` on SP-alias address chains where the
+                // real cast target is a different pointer — semantically
+                // wrong element arithmetic in the printed C. The RPN arm
+                // (rpn_op_type_cast) already used the def-facing consult;
+                // this legacy inline channel now does the same through
+                // cast_type_string (printc.cc:2013 pushType spelling).
+                let out_dt = def_op
                     .output
                     .as_ref()
-                    .and_then(|o| {
-                        let guard = o.read().unwrap();
-                        guard.v_type.as_ref().map(|t| t.get_name().to_string())
-                    })
-                    .unwrap_or_else(|| "long".to_string());
+                    .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+                let type_name = match out_dt {
+                    Some(ref dt) => Self::cast_type_string(dt),
+                    None => "long".to_string(),
+                };
                 if !self.discovery_pass {
                     self.emit.print(&format!("({})", type_name));
                 }
@@ -9671,12 +9681,24 @@ impl PrintLanguage for PrintC {
                     // them typed the extension output itself, flipping
                     // isZextCast/isSextCast false (functional ZEXT48/SEXT48
                     // where the oracle prints the cast/hidden form).
+                    // PRINTC-PTRSTAMP-CAST-OVERWRITE-0001: a varnode whose
+                    // def is a CPUI_CAST already carries the FINALIZED cast
+                    // target that ActionSetCasts installed (coreaction.cc:
+                    // 2702-2712 sets vnout's type to the getInputCast ct;
+                    // Ghidra has no print-side type writer after that — the
+                    // oracle's cast spelling is exactly this terminal
+                    // value). Stamping it with the synthetic "int *" below
+                    // overwrote `long` into `int *`, printing
+                    // `(int *)puVar10 - 8` — a 4x-offset semantic error and
+                    // a non-oracle cast form. Exclude CAST defs from the
+                    // stamp alongside the extension/truncation family.
                     let def_is_ext = vn
                         .get_def()
                         .map(|d| {
                             matches!(
                                 d.read().unwrap().opcode,
-                                OpCode::CPUI_INT_ZEXT
+                                OpCode::CPUI_CAST
+                                    | OpCode::CPUI_INT_ZEXT
                                     | OpCode::CPUI_INT_SEXT
                                     | OpCode::CPUI_SUBPIECE
                                     | OpCode::CPUI_PIECE
@@ -9728,7 +9750,8 @@ impl PrintLanguage for PrintC {
                                         .map(|d| {
                                             !matches!(
                                                 d.read().unwrap().opcode,
-                                                OpCode::CPUI_INT_ZEXT
+                                                OpCode::CPUI_CAST
+                                                    | OpCode::CPUI_INT_ZEXT
                                                     | OpCode::CPUI_INT_SEXT
                                                     | OpCode::CPUI_SUBPIECE
                                                     | OpCode::CPUI_PIECE
@@ -9785,6 +9808,14 @@ impl PrintLanguage for PrintC {
                         // int (the previous fallback pointee), wordsize 1
                         // (ram) — propagateToPointer's sizing per
                         // typeop.cc:497-498.
+                        // (PRINTC-ADDRSTAMP-VALTYPE-0001: pointing the stamp
+                        // at the edge's value type instead — the oracle
+                        // TypeOpLoad/Store::propagateType quantity — was
+                        // measured and left the gate totals unchanged: the
+                        // `(int *)` SP-alias prints do not read this stamp.
+                        // The real lever is the value→address type
+                        // PROPAGATION in ActionInferTypes, registered as
+                        // TYPEPROP-ADDRSLOT-PERSIST-0001.)
                         let sized_ptr = std::sync::Arc::new(Datatype::Pointer(
                             TypePointer {
                                 base: TypeBase::new(
