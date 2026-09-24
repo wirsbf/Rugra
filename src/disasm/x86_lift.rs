@@ -352,6 +352,21 @@ impl X86Lifter {
         displacement: &i64,
         ops: &mut Vec<PcodeOpRaw>,
     ) -> Option<VarnodeRaw> {
+        // rip-relative EA (no index, no segment): the Rugra disassembler
+        // already resolved the displacement to the ABSOLUTE target (iced
+        // memory_displacement64 = next_rip + raw_disp), so the EA is a bare
+        // constant — the same shape as the abs-disp-only form below, with
+        // no RIP register read and no INT_ADD. The resulting
+        // LOAD/STORE(ram-space, const) ops are rewritten to direct
+        // ram-space varnode COPYs by RuleLoadVarnode/RuleStoreVarnode
+        // (ruleaction.cc:4277/:4319), converging on the oracle SLEIGH form
+        // (`add [rip+X],eax` = INT_ADD out=ram:abs in=(ram:abs, EAX) —
+        // .sla dump, probe examples/ripfold_probe.rs). A segment override
+        // cannot combine with rip in long mode, so the fold is gated.
+        if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+            return Some(Self::const_vn(*displacement as u64, 8));
+        }
+
         let mut addr_vn: Option<VarnodeRaw> = None;
 
         if let Some(b) = base {
@@ -602,6 +617,25 @@ impl X86Lifter {
                 size,
                 segment,
             } => {
+                // rip-relative source (no index, no segment): the Rugra
+                // disassembler resolves the displacement to the ABSOLUTE
+                // target (iced memory_displacement64 = next_rip + raw_disp),
+                // and the locked x86-64 SLEIGH constructor folds the EA at
+                // instruction-semantics time into a DIRECT ram-space varnode
+                // — `mov rax,[rip+0x1234]` lifts as `COPY RAX <- ram:abs:8`
+                // with no LOAD and no address op (.sla dump, probe
+                // examples/ripfold_probe.rs: [0] COPY out=4:0x0:8
+                // in=(3:0x223b:8); `add rax,[rip+X]` uses ram:abs inline as
+                // the ALU input). Same convention as the push/comis folded
+                // arms. A segment override cannot combine with rip in long
+                // mode, so the fold is segment-gated.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+                    return Some(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *size,
+                    ));
+                }
                 // Address computation: base + index * scale + displacement
                 let mut addr_vn: Option<VarnodeRaw> = None;
 
@@ -701,6 +735,20 @@ impl X86Lifter {
                 size,
                 segment,
             } => {
+                // rip-relative destination (no index, no segment): same fold
+                // as parse_operand above — the oracle SLEIGH form for
+                // `mov [rip+X],rax` is `COPY ram:abs:8 <- RAX` with NO
+                // STORE (.sla dump, probe examples/ripfold_probe.rs:
+                // [0] COPY out=3:0x225a:8 in=(4:0x0:8)). Returning the
+                // direct ram varnode with the memory-size marker cleared
+                // routes every caller through the plain COPY destination
+                // path, producing exactly that form.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+                    return Some((
+                        VarnodeRaw::new(AddressSpace::Ram, *displacement as u64, *size),
+                        None,
+                    ));
+                }
                 // Very similar to parse_operand but returns the address var
                 let mut addr_vn: Option<VarnodeRaw> = None;
 

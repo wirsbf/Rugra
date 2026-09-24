@@ -1,5 +1,55 @@
 ﻿# x86_lift.rs API Reference
 
+
+### 2026-09-25：X86LIFT-AFINI-RIPFOLD-0001 — 通用内存臂 rip 相对 EA 折叠(wt/ripfold)
+
+**缺口**：`parse_operand`/`parse_dest_operand`/`compute_mem_addr` 三个通用内存臂对
+`base=rip` 的操作数走通用 base+index+disp 路径，产出
+`INT_ADD(Register@0x288:8, const abs)` ——而 Rugra 反汇编器（iced
+`memory_displacement64`）对 rip 相对操作数报告的 displacement **已是绝对目标**
+（next_rip + raw_disp；lea/push/comis 三臂 2026-09-23 起的既有约定），再叠 RIP
+寄存器等于双计。后果：AFINI 车道 httpd iced 路径 `in_RIP` 符号泄漏 23 refs/6 函数
+（main/suck_in_APR/ap_init_vhost_config/ap_fini_vhost_config/ap_update_vhost_given_ip/
+ap_pregcomp），双侧 golden 全 0；CURB2 的 DRIVER-RIPREL-CONSTFOLD-0001 曾在驱动侧
+折叠兑底。锁定 oracle 库 x86-64.sla 的 rip 相对构造器在指令语义期折绝对
+（AFINI probe 佐证），lifter 侧才是该折叠的正位。
+
+**修复**（三臂同一守卫 `segment.is_none() && base == "rip" && index.is_none()`，
+位移直取绝对 ram 址直连；段前缀与 rip 在长模式下不可组合，守卫段门控）：
+
+- `parse_operand`（源读）：返回**直接 ram 空间 varnode**
+  `Ram(abs, size)`——与 push/comis 折叠臂同约定。oracle .sla dump
+  （examples/ripfold_probe.rs 临时探针，已删）：`mov rax,[rip+0x1234]` =
+  `COPY RAX <- ram:0x223b:8`（无 LOAD、无地址 op）；`add rax,[rip+X]` 的
+  ram:abs 直接内联为 ALU 输入；`mov eax,[rip+X]`（32 位）= COPY+EAX + ZEXT，
+  iced 探针输出与 .sla **逐 op 恒等**。
+- `parse_dest_operand`（目的写）：返回 `(Ram(abs, size), None)` ——尺寸标记清空
+  后 mov 臂走普通 COPY 目的路径，产出 `COPY ram:abs <- src`，即 .sla 的
+  `mov [rip+X],rax` 形（**无 STORE**；dump：`[0] COPY out=3:0x225a:8
+  in=(4:0x0:8)`）。
+- `compute_mem_addr`（flag-pcode ALU 路径，约 12 调用点集中覆盖）：EA 折为
+  **裸 Const 空间常量**（同既有 abs-disp-only 形态约定）；下游
+  `LOAD/STORE(ram空间, const)` 由 RuleLoadVarnode/RuleStoreVarnode
+  （ruleaction.cc:4277/:4319，本 session 逐行读）重写为直接 ram varnode COPY，
+  收敛到 .sla 的 `add [rip+X],eax` = `INT_ADD out=ram:abs in=(ram:abs, EAX)` 形。
+
+**与驱动 fold 的幂等性**：`examples/httpd_decompile.rs` 的
+`fold_rip_relative_eas` 只匹配 `INT_ADD(Register@0x288:8, Const)` 模式——lifter
+折叠后该模式不复存在，驱动 fold 空转（实测：基线 stderr 记 25+1+3+9+1+… 处
+fold 日志，折叠构建后**零日志**=clean no-op）。驱动 fold 按任务边界保留，另行
+清理（见 LIFTER-RIPREL-MEMARMS-0001 残尾）。
+
+**门禁**（基线=本 worktree HEAD ac9e93e0，oracle e40ed130，fast-release 双构建
+A/B）：httpd canon **1123→1128/0/0**（defects/numbering 双零；main 550→548=−2
+CONCAT44(ap_conftree) 族消除；ap_init_vhost_config 11→18=+7：movq 8 字节零存
+储宽度修正（objdump 2cf02/2cf0d 实为 `movq`，基线 `(undefined4)` 强转 4 字节为
+错宽）+ return &DAT_001a0828 形（.sla 注入形/MIRROR 同款 `return 0xa0828;`，
+canon golden 的 void 为 headless 签名 DB 桥接残差，AFINI ①族同判））；
+curl **727/0/0 输出逐字节恒等**；MIRROR（RUGRA_MIRROR=1）输出**逐字节恒等**
+（sleigh_lift.rs 零改动）；投影 bank **391/391 MATCH**；cargo test --lib
+1712P/1F（唯一失败 test_nonzeromask_pipeline_wiring=VHOST 在案基线预存，
+HEAD 同败亲测）；gcc 审计 httpd 14/15、curl 104/20 与基线同数（预存比率）。
+
 ### 2026-09-23：CONCATRAM-0001 — lea rip-rel 双计 rip 修复 + 32 位写 zext 补齐
 
 **① lea reg,[rip+disp] 地址双计**：`X86_64Disassembler` 对 rip 相对操作数的
