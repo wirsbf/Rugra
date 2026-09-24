@@ -153,6 +153,18 @@ public:
   void printMessage(const std::string &) const override {}
 };
 
+/// Canonical cross-fixture type projection.  The oracle factory spells its
+/// unknown bases "xunknownN" while the Rust comparand's factory spells them
+/// "undefinedN" — both TYPE_UNKNOWN of the same width — so the untyped-arm
+/// cases (7/8) print metatype+align width, never getName().
+static std::string type_token(const Datatype *ct)
+{
+  if (ct == (const Datatype *)0) return "null";
+  if (ct->getMetatype() == TYPE_UNKNOWN)
+    return "unk" + std::to_string(ct->getAlignSize());
+  return std::string("other:") + ct->getName();
+}
+
 /// Per-case harness mirroring varmap_localwindow_1204.cc: a fresh Funcdata
 /// whose prototype carries the default-window model, plus a real ScopeLocal.
 class GatherOpenScope {
@@ -265,6 +277,35 @@ public:
     return op;
   }
 
+  /// A guarded LOAD whose address input is deliberately UNTYPED:
+  /// newUnique installs the factory's getBase(8,TYPE_UNKNOWN) and no
+  /// updateType overrides it (funcdata_varnode.cc:83-93) — the oracle form
+  /// of the Rust comparand's v_type=None address varnode (the addGuard
+  /// None-ct branch).  getTypeReadFacing (varnode.cc:639-645) hands that
+  /// unknown base to addGuard verbatim.
+  PcodeOp *untyped_load(int4 outsize, uintb pc) {
+    PcodeOp *op = fd.newOp(2, Address(ram, pc));
+    fd.opSetOpcode(op, CPUI_LOAD);
+    fd.opSetInput(op, fd.newConstant(8, 0), 0);
+    Varnode *addr = fd.newUnique(8);
+    fd.opSetInput(op, addr, 1);
+    fd.newUniqueOut(outsize, op);
+    insert_op(op);
+    return op;
+  }
+
+  /// A guarded STORE whose address input is deliberately UNTYPED.
+  PcodeOp *untyped_store(int4 valsize, uintb pc) {
+    PcodeOp *op = fd.newOp(3, Address(ram, pc));
+    fd.opSetOpcode(op, CPUI_STORE);
+    fd.opSetInput(op, fd.newConstant(8, 0), 0);
+    Varnode *addr = fd.newUnique(8);
+    fd.opSetInput(op, addr, 1);
+    fd.opSetInput(op, fd.newConstant(valsize, 0x41), 2);
+    insert_op(op);
+    return op;
+  }
+
   /// Append a LoadGuard record for `op` (the shape Heritage's guardLoads/
   /// guardStores leave behind, heritage.hh:159-161 `set`).
   void add_guard_record(PcodeOp *op, int4 step, uintb minimum, uintb maximum,
@@ -335,6 +376,29 @@ public:
       if (!first) out << ';';
       first = false;
       out << (*iter)->getSymbol()->getName();
+    }
+    return out.str();
+  }
+
+  /// Render the scope's symbols with canonical type tokens — the
+  /// untyped-arm comparand projection `start:size:unkA[num]` (element token
+  /// then element count for arrays).
+  std::string symbols_token_text(void) {
+    std::ostringstream out;
+    bool first = true;
+    MapIterator iter;
+    for (iter = scope.begin(); iter != scope.end(); ++iter) {
+      const SymbolEntry *entry = *iter;
+      if (!first) out << ';';
+      first = false;
+      Datatype *ct = entry->getSymbol()->getType();
+      out << hex << entry->getAddr().getOffset() << ':' << dec << entry->getSize()
+          << ':';
+      if (ct->getMetatype() == TYPE_ARRAY)
+        out << type_token(((TypeArray *)ct)->getBase()) << '['
+            << ((TypeArray *)ct)->numElements() << ']';
+      else
+        out << type_token(ct);
     }
     return out.str();
   }
@@ -487,6 +551,68 @@ static void run_derive_boundaries(FixtureArchitecture &arch)
             << "|probes=" << probes.str() << '\n';
 }
 
+/// Case 7: addGuard's untyped-address arm (varmap.cc:1009-1038) — the
+/// oracle value getTypeReadFacing returns for an address varnode created by
+/// newUnique with no updateType is the factory unknown base of the varnode's
+/// width (funcdata_varnode.cc:83-93), never a null ct.  A range-locked LOAD
+/// with step == element width keeps the address width (unk8, minItems =
+/// 0x80/8-1 = 15); an unanalyzed LOAD whose outSize divides the step
+/// re-steps to 4 and re-types to unk4 (minItems 3); an unanalyzed STORE
+/// re-types to unk2 and extends up to the next hint; an outSize>step LOAD
+/// is still rejected (varmap.cc:1020-1023) and leaves no trace.
+static void run_guard_untyped_hints(FixtureArchitecture &arch)
+{
+  GatherOpenScope t(arch, "guard_untyped_hints", 0xa700);
+  PcodeOp *locked = t.untyped_load(8, 0x2600);
+  t.add_guard_record(locked, 8, 0xffffffffffffff80UL, 0xffffffffffffffffUL, true, false);
+  PcodeOp *unanalyzed = t.untyped_load(4, 0x2610);
+  t.add_guard_record(unanalyzed, 8, 0xffffffffffffff40UL, 0xffffffffffffffffUL, false, false);
+  PcodeOp *store = t.untyped_store(2, 0x2620);
+  t.add_guard_record(store, 2, 0xffffffffffffff20UL, 0xffffffffffffffffUL, false, true);
+  PcodeOp *rejected = t.untyped_load(16, 0x2630);
+  t.add_guard_record(rejected, 8, 0xfffffffffffffff8UL, 0xffffffffffffffffUL, true, false);
+  t.scope.restructureVarnode(true);
+  std::cout << "case=guard_untyped_hints|symbols=[" << t.symbols_token_text()
+            << ']' << '\n';
+}
+
+/// Case 8: the field-by-field untyped-arm comparand — the same four
+/// untyped guards fed to a hand-built MapState (the varmap.cc:1260-1261
+/// construction with the param-range subtraction of varmap.cc:870-875),
+/// dumping every collected RangeHint field in gatherOpen's insertion order
+/// (loads then stores, varmap.cc:1241-1248) before initialize()'s sort:
+/// start / sstart / size / flags / rangeType / highind / type token.
+static void run_guard_untyped_dump(FixtureArchitecture &arch)
+{
+  GatherOpenScope t(arch, "guard_untyped_dump", 0xa800);
+  PcodeOp *locked = t.untyped_load(8, 0x2700);
+  t.add_guard_record(locked, 8, 0xffffffffffffff80UL, 0xffffffffffffffffUL, true, false);
+  PcodeOp *unanalyzed = t.untyped_load(4, 0x2710);
+  t.add_guard_record(unanalyzed, 8, 0xffffffffffffff40UL, 0xffffffffffffffffUL, false, false);
+  PcodeOp *store = t.untyped_store(2, 0x2720);
+  t.add_guard_record(store, 2, 0xffffffffffffff20UL, 0xffffffffffffffffUL, false, true);
+  PcodeOp *rejected = t.untyped_load(16, 0x2730);
+  t.add_guard_record(rejected, 8, 0xfffffffffffffff8UL, 0xffffffffffffffffUL, true, false);
+  MapState state(t.stack, t.scope.getRangeTree(), t.fd.getFuncProto().getParamRange(),
+                 t.arch.types->getBase(1, TYPE_UNKNOWN));
+  std::list<LoadGuard>::const_iterator giter;
+  for (giter = t.fd.heritage.loadGuard.begin(); giter != t.fd.heritage.loadGuard.end(); ++giter)
+    state.addGuard(*giter, CPUI_LOAD, t.arch.types);
+  for (giter = t.fd.heritage.storeGuard.begin(); giter != t.fd.heritage.storeGuard.end(); ++giter)
+    state.addGuard(*giter, CPUI_STORE, t.arch.types);
+  std::ostringstream out;
+  bool first = true;
+  for (size_t i = 0; i < state.maplist.size(); ++i) {
+    const RangeHint *hint = state.maplist[i];
+    if (!first) out << ';';
+    first = false;
+    out << hex << hint->start << ':' << dec << hint->sstart << ':' << hint->size
+        << ':' << hint->flags << ':' << (int4)hint->rangeType << ':'
+        << hint->highind << ':' << type_token(hint->type);
+  }
+  std::cout << "case=guard_untyped_dump|hints=[" << out.str() << ']' << '\n';
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -501,6 +627,8 @@ int main(void)
     run_check_unaliased_return(arch);
     run_annotate_raw_stack_ptr(arch);
     run_derive_boundaries(arch);
+    run_guard_untyped_hints(arch);
+    run_guard_untyped_dump(arch);
   }
   catch (const std::exception &error) {
     std::cerr << "fixture error: " << error.what() << '\n';

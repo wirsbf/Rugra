@@ -303,6 +303,43 @@ fixture 按控制台 `load <addr>` 语义在入口注册函数；全部首验即
 首分歧残差与地址臂机制见银行 README）。结构、重捕获 recipe 与新增条目
 流程见 `tests/fixtures/projections/README.md`。
 
+#### Level 4 补充资产：varmap gatheropen/guard 双侧 fixture 的 untyped 臂（2026-09-25，RANGEHINT-CR-F1）
+
+`tests/oracle/varmap_gatheropen_guard_1204.{cc,rs}` 是 MapState::addGuard /
+gatherSymbols / deriveBoundaries / annotateRawStackPtr / checkUnaliasedReturn
+的双侧函数级 fixture（R23 复核在案：hermetic runner 与 metadata.json 缺失，
+重钉义务仍在）。2026-09-25（Lane F1FIX）补第 7/8 两 case，把 Rust 侧
+add_guard 的 **None-ct 臂**（untyped 地址 varnode，v_type 不设类型）从
+UNTESTED 升为锁定 oracle 对照 MATCH：
+
+- `case=guard_untyped_hints`：untyped 地址输入的 LOAD/STORE 锁场景走生产
+  restructureVarnode 路径，产出 `unk2[16]@-0xe0`（32B）/ `unk4[16]@-0xc0`
+  （64B）/ `unk8[16]@-0x80`（128B）；outSize>step 的 LOAD 仍被拒绝且无痕
+  （varmap.cc:1020-1023 门在 None 臂上不失效）。
+- `case=guard_untyped_dump`：同四 guard 直喂手工构造的 MapState（镜像
+  varmap.cc:1260-1261 构造 + param-range 扣除），按 gatherOpen 插入序
+  （先 loadGuard 后 storeGuard）逐字段 dump RangeHint：start/sstart/size/
+  flags/rangeType/highind/类型 token。锁定输出：
+  `ffffffffffffff80:-128:8:0:1:15:unk8;ffffffffffffff40:-192:4:0:1:3:unk4;ffffffffffffff20:-224:2:0:1:3:unk2`
+  —— `unk8` 即 None 臂代入的工厂 unknown 基（宽=地址 varnode 宽 8，
+  funcdata_varnode.cc:83-93 的 oracle 值），在 step==元素宽时无替换存活
+  （highind=0x80/8-1=15）；`unk4/unk2` 为 outSize 整除重定宽 + step 替换臂
+  （highind=3）。
+
+判定：8 case 全量 stdout **双侧字节恒等**（sha256 =
+`1511c6a41deb001da19bdf706d1b783bc98b0ae35675e6d6e44a6ab505e5640b`，双侧
+各双跑恒等）；前 7 行（envelope + 原 6 case）仍等于 R23 复核钉的
+`3b5e1b652697a3102edfad14df2211e6adb9c9cdb3e768faf9c1e76261b97494`
+（aliasyes=true 编译刷新零行为位移）。建模假设（登记）：**Rust
+`v_type=None` ⟺ oracle untyped varnode**（newUnique 无 updateType 时工厂
+`getBase(s,TYPE_UNKNOWN)` 恒带类型；类型传播 parity 前属有界严格减损分歧）。
+类型 token（`unkN` = metatype + 元素宽）规避双侧工厂对 unknown 基的不同拼写
+（oracle fixture `xunknownN` vs Rust 工厂 `undefinedN`）。复现配方：oracle 侧
+git-archive 锁定 commit 干净重编 libdecomp.a（勿复用带 `-DOPACTION_DEBUG` 的
+对象树）后按 varmap_localwindow runner 同款 g++ 命令链接；Rugra 侧
+`cargo build --lib` 后 rustc 挂 librugra.rlib 编译 .rs；证据归档
+`/dev/shm/rugra-tests/f1fix/`。
+
 ---
 
 ## 4. 当前建议采用的验证策略
