@@ -1065,7 +1065,7 @@ fn factory_named_base(
         })
 }
 
-// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs; any OTHER unresolvable base is a parse error, mirroring the two oracle arms (explicit transport size or findByName miss), never a minted address-sized unknown base (BRIDGE1-TYPESEED-PIDT)
 // HEADLESS-BRIDGE-V1-TYPESEED extension: the committed-local seed manifest
 // (C1) feeds the canon golden's own declaration spellings here, so the base
 // table now also covers the analyzer-committed bases (undefined/undefinedN,
@@ -1080,16 +1080,32 @@ pub(crate) fn parse_c_type(
 ) -> Result<Arc<Datatype>> {
     let types = crate::type_system::typefactory::TypeFactory::shared_default();
     let trimmed = type_text.trim();
-    // Outermost array declarator first: `long[2][4]` and `char *[2]` reduce
-    // by stripping the rightmost dimension and recursing on the base.
+    // Outermost array declarator first, in C declarator order: the LEFTMOST
+    // dimension is the outermost array — `long[2][4]` reads "array 2 of
+    // array 4 of long" (C's `long name[2][4]` binds name[2] first), and the
+    // oracle's type transport nests exactly that way: TypeArray::encode
+    // wraps the element type as the sub-element, so the outer <type
+    // metatype="array" arraysize="2"> holds the inner arraysize="4" (the
+    // decode mirror is type.cc:1326-1347: arraysize from the attribute,
+    // then `arrayof = typegrp.decodeType(decoder)` recursion). Reduction
+    // therefore strips the LEFTMOST dimension and recurses on the rest of
+    // the spelling: `long[2][4]` -> array(2, parse(`long[4]`)). The former
+    // rightmost-strip inverted the nesting into array(4) of array(2) of
+    // long (BRIDGE1-TYPESEED-MULTIDIM).
     if trimmed.ends_with(']') {
-        if let Some(open) = trimmed.rfind('[') {
-            let count: usize = trimmed[open + 1..trimmed.len() - 1].parse()?;
-            let base = parse_c_type(&trimmed[..open], address_size, type_names)?;
-            let mut factory = types
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            return Ok(factory.get_array(base, count));
+        if let Some(open) = trimmed.find('[') {
+            if let Some(rel_close) = trimmed[open + 1..].find(']') {
+                let close = open + 1 + rel_close;
+                let count: usize = trimmed[open + 1..close].parse()?;
+                let mut spelling = String::with_capacity(trimmed.len());
+                spelling.push_str(&trimmed[..open]);
+                spelling.push_str(&trimmed[close + 1..]);
+                let base = parse_c_type(&spelling, address_size, type_names)?;
+                let mut factory = types
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                return Ok(factory.get_array(base, count));
+            }
         }
     }
     let (base_text, pointer_depth) = split_pointer_depth(trimmed);
@@ -1162,12 +1178,37 @@ pub(crate) fn parse_c_type(
         "undefined2" => factory_named_base(&types, 2, TypeMetatype::Unknown, "undefined2"),
         "undefined4" => factory_named_base(&types, 4, TypeMetatype::Unknown, "undefined4"),
         "undefined8" => factory_named_base(&types, 8, TypeMetatype::Unknown, "undefined8"),
-        other => type_names
-            .and_then(|index| index.get(other))
-            .cloned()
-            .unwrap_or_else(|| {
-                factory_named_base(&types, address_size, TypeMetatype::Unknown, other)
-            }),
+        // C1 glibc typedef mirror: the httpd canon commits `__pid_t`
+        // (ghidra_httpd_1204.c:24574, ap_signal_server `__pid_t local_34;`)
+        // as glibc's `typedef int __pid_t` (sys/types.h) the analyzeHeadless
+        // DWARF analyzer imported — 4 bytes, metatype int — the same (4,int)
+        // the oracle-side <localdb> encoder table (gen_seed_xml.py BASES,
+        // stage_seed_diag-validated) writes as the explicit size/metatype
+        // attributes. The httpd driver builds no DWARF name index, so the
+        // committed typedef resolves here exactly like the other seed
+        // bases. BRIDGE1-TYPESEED-PIDT: the former address-size fallback
+        // minted an 8B `__pid_t` that overlapped the neighboring committed
+        // local_30(8B@-48) and tripped the forced-variable-type failure
+        // (varmap.cc:280) in the restructure pass.
+        "__pid_t" => factory_named_base(&types, 4, TypeMetatype::Int, "__pid_t"),
+        other => match type_names.and_then(|index| index.get(other)) {
+            Some(data_type) => data_type.clone(),
+            // A bare name carries no size anywhere the oracle would honor:
+            // the <localdb>/<type> transport reads size only from the
+            // explicit ATTRIB_SIZE (Datatype::decodeBasic, type.cc:623-637,
+            // reached via the default arm of TypeFactory::decodeTypeNoRef,
+            // type.cc:4536-4543), and the C-signature path resolves a named
+            // base through glb->types->findByName (grammar.cc:2989) — an
+            // unresolved name lexes as a plain IDENTIFIER and the parse
+            // fails. Neither oracle path ever mints an address-sized
+            // unknown base from a spelling, so an unresolvable base here is
+            // a parse error the seed caller reports and skips
+            // (BRIDGE1-TYPESEED-PARSEFAIL downgrade; the silent 8B mint is
+            // what made BRIDGE1-TYPESEED-PIDT latent-poisonous).
+            None => bail!(
+                "unresolved base spelling `{other}`: not a committed core/seed base and no known-type entry (the oracle transports an explicit size; a bare name never mints one)"
+            ),
+        },
     };
     for _ in 0..pointer_depth {
         // Ghidra builds parsed declarator pointers through
@@ -1944,6 +1985,60 @@ mod tests {
             }
             cur.get_name().to_string()
         }
+    }
+
+    // BRIDGE1-TYPESEED-PIDT: `__pid_t` must carry the committed glibc
+    // typedef's (4, int) — the explicit size the oracle's <localdb>
+    // transport would hold (gen_seed_xml BASES mirror) — so the seeded
+    // local_34@-52 cannot overlap the 8B local_30@-48 neighbor.
+    #[test]
+    fn typeseed_pidt_base_carries_committed_four_byte_int() {
+        let dt = parse_c_type("__pid_t", 8, None).expect("committed typedef resolves");
+        assert_eq!(dt.get_name(), "__pid_t");
+        assert_eq!(dt.get_size(), 4);
+        assert_eq!(dt.get_metatype(), TypeMetatype::Int);
+    }
+
+    // BRIDGE1-TYPESEED-PIDT (fallback removal): an unresolvable bare name
+    // is a parse error — the oracle never mints an address-sized unknown
+    // base from a spelling (transport carries explicit size; grammar's
+    // findByName miss fails the parse).
+    #[test]
+    fn typeseed_unknown_base_is_parse_error_not_address_sized_mint() {
+        let err = parse_c_type("__not_a_committed_type", 8, None)
+            .expect_err("unknown base must not mint a base");
+        assert!(
+            err.to_string().contains("unresolved base spelling"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    // BRIDGE1-TYPESEED-MULTIDIM: C declarator order — `long[2][4]` is
+    // array(2) of array(4) of long (outer arraysize = leftmost dimension,
+    // matching the oracle's nested TypeArray transport).
+    #[test]
+    fn typeseed_multidim_array_strips_leftmost_dimension() {
+        let dt = parse_c_type("long[2][4]", 8, None).expect("multidim resolves");
+        let Datatype::Array(outer) = dt.as_ref() else {
+            panic!("outermost must be an array");
+        };
+        assert_eq!(outer.num_elements, 2);
+        assert_eq!(outer.base.size, 64); // 2 * 4 * 8
+        let Datatype::Array(inner) = outer.array_of.as_ref() else {
+            panic!("element must be the inner array");
+        };
+        assert_eq!(inner.num_elements, 4);
+        assert_eq!(inner.base.size, 32); // 4 * 8
+        assert_eq!(inner.array_of.get_size(), 8);
+        assert_eq!(inner.array_of.get_name(), "long");
+        // Single-dim spellings keep their shape: `char *[2]` stays
+        // array(2) of char*.
+        let single = parse_c_type("char *[2]", 8, None).expect("single-dim resolves");
+        let Datatype::Array(arr) = single.as_ref() else {
+            panic!("single-dim must be an array");
+        };
+        assert_eq!(arr.num_elements, 2);
+        assert_eq!(arr.array_of.get_metatype(), TypeMetatype::Pointer);
     }
 
     struct TestSpecHost {

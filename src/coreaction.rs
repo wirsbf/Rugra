@@ -1650,6 +1650,24 @@ impl Action for ActionRestructureVarnode {
                 // `local_80[2]` / `local_70[6]` and the plVar[-1]
                 // subscript family (RANGEHINT-proven HEAD domain).
                 for seed in fd.committed_locals.iter() {
+                    // BRIDGE1-TYPESEED-PARSEFAIL (declared downgrade): on a
+                    // type the seed parser cannot resolve, the oracle's
+                    // <localdb> transport has no per-symbol tolerance —
+                    // ScopeInternal::decode -> decodeType throws
+                    // LowlevelError (type.cc:4179 "Unable to resolve type",
+                    // or the TypeArray::decode size check at
+                    // type.cc:1339-1341), the whole function's database
+                    // decode fails, and the function never enters the
+                    // action pipeline. The Rust channel keeps per-symbol
+                    // skip+eprintln instead: a corrupt/unresolvable
+                    // manifest entry downgrades to "local not seeded"
+                    // rather than aborting the function. Observable only
+                    // with a manifest outside the harvest gate (valid
+                    // manifests carry only table-served spellings); since
+                    // the BRIDGE1-TYPESEED-PIDT fix removed the silent
+                    // address-size fallback in parse_c_type, this arm is
+                    // also the designated loud handler for any future
+                    // unresolvable base spelling.
                     let dtype = match crate::debugproto::parse_c_type(
                         &seed.type_expr,
                         fd.stack_pointer_size as usize,

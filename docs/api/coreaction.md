@@ -3068,3 +3068,17 @@ Funcdata 构造 → `<localdb>` decode → action（种子在 decode 期入库�
 边界喂给 restructure——这正是 canon 声明层分区（92B auStack_9c 被种子切成
 28B+16B+48B）与下标形（8B 元素 → scale-8 PTRADD）的机制。默认
 committed_locals 为空 = 零行为差异（E2E cmp 字节恒等亲父）。
+
+## 2026-09-25：BRIDGE1-TYPESEED-PARSEFAIL 降级声明（Lane TYPEFIX，注释级）
+
+种子物化循环的 parse 失败臂（skip+eprintln）正式登记为声明降级
+（BRIDGE1-TYPESEED-PARSEFAIL，CR-BRIDGE1 条件项，代码逻辑零改动）：
+oracle 的 `<localdb>` 传输对不可解析类型没有按符号容忍——
+`ScopeInternal::decode -> decodeType` 抛 LowlevelError（type.cc:4179
+"Unable to resolve type"，或 TypeArray::decode 尺寸检查 type.cc:1339-1341），
+整函数数据库解码失败、函数不进入 action 管线。Rust 通道保留按符号
+skip+eprintln：损坏/不可解析的 manifest 条目降级为"该 local 不播种"而非
+中止函数。仅 harvest 门禁外的 manifest 可观测（合法 manifest 只携带表内
+拼写）；自 BRIDGE1-TYPESEED-PIDT 修复移除 parse_c_type 的静默
+address_size 回退后，该臂同时是未来不可解析基拼写的指定响亮处理路径
+（见 docs/api/debugproto.md 同日节）。
