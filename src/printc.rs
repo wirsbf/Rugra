@@ -510,6 +510,20 @@ pub struct PrintC {
     /// or INT_ADD input feeding LOAD/STORE). Precomputed in doc_function
     /// for usage-based type inference in Hungarian naming.
     pointer_varnodes: HashSet<(crate::space::AddressSpace, u64)>,
+    /// Subset of `pointer_varnodes` that are DIRECT LOAD/STORE address
+    /// inputs. Only these may receive the pre-print pointer fallback stamp:
+    /// the pointer↔address-slot edge is the one direction Ghidra types
+    /// (TypeOpLoad::propagateType typeop.cc:487-502, in/out slot 1), while
+    /// flowing a pointer from an INT_ADD output BACK into its inputs is
+    /// explicitly forbidden (TypeOpIntAdd::propagateType typeop.cc:1197
+    /// `inslot == -1 → 0`). Membership is by VARNODE IDENTITY
+    /// (`create_index`), never by the (space,offset) key: register-space SSA
+    /// keeps a whole family of overlapping varnodes at one offset (RAX/EAX/
+    /// AL all at register 0, one object per SSA rename), so key-based
+    /// matching stamped unrelated sub-register and extension/truncation
+    /// outputs and poisoned the SUBPIECE/ZEXT/SEXT cast decisions (WIDTHOP
+    /// family root cause).
+    load_addr_direct: HashSet<u32>,
     /// Inline candidates: Unique-space (space, offset) → defining PcodeOp Arc
     /// Only populated for single-use Unique outputs of non-COPY, non-STORE ops.
     inline_candidates: HashMap<(crate::space::AddressSpace, u64), Arc<RwLock<PcodeOp>>>,
@@ -826,6 +840,7 @@ impl PrintC {
             call_targets: HashSet::new(),
             void_callee_call_addrs: HashSet::new(),
         pointer_varnodes: HashSet::new(),
+            load_addr_direct: HashSet::new(),
             inline_candidates: HashMap::new(),
             inline_depth: 0,
             cast_strategy: CastStrategyC::new(4), // promote_size = 4 (x86/x64 int)
@@ -8992,8 +9007,41 @@ impl PrintLanguage for PrintC {
             match op.opcode {
                 OpCode::CPUI_LOAD | OpCode::CPUI_STORE if op.inrefs.len() > 1 => {
                     let vn = op.inrefs[1].read().unwrap();
-                    self.pointer_varnodes
-                        .insert((vn.get_space(), vn.get_offset()));
+                    let key = (vn.get_space(), vn.get_offset());
+                    self.pointer_varnodes.insert(key);
+                    // Direct address-slot membership (by varnode identity):
+                    // the only varnodes the fallback stamp below may type.
+                    // Ghidra types exactly this edge (TypeOpLoad::
+                    // propagateType typeop.cc:487-502, slot-1 <-> output)
+                    // with a pointer sized to the address varnode
+                    // (propagateToPointer(..., outvn->getSize(), ws)); an
+                    // INT_ADD output's pointer NEVER flows back into the
+                    // add's inputs (typeop.cc:1197). The extension/
+                    // truncation family (ZEXT/SEXT/SUBPIECE/PIECE/INSERT)
+                    // is excluded as the address side too: Ghidra's
+                    // out→addr-slot propagation only fires when the loaded
+                    // value already carries a concrete type (propagateType
+                    // needs the opposite edge's alttype), which the corpus
+                    // goldens never show on an extension output — stamping
+                    // them typed the extension output itself, flipping
+                    // isZextCast/isSextCast false (functional ZEXT48/SEXT48
+                    // where the oracle prints the cast/hidden form).
+                    let def_is_ext = vn
+                        .get_def()
+                        .map(|d| {
+                            matches!(
+                                d.read().unwrap().opcode,
+                                OpCode::CPUI_INT_ZEXT
+                                    | OpCode::CPUI_INT_SEXT
+                                    | OpCode::CPUI_SUBPIECE
+                                    | OpCode::CPUI_PIECE
+                                    | OpCode::CPUI_INSERT
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !def_is_ext {
+                        self.load_addr_direct.insert(vn.get_create_index());
+                    }
                 }
                 OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                     if let Some(ref out) = op.output {
@@ -9013,8 +9061,41 @@ impl PrintLanguage for PrintC {
                         for in_arc in &op.inrefs {
                             let in_vn = in_arc.read().unwrap();
                             if in_vn.get_space() != AddressSpace::Const {
+                                let key = (in_vn.get_space(), in_vn.get_offset());
                                 self.pointer_varnodes
-                                    .insert((in_vn.get_space(), in_vn.get_offset()));
+                                    .insert(key);
+                                // Stamp-side membership (oracle direction
+                                // check): a pointer reaches an INT_ADD input
+                                // only if the type already lives on that
+                                // varnode (param/load/copy/phi) — Ghidra
+                                // never flows the add OUTPUT's pointer back
+                                // into its inputs (typeop.cc:1197) and the
+                                // extension/truncation family (ZEXT/SEXT/
+                                // SUBPIECE/PIECE/INSERT) has no in→out
+                                // pointer propagation either (no override /
+                                // getSubType walk only, typeop.cc:1115-1189/
+                                // 2161-2186). So the fallback stamp may only
+                                // cover pointer-SIZED inputs whose defining
+                                // op is outside that family.
+                                if in_vn.get_size() == 8 {
+                                    let def_blocks_stamp = in_vn
+                                        .get_def()
+                                        .map(|d| {
+                                            !matches!(
+                                                d.read().unwrap().opcode,
+                                                OpCode::CPUI_INT_ZEXT
+                                                    | OpCode::CPUI_INT_SEXT
+                                                    | OpCode::CPUI_SUBPIECE
+                                                    | OpCode::CPUI_PIECE
+                                                    | OpCode::CPUI_INSERT
+                                            )
+                                        })
+                                        .unwrap_or(true);
+                                    if def_blocks_stamp {
+                                        self.load_addr_direct
+                                            .insert(in_vn.get_create_index());
+                                    }
+                                }
                             }
                         }
                     }
@@ -9022,36 +9103,55 @@ impl PrintLanguage for PrintC {
             }
         }
 
-        // Directly stamp Pointer type on all varnodes identified as pointers.
+        // Fallback pointer stamp for direct LOAD/STORE address varnodes only.
         // This runs AFTER the full pipeline (heritage, type inference, copy
         // propagation, dead code) so the varnodes in loc_tree are the final
-        // surviving ones that PrintC will encounter. This is the approach
-        // Ghidra uses: type information is applied to display-level varnodes
-        // just before printing, not deferred to a separate propagation pass.
-        if !self.pointer_varnodes.is_empty() {
+        // surviving ones that PrintC will encounter. The stamp is restricted
+        // to `load_addr_direct` membership (the address-slot edge Ghidra
+        // types via TypeOpLoad::propagateType typeop.cc:487-502) and the
+        // pointer is sized to the varnode (propagateToPointer sizes to the
+        // address varnode, typeop.cc:497-498). The former blanket stamp over
+        // `pointer_varnodes` also typed INT_ADD input varnodes from the add
+        // OUTPUT's pointer use — the exact out→in direction Ghidra forbids
+        // (TypeOpIntAdd::propagateType typeop.cc:1197 `inslot == -1 → 0`) —
+        // which put an 8-byte `int *` onto 1/4/8-byte SUBPIECE/ZEXT/SEXT
+        // outputs, flipped isSubpieceCast/isZextCast/isSextCast false, and
+        // printed functional `SUB81(x,0)`/`ZEXT18(x)` where the oracle prints
+        // `(char)x`/hidden-extension casts (WIDTHOP family root cause).
+        // `pointer_varnodes` (naming-only superset) is untouched.
+        if !self.load_addr_direct.is_empty() {
             use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
             let int_type = std::sync::Arc::new(Datatype::Base(
                 TypeBase::new(
                 "int".to_string(), 4, TypeMetatype::Int,
             )));
-            let int_ptr = std::sync::Arc::new(Datatype::Pointer(TypePointer {
-                base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
-                ptr_to: int_type,
-                wordsize: 1,
-            }));
             for vn_ref in &fd.vbank.loc_tree {
                 let vn = vn_ref.0.read().unwrap();
-                if self
-                    .pointer_varnodes
-                    .contains(&(vn.get_space(), vn.get_offset())) {
+                if self.load_addr_direct.contains(&vn.get_create_index()) {
                     let needs_update = vn
                         .v_type
                         .as_ref()
                         .map_or(true, |t| t.get_metatype() != TypeMetatype::Pointer
                     );
                     if needs_update {
+                        let vn_size = vn.get_size();
                         drop(vn);
-                        vn_ref.0.write().unwrap().v_type = Some(int_ptr.clone());
+                        // Pointer sized to the address varnode, pointing at
+                        // int (the previous fallback pointee), wordsize 1
+                        // (ram) — propagateToPointer's sizing per
+                        // typeop.cc:497-498.
+                        let sized_ptr = std::sync::Arc::new(Datatype::Pointer(
+                            TypePointer {
+                                base: TypeBase::new(
+                                    "int *".to_string(),
+                                    vn_size,
+                                    TypeMetatype::Pointer,
+                                ),
+                                ptr_to: int_type.clone(),
+                                wordsize: 1,
+                            },
+                        ));
+                        vn_ref.0.write().unwrap().v_type = Some(sized_ptr);
                     }
                 }
             }
