@@ -18516,7 +18516,17 @@ impl<'a> AddTreeState<'a> {
     // Ghidra: ruleaction.cc:6270 AddTreeState::calcSubtype
     fn calc_subtype(&mut self) {
         let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
-        if self.size == 0 || (tmpoff as i64) < self.size {
+        // Ghidra ruleaction.cc:6256 `if (size == 0 || tmpoff < size)` —
+        // `tmpoff` is uint8 and `size` is int4, so C++ usual arithmetic
+        // conversions promote BOTH to uint8: the comparison is UNSIGNED.
+        // A negative byte offset (0xfff...f8 for -8 on a downward-growing
+        // stack) is a huge unsigned value and takes the modulo path, where
+        // the sign-extended remainder keeps `multsum` non-zero. A signed
+        // Rust comparison here sent every negative-offset SP-alias add down
+        // the `offset = tmpoff` branch, zeroed `multsum`, and invalidated
+        // the tree (`valid=false`) — killing the whole INT_ADD→PTRADD
+        // conversion for stack-pointer aliases.
+        if self.size == 0 || tmpoff < self.size as u64 {
             self.offset = tmpoff;
         } else {
             let stmpoff = sign_extend_u64(tmpoff, self.ptrsize * 8);
