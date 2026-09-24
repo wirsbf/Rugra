@@ -1,6 +1,46 @@
 # `blockaction.rs` API Reference
 
 
+### 2026-09-24 修复（BLOCKSTRUCT-SWITCH-CASEFALLTHRU-0001, glob_set 终态树差收口）
+
+**根因（双侧终轮 trace 定缝, noreturn 修正版 oracle harness 重放）**：Ghidra
+`ruleCaseFallthru`（blockaction.cc:1729-1762）作用于**结构化前**的 switch dispatch 块
+（`isSwitchOut()` 的 BlockCopy）：case body（sizeIn≤2 且单出边）落在一个只与 switch 自身
+共享的双入目标上时，把该 case 的 out(0) 标 goto（`setGotoBranch(0)`）；随后的第一趟
+`ruleBlockGoto` 包裹移除该边 → 共享目标 sizeIn 降 1 → `ruleBlockSwitch` 的 fallback
+exit 解析（cc:1672-1690）成功，switch 以**全部 case** 成形且 exit=循环头区域。Rugra 的
+`collapse_case_fallthru` 是自创批处理，只扫**已成形**的 BlockSwitch 组件，在卡住的
+pre-formation 图上永不点火；selectGoto 随即剥掉 switch 的真实 case 边（"multigoto
+peeled"），尾块落到循环外（glob_set `goto LAB_00104c20` + `code_r0x00104c7c` 族）。
+第二处配套缺口：`try_rule_switch` 的 `case_consumed` 只收集 `cases` 字段，漏掉
+`default_case`——default body 留在顶层、dispatch→default 边仍外挂在组合块上，switch
+多出一条假出边，`ruleBlockInfLoop`（需单一自落入）不匹配，多包一层 DoWhile
+（`do { do {` 族）。修复：
+1. 新增 `try_rule_case_fallthru(i)`：逐块 1:1 移植 cc:1729-1762（含 cc:1750 的
+   扫描中 `nonfallthru > 1` 早退、cc:1745 `getOutRevIndex(0)` 反查 target 另一入边
+   == switch 自身的恒等判定、cc:1755-1759 逐候选 `set_goto_branch_on_block(curbl, 0)`
+   ——只标边不建结构）。
+2. `collapse_internal` 第二趟改 oracle 交错扫描（cc:1838-1848）：per-block 先
+   `try_rule_if_no_exit` 再 `try_rule_case_fallthru`，首个命中即 break——原实现
+   （全图 ifnoexit 后接批处理 fallthru）重排了 oracle 决策序。
+3. `case_consumed` 追加 `default_case` 索引（cc:1714-1720 的 -cs- 向量含 default，
+   identifyInternal 同样消费它；组合块出边经既有 `dedup_edges_all_types` 收敛为单条
+   exit 边，对齐 selfIdentify→dedup block.cc:930）。
+**验证（oracle 侧新证据链）**：FK harness 缺 noreturn 建模（控制台模式
+`call exit@plt` 落穿到下一函数，glob_set 吞并 glob_range 的 35 块假输入）——本 lane
+以 `setNoReturn` 补丁重建 `golden_dump_nr`（/dev/shm/rugra-tests/sb-globset/
+golden_dump_nr.cc，链接 FK 同一插桩 libdecomp.a）后 oracle 三轮 19/19/18 与 Rugra
+逐块可比；Rugra 终轮 mark→rule 序列与 oracle trace 逐事件一致（4d30→4d0e, cat3,
+4d24→4d0e, cat13, List3.out1→R, 4c48.out1→4d04, List3.out0→4c5e, head.out1→4c5e,
+casefallthru 标 4c48-region→4c5e, goto#12, **switch 5 cases exit=head**, cat#1,
+**InfLoop#1**, cat#0），finalize 18→1 全塌缩（oracle FINALTREE nblocks=1 同形）。
+**门禁**：curl 2145→**2130**/0/0（仅 getparameter 532→520 + glob_set 71→68 两函数
+golden-closer，defects/numbering 双 0）；httpd 2057==2057/0/0 **字节恒等**；
+next_url/match_url 投影 **MATCH**；parseconfig 对 sb-oracle pin 首散点保持 opline 367
+零移动（对 FO 交付态的首个实质差 = stage 209 oppool1 CROSSBUILD→INT_ADD，结构修复的
+下游重派生）。旧 `collapse_case_fallthru` 保留给 RUGRA_7PHASE=1 遗留路径（非默认）。
+
+
 ### 2026-08-30 追加（seam #2/#3 定缝结论, 未修）
 
 双侧 visit 级 trace（oracle BS_ORACLE_VISIT vs Rugra RUGRA_BS_VISIT，均 env 门控）：

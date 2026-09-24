@@ -1588,12 +1588,23 @@ impl<'a> CollapseStructure<'a> {
                     break;
                 }
             }
-            // cc:1835-1848: second pass — IfNoExit + CaseFallthru.
-            // BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001: removed the invented
-            // `has_switch` gate — the oracle runs ruleBlockIfNoExit for every
-            // function (cc:1840); switch-clause safety comes from the rule's
-            // own isSwitchOut guard (cc:1497), which try_rule_if_no_exit
-            // checks via switch_case_indices/CASE_BODY.
+            // cc:1835-1848: second pass — per-block INTERLEAVED IfNoExit +
+            // CaseFallthru scan, first success breaks (the outer fullchange
+            // loop re-runs the inner fixpoint). The oracle's loop body is
+            //   if (ruleBlockIfNoExit(bl)) { fullchange = true; break; }
+            //   if (ruleCaseFallthru(bl))  { fullchange = true; break; }
+            // for each bl in list order — the fallthru rule is tried on the
+            // SAME block before advancing to the next one. The previous
+            // shape (ifnoexit across all blocks first, then a batch pass)
+            // both reordered the oracle's decision sequence and ran an
+            // invented batch fallthru that never fired on the pre-formation
+            // graph (BLOCKSTRUCT-SWITCH-CASEFALLTHRU-0001).
+            //
+            // BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001 note kept: the oracle
+            // runs ruleBlockIfNoExit for every function (cc:1840);
+            // switch-clause safety comes from the rule's own isSwitchOut
+            // guard (cc:1497), which try_rule_if_no_exit checks via
+            // switch_case_indices/CASE_BODY.
             let mut fullchange = false;
             if std::time::Instant::now() <= deadline {
                 // cc:1838-1848: position-order scan over Ghidra's list,
@@ -1604,9 +1615,10 @@ impl<'a> CollapseStructure<'a> {
                         fullchange = true;
                         break;
                     }
-                }
-                if !fullchange && self.collapse_case_fallthru() {
-                    fullchange = true;
+                    if self.try_rule_case_fallthru(slot as usize) {
+                        fullchange = true;
+                        break;
+                    }
                 }
             }
             if !fullchange {
@@ -5941,6 +5953,105 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.cc:1729 CollapseStructure::ruleCaseFallthru
+    /// Faithful port of `ruleCaseFallthru` (blockaction.cc:1725-1762): look
+    /// for a switch case that falls through to another switch case, starting
+    /// from the (pre-formation) switch dispatch block. A case body with
+    /// sizeIn<=2 and exactly one out-edge, whose target has sizeIn==2 (the
+    /// other in-edge being the switch itself) and sizeOut<=1, is a fallthru
+    /// candidate; every candidate's out(0) is marked goto
+    /// (`setGotoBranch(0)`). At most one nonfallthru exit is allowed.
+    ///
+    /// The rule marks edges but builds NO structure; the next first-pass
+    /// `ruleBlockGoto` wrap removes the marked edge, dropping the shared
+    /// target's sizeIn so `ruleBlockSwitch`'s fallback exit resolution can
+    /// succeed WITHOUT peeling a real case edge. BLOCKSTRUCT-SWITCH-
+    /// CASEFALLTHRU-0001: the previous batch `collapse_case_fallthru` only
+    /// inspected ALREADY-FORMED BlockSwitch composites, so on the stuck
+    /// pre-formation graph it never fired; selectGoto then peeled the
+    /// switch's case edge and the tail region landed outside the loop
+    /// (glob_set: `goto LAB_00104c20` + `code_r0x00104c7c` back-edge family).
+    fn try_rule_case_fallthru(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        // cc:1732: if (!bl->isSwitchOut()) return false;
+        if !block.read().unwrap().is_switch_out() {
+            return false;
+        }
+        let sizeout = block.read().unwrap().size_out();
+        let mut nonfallthru = 0usize;
+        let mut fallthru: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for j in 0..sizeout {
+            let curbl = match block.read().unwrap().get_out(j) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
+            // cc:1739: cannot exit to itself (pointer identity).
+            if Arc::ptr_eq(&curbl, &block) {
+                return false;
+            }
+            let (cur_sin, cur_sout) = {
+                let r = curbl.read().unwrap();
+                (r.size_in(), r.size_out())
+            };
+            // cc:1740: sizeIn>2 OR sizeOut>1 counts as a (the at most one)
+            // nonfallthru exit.
+            if cur_sin > 2 || cur_sout > 1 {
+                nonfallthru += 1;
+            } else if cur_sout == 1 {
+                // cc:1743-1748: candidate whose single out-edge lands on a
+                // block shared only with the switch itself.
+                let target_edge = {
+                    let r = curbl.read().unwrap();
+                    r.get_out(0)
+                        .map(|e| (e.point.clone(), e.reverse_index))
+                };
+                if let Some((target, inslot)) = target_edge {
+                    let (tgt_sin, tgt_sout) = {
+                        let t = target.read().unwrap();
+                        (t.size_in(), t.size_out())
+                    };
+                    if tgt_sin == 2 && tgt_sout <= 1 {
+                        // cc:1745: inslot = curbl->getOutRevIndex(0) — the
+                        // in-slot this edge occupies on the target; the
+                        // OTHER in-edge must be the switch block itself.
+                        if inslot == 0 || inslot == 1 {
+                            let other = target
+                                .read()
+                                .unwrap()
+                                .get_in((1 - inslot) as usize)
+                                .map(|e| e.point.clone());
+                            if let Some(other) = other {
+                                if Arc::ptr_eq(&other, &block) {
+                                    fallthru.push(curbl.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // cc:1750: can have at most 1 other exit block — checked DURING
+            // the scan, so a second nonfallthru out aborts before any
+            // marking happens.
+            if nonfallthru > 1 {
+                return false;
+            }
+        }
+        // cc:1752: no fallthru candidates → nothing to do.
+        if fallthru.is_empty() {
+            return false;
+        }
+        // cc:1755-1759: mark each candidate's out(0) as goto, in discovery
+        // order (setGotoBranch writes the f_goto_edge label on both edge
+        // halves plus the interior goto flags).
+        for curbl in &fallthru {
+            self.set_goto_branch_on_block(curbl, 0);
+        }
+        true
+    }
+
     // Ghidra: blockaction.cc:1649 CollapseStructure::ruleBlockSwitch
     /// Try to find a switch structure: find the exitblock, validate all
     /// cases converge, run checkSwitchSkips, then build the BlockSwitch.
@@ -6304,11 +6415,28 @@ impl<'a> CollapseStructure<'a> {
         // Consume the case bodies (dispatch sits at install_idx=i).
         let case_consumed: Vec<i32> = {
             let sb = switch_block.read().unwrap();
+            let sref = sb.as_any().downcast_ref::<BlockSwitch>().unwrap();
             let mut v = Vec::new();
-            for case in &sb.as_any().downcast_ref::<BlockSwitch>().unwrap().cases {
+            for case in &sref.cases {
                 let ci = case.read().unwrap().get_index();
                 if ci as usize != i {
                     v.push(ci);
+                }
+            }
+            // cc:1714-1720: the oracle's -cs- vector holds EVERY out block
+            // except the exitblock — including the DEFAULT case (Ghidra
+            // keeps it in caseblocks tagged isdefault via addCase, cc:3515;
+            // identifyInternal consumes it like any other component). The
+            // previous collection skipped Rugra's default_case slot, leaving
+            // the default body a top-level block whose dispatch->default
+            // edge stayed external on the composite — the switch then
+            // carried a spurious second out edge, ruleBlockInfLoop (needs
+            // the single self fall-through) could not match, and a DoWhile
+            // layer wrapped the loop instead (glob_set `do { do {` family).
+            if let Some(d) = &sref.default_case {
+                let di = d.read().unwrap().get_index();
+                if di as usize != i {
+                    v.push(di);
                 }
             }
             v
