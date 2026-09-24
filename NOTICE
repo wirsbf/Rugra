@@ -1,0 +1,11 @@
+Rugra
+Copyright 2026 Rugra contributors
+
+This product includes software developed as a Rust port of the NSA Ghidra
+decompiler (decompile/cpp), licensed under the Apache License, Version 2.0.
+The locked alignment oracle is Ghidra commit e40ed13014025f82488b1f8f7bca566894ac376b
+(Ghidra 12.0.4). Attribution and per-function source anchors are recorded in
+the `// Ghidra:` annotations throughout src/ and in docs/alignment_audit/.
+
+Third-party crates are listed in Cargo.toml; notable ports include
+SLEIGH engine bindings built from the Ghidra source tree.
