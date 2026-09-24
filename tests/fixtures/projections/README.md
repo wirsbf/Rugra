@@ -5,7 +5,7 @@ frozen oracle-side and rugra-side v1.2 stage projections plus a manifest
 that pins provenance and byte identity. This directory is the durable,
 in-repo form of the RAM-disk lane evidence (the `/dev/shm/rugra-tests/sb-*`
 projection products are lost on reboot); it exists so that the wave's
-five proven-MATCH functions cannot silently regress.
+six proven-MATCH functions cannot silently regress.
 
 ## Layout
 
@@ -27,6 +27,7 @@ tests/fixtures/projections/
 | curl_parseconfig.constprop.0 | parseconfig.constprop.0 | 0x3c80 | 335 | 130,099 | bank sha256 (== lane pin b2ace56a…) |
 | curl_myprogress | myprogress | 0x34d0 | 402 | 84,249 | bank sha256 |
 | curl_getparameter.constprop.0 | getparameter.constprop.0 | 0x3f00 | 371 | 913,373 | metadata functions map |
+| curl_glob_set | glob_set | 0x4bc0 | 366 | 141,943 | bank sha256 (capture-mode first, then frozen) |
 
 Common provenance (also recorded per manifest):
 
@@ -37,7 +38,9 @@ Common provenance (also recorded per manifest):
 - corpus binary: `examples/curl`
   (sha256 `8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41`)
 - rugra driver commit at capture: `dc7a0d0ad5ba94cebb9488549ff17db3a0a0c0ca`
-  (master when the bank was cut; the bank commit itself only adds fixtures)
+  for the original five (master when the bank was cut); the bank commit
+  itself only adds fixtures. `curl_glob_set` was captured later at
+  `cd071239883d9e536aca5ed71adc6f6d6ee52b04` (per its manifest).
 
 ## Verification
 
@@ -85,7 +88,7 @@ RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=<selector> \
   cargo run --profile fast-release --example curl_decompile
 ```
 
-Selector spellings: `next_url`, `match_url`, `myprogress`,
+Selector spellings: `next_url`, `match_url`, `myprogress`, `glob_set`,
 `parseconfig` (DWARF spelling of `parseconfig.constprop.0`),
 `getparameter` (DWARF spelling of `getparameter.constprop.0`); the
 address form `0x<entry>` is observation-equivalent (verified byte-identical
