@@ -27312,6 +27312,72 @@ mod tests {
         assert_eq!(state.offset, 0x8000_0000_0000_1000);
         assert_eq!(state.correct, 0x8000_0000_0000_0008);
     }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// vnterm for check_mult_term: written by a COPY (not INT_ADD) so the
+    /// distribute path (cc:6138-6143) is skipped and the vncoeff
+    /// accumulator at cc:6145 runs; not free (WRITTEN set).
+    fn make_copy_written_vnterm(
+        fd: &mut Funcdata, reg: u64,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vnterm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, reg);
+        let vnterm_def = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 5),
+            OpCode::CPUI_COPY,
+        )));
+        vnterm
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        vnterm.write().unwrap().def = Some(Arc::downgrade(&vnterm_def));
+        vnterm
+    }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// Shared fixture: an AddTreeState over an 8-byte pointer to a
+    /// VARIABLE-LENGTH base type, so `size == 0` (cc:6038). That is what
+    /// structurally lets |sval| exceed the cc:6134 `val >= size` bail (the
+    /// gate only fires when size != 0), letting pathological magnitudes
+    /// reach the vncoeff accumulator.
+    fn make_varlen_add_tree_state(
+        fd: &mut Funcdata,
+    ) -> AddTreeState<'_> {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer,
+        };
+        let varlen_base = {
+            let mut b = TypeBase::new("void".into(), 1, TypeMetatype::Void);
+            b.flags |= type_flags::VARLENGTH;
+            Arc::new(Datatype::Base(b))
+        };
+        let ptr_type = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("void *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: varlen_base,
+            wordsize: 1,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        let state = AddTreeState::new(fd, add_op, 0);
+        assert_eq!(state.size, 0);
+        state
+    }
 }
 
 

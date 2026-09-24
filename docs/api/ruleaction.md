@@ -1736,3 +1736,5 @@ flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate
   latent 输入行为差异，语料内不可达 ⇒ 输出恒等即预期。
 
 - 2026-09-24 (CR25 unlock A+B): calc_subtype SPACEBASE arm extra conversion switched to unsigned divide per ruleaction.cc:6294 (byteToAddress, space.hh:523-525); STRUCT arm keeps signed byteToAddressInt per cc:6311. Three behavior-lock tests added; ten test helpers annotated.
+
+- 2026-09-24: two test helpers (make_copy_written_vnterm, make_varlen_add_tree_state) joined the behavior locks from the sibling branch.
