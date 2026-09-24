@@ -14417,6 +14417,132 @@ impl Action for ActionLaneDivide {
 /// populated exactly like Ghidra's and no trial seeding happens here.
 pub struct ActionReturnRecovery { pub count: i32 ,
 }
+// Ghidra: translate.cc:817 AddrSpaceManager::constructJoinAddress
+/// Build the joined storage address for the two-piece RETURN
+/// concatenation of `ActionReturnRecovery::buildReturnOutput`
+/// (coreaction.cc:1855-1857), mirroring
+/// `AddrSpaceManager::constructJoinAddress` (translate.cc:817-860) over
+/// the trial storage quadruples:
+/// 1. `usejoinspace` (cc:823-830): a spacebase (stack) or
+///    default-code-space (ram) piece joins in its own mappable space;
+///    register pieces keep the join space.
+/// 2. Contiguous pieces (address.cc:173 `Address::isContiguous` — same
+///    space + wrapOffset arithmetic): a mappable space returns the
+///    earliest address (LE lo / BE hi, cc:832-835); a register space
+///    first checks `Translate::getRegisterName` for a covering parent
+///    register (sleighbase.cc:144-168) and returns that piece's address
+///    when named (cc:837-845) — x86-64 return pairs like RDX:RAX are
+///    non-contiguous and unnamed, so they fall through.
+/// 3. Otherwise `findAddJoin(pieces=[hi,lo],0)` (translate.cc:671-715):
+///    the JOIN space at the record's unified offset (cc:848-859).
+///
+/// The oracle's LowlevelError guard (cc:824-826 — a piece outside the
+/// spacebase/processor spaces throws "Trying to join in appropriate
+/// locations") is structurally unreachable here: output trials are
+/// register storage. A violating quadruple is logged loudly and still
+/// joins instead of aborting the run.
+fn return_join_address(
+    arch: Option<&std::sync::Arc<crate::arch::Architecture>>,
+    hi: (crate::space::AddressSpace, u64, i32),
+    lo: (crate::space::AddressSpace, u64, i32),
+) -> (crate::space::AddressSpace, u64) {
+    let (hi_space, hi_off, hi_sz) = hi;
+    let (lo_space, lo_off, lo_sz) = lo;
+    // cc:821-826: spacetype membership. Rugra enum model: Stack =
+    // IPTR_SPACEBASE; Ram/Register/Overlay/Other = IPTR_PROCESSOR.
+    let joinable = |spc: crate::space::AddressSpace| {
+        !matches!(
+            spc,
+            crate::space::AddressSpace::Unique
+                | crate::space::AddressSpace::Const
+                | crate::space::AddressSpace::Join
+                | crate::space::AddressSpace::Iop
+        )
+    };
+    if !joinable(hi_space) || !joinable(lo_space) {
+        eprintln!(
+            "[COREACTION] return_join_address: trial outside joinable spaces hi={:?} lo={:?} (translate.cc:826 LowlevelError arm)",
+            hi_space, lo_space
+        );
+    }
+    // cc:827-830: usejoinspace = false for spacebase or default-code-space
+    // pieces (the x86-64 default code space is ram).
+    let use_join_space = hi_space != crate::space::AddressSpace::Stack
+        && lo_space != crate::space::AddressSpace::Stack
+        && hi_space != crate::space::AddressSpace::Ram
+        && lo_space != crate::space::AddressSpace::Ram;
+    // address.cc:173-188 Address::isContiguous(hisz, loaddr, losz): same
+    // space; LE wraps lo.offset+losz onto this offset, BE the reverse.
+    let contiguous = hi_space == lo_space
+        && if hi_space.is_big_endian() {
+            hi_off.wrapping_add(hi_sz as u64) == lo_off
+        } else {
+            lo_off.wrapping_add(lo_sz as u64) == hi_off
+        };
+    if contiguous {
+        let big_endian = hi_space.is_big_endian();
+        if !use_join_space {
+            // cc:832-835: mappable space — earliest address.
+            return if big_endian { (hi_space, hi_off) } else { (lo_space, lo_off) };
+        }
+        // cc:837-845: register space — a covering parent register name wins
+        // (LE names at the lo piece, BE at the hi piece).
+        let (name_space, name_off) = if big_endian { (hi_space, hi_off) } else { (lo_space, lo_off) };
+        let covering_name = arch
+            .map(|a| a.get_register_name(name_space, name_off, hi_sz + lo_sz))
+            .unwrap_or_default();
+        if !covering_name.is_empty() {
+            return (name_space, name_off);
+        }
+    }
+    // cc:848-859: findAddJoin([hi,lo],0) → Address(joinspace, unified.offset).
+    (crate::space::AddressSpace::Join, join_unified_offset(hi, lo))
+}
+
+// RUGRA-GLUE: join_unified_offset — deterministic stand-in for the
+// manager-global `joinallocate` counter of AddrSpaceManager::findAddJoin
+// (translate.cc:699-712); residual registered on COREACTION-JOINSPACE-0001.
+/// Unified join-space offset for the piece quadruple (hi first, lo second —
+/// findAddJoin's most-significant-first piece order). A stateless
+/// splitmix64-style mix keeps the semantics downstream consumers observe
+/// from Ghidra's splitset dedup: identical pieces always map to the
+/// identical join address (merge identity across RETURN ops,
+/// laned-map/loc-tree storage keys), distinct pieces to distinct offsets.
+/// The oracle instead allocates sequential 16-byte-aligned counter slots
+/// from a mutable process-global table; Rugra's production Architecture
+/// exposes no mutable join table (the legacy `join_db` is read-only through
+/// the shared Arc), and a stateless derivation is also race-free where the
+/// example drivers decompile functions on parallel threads. Offsets keep
+/// findAddJoin's 16-byte slot alignment (translate.cc:708 roundsize); the
+/// numeric values differ from the oracle's counter sequence — unobservable
+/// today because `join_db` stays empty, so no findJoin consumer can
+/// compare offsets.
+fn join_unified_offset(
+    hi: (crate::space::AddressSpace, u64, i32),
+    lo: (crate::space::AddressSpace, u64, i32),
+) -> u64 {
+    // RUGRA-GLUE: splitmix64 finalizer — pure arithmetic mixer with no
+    // Ghidra counterpart (the oracle's offset comes from the joinallocate
+    // counter, not a hash); fully specified for cross-toolchain stability.
+    fn mix(mut z: u64) -> u64 {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    let mut acc = 0u64;
+    for (space, off, sz) in [hi, lo] {
+        acc = mix(
+            acc ^ mix(
+                (space.space_id() as u64) << 56
+                    ^ off
+                    ^ (((sz as u64) & 0xFFFF) << 32),
+            ),
+        );
+    }
+    // translate.cc:708: roundsize = (totalsize + 15) & ~15 — 16-byte slots.
+    (acc >> 4) << 4
+}
 impl ActionReturnRecovery {
     // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
     pub fn new() -> Self { Self { count: 0 } }
@@ -14464,18 +14590,36 @@ impl ActionReturnRecovery {
             let hivn = newparam[2].clone();
             let triallo = active.get_trial(0);
             let trialhi = active.get_trial(1);
-            // Rugra has no constructJoinAddress; the joined address is cosmetic
-            // (it labels the synthetic whole varnode). Use the min of the two
-            // piece offsets, which matches little-endian RAX:RDX layout.
-            let lo_off = lovn.read().unwrap().get_offset();
-            let hi_off = hivn.read().unwrap().get_offset();
-            let join_off = lo_off.min(hi_off);
+            // Ghidra cc:1855-1857: joinaddr = getArch()->constructJoinAddress(
+            // translate, trialhi.getAddress(),trialhi.getSize(),
+            // triallo.getAddress(),triallo.getSize()) — the TRIAL storage
+            // addresses feed AddrSpaceManager::constructJoinAddress
+            // (translate.cc:817-860, mirrored by `return_join_address`
+            // below): non-contiguous unnamed register pairs like RDX:RAX
+            // join in the JOIN space, not the register space the spaceless
+            // adapter pinned (COREACTION-JOINSPACE-0001).
+            let (join_space, join_off) = return_join_address(
+                fd.get_arch(),
+                (
+                    trialhi.get_space(),
+                    trialhi.get_address().as_u64(),
+                    trialhi.get_size(),
+                ),
+                (
+                    triallo.get_space(),
+                    triallo.get_address().as_u64(),
+                    triallo.get_size(),
+                ),
+            );
             let total_size = (trialhi.get_size() + triallo.get_size()) as usize;
             let ret_addr = retop.0.read().unwrap().get_addr();
             let newop = fd.new_op(2, ret_addr);
             fd.op_set_opcode(&newop, OC::CPUI_PIECE);
-            // Ghidra cc:1860: newVarnodeOut(size, joinaddr, newop). Register space.
-            let join_vn = fd.new_varnode_out(total_size, Addr::new(join_off), &newop);
+            // Ghidra cc:1860: newVarnodeOut(trialhi.getSize()+triallo.getSize(),
+            // joinaddr, newop) — the full join address (join space + unified
+            // offset, or the covering/earliest piece address from the
+            // constructJoinAddress fast paths).
+            let join_vn = fd.new_varnode_out_full(total_size, join_space, Addr::new(join_off), &newop);
             // Ghidra cc:1861: newwhole->setWriteMask().
             join_vn.write().unwrap().set_write_mask();
             // Ghidra cc:1862: opInsertBefore(newop, retop).
