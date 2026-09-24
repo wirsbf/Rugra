@@ -337,6 +337,38 @@ fn build_action_data_symbol_db(
         )))
     };
 
+    // (0b) Read-only PT_LOAD segments, hoisted ahead of the symbol
+    // sections: the analyzeHeadless XML transport serializes every symbol
+    // in a read-only memory block with readonly="true" (database.cc:435-437
+    // ATTRIB_READONLY → Symbol flags), and the decompiler's
+    // `Scope::queryProperties` symbol-hit arm returns ONLY the symbol's
+    // flags (database.cc:1269-1270) — the flagbase property range alone
+    // (installed at (6) below) never reaches a query that lands on a
+    // symbol. `RulePtrsubCharConstant`'s `scope->isReadOnly(symaddr,...)`
+    // (ruleaction.cc:7372) and `PrintC::pushPtrCharConstant`'s
+    // `isReadOnly(stringaddr,...)` (printc.cc:1709) both query through
+    // that arm, so without the symbol-side flag the char* string-literal
+    // channel (PTRSUB → COPY of char* constant → "literal") never fires.
+    let mut ronly_ranges: Vec<(u64, u64)> = Vec::new();
+    for ph in elf.program_headers.iter() {
+        const PT_LOAD: u32 = 1;
+        const PF_X: u32 = 1;
+        const PF_W: u32 = 2;
+        const PF_R: u32 = 4;
+        if ph.p_type != PT_LOAD || (ph.p_flags & PF_R) == 0 || (ph.p_flags & PF_W) != 0 {
+            continue;
+        }
+        ronly_ranges.push((ph.p_vaddr, ph.p_vaddr + ph.p_filesz));
+    }
+    // The transport's per-symbol readonly attribute (block-permission
+    // driven): applied to every mapped data symbol landing in an R-only
+    // segment.
+    let mark_readonly = |db: &mut rugra::database::Database, sym_id: u64, addr: u64| {
+        if ronly_ranges.iter().any(|&(a, b)| addr >= a && addr < b) {
+            db.set_symbol_flag(global_scope_id, sym_id, symbol_flags::READONLY, true);
+        }
+    };
+
     // (1) Function symbols — the canon print DB's entry set.
     {
         let db_entries: Vec<(u64, String)> = functions
@@ -365,16 +397,14 @@ fn build_action_data_symbol_db(
             continue;
         }
         let size = if sym.st_size > 0 { sym.st_size as usize } else { 8 };
-        if db
-            .add_symbol_mapped(
-                global_scope_id,
-                name,
-                Some(undefined_t(size)),
-                Address::new(sym.st_value),
-                size as i32,
-            )
-            .is_some()
-        {
+        if let Some(sym_id) = db.add_symbol_mapped(
+            global_scope_id,
+            name,
+            Some(undefined_t(size)),
+            Address::new(sym.st_value),
+            size as i32,
+        ) {
+            mark_readonly(&mut db, sym_id, sym.st_value);
             covered.push((sym.st_value, sym.st_value + size as u64));
         }
     }
@@ -394,16 +424,14 @@ fn build_action_data_symbol_db(
         }
         let slot = rel.r_offset;
         let name = format!("PTR_{}_{:08x}", base, ANALYZE_HEADLESS_IMAGE_BASE + slot);
-        if db
-            .add_symbol_mapped(
-                global_scope_id,
-                &name,
-                Some(undefined_t(8)),
-                Address::new(slot),
-                8,
-            )
-            .is_some()
-        {
+        if let Some(sym_id) = db.add_symbol_mapped(
+            global_scope_id,
+            &name,
+            Some(undefined_t(8)),
+            Address::new(slot),
+            8,
+        ) {
+            mark_readonly(&mut db, sym_id, slot);
             covered.push((slot, slot + 8));
         }
     }
@@ -452,6 +480,7 @@ fn build_action_data_symbol_db(
             array_len as i32,
         ) {
             db.set_symbol_flag(global_scope_id, sym_id, symbol_flags::TYPELOCK, true);
+            mark_readonly(&mut db, sym_id, saddr);
             covered.push((saddr, saddr + array_len as u64));
         }
     }
@@ -469,16 +498,14 @@ fn build_action_data_symbol_db(
             continue;
         }
         let name = format!("DAT_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + raw);
-        if db
-            .add_symbol_mapped(
-                global_scope_id,
-                &name,
-                Some(undefined_t(8)),
-                Address::new(raw),
-                8,
-            )
-            .is_some()
-        {
+        if let Some(sym_id) = db.add_symbol_mapped(
+            global_scope_id,
+            &name,
+            Some(undefined_t(8)),
+            Address::new(raw),
+            8,
+        ) {
+            mark_readonly(&mut db, sym_id, raw);
             covered.push((raw, raw + 8));
             dat_count += 1;
         }
@@ -1991,7 +2018,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{}", tree_out);
                 }
             }
-            let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+            // ACTION-SYMDB-DATASYM-0001 (render residual ②): the oracle's
+            // PrintLanguage default emitter is EmitPrettyPrint
+            // (printlanguage.cc:69 `emit = new EmitPrettyPrint()`), whose
+            // Oppen scan-queue inserts the golden's 100-column line breaks
+            // (ap_set_name_virtual_host's CALL splits after
+            // `&DAT_001a0820,`; EmitNoMarkup streams tokens unwrapped).
+            // Switched in ONLY with the action DB attached (RUGRA_SYMDB=1
+            // canon gate): the default fold-only path keeps the historical
+            // EmitNoMarkup byte stream (parent-identical), and the mirror
+            // keeps its own contract.
+            let pretty_emit = action_db_attached;
+            let mut printer = if pretty_emit {
+                PrintC::new(Box::new(rugra::prettyprint::EmitPrettyPrint::new()))
+            } else {
+                PrintC::new(Box::new(EmitNoMarkup::new()))
+            };
             // PRINTC-LABSPELL-LABSYMS-0001: the front-end program-DB
             // code-label layer (same contract as the curl driver's install,
             // see the long block comment there): every direct-branch target
@@ -2078,8 +2120,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             printer.doc_function(&fd_read);
             let output = printer.take_emit();
-            let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
-            Some(text.get_output())
+            // ACTION-SYMDB-DATASYM-0001: symmetric extraction — the pretty
+            // path flushes the scan queue then reuses the same low-level
+            // getOutput post-processing.
+            if pretty_emit {
+                let text = output
+                    .into_any()
+                    .downcast::<rugra::prettyprint::EmitPrettyPrint>()
+                    .unwrap();
+                Some(text.get_output())
+            } else {
+                let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
+                Some(text.get_output())
+            }
         });
 
         // Wait with timeout (like curl_decompile) to prevent single-function
