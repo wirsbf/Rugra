@@ -610,3 +610,10 @@ TypeOpStore::getInputCast cc:546-548 的 cast-already-in-place 测试——依�
 `TypeOpEqual::propagateAcrossCompare`（typeop.cc:963-986）的 compare_op_impl!
 端口在位：`*store != HTTPREQ_UNSPEC` 的常量类型经 INT_EQUAL/NOTEQUAL 输入间
 传播获得枚举类型（枚举 ENUMTYPE 旗标修复后自然接通）。
+
+## 2026-09-24（CR29 返工）：TypeOpReturn 锚行修正
+
+`TypeOpReturn::getInputLocal` 定义行是 typeop.cc:**901**（af6c5ee2 误锚 883=
+printRaw，行漂移红旗）；行内引用同步：slot0=907-908、getOutputType=918、
+void/尺寸失配=919-920。varnode.rs RETURN 臂与 coreaction build_localtypes
+注释同批修正。

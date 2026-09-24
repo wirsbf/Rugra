@@ -1608,8 +1608,23 @@ impl FuncProto {
         let outparm_is_size_locked = out_type_locked;
         if !out_type_locked {
             if triallist.is_empty() {
-                // store->clearOutput()
-                self.clear_unlocked_output();
+                // fspec.cc:4142 store->clearOutput() — unconditional void
+                // output: ProtoStoreInternal::clearOutput (fspec.cc:3389-
+                // 3395) replaces the outparam with ParameterBasic(voidtype);
+                // ProtoStoreSymbol::clearOutput (fspec.cc:3262-3270) sets
+                // pieces.type = getTypeVoid(). The return value itself
+                // resets to void — NOT just the lock flag (the former
+                // clear_unlocked_output delegation kept a stale type,
+                // af6c5ee2 Evidence 断言了未实现的行为, CR29 件④).
+                self.return_type = std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Void(
+                        crate::type_system::datatype::TypeBase::new(
+                            "void".to_string(),
+                            0,
+                            crate::type_system::TypeMetatype::Void,
+                        ),
+                    ),
+                );
                 return;
             }
         } else if outparm_is_size_locked {

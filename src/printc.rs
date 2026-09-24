@@ -345,6 +345,53 @@ fn escape_char_body(val: u64) -> String {
     }
 }
 
+// RUGRA-GLUE: the infix-text projection of pushEnumConstant's match branch
+// (printc.cc:1672-1683) — pure name assembly over TypeEnum::get_matches
+// (datatype.rs, type.cc:1365-1414), shared by the direct-emit
+// (push_enum_constant_named) and text (enum_constant_text) renderers.
+/// Build the named representation of `val`: `A`, `A|B` (enum_cat joins),
+/// `~A` / `~(A|B)` (complement), each optionally `>> n` (shift_right with
+/// the amount as an unsigned 4-byte integer, printc.cc:1683).
+/// Parenthesization mirrors the token protocol's parentheses() decision:
+/// `|` binds looser than the unary `~`'s operand requirement and looser
+/// than shift_right's left operand, so the OR-join is wrapped under
+/// either; a lone name takes none. `None` when getMatches finds no named
+/// representation.
+fn enum_match_text(val: u64, e: &crate::type_system::datatype::TypeEnum) -> Option<String> {
+    let mut rep = crate::type_system::datatype::EnumRepresentation::default();
+    e.get_matches(val, &mut rep);
+    enum_rep_text(&rep)
+}
+
+// RUGRA-GLUE: the representation-to-text half of pushEnumConstant's match
+// branch — pure string assembly, split out so the shift form (which
+// TypeEnum::getMatches itself never produces — its Representation keeps
+// the ctor's shiftAmount=0, same as type.cc:1370's rep) is still unit-
+// covered exactly as printc.cc:1672-1683 renders it.
+fn enum_rep_text(rep: &crate::type_system::datatype::EnumRepresentation) -> Option<String> {
+    if rep.match_name.is_empty() {
+        return None;
+    }
+    let joined = rep.match_name.join("|");
+    let multi = rep.match_name.len() > 1;
+    let base = if rep.complement {
+        if multi {
+            format!("~({joined})")
+        } else {
+            format!("~{joined}")
+        }
+    } else if multi && rep.shift_amount != 0 {
+        format!("({joined})")
+    } else {
+        joined
+    };
+    Some(if rep.shift_amount != 0 {
+        format!("{base} >> {}", rep.shift_amount)
+    } else {
+        base
+    })
+}
+
 // RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
 /// Escape a raw string from the binary into a C string literal.
 /// Converts control characters to their escape sequences:
@@ -1629,11 +1676,12 @@ impl PrintC {
             // (TypeEnum::decode, type.cc:1475), so its TYPE_UINT/TYPE_INT
             // arms reach pushEnumConstant (printc.cc:1756/1763). Rugra's
             // Enum metatype IS that enum-int/uint collapse, so it takes the
-            // same member-name path: exact-match enumerator name, else the
-            // unsigned integer (printc.cc:1666-1691 pushEnumConstant's
-            // no-match else). Locked witnesses: `return CURLE_OK;`
-            // (main_init), `*store != HTTPREQ_UNSPEC` (SetHTTPrequest).
-            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm.
+            // same named path: the getMatches representation (enum_match_
+            // text — `A`, `A|B`, `~(A|B)`, `... >> n`), else the unsigned
+            // integer (printc.cc:1684-1686). Locked witnesses:
+            // `return CURLE_OK;` (main_init), `*store != HTTPREQ_UNSPEC`
+            // (SetHTTPrequest). TYPE_PARTIALENUM keeps Ghidra's
+            // default-cast arm.
             TypeMetatype::Enum => self.enum_constant_text(val, &ct),
             TypeMetatype::Unknown => self.integer_text(val, sz, false, display_format::DEFAULT)
             ,
@@ -1685,14 +1733,14 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
-    /// The text core of the enum-constant arm: the exact-match member name
-    /// when present, the unsigned integer otherwise (matching
-    /// `push_enum_constant_named`'s exact-member slice of
-    /// `TypeEnum::getMatches`).
+    /// The text core of the enum-constant arm: the getMatches representation
+    /// (`A`, `A|B`, `~A`, `~(A|B)`, `... >> n` — see `enum_match_text`) when
+    /// a named form exists, the unsigned integer otherwise (printc.cc:1684
+    /// -1686; the `false` signedness argument applies to enum_int too).
     fn enum_constant_text(&self, val: u64, ct: &Datatype) -> String {
         if let Datatype::Enum(e) = ct {
-            if let Some(name) = e.values.get(&val) {
-                return name.clone();
+            if let Some(text) = enum_match_text(val, e) {
+                return text;
             }
         }
         self.integer_text(val, ct.get_size(), false, display_format::DEFAULT)
@@ -15578,24 +15626,28 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
-    /// Render an enumerated constant, preferring the enum's named member over
-    /// a raw integer. Faithful port of `PrintC::pushEnumConstant`
+    /// Render an enumerated constant, preferring the enum's named member(s)
+    /// over a raw integer. Faithful port of `PrintC::pushEnumConstant`
     /// (printc.cc:1666-1687).
     ///
-    /// Ghidra builds a value out of named enum members via
-    /// `TypeEnum::getMatches` (which can OR/complement/shift members to form
-    /// `val`) and emits `NAME1 | NAME2`. Rugra's `TypeEnum.values` is a flat
-    /// `BTreeMap<u64,String>` with no getMatches, so this port renders the
-    /// exact-match member name when present and otherwise falls back to
-    /// `push_integer` — the two cases at printc.cc:1672/1684-1686. The
-    /// multi-name `|` rendering is a TODO hook for when getMatches is ported.
+    /// The named representation comes from `TypeEnum::getMatches`
+    /// (type.cc:1365-1414; ported at datatype.rs get_matches): the greedy
+    /// two-pass algorithm returning the member names to OR, whether the OR
+    /// is complemented, and a shift amount. Rendering follows the token
+    /// sequence printc.cc:1672-1683 pushes — enum_cat `|` joins (parenthe-
+    /// sized under the unary `~` or as shift_right's left operand, per the
+    /// token protocol's parentheses() decision for `|`'s precedence),
+    /// complement `~`, and `>> <amount>` with the amount as an unsigned
+    /// 4-byte integer (printc.cc:1683). No named representation falls back
+    /// to push_integer — unsigned regardless of the enum's signedness
+    /// (printc.cc:1685 hardcodes false for both enum_int and enum_uint).
     pub fn push_enum_constant_named(
         &mut self, val: u64,
                                     ct: &crate::type_system::datatype::TypeEnum,
     ) {
-        if let Some(name) = ct.values.get(&val) {
-            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)).
-            self.emit.print(name);
+        if let Some(text) = enum_match_text(val, ct) {
+            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)) etc.
+            self.emit.print(&text);
         } else {
             // printc.cc:1684-1686: no named match -> push_integer.
             self.push_integer(val, ct.base.size, false, display_format::DEFAULT);
@@ -15707,8 +15759,9 @@ impl PrintC {
             // Rugra's Enum metatype is Ghidra's enum-int/uint collapse
             // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.cc:1475),
             // so printConstant's TYPE_UINT/TYPE_INT arms reach
-            // pushEnumConstant (printc.cc:1756/1763) — member name on exact
-            // match, unsigned integer otherwise (printc.cc:1666-1691).
+            // pushEnumConstant (printc.cc:1756/1763) — the getMatches
+            // named representation (enum_match_text), else the unsigned
+            // integer (printc.cc:1684-1686, `false` for enum_int too).
             TypeMetatype::Enum => {
                 let text = self.enum_constant_text(val, ct);
                 self.emit.print(&text);
@@ -16709,6 +16762,89 @@ mod tests {
     use crate::address::Address;
     use crate::opcodes::OpCode;
     use crate::prettyprint::EmitNoMarkup;
+
+    // CR29 件④子项②回归：enum 常量渲染走 TypeEnum::get_matches 的完整
+    // 表示（多成员 |、补码 ~、shift >>），printc.cc:1672-1683 token 序列
+    // 的中缀投影。
+    fn test_enum(values: &[(u64, &str)], size: usize) -> crate::type_system::datatype::TypeEnum {
+        crate::type_system::datatype::TypeEnum {
+            base: TypeBase::new("T".to_string(), size, TypeMetatype::Enum),
+            values: values
+                .iter()
+                .map(|&(v, n)| (v, n.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn enum_match_text_renders_getmatches_representations() {
+        // 单名（CURLcode CURLE_OK 形）。
+        let single = test_enum(&[(0, "OK"), (1, "A")], 4);
+        assert_eq!(enum_match_text(0, &single).as_deref(), Some("OK"));
+        assert_eq!(enum_match_text(1, &single).as_deref(), Some("A"));
+        // 多成员 OR：getMatches 贪心从最大命名值起步（type.cc 反向迭代
+        // namemap 找 ≤target 的最大键），3 → 先 B(2) 后 A(1)，与 oracle
+        // 同序 `B|A`。
+        let multi = test_enum(&[(1, "A"), (2, "B")], 4);
+        assert_eq!(enum_match_text(3, &multi).as_deref(), Some("B|A"));
+        // 补码单名：size1 mask 0xff，val 0xfd 无直配 → 第二遍补码 0x02。
+        let comp = test_enum(&[(2, "A")], 1);
+        assert_eq!(enum_match_text(0xfd, &comp).as_deref(), Some("~A"));
+        // 补码多名：0xfa → 补码 0x05，贪心先 B(4) 后 A(1)。
+        let comp_multi = test_enum(&[(1, "A"), (4, "B")], 1);
+        assert_eq!(enum_match_text(0xfa, &comp_multi).as_deref(), Some("~(B|A)"));
+        // 无表示：值与补码都拆不出来 → None（调用方回退无符号整数）。
+        let none = test_enum(&[(1, "A")], 4);
+        assert_eq!(enum_match_text(2, &none), None);
+    }
+
+    #[test]
+    fn enum_rep_text_covers_shift_forms() {
+        use crate::type_system::datatype::EnumRepresentation as R;
+        // getMatches 自身恒产 shiftAmount=0（type.cc:1370 rep 构造默认），
+        // shift 形态按 printc.cc:1672-1683 的渲染规则直接驱动 rep：
+        // shift_right 最先 push（最外层），枚举名 | 连接，amount 为
+        // 4 字节无符号整数。
+        assert_eq!(
+            enum_rep_text(&R {
+                match_name: vec!["A".into(), "B".into()],
+                complement: false,
+                shift_amount: 3,
+            })
+            .as_deref(),
+            Some("(A|B) >> 3")
+        );
+        assert_eq!(
+            enum_rep_text(&R {
+                match_name: vec!["A".into()],
+                complement: false,
+                shift_amount: 3,
+            })
+            .as_deref(),
+            Some("A >> 3")
+        );
+        // 一元 ~ 结合比 >> 紧：补码形不再套外括号（token 协议括号决策）。
+        assert_eq!(
+            enum_rep_text(&R {
+                match_name: vec!["A".into()],
+                complement: true,
+                shift_amount: 3,
+            })
+            .as_deref(),
+            Some("~A >> 3")
+        );
+        assert_eq!(
+            enum_rep_text(&R {
+                match_name: vec!["A".into(), "B".into()],
+                complement: true,
+                shift_amount: 0,
+            })
+            .as_deref(),
+            Some("~(A|B)")
+        );
+        // 空表示 → None。
+        assert_eq!(enum_rep_text(&R::default()), None);
+    }
 
     #[test]
     fn test_print_c_copy() {

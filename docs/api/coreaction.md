@@ -3005,3 +3005,7 @@ ActionReturnSplit 的 `self.count +=` 同样无收割覆盖（ActionDoNothing �
 `getFirstReturnOp`（returnlist 插入序，跳 dead/HALT）取输入 1..n 构造
 triallist，交 `FuncProto::update_output_types`（fspec.cc:4136-4159）；
 未锁输出 + 空表 → clearOutput（void），与 Ghidra 同。
+
+## 2026-09-24（CR29 返工）：build_localtypes 注释锚行修正
+
+TypeOpReturn::getInputLocal 引用随 typeop.cc 901 修正（原 883）。无行为变化。

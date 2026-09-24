@@ -7286,7 +7286,7 @@ impl ActionInferTypes {
             // only path that can set it; a successful exact-piece lookup leaves
             // it false.
             let mut needs_block = false;
-            // TypeOpReturn::getInputLocal (typeop.cc:883-897) reads RETURN
+            // TypeOpReturn::getInputLocal (typeop.cc:901-920) reads RETURN
             // inputs' local types from the enclosing function's current
             // return-value parameter (fp->getOutputType() = funcp.return_type,
             // void when cleared) — the fd channel Ghidra reaches through

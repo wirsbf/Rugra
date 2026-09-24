@@ -2655,3 +2655,17 @@ opStore cc:500-518 端口修正：deref 形先 pushOp(dereference) 再单次
 rpn_push_in(op,1,m)——旧实现 tag_op("*") + 未递归首推 + 二次输入推送使 RPN
 栈残留重复左值（`*urlnum*urlnum = ...`）。maptable 静态序键增 end（rangemap.hh
 :100-102 AddrRange (last,subsort) 序：同 start 先结束者先访问）。
+
+## 2026-09-24（CR29 返工）：枚举常量渲染接 get_matches 全表示
+
+datatype.rs:3223-3290 早已完整移植 `TypeEnum::getMatches`（type.cc:1365-1414，
+两遍贪心+补码，a1bcaea6）——此前 enum 两臂（enum_constant_text /
+push_enum_constant_named）走 BTreeMap 精确单名切片且注释误称"无 getMatches
+移植"。修正：两臂共用 `enum_match_text`（get_matches → `enum_rep_text` 中缀
+投影：`A`、`B|A`（贪心自最大命名值起，与 namemap 反向迭代同序）、`~A`、
+`~(B|A)`、`>> n`（amount=4 字节无符号，printc.cc:1683）；无表示回退无符号
+整数（cc:1684-1686，`false` 签参对 enum_int 同样硬编码）。括号决策随 token
+协议：`|` 在一元 `~` 下或作 shift_right 左操作数时包裹，单名不包。新增
+enum_match_text_renders_getmatches_representations +
+enum_rep_text_covers_shift_forms 单测（shift 形态经 rep 直驱——getMatches
+自身恒产 shiftAmount=0，同 type.cc:1370 构造默认）。

@@ -1207,3 +1207,9 @@ queryProperties/inUse 差异)。
 `Some(fd.funcp.return_type.clone())`（Ghidra 的 op→getParent()→getFuncdata()
 通道）。slot 0（indeterminate marker）走 `_` 默认臂，与 Ghidra slot==0 →
 基类默认一致。
+
+## 2026-09-24（CR29 返工）：RETURN 臂锚行修正
+
+`op_input_type_local` 的 RETURN 臂注释锚行随 typeop.cc 修正：定义行 901（原
+883=printRaw，行漂移），fp->getOutputType()=cc:918，void/尺寸失配=cc:919-920。
+无行为变化。

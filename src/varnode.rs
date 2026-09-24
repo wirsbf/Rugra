@@ -382,11 +382,11 @@ pub fn op_input_type_local(
                 None => local_base(type_factory, input_size, TypeMetatype::Unknown),
             }
         }
-        // typeop.cc:883-897 TypeOpReturn::getInputLocal — a RETURN input
+        // typeop.cc:901-920 TypeOpReturn::getInputLocal — a RETURN input
         // (slot >= 1) reads its local type from the enclosing function's
-        // return-value parameter (fp->getOutputType()), kept only when not
-        // void and size-matched; this bare-&PcodeOp table has no parent
-        // Funcdata chain, so the fd-less form mirrors Ghidra's bb==0
+        // return-value parameter (fp->getOutputType(), cc:918), kept only
+        // when not void and size-matched; this bare-&PcodeOp table has no
+        // parent Funcdata chain, so the fd-less form mirrors Ghidra's bb==0
         // fallback (base undefined) and the fd-carrying dispatch in
         // ActionInferTypes::build_localtypes routes through
         // TypeOpReturn::get_input_local_in_fd instead.
