@@ -732,3 +732,40 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 - `FlowInfo::clone_function`（partial 克隆）继承源函数的 `display_image_base`：
   partial 的 jumptable LowlevelError 文本（recover_addresses_classified，
   jumptable.cc:2629）与父函数保持同一 oracle printRaw 拼写。
+
+## 2026-09-24（HTTPD-MAIN-WARNUNREACH-JTEDGE-0001）：`recover_jump_tables_injected` —— 线性注入库的后置跳表恢复
+
+- 新增 `pub fn recover_jump_tables_injected(fd) -> Result<usize>`（Ghidra:
+  flow.cc:785 `FlowInfo::generateOps`）：为"批量线性注入整库后建块"的驱动
+  路径（`Funcdata::inject_raw_ops` + `build_blocks_from_ops`）补上
+  followFlow 在 oracle 里内联完成的 generateOps 第二阶段——跳表恢复
+  （flow.cc:796-821）以及融合加载无法产生的两个 generateBlocks 尾部可观
+  测：BRANCHIND 的逐 case 出边（collectEdges BRANCHIND 臂，flow.cc:933-957）
+  与 switchOver 映射（funcdata_op.cc:777-778 → jumptable.cc:2528）。
+- 适配差异（全部源自调用方预提升的线性库，逐条注明在函数 doc 注释）：
+  - 恢复前把 op 库 mark_dead 进 dead list、恢复后按 dead list 顺序
+    mark_alive 复原——`Funcdata::truncatedFlow` 以 `obank.beginDead()` 为
+    partial 克隆源（funcdata.cc:797-799），oracle 恢复时点全部 raw p-code
+    在 dead list、alivelist 为空；
+  - 各基本块首 op 补 STARTBASIC（xref 走查的终态，flow.cc:469-477/570-572；
+    `clone_op` 复制该旗标，funcdata_op.cc:621-622），partial 克隆的
+    generateBlocks 得以复现源分区；
+  - `newAddress`/`fallthru` 提升为 no-op（case 体已在线性库中；oracle 由
+    flow.cc:804-809 后置提升）；
+  - 恢复 partial 挂载 commentdb 剥离的 Architecture 克隆：coreaction.cc:5490
+    把首个 `ActionUnreachable("base")` 注册进 base 组（"jumptable" 组也含
+    base），oracle 的 partial 不含 case 体（恢复先于提升）故该动作从不触发；
+    线性库的 partial 携带孤儿 case 体，其删块警告会经共享 commentdb（同
+    入口地址）泄漏进真实函数输出——剥离恰好中和这一适配伪影通道；真实 fd
+    警告（truncateIndirectJump 等）仍走真实 arch；
+  - truncateIndirectJump 的人工 halt 以 dead list 位置（insert_after_dead
+    的落点）补插进前驱 CALLIND 所在块尾——oracle 由 splitBasic
+    （flow.cc:996-1013）完成的块归属；
+  - 表目的地无 p-code（越出符号窗）时跳过该出边并整表跳过 switchOver
+    （oracle 不可达形态：恢复后目的地必然在库）。
+- 新增私有构造 `FlowInfo::from_injected`（lifter=None，同截断克隆构造形态；
+  visited 由 op 库合成，baddr/eaddr=(0,u64::MAX) 为 oracle harness 的
+  followFlow(code:0, code:highest) 契约）。
+- 驱动接线：`examples/httpd_decompile.rs` 默认路径在 `inject_raw_ops` 后、
+  action 管线前调用（httpd main 警告 30→0，switch case 体恢复）；MIRROR
+  路径与其余驱动不变（curl 字节恒等实测）。
