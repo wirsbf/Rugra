@@ -1,0 +1,1304 @@
+META side=oracle oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86:LE:64:default cspec=gcc
+META analysis_options=default build_flags=v1-no-OPACTION_DEBUG
+META binary_sha256=805f89cdbdce827f8f6ccd877aa7c344ff1105713b7bf7b0e6f313affa93b1c1 func_entry=0x2acc0 func_name=func_0x0002acc0 load_mode=single_function_bfd
+META producer=24a4bec28f2786d0b0f4b23e540c67228519b92f maxrestarts=1 unique_base=0x364200
+@BEGIN 1 universal
+@BEGIN 2 universal:start
+@END 2 universal:start result=0 count=0 tests=0 apply=0
+@SNAP 2 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 3 universal:constbase
+@END 3 universal:constbase result=0 count=0 tests=0 apply=0
+@SNAP 3 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+@BEGIN 4 universal:defaultparams
+@END 4 universal:defaultparams result=0 count=0 tests=0 apply=0
+@SNAP 4 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+@BEGIN 5 universal:extrapopsetup
+@END 5 universal:extrapopsetup result=0 count=0 tests=0 apply=0
+@SNAP 5 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+@BEGIN 6 universal:prototypetypes
+@END 6 universal:prototypetypes result=0 count=0 tests=0 apply=0
+@SNAP 6 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+@BEGIN 7 universal:funclink
+@END 7 universal:funclink result=0 count=0 tests=0 apply=0
+@SNAP 7 ops 6
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 8 universal:fullloop
+@BEGIN 9 universal:fullloop:mainloop
+@BEGIN 10 universal:fullloop:mainloop:unreachable
+@END 10 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 10 ops 6
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 11 universal:fullloop:mainloop:varnodeprops
+@END 11 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 11 ops 6
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 12 universal:fullloop:mainloop:heritage
+@END 12 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 12 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 13 universal:fullloop:mainloop:paramdouble
+@END 13 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 13 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 14 universal:fullloop:mainloop:segmentize
+@END 14 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 14 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 15 universal:fullloop:mainloop:internalstorage
+@END 15 universal:fullloop:mainloop:internalstorage result=0 count=0 tests=0 apply=0
+@SNAP 15 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 16 universal:fullloop:mainloop:forcegoto
+@END 16 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 16 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 17 universal:fullloop:mainloop:directwrite
+@END 17 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 17 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 18 universal:fullloop:mainloop:activeparam
+@END 18 universal:fullloop:mainloop:activeparam result=1 count=1 tests=0 apply=1
+@SNAP 18 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 19 universal:fullloop:mainloop:returnrecovery
+@END 19 universal:fullloop:mainloop:returnrecovery result=1 count=1 tests=0 apply=1
+@SNAP 19 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 20 universal:fullloop:mainloop:restrictlocal
+@END 20 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 20 ops 7
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:2 COPY d=0 out=n:register:20a:1 in=c:0:1
+2acc4:3 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+2acc4:6 DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:2acc4:0
+@BEGIN 21 universal:fullloop:mainloop:deadcode
+@END 21 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 21 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 22 universal:fullloop:mainloop:dynamicmapping
+@END 22 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 22 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 23 universal:fullloop:mainloop:restructure_varnode
+@END 23 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 23 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 24 universal:fullloop:mainloop:spacebase
+@END 24 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 24 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 25 universal:fullloop:mainloop:nonzeromask
+@END 25 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 25 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 26 universal:fullloop:mainloop:infertypes
+@END 26 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 26 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:4 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+@BEGIN 27 universal:fullloop:mainloop:stackstall
+@BEGIN 28 universal:fullloop:mainloop:stackstall:oppool1
+@END 28 universal:fullloop:mainloop:stackstall:oppool1 result=3 count=3 tests=0 apply=2
+@SNAP 28 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 29 universal:fullloop:mainloop:stackstall:lanedivide
+@END 29 universal:fullloop:mainloop:stackstall:lanedivide result=0 count=0 tests=0 apply=0
+@SNAP 29 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 30 universal:fullloop:mainloop:stackstall:multicse
+@END 30 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 30 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 31 universal:fullloop:mainloop:stackstall:shadowvar
+@END 31 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 31 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 32 universal:fullloop:mainloop:stackstall:deindirect
+@END 32 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 32 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 33 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 33 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 33 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 34 universal:fullloop:mainloop:stackstall:oppool1
+@END 34 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 34 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 35 universal:fullloop:mainloop:stackstall:multicse
+@END 35 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 35 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 36 universal:fullloop:mainloop:stackstall:shadowvar
+@END 36 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 36 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 37 universal:fullloop:mainloop:stackstall:deindirect
+@END 37 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 37 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 38 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 38 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 38 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@END 27 universal:fullloop:mainloop:stackstall result=3 count=3 tests=0 apply=1
+@SNAP 27 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 39 universal:fullloop:mainloop:redundbranch
+@END 39 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 39 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 40 universal:fullloop:mainloop:blockstructure
+@END 40 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 40 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 41 universal:fullloop:mainloop:constantptr
+@END 41 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 41 ops 3
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8,u:10000008:1
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:5 LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+@BEGIN 42 universal:fullloop:mainloop:oppool2
+@END 42 universal:fullloop:mainloop:oppool2 result=1 count=1 tests=0 apply=1
+@SNAP 42 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 43 universal:fullloop:mainloop:determinedbranch
+@END 43 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 43 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 44 universal:fullloop:mainloop:unreachable
+@END 44 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 44 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 45 universal:fullloop:mainloop:nodejoin
+@END 45 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 45 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 46 universal:fullloop:mainloop:conditionalexe
+@END 46 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 46 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 47 universal:fullloop:mainloop:condconst
+@END 47 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 47 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 48 universal:fullloop:mainloop:unreachable
+@END 48 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 48 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 49 universal:fullloop:mainloop:varnodeprops
+@END 49 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 49 ops 2
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+@BEGIN 50 universal:fullloop:mainloop:heritage
+@END 50 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 50 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 51 universal:fullloop:mainloop:paramdouble
+@END 51 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 51 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 52 universal:fullloop:mainloop:segmentize
+@END 52 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 52 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 53 universal:fullloop:mainloop:forcegoto
+@END 53 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 53 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 54 universal:fullloop:mainloop:directwrite
+@END 54 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 54 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 55 universal:fullloop:mainloop:activeparam
+@END 55 universal:fullloop:mainloop:activeparam result=1 count=1 tests=0 apply=1
+@SNAP 55 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 56 universal:fullloop:mainloop:returnrecovery
+@END 56 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 56 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 57 universal:fullloop:mainloop:restrictlocal
+@END 57 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 57 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 58 universal:fullloop:mainloop:deadcode
+@END 58 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 58 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 59 universal:fullloop:mainloop:dynamicmapping
+@END 59 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 59 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 60 universal:fullloop:mainloop:restructure_varnode
+@END 60 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 60 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 61 universal:fullloop:mainloop:spacebase
+@END 61 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 61 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 62 universal:fullloop:mainloop:nonzeromask
+@END 62 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 62 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 63 universal:fullloop:mainloop:infertypes
+@END 63 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 63 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 64 universal:fullloop:mainloop:stackstall
+@BEGIN 65 universal:fullloop:mainloop:stackstall:oppool1
+@END 65 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 65 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 66 universal:fullloop:mainloop:stackstall:multicse
+@END 66 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 66 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 67 universal:fullloop:mainloop:stackstall:shadowvar
+@END 67 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 67 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 68 universal:fullloop:mainloop:stackstall:deindirect
+@END 68 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 68 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 69 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 69 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 69 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 64 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 64 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 70 universal:fullloop:mainloop:redundbranch
+@END 70 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 70 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 71 universal:fullloop:mainloop:blockstructure
+@END 71 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 71 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 72 universal:fullloop:mainloop:constantptr
+@END 72 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 72 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 73 universal:fullloop:mainloop:oppool2
+@END 73 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 73 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 74 universal:fullloop:mainloop:determinedbranch
+@END 74 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 74 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 75 universal:fullloop:mainloop:unreachable
+@END 75 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 75 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 76 universal:fullloop:mainloop:nodejoin
+@END 76 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 76 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 77 universal:fullloop:mainloop:conditionalexe
+@END 77 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 77 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 78 universal:fullloop:mainloop:condconst
+@END 78 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 78 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 79 universal:fullloop:mainloop:unreachable
+@END 79 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 79 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 80 universal:fullloop:mainloop:varnodeprops
+@END 80 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 80 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 81 universal:fullloop:mainloop:heritage
+@END 81 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 81 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 82 universal:fullloop:mainloop:paramdouble
+@END 82 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 82 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 83 universal:fullloop:mainloop:segmentize
+@END 83 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 83 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 84 universal:fullloop:mainloop:forcegoto
+@END 84 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 84 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 85 universal:fullloop:mainloop:directwrite
+@END 85 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 85 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 86 universal:fullloop:mainloop:activeparam
+@END 86 universal:fullloop:mainloop:activeparam result=0 count=0 tests=0 apply=0
+@SNAP 86 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 87 universal:fullloop:mainloop:returnrecovery
+@END 87 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 87 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 88 universal:fullloop:mainloop:restrictlocal
+@END 88 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 88 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 89 universal:fullloop:mainloop:deadcode
+@END 89 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 89 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 90 universal:fullloop:mainloop:dynamicmapping
+@END 90 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 90 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 91 universal:fullloop:mainloop:restructure_varnode
+@END 91 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 91 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 92 universal:fullloop:mainloop:spacebase
+@END 92 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 92 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 93 universal:fullloop:mainloop:nonzeromask
+@END 93 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 93 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 94 universal:fullloop:mainloop:infertypes
+@END 94 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 94 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 95 universal:fullloop:mainloop:stackstall
+@BEGIN 96 universal:fullloop:mainloop:stackstall:oppool1
+@END 96 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 96 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 97 universal:fullloop:mainloop:stackstall:multicse
+@END 97 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 97 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 98 universal:fullloop:mainloop:stackstall:shadowvar
+@END 98 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 98 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 99 universal:fullloop:mainloop:stackstall:deindirect
+@END 99 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 99 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 100 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 100 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 100 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 95 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 95 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 101 universal:fullloop:mainloop:redundbranch
+@END 101 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 101 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 102 universal:fullloop:mainloop:blockstructure
+@END 102 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 102 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 103 universal:fullloop:mainloop:constantptr
+@END 103 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 103 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 104 universal:fullloop:mainloop:oppool2
+@END 104 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 104 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 105 universal:fullloop:mainloop:determinedbranch
+@END 105 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 105 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 106 universal:fullloop:mainloop:unreachable
+@END 106 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 106 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 107 universal:fullloop:mainloop:nodejoin
+@END 107 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 107 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 108 universal:fullloop:mainloop:conditionalexe
+@END 108 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 108 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 109 universal:fullloop:mainloop:condconst
+@END 109 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 109 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 9 universal:fullloop:mainloop result=7 count=7 tests=0 apply=2
+@SNAP 9 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 110 universal:fullloop:likelytrash
+@END 110 universal:fullloop:likelytrash result=0 count=0 tests=0 apply=0
+@SNAP 110 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 111 universal:fullloop:directwrite
+@END 111 universal:fullloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 111 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 112 universal:fullloop:deadcode
+@END 112 universal:fullloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 112 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 113 universal:fullloop:donothing
+@END 113 universal:fullloop:donothing result=0 count=0 tests=0 apply=0
+@SNAP 113 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 114 universal:fullloop:switchnorm
+@END 114 universal:fullloop:switchnorm result=0 count=0 tests=0 apply=0
+@SNAP 114 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 115 universal:fullloop:returnsplit
+@END 115 universal:fullloop:returnsplit result=0 count=0 tests=0 apply=0
+@SNAP 115 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 116 universal:fullloop:unjustparams
+@END 116 universal:fullloop:unjustparams result=0 count=0 tests=0 apply=0
+@SNAP 116 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 117 universal:fullloop:starttypes
+@END 117 universal:fullloop:starttypes result=1 count=1 tests=0 apply=1
+@SNAP 117 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 118 universal:fullloop:activereturn
+@END 118 universal:fullloop:activereturn result=1 count=1 tests=0 apply=1
+@SNAP 118 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 119 universal:fullloop:mainloop
+@BEGIN 120 universal:fullloop:mainloop:unreachable
+@END 120 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 120 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 121 universal:fullloop:mainloop:varnodeprops
+@END 121 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 121 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 122 universal:fullloop:mainloop:heritage
+@END 122 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 122 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 123 universal:fullloop:mainloop:paramdouble
+@END 123 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 123 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 124 universal:fullloop:mainloop:segmentize
+@END 124 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 124 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 125 universal:fullloop:mainloop:forcegoto
+@END 125 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 125 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 126 universal:fullloop:mainloop:directwrite
+@END 126 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 126 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 127 universal:fullloop:mainloop:activeparam
+@END 127 universal:fullloop:mainloop:activeparam result=0 count=0 tests=0 apply=0
+@SNAP 127 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 128 universal:fullloop:mainloop:returnrecovery
+@END 128 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 128 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 129 universal:fullloop:mainloop:restrictlocal
+@END 129 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 129 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 130 universal:fullloop:mainloop:deadcode
+@END 130 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 130 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 131 universal:fullloop:mainloop:dynamicmapping
+@END 131 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 131 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 132 universal:fullloop:mainloop:restructure_varnode
+@END 132 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 132 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 133 universal:fullloop:mainloop:spacebase
+@END 133 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 133 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 134 universal:fullloop:mainloop:nonzeromask
+@END 134 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 134 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 135 universal:fullloop:mainloop:infertypes
+@END 135 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 135 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 136 universal:fullloop:mainloop:stackstall
+@BEGIN 137 universal:fullloop:mainloop:stackstall:oppool1
+@END 137 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 137 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 138 universal:fullloop:mainloop:stackstall:multicse
+@END 138 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 138 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 139 universal:fullloop:mainloop:stackstall:shadowvar
+@END 139 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 139 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 140 universal:fullloop:mainloop:stackstall:deindirect
+@END 140 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 140 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 141 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 141 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 141 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 136 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 136 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 142 universal:fullloop:mainloop:redundbranch
+@END 142 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 142 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 143 universal:fullloop:mainloop:blockstructure
+@END 143 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 143 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 144 universal:fullloop:mainloop:constantptr
+@END 144 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 144 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 145 universal:fullloop:mainloop:oppool2
+@END 145 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 145 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 146 universal:fullloop:mainloop:determinedbranch
+@END 146 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 146 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 147 universal:fullloop:mainloop:unreachable
+@END 147 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 147 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 148 universal:fullloop:mainloop:nodejoin
+@END 148 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 148 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 149 universal:fullloop:mainloop:conditionalexe
+@END 149 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 149 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 150 universal:fullloop:mainloop:condconst
+@END 150 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 150 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 119 universal:fullloop:mainloop result=0 count=0 tests=0 apply=0
+@SNAP 119 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 151 universal:fullloop:likelytrash
+@END 151 universal:fullloop:likelytrash result=0 count=0 tests=0 apply=0
+@SNAP 151 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 152 universal:fullloop:directwrite
+@END 152 universal:fullloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 152 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 153 universal:fullloop:deadcode
+@END 153 universal:fullloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 153 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 154 universal:fullloop:donothing
+@END 154 universal:fullloop:donothing result=0 count=0 tests=0 apply=0
+@SNAP 154 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 155 universal:fullloop:switchnorm
+@END 155 universal:fullloop:switchnorm result=0 count=0 tests=0 apply=0
+@SNAP 155 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 156 universal:fullloop:returnsplit
+@END 156 universal:fullloop:returnsplit result=0 count=0 tests=0 apply=0
+@SNAP 156 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 157 universal:fullloop:unjustparams
+@END 157 universal:fullloop:unjustparams result=0 count=0 tests=0 apply=0
+@SNAP 157 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 158 universal:fullloop:starttypes
+@END 158 universal:fullloop:starttypes result=0 count=0 tests=0 apply=0
+@SNAP 158 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 159 universal:fullloop:activereturn
+@END 159 universal:fullloop:activereturn result=0 count=0 tests=0 apply=0
+@SNAP 159 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 8 universal:fullloop result=9 count=9 tests=0 apply=1
+@SNAP 8 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 160 universal:mapped_local_sync
+@END 160 universal:mapped_local_sync result=0 count=0 tests=0 apply=0
+@SNAP 160 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 161 universal:startcleanup
+@END 161 universal:startcleanup result=0 count=0 tests=0 apply=0
+@SNAP 161 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 162 universal:cleanup
+@END 162 universal:cleanup result=0 count=0 tests=0 apply=0
+@SNAP 162 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 163 universal:prefercomplement
+@END 163 universal:prefercomplement result=0 count=0 tests=0 apply=0
+@SNAP 163 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 164 universal:structuretransform
+@END 164 universal:structuretransform result=0 count=0 tests=0 apply=0
+@SNAP 164 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 165 universal:assignhigh
+@END 165 universal:assignhigh result=0 count=0 tests=0 apply=0
+@SNAP 165 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 166 universal:mergerequired
+@END 166 universal:mergerequired result=0 count=0 tests=0 apply=0
+@SNAP 166 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 167 universal:markexplicit
+@END 167 universal:markexplicit result=3 count=3 tests=0 apply=1
+@SNAP 167 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 168 universal:markimplied
+@END 168 universal:markimplied result=0 count=0 tests=0 apply=0
+@SNAP 168 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 169 universal:mergemultientry
+@END 169 universal:mergemultientry result=0 count=0 tests=0 apply=0
+@SNAP 169 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 170 universal:mergecopy
+@END 170 universal:mergecopy result=0 count=0 tests=0 apply=0
+@SNAP 170 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 171 universal:dominantcopy
+@END 171 universal:dominantcopy result=0 count=0 tests=0 apply=0
+@SNAP 171 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 172 universal:dynamicsymbols
+@END 172 universal:dynamicsymbols result=0 count=0 tests=0 apply=0
+@SNAP 172 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 173 universal:markindirectonly
+@END 173 universal:markindirectonly result=0 count=0 tests=0 apply=0
+@SNAP 173 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 174 universal:mergeadjacent
+@END 174 universal:mergeadjacent result=0 count=0 tests=0 apply=0
+@SNAP 174 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 175 universal:mergetype
+@END 175 universal:mergetype result=0 count=0 tests=0 apply=0
+@SNAP 175 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 176 universal:hideshadow
+@END 176 universal:hideshadow result=0 count=0 tests=0 apply=0
+@SNAP 176 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 177 universal:copymarker
+@END 177 universal:copymarker result=0 count=0 tests=0 apply=0
+@SNAP 177 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 178 universal:outputprototype
+@END 178 universal:outputprototype result=0 count=0 tests=0 apply=0
+@SNAP 178 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 179 universal:inputprototype
+@END 179 universal:inputprototype result=0 count=0 tests=0 apply=0
+@SNAP 179 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 180 universal:mapglobals
+@END 180 universal:mapglobals result=0 count=0 tests=0 apply=0
+@SNAP 180 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 181 universal:dynamicsymbols
+@END 181 universal:dynamicsymbols result=0 count=0 tests=0 apply=0
+@SNAP 181 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 182 universal:namevars
+@END 182 universal:namevars result=0 count=0 tests=0 apply=0
+@SNAP 182 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 183 universal:setcasts
+@END 183 universal:setcasts result=0 count=0 tests=0 apply=0
+@SNAP 183 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 184 universal:finalstructure
+@END 184 universal:finalstructure result=0 count=0 tests=0 apply=0
+@SNAP 184 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 185 universal:prototypewarnings
+@END 185 universal:prototypewarnings result=0 count=0 tests=0 apply=0
+@SNAP 185 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@BEGIN 186 universal:stop
+@END 186 universal:stop result=0 count=0 tests=0 apply=0
+@SNAP 186 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8
+@END 1 universal result=12 count=12 tests=0 apply=1
+@SNAP 1 ops 4
+2acc4:0 CALLIND d=0 out=- in=n:ram:9ca28:8
+2acc4:1 RETURN d=0 out=- in=c:1:4
+2acc4:7 DELAY_SLOT d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8,o:2acc4:0
+2acc4:8 COPY d=0 out=n:ram:9ca28:8 in=n:ram:9ca28:8

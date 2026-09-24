@@ -1592,6 +1592,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
     };
 
+    // HBANK-DRIVER-STAGELEDGER-0001: stage-only PLT-thunk ledger arm.
+    // The `functions` ledger above is symtab∪dynsym-DEFINED symbols — httpd
+    // is stripped, so that surface starts at main@0x2b820 and the 320 PLT
+    // thunk code slots (.plt PLT0 header + .plt.got + .plt.sec,
+    // 0x29020..0x2b7e0) carry no symbol in any table. Ghidra's Java
+    // ELF/PLT analyzer creates a thunk Function for every one of those
+    // slots (the naming the canon golden prints at call sites), and the
+    // locked-oracle stage harness reaches them through the address-only
+    // arm (console `load <addr>` = IfcAddrrangeLoad::execute
+    // ifacedecomp.cc:496-514: nameFunction default + global-scope
+    // addFunction). This arm extends the ledger with the same slot
+    // population (make_inventory.py method, bank README) so the address
+    // form RUGRA_STAGE_FUNC=0x<entry> can select a thunk exactly like the
+    // curl driver's GOLDEN_CORPUS_LEDGER lets its 45 thunks be selected.
+    // SELECTOR SURFACE ONLY: the arm is gated on the stage envs, so every
+    // env-unset run keeps the exact historical loop input (byte-identity
+    // of the default path is the gate); and the extension lands AFTER
+    // mirror_fn_syms (registerDynamicFunctionSymbols parity: the bare-BFD
+    // oracle registers no thunk symbols), after the switchD scans, after
+    // the print/action symbol DBs — the only consumer downstream is the
+    // stage loop itself.
+    let functions = if stage_selector.is_some() {
+        let mut extended = functions;
+        if let Object::Elf(elf) = &obj {
+            extended.extend(stage_plt_thunk_ledger_entries(elf, &buffer));
+            extended.sort_by_key(|f| f.0);
+            extended.dedup_by_key(|f| f.0);
+        }
+        eprintln!(
+            "[PREPASS] HBANK-DRIVER-STAGELEDGER-0001: stage ledger {} entries after PLT thunk arm",
+            extended.len()
+        );
+        extended
+    } else {
+        functions
+    };
+
     for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
         if idx >= max_functions && stage_selector.is_none() { break; }
         if stage_selector.is_some() {
@@ -3410,6 +3447,143 @@ fn stage_frontier(
 // the pause; the node that applied between two pauses gets one
 // @BEGIN/@END/@SNAP triple, seq is globally consecutive from 1, and open
 // group frames close LIFO when the next pause falls outside their subtree.
+// HBANK-DRIVER-STAGELEDGER-0001: stage-only PLT-thunk ledger entries
+// (vaddr, size, file_off, name), the driver-side inventory of the code
+// slots Ghidra's Java ELF/PLT analyzer turns into thunk Functions. The
+// locked-oracle population rule (bank README httpd section, regenerable
+// with the same method as the curl sweep — make_inventory.py over
+// readelf -S/-r): only REAL code slots in the executable PLT sections
+// enter; .plt lazy stubs past the header are excluded (all resolved
+// calls go through .plt.sec/.plt.got on these full-BIND_NOW corpora) and
+// the EXTERNAL pseudo-functions are excluded by construction (no backing
+// section, no code bytes). Spelling follows the curl GOLDEN_CORPUS_LEDGER
+// precedent: PLT0 = `FUN_<image-base addr>` (Ghidra default spelling of
+// the resolver header, no import name exists for it), .plt.got/.plt.sec
+// = the resolved dynsym import name. Slot geometry and GOT matching:
+//   * .plt.sec slot i (16B) ↔ i-th .rela.plt JUMP_SLOT import (the
+//     f2-ff-25/ff-25 form only decides the honest instruction length);
+//   * .plt.got slots are decoded individually — the jump's GOT target is
+//     resolved through the owning R_X86_64_GLOB_DAT relocation in
+//     .rela.dyn (slot-index matching cannot see these). Both tail
+//     spellings are handled: bnd `f2 ff 25 <disp32>` (rip = slot+11,
+//     curl) and plain `ff 25 <disp32>` (rip = slot+10, httpd). This
+//     driver-side decode deliberately does NOT route through
+//     debugproto::ElfPltImports (which also misses the plain-form
+//     .plt.got slots — registered as the same-name src-side TODO); the
+//     name layer it feeds here is stage-selector-only surface.
+fn stage_plt_thunk_ledger_entries(
+    elf: &goblin::elf::Elf,
+    buffer: &[u8],
+) -> Vec<(u64, usize, u64, String)> {
+    // <slot-addr, slot-file-off> + name per section kind.
+    let mut plt0: Option<(u64, u64)> = None;
+    let mut plt_got: Option<(u64, u64, u64)> = None; // (addr, off, size)
+    let mut plt_sec: Option<(u64, u64, u64)> = None;
+    for header in elf.section_headers.iter() {
+        let Some(name) = elf.shdr_strtab.get_at(header.sh_name) else { continue };
+        match name {
+            ".plt" => plt0 = Some((header.sh_addr, header.sh_offset)),
+            ".plt.got" => plt_got = Some((header.sh_addr, header.sh_offset, header.sh_size)),
+            ".plt.sec" => plt_sec = Some((header.sh_addr, header.sh_offset, header.sh_size)),
+            _ => {}
+        }
+    }
+    // Honest instruction length of a thunk tail at `off` (bytes after the
+    // endbr64/push head): bnd jmp f2 ff 25 disp32 = 7, plain jmp
+    // ff 25 disp32 = 6; None = not a decodable tail (slot skipped).
+    let tail_len = |off: usize| -> Option<usize> {
+        let insn = buffer.get(off..off + 7)?;
+        if insn[0] == 0xf2 && insn[1] == 0xff && insn[2] == 0x25 {
+            Some(7)
+        } else if insn[0] == 0xff && insn[1] == 0x25 {
+            Some(6)
+        } else {
+            None
+        }
+    };
+    // Import name (dynsym spelling, no version suffix — the strtab never
+    // carries one) of the .rela.dyn GLOB_DAT relocation at `got_addr`.
+    let glob_dat_owner = |got_addr: u64| -> Option<String> {
+        elf.dynrelas.iter().find_map(|reloc| {
+            if reloc.r_offset != got_addr {
+                return None;
+            }
+            elf.dynsyms
+                .get(reloc.r_sym)
+                .and_then(|sym| elf.dynstrtab.get_at(sym.st_name))
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string())
+        })
+    };
+    let mut entries: Vec<(u64, usize, u64, String)> = Vec::new();
+
+    // PLT0 header (first 16B slot of .plt): `ff 35 disp32` push (6B) +
+    // jmp tail. Named by the Ghidra default (image-base) spelling.
+    if let Some((addr, off)) = plt0 {
+        let size = match tail_len(off as usize + 6) {
+            Some(tail) => 6 + tail,
+            None => {
+                eprintln!(
+                    "[PREPASS] HBANK-DRIVER-STAGELEDGER-0001: PLT0 @0x{:x} tail undecodable, skipped",
+                    addr
+                );
+                0
+            }
+        };
+        if size > 0 {
+            entries.push((
+                addr,
+                size,
+                off,
+                format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + addr),
+            ));
+        }
+    }
+
+    // .plt.got (16B slots): endbr64 + tail; GOT target = tail disp from
+    // the rip base (slot+11 bnd / slot+10 plain), owner = GLOB_DAT.
+    if let Some((base, off, size)) = plt_got {
+        for slot in 0..(size as usize / 16) {
+            let slot_off = off as usize + slot * 16;
+            let slot_addr = base + slot as u64 * 16;
+            let Some(tail) = tail_len(slot_off + 4) else {
+                continue;
+            };
+            let Some(insn) = buffer.get(slot_off + 4..slot_off + 4 + tail) else { continue };
+            let disp = i64::from(i32::from_le_bytes([
+                insn[tail - 4], insn[tail - 3], insn[tail - 2], insn[tail - 1],
+            ]));
+            let rip_base = slot_addr + 4 + tail as u64;
+            let name = glob_dat_owner((rip_base as i64 + disp) as u64)
+                .unwrap_or_else(|| format!("slot_{:x}", slot_addr));
+            entries.push((slot_addr, 4 + tail, (slot_off) as u64, name));
+        }
+    }
+
+    // .plt.sec (16B slots): slot i named by the i-th .rela.plt JUMP_SLOT.
+    if let Some((base, off, size)) = plt_sec {
+        for (i, reloc) in elf.pltrelocs.iter().enumerate() {
+            let slot_addr = base + i as u64 * 16;
+            if slot_addr >= base + size {
+                break;
+            }
+            let Some(sym) = elf.dynsyms.get(reloc.r_sym) else { continue };
+            let Some(name) = elf.dynstrtab.get_at(sym.st_name) else { continue };
+            if name.is_empty() {
+                continue;
+            }
+            let slot_off = off as usize + i * 16;
+            let body = match tail_len(slot_off + 4) {
+                Some(tail) => 4 + tail,
+                None => 16, // reloc-backed slot: keep it, honest slot extent
+            };
+            entries.push((slot_addr, body, slot_off as u64, name.to_string()));
+        }
+    }
+
+    entries
+}
+
 fn emit_stage_projection(
     fd: &mut Funcdata,
     db: &mut ActionDatabase,
