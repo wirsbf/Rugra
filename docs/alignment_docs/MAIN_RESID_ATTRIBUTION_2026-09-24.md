@@ -298,3 +298,47 @@ next_url/match_url/getparameter/myprogress/parseconfig）；cargo test --lib 170
 （唯一失败 test_nonzeromask_pipeline_wiring=VHOST 报告在案的基线预存）。
 产物=/dev/shm/rugra-tests/afini/（httpd_{base,mirror}.c、apfini_{rug,gold}.txt、
 probe1/probe2.err IR 探针 dump）。
+## 6. ADDRSLOT 车道复核（2026-09-25,wt/addrslot 基亲父 4160d9e7——TYPEPROP-ADDRSLOT-PERSIST-0001 判定）
+**结论:MAIN2 对下标形 61 的根因假设(InferTypes 值→地址反传/typeOrder 持久化未持久化)被探针证据推翻;
+传播与持久化两层均在工作。真实根因迁移到 varmap 域:栈符号数组元素粒度(1B vs canon 8B)经由
+spacebase downChain 符号解析→RulePtrArith scale-1 PTRADD→setcasts 忠实 undo 的完整链条。**
+### 6.1 探针证据链(全部 /dev/shm/rugra-tests/addrslot/,可复现,RUGRA_DBG_ADDRSLOT 门控)
+1. **基线复现**:httpd E2E canon **1405/0/0** == 亲父;main 单函数 643;census 下标形 LOST=61
+   (main_resid.py 自校验 643 OK)。配对形态:canon `V[-LIT] = LIT;` ↔ Rugra
+   `*(undefined8 *)((long)V + -LIT) = LIT;`。
+2. **反传存在**:STORE slot2→slot1 边探针(httpd_dbg2.err,905 事件):main 范围 300 次
+   `new=Pointer/8 cur=Some("Int/8") better=true`——值→地址反传全面开火;目标即 INT_ADD/PTRADD/MULTIEQUAL 出边。
+3. **持久化存在**:逐 cycle writeBack 探针(httpd_ci.err):ci4575(2c2da:1848 INT_ADD 出边)cycle0
+   `perm=Unknown/8 tmp=Pointer/8`→落库;cycle1/2 无 diff 行(perm==tmp==Pointer)。全 3 cycle 持久。
+4. **终态身份**:终态 opdump(RUGRA_DUMP_FUNC=main):`2c2da:14766 CAST out=Pointer/8[ci4575]
+   in=Int/8`——原 ptr varnode 存活为 CAST 出边;INT_ADD 出边换成新 ci48595(Int/8)。
+   这是 setcasts castOutput 的 cc:2594-2609 合法拼接(token=arithmeticOutputStandard=long ≠ 出边高类型
+   ptr),oracle 同输入同样会插。Varnode::updateType 单参版(varnode.cc:456-464)无 typeOrder 门槛,
+   Rugra update_type(varnode.rs:1383)等价——"未持久化"不成立。
+5. **PTRADD 创建又回滚**:RulePtrArith 探针(httpd_pa2.err):成功族 `2b86f:76 slot=0
+   types=Pointer,Int → ADDTREE`(转换发生);setcasts 探针(httpd_pu.err):39 次
+   `PTRA_UNDO op=2b86f:76 sz=1 ct=(Pointer,8)`——**undo 因 scale(1)≠终态 pointee 尺寸(8)**,
+   忠实于 coreaction.cc:2740-2746。scale=1 来自 AddTreeState 创建时 pointee=unknown1。
+6. **symbol 解析在跑但元素粒度错**:TypeSpacebase::get_sub_type 探针(httpd_gs2.err):
+   `off=-200(=-0xc8) sym dt=Array/32 elem=(Unknown,1,32)`——**Rugra undefined1[32] vs canon
+   `long local_c8[4]`(8B 元素)**;-0x58=Array/24×1B vs canon local_70=long[6];符号边界+元素粒度双重分歧。
+7. **RSP 直系仅 4 后继**(httpd_sb.err SBREF):帧引用经 COPY(RSP)→RBP 链,Rugra/oracle 同构
+   (oracle propagateSpacebaseRef 也只走直系,coreaction.cc:5276)。
+### 6.2 完整根因链(oracle 视角)
+canon:`long local_c8[4]`(RangeHint 8B 元素)→ TypeSpacebase::getSubType(type.cc:2947-2968,
+`scope->queryContainer`→symbol 类型)→ downChain 数组包裹(type.cc:1084-1131,INT_ADD allowWrap)→
+基指针=ptr(long)(8B pointee)→ RulePtrArith 建 **scale-8** PTRADD → setcasts cc:2740-2746 尺寸匹配不回滚
+→ 印 `plVar12[-1]`。Rugra:symbol=undefined1[32] → 同链给 ptr(undefined1) → **scale-1** PTRADD →
+STORE 反传后期把 pointee 改善为 8B(ptr-vs-ptr typeOrder=0 不竞换,但 offset-0 直存边在 Int 在位时先落
+undefined8)→ setcasts 忠实 undo → INT_ADD+`(long)` 输入 cast+`*(undefined8 *)` 地址 cast=61 族形态。
+**首因=RangeHint dtype 丢失**:varmap.rs create_entry(varmap.cc:617-631 镜像)在 `hint.dtype=None`
+时 fallback `make_int_info(types,1)`(varmap.rs:3559)→ 1B 元素数组。hint 的 dtype 源头
+(RuleStoreVarnode/RuleLoadVarnode→hint)未携带 STORE 值/LOAD 出边的 8B 类型,且 -0xc8 区间合并为
+32B 无类型整块(边界+粒度双差)。**修复域=varmap(RangeHint 收集/分区/类型携带),非 coreaction**;
+InferTypes 域(本车道写域)无需改动——值/LD 出边类型已正确喂给(varnode 侧 Unknown/8=undefined8)。
+### 6.3 移交与验证要求
+- 新归因 ID 沿用 `TYPEPROP-ADDRSLOT-PERSIST-0001` 更名语义 → **VARMAP-RANGEHINT-ARRAYELEM-0001**
+  (P2,varmap 域,机制 C 白名单):验收=httpd main 下标形 61 收敛+`-0xc8 族符号 8B 元素`+三门禁
+  (curl 1262/httpd 1405 亲父数)+零回退+五投影 MATCH。
+- 探针脚本/日志留存 /dev/shm/rugra-tests/addrslot/(main_resid.py+census.py 已适配本 worktree 路径;
+  httpd_{base,dbg2,ci,pa2,pu,gs2,sb}.* 为证据;基线 httpd_base.c 与撤针后输出 cmp 恒等)。
