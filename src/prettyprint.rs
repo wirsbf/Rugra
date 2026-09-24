@@ -2343,12 +2343,30 @@ impl EmitNoMarkup {
                     if !t.contains('=') {
                         let indent = lines[j].len() - lines[j].trim_start().len();
                         decl_indent = indent;
-                        let name: String = t
-                            .trim_end_matches(';')
-                            .split_whitespace()
+                        // HEADLESS-BRIDGE-V1-TYPESEED: postfix array
+                        // declarators (`long local_c8 [4];` — the committed
+                        // seed symbol decl form, printc.cc:2502
+                        // pushTypeStart/pushSymbol spelling) put `[N]`
+                        // dimension tokens AFTER the name, so the old
+                        // last-token pick recorded `[4]` as the "declared
+                        // name" and the backfill re-injected `int local_c8;`
+                        // beside the real array declaration. Strip trailing
+                        // bracket tokens (and a glued `[..]` suffix) before
+                        // the name pick.
+                        let mut tokens: Vec<&str> =
+                            t.trim_end_matches(';').split_whitespace().collect();
+                        while tokens.len() > 1
+                            && tokens.last().map(|tok| tok.starts_with('[')).unwrap_or(false)
+                        {
+                            tokens.pop();
+                        }
+                        let name: String = tokens
                             .last()
-                            .unwrap_or("")
+                            .unwrap_or(&"")
                             .trim_start_matches('*')
+                            .split('[')
+                            .next()
+                            .unwrap_or("")
                             .to_string();
                         if !name.is_empty() { declared.insert(name); }
                         j += 1;

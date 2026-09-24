@@ -1018,6 +1018,87 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut stage_seen = false;
 
+    // HEADLESS-BRIDGE-V1-TYPESEED (C1 TYPE-SEED-LOCAL): opt-in committed-
+    // local seeding for the canon (analyzeHeadless) convergence direction.
+    // The headless golden is the C++ library PLUS the Java analyzer stack's
+    // committed symbols transported over `<localdb>` (funcdata.cc:804-810);
+    // the direct-runner/bare-load contract has no such channel. This gate
+    // installs the harvested manifest (tools/harvest_local_manifest.py over
+    // tests/golden/ghidra_httpd_1204.c, oracle-validated via the seeded
+    // stage_seed_diag harness) into Funcdata::committed_locals, which
+    // ActionRestructureVarnode materializes as name+type-locked stack
+    // symbols at scope construction. Default (env unset) = the exact
+    // historical bare load, byte-identical. The mirror gate stays clean:
+    // RUGRA_MIRROR/RUGRA_FLOW_MIRROR runs never seed (the five projections
+    // must remain byte-identical).
+    let typeseed_active = std::env::var("RUGRA_TYPESEED").is_ok();
+    let typeseed_manifest: Option<
+        std::sync::Arc<std::collections::HashMap<String, Vec<rugra::funcdata::CommittedLocal>>>,
+    > = if typeseed_active && !mirror_flow_enabled() {
+        let path = std::env::var("RUGRA_TYPESEED_MANIFEST")
+            .unwrap_or_else(|_| "tests/golden/manifests/local_seed_httpd_1204.json".to_string());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Err(err) => {
+                    eprintln!("[TYPESEED] manifest {} is not a JSON object map: {}", path, err);
+                    None
+                }
+                Ok(raw) => {
+                    // The manifest's top level is {"functions": {addr: {...}}};
+                    // decode the inner table defensively, keeping the file
+                    // human-inspectable.
+                    let mut table = std::collections::HashMap::new();
+                    let mut count = 0usize;
+                    if let Some(serde_json::Value::Object(functions)) = raw.get("functions") {
+                        for (addr, entry) in functions {
+                            let Some(serde_json::Value::Array(locals)) = entry.get("locals") else {
+                                continue;
+                            };
+                            let mut seeds = Vec::new();
+                            for local in locals {
+                                let (Some(serde_json::Value::Number(offset)), Some(
+                                    serde_json::Value::String(name)),
+                                 Some(serde_json::Value::String(type_expr))) = (
+                                    local.get("offset"),
+                                    local.get("name"),
+                                    local.get("type"),
+                                ) else {
+                                    continue;
+                                };
+                                let Some(offset) = offset.as_i64() else { continue };
+                                seeds.push(rugra::funcdata::CommittedLocal {
+                                    offset,
+                                    name: name.clone(),
+                                    type_expr: type_expr.clone(),
+                                });
+                            }
+                            count += seeds.len();
+                            if !seeds.is_empty() {
+                                table.insert(addr.clone(), seeds);
+                            }
+                        }
+                    }
+                    eprintln!(
+                        "[TYPESEED] loaded {}: {} functions / {} committed locals",
+                        path,
+                        table.len(),
+                        count
+                    );
+                    Some(std::sync::Arc::new(table))
+                }
+            },
+            Err(err) => {
+                eprintln!("[TYPESEED] cannot read manifest {}: {} (seeding disabled)", path, err);
+                None
+            }
+        }
+    } else {
+        if typeseed_active && mirror_flow_enabled() {
+            eprintln!("[TYPESEED] RUGRA_TYPESEED ignored under the mirror gate (projection purity)");
+        }
+        None
+    };
+
     // Pre-pass: collect prototypes (limited to functions being decompiled)
     let mut prototype_db: HashMap<u64, usize> = HashMap::new();
     let mut call_targets: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -1558,9 +1639,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SB-CONSTBASE-0001: per-thread clone of the tracked-context
         // Architecture template (see tracked_context_architecture).
         let thread_arch = tracked_arch.clone();
+        // HEADLESS-BRIDGE-V1-TYPESEED: per-thread manifest handle (Arc clone
+        // only behind the gate; None keeps the historical path untouched).
+        let typeseed_locals = typeseed_manifest.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
+            // HEADLESS-BRIDGE-V1-TYPESEED (C1): attach the canon-address-keyed
+            // committed-local seeds before any action runs (the <localdb>
+            // transport position). Manifest keys are analyzeHeadless
+            // addresses = this driver's base-0 vaddr + 0x100000.
+            if let Some(table) = typeseed_locals.as_ref() {
+                if let Some(seeds) =
+                    table.get(&format!("0x{:x}", vaddr + ANALYZE_HEADLESS_IMAGE_BASE))
+                {
+                    eprintln!(
+                        "[THREAD] {} typeseed: {} committed locals",
+                        func_name,
+                        seeds.len()
+                    );
+                    fd.committed_locals = seeds.clone();
+                }
+            }
             // HTTPD-STACKSLOT-FOLD-0001: Ghidra's Funcdata constructor always
             // binds its Architecture (`glb = scope->getArch()`, funcdata.cc:48)
             // — the headless oracle that produced
@@ -1869,6 +1969,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // structured tree (sblocks) for the RUGRA_DUMP_FUNC target.
             if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
                 if dump_fn == func_name {
+                    if let Some(scope) = fd_read.scope.as_ref() {
+                        eprintln!("[DUMP] === local symbols for {} ===", func_name);
+                        for (i, sym) in scope.symbols.iter().enumerate() {
+                            eprintln!(
+                                "[DUMP] sym#{i} name={} start={:#x} size={} tl={} nl={} dt={:?}",
+                                sym.name,
+                                sym.start,
+                                sym.size,
+                                sym.typelock,
+                                sym.namelock,
+                                sym.dtype.as_ref().map(|d| d.get_name().to_string())
+                            );
+                        }
+                    }
                     eprintln!("[DUMP] === structure tree for {} ===", func_name);
                     let mut tree_out = String::new();
                     for blk in &fd_read.sblocks.blocks {

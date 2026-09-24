@@ -1625,6 +1625,58 @@ impl Action for ActionRestructureVarnode {
                         }
                     }
                 }
+                // HEADLESS-BRIDGE-V1-TYPESEED (C1 TYPE-SEED-LOCAL): the
+                // driver's committed-local manifest rides
+                // Funcdata::committed_locals — the Rust carrier of the
+                // `<localdb>` payload the Java DecompInterface transports
+                // before any action runs (funcdata.cc:804-810 `<localdb>` ->
+                // Database::decodeScope -> ScopeInternal::decode ->
+                // Scope::addMapSym, database.cc:1564, with
+                // ATTRIB_TYPELOCK/ATTRIB_NAMELOCK on every committed
+                // symbol). Materialize each seed as a name+type-locked
+                // stack symbol here, at scope construction (ONCE, the
+                // lifecycle position mirroring the oracle's construction
+                // -> localdb-decode -> action order):
+                // `clearUnlockedCategory(-1)` at the top of every
+                // restructureVarnode pass keeps typelocked symbols
+                // (varmap.cc:1259, database.cc:2071-2100), and
+                // MapState::gatherSymbols re-feeds them as
+                // RangeHint::fixed boundaries (varmap.cc:1044-1059) —
+                // the partition+typing that reproduces the canon
+                // declaration layer. Empty by default (bare-load
+                // contract); populated only under the driver's opt-in
+                // gate. Oracle-validated: the seeded stage_seed_diag run
+                // of httpd main reproduces `long local_c8[4]` /
+                // `local_80[2]` / `local_70[6]` and the plVar[-1]
+                // subscript family (RANGEHINT-proven HEAD domain).
+                for seed in fd.committed_locals.iter() {
+                    let dtype = match crate::debugproto::parse_c_type(
+                        &seed.type_expr,
+                        fd.stack_pointer_size as usize,
+                        None,
+                    ) {
+                        Ok(dt) => dt,
+                        Err(err) => {
+                            eprintln!(
+                                "[ACTION] typeseed: skipping {} at {:#x}: {}",
+                                seed.name, seed.offset, err
+                            );
+                            continue;
+                        }
+                    };
+                    // Negative stack offsets wrap modulo 2^64 (the stack
+                    // space address form, e.g. -0xc8 -> 0xff..f38).
+                    let start = seed.offset as u64;
+                    let idx = scope.add_symbol(
+                        crate::space::AddressSpace::Stack,
+                        &seed.name,
+                        Some(dtype),
+                        start,
+                        None,
+                    );
+                    scope.symbols[idx].typelock = true;
+                    scope.symbols[idx].namelock = true;
+                }
                 // Install the register-name lookup standing in for
                 // `glb->translate->getRegisterName` (translate.hh:380):
                 // Ghidra's ScopeInternal::buildVariableName register queries

@@ -165,3 +165,79 @@ python3 /dev/shm/rugra-tests/bridge1/diff_hunks.py tests/golden/ghidra_httpd_120
 # 机制源码锚点:funcdata.cc:775-837(<function> 协议) / varmap.cc:1044-1059(gatherSymbols) / varmap.rs:1950,4024,4041(Rust 消费+播种 API)
 # grep 口径行数:local_/PTR_/pcRam/LAB_/code_r/jumptable warn/locked warn/.constprop(见 §2 表)
 ```
+
+---
+
+## §9 W1 交付记录（Lane BRIDGE1，2026-09-25，基=亲父 b255cce9）
+
+### 9.1 步骤① 通道内容 oracle 判定：**证实**
+
+仪器化方法（复用 RANGEHINT lane 的 git-archive 锁定库构建链）：新增
+`stage_seed_diag.cc`（/dev/shm/rugra-tests/bridge1/，构建=build_seed_diag.sh）——
+BfdArchitecture 裸加载 + 在 fd 解析后、followFlow 前把种子 XML 喂给
+`fd->getScopeLocal()->decode(decoder)`（**真实 `<localdb>` 协议链**：
+ScopeInternal::decode → Scope::addMapSym → Symbol::decodeHeader(typelock/
+namelock) + decodeType + SymbolEntry::decode(`<addr>`+`<rangelist>）→ addMap），
+然后按 golden 生成器契约驱动 + PrintC docFunction。
+
+锁定 oracle 库 + httpd main 种子（§5.1 收割清单）输出
+（/dev/shm/rugra-tests/bridge1/oracle_main_seeded.c）：
+
+- **声明层逐符号复现 canon**：`long local_d8; long local_d0; long[4] local_c8;
+  undefined8 *local_a8; undefined8[2] local_80; long[6] local_70; undefined8
+  local_40` + 未提交块 `axStack_9c [7]`——92B hermetic 整块被种子切成
+  28B+16B+48B，分区与 canon 一致（RANGEHINT 判定的"1B 反馈环"被 fixed
+  typelock hint 打破）。
+- **下标形族复现**：133 处 `plVar11[-N] =`（canon main 134 处；
+  hermetic 库为 0——`*(xunknown8*)((int8)p + -8)` 形）。
+- **证伪边界**：canon 的 15 处 `local_d0 = <retaddr>;` 直接赋值拼写连
+  seeded-oracle 也不产生（打印为 `plVar11[-1] = <retaddr>`，同一存储的
+  别名指针形）⇒ 该族需要种子之外的 headless 状态（Parameter ID 早轮
+  IR/别名挂接差异），**超出 C1 v1 范围**，归 HEAD 残差（W0 消融可再钉）。
+
+### 9.2 as-built 与 §5.2/5.3 的偏差（按实测修正）
+
+- 种子载体：`Funcdata::committed_locals: Vec<CommittedLocal>`
+  （funcdata.rs，RUGRA-GLUE）而非 `DecompileRequest` 协议字段——httpd
+  驱动是单进程线程模型，无 worker 协议可 bump；fd 字段即
+  `<localdb>` 载体的 Rust 形态。
+- 注入点：`ActionRestructureVarnode::apply` 的 scope 首次构造臂
+  （coreaction.rs，平台参数符号安装之后）而非"驱动在 perform 前
+  ScopeLocal::add_symbol"——Rugra 的 ScopeLocal 是首个 restructure
+  pass 才惰性构造的（fd.scope=None），None 臂构造点正是 oracle
+  "Funcdata 构造 → localdb decode → action" 生命周期的镜像位。
+  类型解析走 `parse_c_type`（debugproto.rs，扩展数组声明符+C1 基
+  类型表，shared_default 工厂保持类型身份域单一）。
+- opt-in 门：`RUGRA_TYPESEED=1`（`RUGRA_TYPESEED_MANIFEST` 可覆写路径，
+  默认 `tests/golden/manifests/local_seed_httpd_1204.json`，按
+  vaddr+0x100000=canon 地址匹配）；mirror 门下恒不装载（五投影纯净
+  性）。默认路径 committed_locals 恒空 ⇒ 输出与亲父 cmp 字节恒等。
+- 附带修复：prettyprint 声明回填 pass 现在识别后缀数组声明符
+  （`long local_c8 [4];` 旧实现在 declared 集里记下 `[4]` 而非
+  `local_c8`，回填注入了 `int local_c8;` 重复声明）。
+- v1 域收缩：收割器跳过结构体基类型种子（sigaction/sigset_t 各 1，
+  C4 组合类型域）；curl 侧 W1b 未并入（curl golden 局部名以 DWARF
+  语义名为主，local_ 保守域只收 4 函数/18 条，收益小，留 W1b 专项）。
+
+### 9.3 W1 验收（亲测，基=亲父 b255cce9）
+
+| 门禁 | 默认（无 env） | opt-in（RUGRA_TYPESEED=1） |
+|---|---|---|
+| httpd E2E canon | **1472/0/0**，cmp 亲父字节恒等 | **1360/0/0**（−112） |
+| curl E2E canon | **1099/0/0**（=亲父） | n/a（httpd manifest） |
+| 五投影银行 | **26/26 MATCH** | mirror 门恒不装载 |
+| cargo test --lib | 1709P/1F（预存 VHOST） | 同 |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+
+逐函数（6 个被播种函数全部改善、0 回退）：main 694→668；
+ap_parse_vhost_addrs 27→9；ap_fini_vhost_config 245→218；
+ap_update_vhost_from_headers 92→71；ap_ht_time 17→13；
+ap_os_is_path_absolute 23→7。
+
+main 族前后（vs canon）：local_* 引用 0→11（canon 44；**seeded-oracle
+同为 11**——C1 域内 Rugra==oracle）；auStack/uStack 命名 11→3（canon 4；
+oracle-seeded 同 3）；下标形 119（canon 116，oracle-seeded 133——差 14
+为既有库级 typeprop 域，非 C1 引入）；字符串族 0（canon 81）不动——
+C5-邻域，非 C1 目标。SPALIAS 定点（§5.5-2）：`long local_c8 [4]`/
+`local_d0`/`local_d8` 声明全量出现 ✓；`plVar = local_c8` 直接符号形 ✓
+（canon 的 `local_d0 = retaddr` 15 处拼写族按 §9.1 证伪边界豁免）。
