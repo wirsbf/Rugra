@@ -1015,3 +1015,12 @@ gcc 审计 per-function OK/FAIL 集与基线恒等（101/369，int8 族预存）
 三投影 next_url/match_url/parseconfig.constprop.0(RUGRA_MIRROR=1)
 stage_bisect --v1 **MATCH×3**。该修复为 POSTFIX-RETIRE-0001 补偿层内
 误伤封堵，不改变退役路线（P6 整层退役时随之消失）。
+
+## 2026-09-24 (Lane MAIN2) — 移除 `+ -N` → `- N` 后处理改写（PRINTC-PLUSNEGLIT-0001）
+
+Ghidra 按位打印负加数：`push_integer`（printc.cc:1288-1368）把负号放进常量
+atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon golden 含
+666 处 `+ -` 形、direct-runner golden 1096 处；本仓后处理把所有 `+ -N` 改写
+成 `- N`，使 Rugra 侧为 0 处——每一行都是骨架差分。该"算术简化"非 Ghidra
+行为（无 oracle 对应物），已删除。删除后 httpd 56 处、curl 相应恢复
+`+ -N` 正典拼写。

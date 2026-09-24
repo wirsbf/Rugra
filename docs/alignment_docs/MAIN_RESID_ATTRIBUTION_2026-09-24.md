@@ -152,3 +152,74 @@ varmap 环节（SP-alias 符号类型 `long[4]` 固定点 + local_d0/local_d8
 缺失）未动，登记 `VARMAP-SPALIAS-RETYPE-0001` +
 `RULEACTION-SPALIAS-INDIRECTPTR-0002`（含探针实证的符号表/alias 轮
 演变数据与调查入口）。
+
+---
+
+# Lane MAIN2 续章（wt/main2，2026-09-24 晚）— 当前态重分解 + 印刷域三件修复
+
+- 基 = 亲父 **37014110**（SPALIAS 顶）亲测基线：curl **1329/0/0**、httpd 门禁面 **1445/0/0**（==任务书预期）。
+- oracle: Ghidra 12.0.4 e40ed130; canon = `tests/golden/ghidra_httpd_1204.c`;
+  direct-runner = 库真值判据基。CARGO_TARGET_DIR=/dev/shm/rugra-targets/sb-main2。
+- 探针（未入库）：examples/main2_probe.rs = httpd driver 副本 + 终态 op/类型 dump
+  （MAIN2_OPDUMP/MAIN2_OPDUMP_FUNC）；判类器 = sb-mainattr2/main_resid.py 适配路径。
+
+## 1. 修复前重分解（httpd main = 645，自校验 OK）
+
+| 族 | Rugra 侧 | canon 侧 | 判性 | 域 |
+|---|---:|---:|---|---|
+| **SP-cast 印刷族** `((int *)V ± LIT)` | 40 | — | GAP（canon/direct 皆无此形;direct= `(int8)p + -8` 整数算术,canon= `((long)p + -8)`/下标形） | printc（本 lane 修复） |
+| `(undefined8 *)` 值 cast 杂项 | 49 | 5 | 混合 | printc/typeprop |
+| WARN unreachable | 31 | 1 | 结构差 | blockaction finalization |
+| SWITCHD/goto/case | 9+ | 43 | 跳表边 | JTEDGE 车道（并行） |
+| 字符串字面量 | — | 69 | HEAD | FI 判例域 |
+| local_* DWARF 命名 | — | 24 | HEAD | FI 判例域 |
+| 下标形 `V[-LIT]` | 2 | 61 | 双侧目标形（direct 152/canon 134） | typeprop 传播层（TYPEPROP-ADDRSLOT-PERSIST-0001） |
+| `V + -LIT` 正典拼写 | 0（全被后处理改写为 `- LIT`） | 666（语料级） | **纯印刷差** | prettyprint（本 lane 修复） |
+
+## 2. 根因链（探针实证）
+
+SP-cast 族链（以 0x2b86f `= 0x2b874` LINE-store 为例，终态投影+类型 dump）：
+```
+INT_ADD out=u:…92[long] in=CAST(RSP→long)[long], c:-8
+CAST(RSP→long)                       ← setcasts metain 臂（oracle 同构 (int8)/(long)）
+CAST(INT_ADD-out → register:20)      ← 消费侧 ptr(valueType) CAST（oracle 无：其地址已是 ptr 型）
+```
+oracle：InferTypes 值→地址反向传播（TypeOpLoad/Store::propagateType，typeop.cc:493-498/563-566）
++ typeOrder（SUB_PTR=6 < SUB_INT_PLAIN=17，type.hh:105-118）把 ptr(valueType) 落到 INT_ADD 输出
+→ setcasts 时地址已是指针 → getInputCast 返回 null → 无消费侧 CAST → 印 `(int8)p + -8`。
+Rugra：该传播未持久化（终态高类型=long）→ 忠实 getInputCast 插 CAST → 再被 printc
+load_addr_direct 印刷期戳覆写 `int *` → `(int *)p - 8`（4× 语义错位）。
+**印刷层三缺陷（本 lane 修）**：①prettyprint `+ -N`→`- N` 改写（消灭全部 666/1096 正典形）；
+②CAST 内联臂读 v_type 原名（泄漏戳名）而非 oracle 的 def-facing 高类型+结构拼写（printc.cc:448-464）；
+③load_addr_direct 戳覆写 setcasts 定型 CAST（INDPTR 判决 PRINTC-PTRSTAMP-CAST-OVERWRITE-0001）。
+**传播层缺口（登记 TYPEPROP-ADDRSLOT-PERSIST-0001，coreaction 域）**=剩余 ~17 `(int *)` 与
+canon 侧 61 下标形的根源。
+
+## 3. 修复与前后（亲测，基线=亲父 37014110）
+
+| 门禁 | 前 | 后 | 判定 |
+|---|---:|---:|---|
+| httpd E2E canon | 1445/0/0 | **1405/0/0**（−40） | defects/numbering 保持 0 |
+| curl E2E canon | 1329/0/0 | **1262/0/0**（−67） | 同上 |
+| httpd main 单函数 | 645 | **643** | SP-cast 族 40→1 |
+| 逐函数 | — | httpd 5 改善/0 回退；curl 8/0 | 零回退 |
+| 五投影 | MATCH×5 | **MATCH×5 保持** | stage+snapshot identical |
+| gcc 审计 | curl 103/21、httpd 16/13 | 同数 | 恒等 |
+| 双跑确定性 | — | cmp 恒等（双侧） | ✓ |
+| 单测 | — | printc 15/15、prettyprint 6/6 | ✓ |
+
+修复后 httpd main SP 族形态：`*(undefined8 *)((long)puVar10 + -8) = 0x2b874;`
+——与 canon `((long)plVar11 + -8) = 0x12b874;` **逐字同形**（变量名/基址差归命名/加载域）。
+
+## 4. 修复后残差分解（httpd main = 643）
+
+OTHER 137 / TYPE 6 / BOOL 1 / NAME 18 / MIXED 5 / LOST 314（HEAD 179 + LIB_BOTH 135）。
+族排序：字符串 69（HEAD）> 下标形 61（typeprop 域）> SWITCHD/goto 43（JTEDGE）>
+local_* 24（HEAD）> WARN 31（blockaction）> `(undefined8 *)` 杂项 ~43（混合）。
+三大块判定：**headless 层 ~203（字符串+命名+类型播种，FI 判例域）+ typeprop 传播层 ~61-78
+（TYPEPROP-ADDRSLOT-PERSIST-0001，coreaction 域）+ 结构/JTEDGE ~74（并行车道）**。
+
+## 5. 产物（/dev/shm/rugra-tests/sb-main2/）
+
+gates/{curl,httpd}_{base,final,final2}.c + compare 输出 + 五投影 *.projection + perfunc.py +
+main_resid.py（sb-mainattr2 适配）/census.py / probe/opdump_main.txt（终态 op+类型 dump）。

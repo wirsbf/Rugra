@@ -868,20 +868,14 @@ impl EmitNoMarkup {
                 }
             }
 
-            // 3. Arithmetic simplification: "+ -N" → "- N"
-            while let Some(pos) = s.find("+ -") {
-                let after = &s[pos + 3..];
-                // Find the number
-                let num_end = after
-                    .find(|c: char| !c.is_ascii_digit())
-                    .unwrap_or(after.len());
-                if num_end > 0 {
-                    let num = &after[..num_end];
-                    s = format!("{}- {}{}", &s[..pos], num, &after[num_end..]);
-                } else {
-                    break;
-                }
-            }
+            // 3. Arithmetic simplification: "+ -N" → "- N" — REMOVED
+            // (PRINTC-PLUSNEGLIT-0001): Ghidra prints the negative addend
+            // verbatim as `X + -N` (printc.cc:1288-1368 push_integer emits
+            // the minus sign inside the constant atom; binary_plus keeps its
+            // ` + ` token). The canon golden has 666 `+ -` forms and the
+            // direct-runner golden 1096, while this local rewrite produced
+            // zero on the Rugra side, so every one of those lines was a
+            // skeleton diff. The rewrite is not a Ghidra behavior — deleted.
 
             // 4. Character constants in if comparisons
             // Pattern: != 0xNN or == 0xNN where NN is printable ASCII
