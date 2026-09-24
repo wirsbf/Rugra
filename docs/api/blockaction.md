@@ -304,6 +304,33 @@ Corresponds to Ghidra's `ActionNormalizeBranches`
 
 Create a new ActionNormalizeBranches instance
 
+### 2026-09-24：CONTINUE/BREAK 标注的树遍历与原块解析（BLOCKACT-NORMALIZE-CONTINUE-TAG-0001）
+
+- **遍历深度**：loop_info 收集从"仅顶层 sblocks"改为 Ghidra 结构树遍历模式
+  （`ActionPreferComplement::apply` 的 vec-BFS，blockaction.cc:2143-2164：种子=根图
+  组件，copy/basic 子块不下潜，其余子块全部入队；分类语义对标 Ghidra 自家的
+  `scopeBreak` 树递归 block.cc:1270-1288）。此前 WhileDo 嵌套在 BlockList 内
+  （循环体为链 head→…→tail→head 的常见形态）时收集不到 → 回边 jmp 永不标
+  CONTINUE。
+- **地址解析**：条件块是 collapse 图的 BlockCopy，其默认 `get_start_addr` 返回
+  `Address(0)` 且边已被 identifyInternal 重接到组合块上——header/exit 一律经
+  `resolve_orig`（BlockCopy.sub_block(0) 解原块）+ `front_leaf_start_addr` 计算；
+  exit 候选从**原块**的 out 边取（bblocks 边不被结构化改动）。DoWhile 的 header
+  取条件块 CBRANCH 目标（do-while 条件块即回边尾块，slot 序不固定），exit 取
+  非 header 的 out 边。
+- **循环自身测试保护**：原 `op.addr == header.addr` 守卫只对单 op 头块有效（多
+  op 头块的 CBRANCH 地址≠块起始地址，会被误标 BREAK/CONTINUE）。改为 op.parent
+  （解析到原块）与循环条件原块的 `Arc::ptr_eq` 身份比对——Ghidra 语义里循环测试
+  被 `while(...)/do...while(...)` 语法消费（BlockWhileDo/BlockDoWhile::emit 读条件
+  cbranch；scopeBreak 从不将其作为 goto 访问）。
+- **管线位/E2E 影响**：oracle 的 ActionNormalizeBranches（blockaction.cc:2117-2138,
+  coreaction.cc:5716）被 decompile grouplist 过滤（coreaction.cc:5424-5431），E2E
+  driver 不运行本 Action——本修复为 fixture/机制修复，E2E 零漂移（curl 输出与基线
+  字节恒等亲测）。
+- 验收：`test_normalize_branches_break_in_while_loop` 转绿；`cargo test --lib`
+  1706/0；curl E2E compare defects=0 numbering=0（输出与基线 diff=0）；httpd E2E
+  compare defects=0 numbering=0。
+
  
 ### 2026-06-23（续）：interleaved 规则框架
 

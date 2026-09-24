@@ -2275,6 +2275,21 @@ heritage（override 借 self 不可变而 heritage 可变）。followFlow 与
 inline-function 头警告仍属未移植基础设施（驱动侧流生成，
 PIPE-RESTART-0001）。
 
+## `start_processing` 作为 Action 前件的测试契约（BLOCKACT-NORMALIZE-CONTINUE-TAG-0001，2026-09-24）
+
+`test_normalize_branches_break_in_while_loop`（`#[cfg(test)]`，本文件
+15100 区）此前手搓 `fd.bblocks.build_dom_tree()` 代替 oracle 管线前件：
+Ghidra 里 `startProcessing`（funcdata.cc:150-168）在一切 Action 之前跑
+`followFlow; structureReset;`，structureReset→`bblocks.structureLoops`
+（funcdata_block.cc:711）打出 F_BACK_EDGE 标签，`ActionBlockStructure`
+的 buildCopy 才能携带它们供 `orderLoopBodies`（blockaction.cc:1148）发现
+自然循环。跳过该前件时 `dfs_back_edges=0`、0 个循环、无 WhileDo 结构、
+`ActionNormalizeBranches` 无 loop_info——回边 jmp 永不标 CONTINUE。测试
+fixture 改为 `fd.start_processing()`；生产路径无变化（ActionStart 已按
+universal 序先行调用，ActionNormalizeBranches 本身被 decompile grouplist
+过滤=coreaction.cc:5424-5431）。
+
+
 ## FlowOverride 注入期应用（GOTO-LABEL-UNPRINTED-0001 tail-call 家族，2026-08-27）
 
 `inject_raw_ops` 在 phase-1（`oneInstruction` dump 等价物）与 phase-2
