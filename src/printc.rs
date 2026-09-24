@@ -2052,12 +2052,12 @@ impl PrintC {
         if name.is_empty() {
             // pushUnnamedLocation fallback (printlanguage.cc:244 ->
             // printc.cc:1938-1945): space name + printRaw of the high name
-            // representative's address, one oracle form for every space
-            // (PRINTC-UNLINKED-REF-FAMILY slice A merges this RPN ladder
-            // into the single helper).
-            name = Self::unnamed_location_token(
-                vn.get_space(),
-                Self::unnamed_location_offset(vn));
+            // representative's FULL address — both halves from the rep
+            // (PRINTC-AFINI-UNIQUELOC-0001) — one oracle form for every
+            // space (PRINTC-UNLINKED-REF-FAMILY slice A merges this RPN
+            // ladder into the single helper).
+            let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+            name = Self::unnamed_location_token(rep_space, rep_offset);
         }
         self.mark_varnode_used(name.clone(), vn);
         Atom::with_op_vn(
@@ -2177,6 +2177,60 @@ impl PrintC {
         }
         // cc:367-368: PTRSUB/PTRADD are the array-use shapes.
         code == OpCode::CPUI_PTRSUB || code == OpCode::CPUI_PTRADD
+    }
+
+    // Ghidra: printc.cc:894 isValueFlexible
+    /// Whether an (implied, written) Varnode's defining op is a PTRSUB or
+    /// PTRADD — possibly through one COPY whose input is itself implied and
+    /// written — so `PrintC::opPtrsub` can flip its member syntax from `->`
+    /// to `.` and absorb the dereference into the base expression
+    /// (`pushVn(in0,op,m | print_load_value)`, printc.cc:1039-1041/1047-1049;
+    /// the base's own spacebase PTRSUB then drops its `&` and its PTRADD
+    /// renders as an array subscript). PRINTC-C3FLEX-DOTFORM-0001: this is
+    /// the flex decision behind the canon `glob.pattern[iVar5].type` dot
+    /// forms. Guard order is faithful to cc:898-904: the COPY arm returns
+    /// false unless the input is implied AND written (checking
+    /// `invn->getDef()` before the `isWritten` guard would be a null deref
+    /// in the oracle — the guards at cc:899-901 return first).
+    fn is_value_flexible(vn: &crate::varnode::Varnode) -> bool {
+        // cc:895-897: only implied, written varnodes can absorb a
+        // dereference; everything else flexes to false.
+        if !vn.is_implied() || !vn.is_written() {
+            return false;
+        }
+        let def_arc = match vn.get_def() {
+            Some(d) => d,
+            None => return false,
+        };
+        let opc = def_arc.read().unwrap().opcode;
+        // cc:898-904: look through one COPY to the input's defining op.
+        if opc == OpCode::CPUI_COPY {
+            let invn_arc = {
+                let def = def_arc.read().unwrap();
+                let invn = def.get_in(0).cloned();
+                invn
+            };
+            match invn_arc {
+                Some(a) => {
+                    let invn = a.read().unwrap();
+                    if !invn.is_implied() || !invn.is_written() {
+                        return false;
+                    }
+                    match invn.get_def() {
+                        Some(indef) => {
+                            let code = indef.read().unwrap().opcode;
+                            // cc:905-906: only PTRSUB/PTRADD defs flex.
+                            return code == OpCode::CPUI_PTRSUB
+                                || code == OpCode::CPUI_PTRADD;
+                        }
+                        None => return false,
+                    }
+                }
+                None => return false,
+            }
+        }
+        // cc:905-906
+        opc == OpCode::CPUI_PTRSUB || opc == OpCode::CPUI_PTRADD
     }
 
     // Ghidra: typeop.hh:170 TypeOp::push (virtual dispatch — the per-opcode
@@ -2921,6 +2975,19 @@ impl PrintC {
             // addressof tokens defined above.
             OpCode::CPUI_PTRSUB => {
                 use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                // printc.cc:929 opPtrsub: struct/union field access
+                // `ptr->field`/`ptr.field`, array element pointer `*ptr`/
+                // `ptr[0]`, or `&ptr->field`. Port of `PrintC::opPtrsub`
+                // (printc.cc:929-1143): the flex decision (cc:958,
+                // isValueFlexible cc:894-911 — PRINTC-C3FLEX-DOTFORM-0001)
+                // selects object_member (`.`) + the base load-value flip;
+                // Rugra has no TypePointerRel, so the `ptrel` branches
+                // (cc:946-950/966-976) collapse to the plain
+                // `ct = ptype->getPtrTo()` arm. The four struct/union emit
+                // shapes (printc.cc:1018-1055) and the four array shapes
+                // (1098-1141) are reproduced via the RPN stack using the
+                // pointer_member/object_member/dereference/addressof/
+                // subscript tokens.
                 // printc.cc:940-942: in0 = op->getIn(0); in1const = in1 offset.
                 let in1const: u64 = op
                     .get_in(1)
@@ -2933,6 +3000,16 @@ impl PrintC {
                 // printc.cc:955-956: valueon = (mods & (load|store value)) != 0.
                 let valueon = self.is_set(
                     print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+                // printc.cc:957: m = mods & ~(print_load_value|
+                // print_store_value) — the mod word the base operands see.
+                let m = self.mods
+                    & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+                // printc.cc:958: flex = isValueFlexible(in0) — PRINTC-
+                // C3FLEX-DOTFORM-0001 (printc.cc:894-911 port above).
+                let flex = op
+                    .get_in(0)
+                    .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                    .unwrap_or(false);
                 // printc.cc:951-954: ct = ptype->getPtrTo() (no TypePointerRel).
                 let ct = ptype.as_ref().and_then(|pt| match &**pt {
                     Datatype::Pointer(p) => Some(p.ptr_to.clone()),
@@ -2972,25 +3049,45 @@ impl PrintC {
                             0,
                             -1,
                         );
-                        // printc.cc:1018-1034 (!valueon, !flex):
-                        //   pushOp(&addressof); pushOp(&pointer_member);
-                        //   pushVn(in0); pushAtom(fieldname)
-                        // printc.cc:1046-1052 (valueon, !flex):
-                        //   pushOp(&pointer_member); pushVn(in0); pushAtom(fieldname)
-                        // printc.cc:1037-1038/1053-1054 (arrayvalue):
-                        //   pushOp(&subscript) precedes the member ops and
-                        //   push_integer(0) follows the field atom — `in0->f[0]`.
-                        // Rugra has no isValueFlexible; we treat flex as false
-                        // (the common case for typed pointer dereferences),
-                        // selecting the pointer_member (`->`) shape rather than
-                        // the object_member (`.`) shape.
+                        // printc.cc:1018-1055: the four emit shapes, selected
+                        // by valueon x flex (the doc table at cc:912-921):
+                        //   off+yes `&( ).name`  off+no `&( )->name`
+                        //   on+yes  `( ).name`   on+no  `( )->name`
+                        // flex flips the member op to object_member (`.`)
+                        // AND the base push to `m | print_load_value`
+                        // (cc:1039-1041/1047-1049) so the base's defining
+                        // op absorbs this dereference (spacebase arm drops
+                        // the `&`, opPtradd uses subscript); !valueon
+                        // prefixes addressof first. The base mods are the
+                        // STRIPPED `m` (cc:957) in the !flex arms — not
+                        // self.mods — so the load/store bit does not leak
+                        // into a non-flexible base.
+                        let base_mods = if flex {
+                            m | print_mods::PRINT_LOAD_VALUE
+                        } else {
+                            m
+                        };
+                        let member_tok = if flex {
+                            self.rpn_tok_object_member
+                        } else {
+                            self.rpn_tok_pointer_member
+                        };
                         if !valueon_here {
+                            // cc:1018-1028: EMIT &( ).name / &( )->name.
                             self.rpn_push_op(self.rpn_tok_addressof);
+                            self.rpn_push_op(member_tok);
+                        } else {
+                            // cc:1044-1055: EMIT ( ).name / ( )->name. The
+                            // canon `if (arrayvalue) pushOp(&subscript)`
+                            // prefix and trailing `push_integer(0)` render
+                            // as the terminal literal `[0]` below (the
+                            // field atom is always last, so the postsurround
+                            // bracket pairing is byte-identical).
+                            self.rpn_push_op(member_tok);
                         }
-                        self.rpn_push_op(self.rpn_tok_pointer_member);
                         // pushVn(in0): record into nodepend so an implied in0
                         // (e.g. nested PTRSUB/CAST) is inlined by rpn_recurse.
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        self.rpn_push_in(op_arc, op, 0, base_mods);
                         // pushAtom(fieldname) drains the pending in0 first.
                         self.rpn_push_atom(&field_atom);
                         if arrayvalue {
@@ -3002,19 +3099,41 @@ impl PrintC {
                         return;
                     }
                     if meta == TypeMetatype::Array {
-                        // printc.cc:1098-1137: PTRSUB(*,0) switches to element-
-                        // pointer view. !valueon,!flex (printc.cc:1113-1117):
-                        //   pushOp(&dereference); pushVn(in0)
-                        // valueon,!flex (1129-1135):
-                        //   pushOp(&subscript); pushOp(&dereference);
-                        //   pushVn(in0); push_integer(0)
-                        // Rugra has no subscript token wired yet; for the common
-                        // !valueon case (a bare PTRSUB producing a pointer) we
-                        // emit `*in0` faithfully. The valueon arm falls back to
-                        // the same `*in0` shape to stay correct.
-                        self.rpn_push_op(self.rpn_tok_dereference);
-                        // pushVn(in0): record so implied in0 inlines.
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        // printc.cc:1098-1141: PTRSUB(*,0) switches to the
+                        // element-pointer view of the array. The four shapes
+                        // (doc table cc:912-921 array row):
+                        //   off+yes `( )`    off+no `*( )`
+                        //   on+yes  `( )[0]` on+no  `(* )[0]`
+                        // flex absorbs the dereference into in0's defining
+                        // op (base push `m | print_load_value`, cc:1113-
+                        // 1117/1128-1133); !flex prefixes the dereference
+                        // op and keeps the stripped `m`. The trailing
+                        // `push_integer(0,...)` renders as the terminal
+                        // literal `[0]` (nothing follows it in this arm).
+                        if !valueon {
+                            if !flex {
+                                // cc:1118-1122: EMIT *( ).
+                                self.rpn_push_op(self.rpn_tok_dereference);
+                            }
+                            // cc:1113-1117: EMIT ( ) — flex absorbs the
+                            // dereference into in0's defining op.
+                            self.rpn_push_in(op_arc, op, 0, if flex {
+                                m | print_mods::PRINT_LOAD_VALUE
+                            } else {
+                                m
+                            });
+                        } else {
+                            // cc:1125-1141: EMIT ( )[0] / (* )[0].
+                            if !flex {
+                                self.rpn_push_op(self.rpn_tok_dereference);
+                            }
+                            self.rpn_push_in(op_arc, op, 0, if flex {
+                                m | print_mods::PRINT_LOAD_VALUE
+                            } else {
+                                m
+                            });
+                            self.emit.print("[0]");
+                        }
                         return;
                     }
                     if meta == TypeMetatype::Spacebase {
@@ -3123,8 +3242,28 @@ impl PrintC {
                         }
                         if symbol.is_none() {
                             // cc:1078-1082: pushUnnamedLocation(addr, ...) —
-                            // `0x<hex>` of the spacebase-resolved address.
-                            let addr_text = format!("0x{:x}", in1const);
+                            // addr = sb->getAddress(in1const, in0->getSize(),
+                            // op->getAddr()) (TypeSpacebase::getAddress
+                            // type.cc:3063-3073 → AddrSpaceManager::
+                            // resolveConstant translate.cc:628-642: the
+                            // spacebase's OWN spaceid with addressToByte +
+                            // wrapOffset, the identity for the wordsize-1
+                            // x86-64 spaces) → PrintC::pushUnnamedLocation
+                            // (printc.cc:1938-1945): space name +
+                            // AddrSpace::printRaw (space.cc:206-222 zero-
+                            // padded hex). PRINTC-C3-UNNAMED-SPACE-NAME-0001:
+                            // e.g. stack spacebase → `stack0xfffffffffffffc78`,
+                            // ram spacebase → `ram0x00023e00`. A spacebase
+                            // type without spaceid (decode-path sentinel,
+                            // type.cc:3090) keeps the identity degradation.
+                            let space = ct.as_ref().and_then(|c| match &**c {
+                                Datatype::Spacebase(sb) => sb.spaceid,
+                                _ => None,
+                            });
+                            let addr_text = match space {
+                                Some(sp) => Self::unnamed_location_token(sp, in1const),
+                                None => format!("0x{:x}", in1const),
+                            };
                             let unnamed = crate::printlanguage::Atom::with_field(
                                 &addr_text,
                                 crate::printlanguage::TagType::FieldToken,
@@ -6925,6 +7064,28 @@ impl PrintC {
         vn.get_offset()
     }
 
+    // Ghidra: printlanguage.cc:244 PrintLanguage::pushSymbolDetail
+    /// The FULL address (space AND offset) of the high name representative —
+    /// what `pushUnnamedLocation(high->getNameRepresentative()->getAddr(),
+    /// vn, op)` passes at the sym==null fallback. PRINTC-AFINI-UNIQUELOC-
+    /// 0001: the label's space previously followed the printing INSTANCE
+    /// (`vn.get_space()`), splitting UNIQUE-space COPY outputs from their
+    /// RAM-space name representatives (`unique0x<rep-off>` where the oracle
+    /// prints `ram0x<rep-off>`); both halves of the address now come from
+    /// the representative, with the instance's own address as the no-high
+    /// degradation (same shape as [`Self::unnamed_location_offset`]).
+    fn unnamed_location_space_offset(
+        vn: &Varnode,
+    ) -> (crate::space::AddressSpace, u64) {
+        if let Some(high_arc) = vn.high.as_ref() {
+            if let Some(rep_arc) = high_arc.read().unwrap().get_name_representative() {
+                let rep = rep_arc.read().unwrap();
+                return (rep.get_space(), rep.get_offset());
+            }
+        }
+        (vn.get_space(), vn.get_offset())
+    }
+
     // Ghidra: space.cc:206 AddrSpace::printRaw
     /// `printRaw` of an offset in an address space — the exact transport
     /// `PrintC::pushUnnamedLocation` appends after the space name
@@ -7334,16 +7495,15 @@ impl PrintC {
                     return pname.clone();
                 }
                 // pushUnnamedLocation (printc.cc:1938-1945): space name +
-                // printRaw of the representative address.
-                Self::unnamed_location_token(
-                    AddressSpace::Register,
-                    Self::unnamed_location_offset(vn),
-                )
+                // printRaw of the representative's FULL address
+                // (printlanguage.cc:244 — PRINTC-AFINI-UNIQUELOC-0001:
+                // the space half follows the rep too).
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Stack => {
-                Self::unnamed_location_token(
-                AddressSpace::Stack,
-                Self::unnamed_location_offset(vn))
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Unique => {
                 // Inline candidacy stays keyed on the current instance
@@ -7353,12 +7513,13 @@ impl PrintC {
                 if self.inline_candidates.contains_key(&key) {
                     return String::new();
                 }
-                Self::unnamed_location_token(
-                    AddressSpace::Unique,
-                    Self::unnamed_location_offset(vn),
-                )
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
-            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
+            _ => {
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
+            }
         }
     }
 
@@ -8504,12 +8665,15 @@ impl PrintC {
                 if let Some(ref out_arc) = def_op.output {
                     let out_vn = out_arc.read().unwrap();
                     // pushUnnamedLocation (printc.cc:1938-1945): space name +
-                    // printRaw of the high name representative's address
-                    // (PRINTC-UNLINKED-REF-FAMILY slice A token form).
-                    let name = Self::unnamed_location_token(
-                        out_vn.get_space(),
-                        Self::unnamed_location_offset(&out_vn),
-                    );
+                    // printRaw of the high name representative's FULL
+                    // address (printlanguage.cc:244;
+                    // PRINTC-AFINI-UNIQUELOC-0001: the space half follows
+                    // the rep — PRINTC-UNLINKED-REF-FAMILY slice A token
+                    // form).
+                    let (rep_space, rep_offset) =
+                        Self::unnamed_location_space_offset(&out_vn);
+                    let name =
+                        Self::unnamed_location_token(rep_space, rep_offset);
                     self.mark_varnode_used(name.clone(), &out_vn);
                     if !self.discovery_pass {
                         self.emit.tag_variable(&name, 0);
@@ -12070,10 +12234,8 @@ impl PrintLanguage for PrintC {
                             return;
                         }
                     }
-                    Self::unnamed_location_token(
-                        AddressSpace::Register,
-                        Self::unnamed_location_offset(vn),
-                    )
+                    let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                    Self::unnamed_location_token(rep_space, rep_offset)
                 }
             }
             AddressSpace::Const => {
@@ -12169,9 +12331,8 @@ impl PrintLanguage for PrintC {
                 }
             }
             AddressSpace::Stack => {
-                Self::unnamed_location_token(
-                AddressSpace::Stack,
-                Self::unnamed_location_offset(vn))
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Unique => {
                 let key = (AddressSpace::Unique, vn.get_offset());
@@ -12199,25 +12360,27 @@ impl PrintLanguage for PrintC {
                     }
                 }
                 // Unnamed-location fallback (printc.cc:1938-1945): space
-                // name + printRaw of the high name representative's address
-                // — every instance of one HighVariable prints the same
-                // label (slice B1 address source + slice A token form).
-                // Inline candidacy above stays keyed on the current
+                // name + printRaw of the high name representative's FULL
+                // address — every instance of one HighVariable prints the
+                // same label (slice B1 address source + slice A token form;
+                // PRINTC-AFINI-UNIQUELOC-0001: the space half follows the
+                // rep). Inline candidacy above stays keyed on the current
                 // instance.
-                Self::unnamed_location_token(
-                    AddressSpace::Unique,
-                    Self::unnamed_location_offset(vn),
-                )
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Ram => {
                 // Symbol/string lookups are handled at Priority 0 above.
                 // If we reach here, it's an unresolved RAM address:
-                // pushUnnamedLocation prints "ram" + printRaw.
-                Self::unnamed_location_token(
-                    AddressSpace::Ram,
-                    Self::unnamed_location_offset(vn))
+                // pushUnnamedLocation prints "ram" + printRaw of the
+                // representative's full address.
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
-            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
+            _ => {
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
+            }
         };
 
         self.mark_varnode_used(name.clone(), vn);
@@ -13181,13 +13344,29 @@ impl PrintC {
                 let is_struct = meta == TypeMetatype::Struct || meta == TypeMetatype::Union;
                 let is_array = meta == TypeMetatype::Array;
                 if is_struct {
-                    // printc.cc:1018-1034 (!valueon) / 1036-1052 (valueon):
-                    // struct/union -> `&in0->field` (!valueon) or `in0->field`.
+                    // printc.cc:1018-1052: struct/union — `&in0->field`
+                    // (!valueon) or `in0->field`; flex (printc.cc:894-911,
+                    // PRINTC-C3FLEX-DOTFORM-0001) selects object_member
+                    // (`.`) and flips the base push to load-value form
+                    // (cc:1039-1041/1047-1049) so the base's defining
+                    // spacebase PTRSUB drops its `&` — expressed on this
+                    // legacy direct-emit path by temporarily setting the
+                    // print_load_value mod around push_varnode (the RPN
+                    // path passes it per-push as `m | print_load_value`).
+                    let flex = op
+                        .get_in(0)
+                        .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                        .unwrap_or(false);
                     if !valueon {
                         self.emit.print("&");
                     }
                     if let Some(in0) = op.get_in(0) {
+                        let saved_mods = self.mods;
+                        if flex {
+                            self.mods |= print_mods::PRINT_LOAD_VALUE;
+                        }
                         self.push_varnode(&in0.read().unwrap(), Some(op));
+                        self.mods = saved_mods;
                     }
                     // printc.cc:991-1010: field lookup via findTruncation.
                     let fieldname = Self::find_partial_field(&ct, in1const as usize, 0)
@@ -13197,22 +13376,41 @@ impl PrintC {
                             // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
                             format!("field_0x{:x}", in1const)
                         });
-                    self.emit.print("->");
+                    self.emit.print(if flex { "." } else { "->" });
                     self.emit.print(&fieldname);
                 } else if is_array {
-                    // printc.cc:1098-1137: array — PTRSUB(*,0) switches to
-                    // element-pointer view. valueon: `in0[0]`; !valueon: `*in0`
-                    // (the !flex arms; Rugra has no isValueFlexible).
+                    // printc.cc:1098-1141: array — PTRSUB(*,0) switches to
+                    // element-pointer view. valueon: `in0[0]`; !valueon:
+                    // `*in0` (the !flex arms). flex (PRINTC-C3FLEX-
+                    // DOTFORM-0001) absorbs the dereference into in0's
+                    // defining op (cc:1113-1117/1128-1133): no `*` prefix
+                    // and the load-value mod flip around the base push.
+                    let flex = op
+                        .get_in(0)
+                        .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                        .unwrap_or(false);
                     if valueon {
                         if let Some(in0) = op.get_in(0) {
+                            let saved_mods = self.mods;
+                            if flex {
+                                self.mods |= print_mods::PRINT_LOAD_VALUE;
+                            }
                             self.push_varnode(&in0.read().unwrap(), Some(op));
+                            self.mods = saved_mods;
                         }
                         self.emit.print("[0]");
                     } else {
-                        // EMIT *(in0)
-                        self.emit.print("*");
+                        // EMIT *(in0) — !flex; flex emits (in0) bare.
+                        if !flex {
+                            self.emit.print("*");
+                        }
                         if let Some(in0) = op.get_in(0) {
+                            let saved_mods = self.mods;
+                            if flex {
+                                self.mods |= print_mods::PRINT_LOAD_VALUE;
+                            }
                             self.push_varnode(&in0.read().unwrap(), Some(op));
+                            self.mods = saved_mods;
                         }
                     }
                 } else if meta == TypeMetatype::Spacebase {

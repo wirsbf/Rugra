@@ -1033,3 +1033,13 @@ atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon gol
 `int local_c8;` 重复声明（printc.cc:2502 pushTypeStart/pushSymbol 的符号
 声明后缀数组拼写是 C1 种子通道引入的常态形态）。默认路径无后缀数组局部
 声明，输出 cmp 字节恒等亲父。
+
+## 声明回填 pass：未名位置 token 零声明（PRINTC-C3-UNNAMED-SPACE-NAME-0001，2026-09-25，Lane PDOTFORM）
+
+回填注入对四个未名位置 token 前缀（`unique0x`/`register0x`/`stack0x`/
+`ram0x`）跳过。canon（12.0.4 golden）对这些 token **零声明**：它们是
+`PrintC::pushUnnamedLocation`（printc.cc:1938-1945）的表达式级存储槽标签，
+不是 ScopeLocal 符号，oracle 的 emitLocalVarDecls（printc.cc:2260-2279）只
+遍历符号、永不为其发声明（golden 中 stack0x 使用站点 3 处、声明 0 处）。
+printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过会注入
+`long stack0x00000008;` 与 canon 文本分歧（_start 10→11 回退源）。

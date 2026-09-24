@@ -2911,3 +2911,54 @@ break（canon 形）、`goto switchD_..._caseD_40` 形恢复；curl getparameter
 383→381、glob_set 的 base 期语义错误 break（canon=直落 default 链）纠正为
 `goto caseD_5e`（形态 +2）；mirror 面 main CMOV 位由 goto+label 平铺形转
 clean if-block（向 direct-runner 纯库真值收敛 −9 行）。
+
+## 2026-09-25（Lane PDOTFORM 三合一）：isValueFlexible 移植 + 未名位置空间名/rep 全址（PRINTC-C3FLEX-DOTFORM-0001 / PRINTC-C3-UNNAMED-SPACE-NAME-0001 / PRINTC-AFINI-UNIQUELOC-0001）
+
+- **`is_value_flexible`**（`// Ghidra: printc.cc:894`，静态 helper）：implied+written
+  varnode 的 def 为 PTRSUB/PTRADD（可经一层 implied+written 的 COPY 透传，
+  cc:898-904 守卫序忠实——`!isWritten` 先 return 否则 `invn->getDef()` 空解引用）
+  → flex=true。`dispatch_op_rpn` CPUI_PTRSUB 臂据此（cc:958）：
+  - struct/union 臂四形态（cc:1018-1055 doc 表 cc:912-921）：flex 选
+    object_member（`.`）且基座 `rpn_push_in(..., m | PRINT_LOAD_VALUE)`
+    （cc:1039-1041/1047-1049）——基座自身的 spacebase PTRSUB 因此去 `&`、
+    PTRADD 因此用下标；!valueon 前缀 addressof（`&( ).name` 形）。
+  - array 臂四形态（cc:1098-1141）：flex 吸收解引用（无 `*` 前缀 + load 翻转），
+    `valueon` 形尾部 `[0]`（canon `push_integer(0)` 的终位字面等价——field atom
+    恒为最后一个 atom，postsurround 配对字节恒等）。
+  - 基座 mods 从 `self.mods`（未剥离）改为 canon 剥离形 `m`（cc:957）/flex 翻转形，
+    修复 load/store 位泄漏进非 flex 基座的形状差。
+  - legacy `op_ptrsub` 同步：struct 臂 `.`/`->` 选择 + 基座
+    `self.mods` save/flip/restore（该直发路径无逐推送 mods 通道，用临时位翻转
+    表达 cc:1039-1041）；array 臂同步 flex 吸收。
+- **spacebase 未名回退空间名**（PRINTC-C3-UNNAMED-SPACE-NAME-0001）：
+  RPN 臂 `symbol.is_none()` 回退从裸 `0x{:x}` 改为
+  `unnamed_location_token(sb.spaceid, in1const)`——cc:1078-1082
+  `pushUnnamedLocation(sb->getAddress(in1const,...))`，`TypeSpacebase::
+  getAddress`（type.cc:3063-3073）→ `resolveConstant`（translate.cc:628-642，
+  spacebase 自身空间 + addressToByte/wrapOffset，x86-64 wordsize-1 空间为恒等）
+  → `PrintC::pushUnnamedLocation`（printc.cc:1938-1945）空間名 + `printRaw`
+  （space.cc:206-222 零填充）：`stack0xfffffffffffffc78` / `ram0x00023e00`。
+  legacy 路径已走 `push_unnamed_location`（无需改）。
+- **未名回退 rep 全址**（PRINTC-AFINI-UNIQUELOC-0001）：新增
+  `unnamed_location_space_offset(vn)`（`// Ghidra: printlanguage.cc:244`）返回
+  名字代表的（空间, 偏移）二元组；`make_atom_for_vn` 回退、RPN/legacy 两路
+  display-name 阶梯的 Register/Stack/Unique/Ram/other 臂、RPN unknown-def
+  兜底全部改取 rep 全址（canon `pushUnnamedLocation(rep->getAddr())`——空间
+  半边此前随打印实例 `vn.get_space()`，UNIQUE 空间 COPY 输出与 RAM 空间代表
+  分裂出 `unique0x<rep-off>` 形）。vn-空间键控的前置检查（param_names /
+  inline_candidates 键）保持实例键控（逐实例内联决策，slice B1 域）；
+  `pushMismatchSymbol` 臂（printc.cc:2082 vn 自身地址）不变。
+- **配套**（写域延伸，src/prettyprint.rs）：backfill 声明注入对四个未名位置
+  token 前缀（`unique0x`/`register0x`/`stack0x`/`ram0x`）跳过——canon 对这些
+  token **零声明**（它们是表达式级存储槽标签而非 ScopeLocal 符号，
+  emitLocalVarDecls（printc.cc:2260-2279）永不为其发声明；12.0.4 golden 中
+  stack0x/unique0x 使用站点均无对应声明行）。
+
+观测（curl 12.0.4 canon golden 差分）：767/0/0 → **727/0/0**；
+match_url 28→22（`(&glob)->pattern[iVar5]->type` 族 → `glob.pattern[iVar5].type`
+canon 形，`(&glob)` 7 处清零）、main 129→127、getparameter 275→261、
+glob_range 51→43、glob_set 47→43、next_url 31→27、helpf 37→35；
+`&stack0xfffffffffffffc78`/`&stack0x00000008` 空间名形态出现（与 canon 逐字一致）。
+httpd：canon 1125→1123、direct-runner 2782→2780（零缺陷）。
+httpd MIRROR 面 `unique0x<ram 偏移>` 形 8 处 → **0**（`ram0x000a0820`/
+`ram0x000a0830`/`ram0x000a11b0`… rep 全址形）。
