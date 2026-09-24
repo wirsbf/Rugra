@@ -2975,3 +2975,40 @@ httpd MIRROR 面 `unique0x<ram 偏移>` 形 8 处 → **0**（`ram0x000a0820`/
    wrapped 叶起点（Basic/Copy）；否则 goto 语句的 never-emitted 锚对「树中实际发射
    的目标」误点火，吃掉 printed_labels 使 case 头部真标签被压掉（httpd main
    `switchD_0012ba94_caseD_3f:` 标签实证）。
+
+## 2026-09-25（Lane SCOPEPFX）：spacebase 符号臂接通 `::` 遮蔽前缀（PRINTC-SPACEBASE-SCOPEPREFIX-0001）
+
+RPN `dispatch_op_rpn` CPUI_PTRSUB 臂 TYPE_SPACEBASE 符号命中路径
+（`query_container(global_scope_id, ...)` 替身）此前印**裸符号名**
+（`&config` / `config.crlf`），漏掉 oracle `pushSymbol`（printc.cc:1086）
+入口的 `pushSymbolScope`（cc:1919 → cc:202-228）：MINIMAL_NAMESPACES 下
+`Symbol::getResolutionDepth(curscope)`（database.cc:323-359）对**局部
+nametree 被同名占据**（`ScopeInternal::isNameUsed`，cc:2417-2432——参数、
+restructure 局部、ActionNameVars 命名 high）的全局符号返回深度 1，
+`pushSymbolScope` 打印全局 scope 的**空** display name + 二元 `::` scope
+运算符（printc.cc:24）。REGSYM 判决（HEADLESS-BRIDGE-V1-REGSYM-0009 §14，
+W5 参数改名消融）已实证该因果链：参数名 `config` 遮蔽全局 `config` 是
+`::` 前缀的唯一触发器。
+
+- **RPN 臂**：命中查询从 `query_container`（只要 name/metatype）改为
+  `query_container_entry`（取 `(scope_id, Arc<SymbolEntry>)`），从 entry 的
+  Symbol 读 name + dtype metatype（与 `container_hit` 逐字段同源：
+  `symbol_name`=getName、Unknown≠Array/Code 折叠等价），并在 sym_atom
+  组装处调用**已落地的** `symbol_scope_prefix(&sym, Some(&entry))`
+  （PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ②，原仅 7169/7183/7196 叶优先路径
+  接线）——遮蔽全局得 `::` 前缀，未遮蔽/`::` 预组合名（函数命名空间）/
+  非全局得空串。栈 spacebase 的 ScopeLocal 回退路径不取前缀
+  （database.cc:326：符号在自身 scope 内使用，深度 0）。
+- **legacy `op_ptrsub` 同步**：spacebase 臂 pushSymbol/pushPartialSymbol
+  两分支（cc:1086/1092 调用点）同样以 `symbol_scope_prefix(sym,
+  in1 的 symbol_entry)` 前缀 display name（oracle 两路径入口都是
+  pushSymbolScope）；`symbol_is_global` 的 DB 属主查询对栈局部命中
+  （栈地址全局查询必 miss）自然得空前缀。
+
+**验证**（oracle=12.0.4 e40ed130，canon `tests/golden/ghidra_curl_1204.c`）：
+`&::config` 族收敛——`::config` 行数 getparameter 61→95、main 104→105、
+parseconfig 3（==canon 逐函数 95/105/3；残留裸 `config` 仅签名/字符串字面量/
+main 真·局部变量循环=canon 同形）；curl 全量 727/0/0→**635/0/0**
+（getparameter 261→171、main 127→125；改动仅限这两函数、全部 config 行）；
+httpd **1123/0/0 恒等**；投影 bank 391/391；gcc 审计 104 OK/20 FAIL
+fail 名集与基线逐名相同；双跑 cmp 恒等；`::` 零泄漏（仅 `::config` 族）。
