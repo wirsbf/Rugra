@@ -2759,6 +2759,16 @@ type.cc:1475），故其 TYPE_UINT/TYPE_INT 臂可达 pushEnumConstant（cc:1756
 `return CURLE_OK;`（main_init）、`*store != HTTPREQ_UNSPEC`（SetHTTPrequest）。
 TYPE_PARTIALENUM 保持 Ghidra 的默认 cast 臂。同时移除 lane 前代遗留的
 [DBGSTR] TEMP-DBG 块。
+## 2026-09-24（Lane SMALLFIX 重钉）：Enum 元类型两臂自 GG 合并丢落后恢复
+GG lane 手工并集（260a046c）保了 master 的 cast-先行路径，上述两处
+`TypeMetatype::Enum` 臂（af6c5ee2/26109524 已交付）被丢回 `_` 默认 cast 臂——
+`enum_match_text`/`enum_rep_text`（get_matches 全表示）与 datatype.rs 的
+`TypeEnum::get_matches` 移植本体未丢，仅两处分派臂缺失，DWARF 枚举常量全量回退
+`(HttpReq)0x...` 形。本 lane 按上述 GG2/CR29 原语义恢复两臂（常量叶
+`constant_leaf_text` 与直发 `push_constant_typed`），见证回归：getparameter
+`& ~HTTPREQ_HEAD) == HTTPREQ_UNSPEC`/`& ~HTTPREQ_SIMPLEPOST`（golden 1845/
+1981）、main_init `return CURLE_OK;`、SetHTTPrequest `HTTPREQ_POST` 族；
+TYPE_PARTIALENUM 仍走默认 cast（printc.cc:1801 break 表）。
 ## 2026-09-24：STORE 左值双打印修复 + MapIterator end 键（前代 WIP 收编核证）
 opStore cc:500-518 端口修正：deref 形先 pushOp(dereference) 再单次
 rpn_push_in(op,1,m)——旧实现 tag_op("*") + 未递归首推 + 二次输入推送使 RPN
