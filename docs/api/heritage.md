@@ -1479,3 +1479,13 @@ back 臂（同 oracle）；计数器=无；排序键=SeqNum(pc=call,uniq=创建�
 
 移除 guard_returns 输入处的 [DBGRD] 环境门调试块（lane 前代遗留；提交规范
 要求临时 TAG 提交前删除）。无行为变化。
+
+## 2026-09-24：test_heritage_creation 陈旧期望修正（TESTLIB-STATE-CONTAMINATION-0001）
+
+`#[cfg(test)]` 内 `test_heritage_creation` 仍断言 Stack deadcode delay=2
+（旧 "ram+1" 读法），而 `space.rs get_delay` 已在 6821e158 按指针空间规则
+修正为 register(0)+1=**1**（oracle HeritageInfo dump
+`stack:idx=8,type=IPTR_SPACEBASE,delay=1`，RCA2_MAXPASS.md §4.3/§5，
+architecture.cc:565 `ptrdata.space->getDelay()+1` 中 ptrdata.space 是栈指针
+寄存器空间而非 ram basespace）。测试断言与注释同步改为 1；`Heritage`/
+`HeritageInfo` 生产代码零改动。
