@@ -1770,3 +1770,26 @@ flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate
   （oracle 有 local_d0/local_d8）+ main 残余 40 行 SP-cast 中 1 处
   phi（INDIRECT 输入 long 整型化）未获指针型 —— 见 TODO_BOARD
   VARMAP-SPALIAS-RETYPE-0001 / RULEACTION-SPALIAS-INDIRECTPTR-0002。
+
+## 2026-09-24：RulePushMulti 替代 MULTIEQUAL 输出保留共享存储地址（PM-GLOBWORD lane）
+
+res==1 新建替代 MULTIEQUAL 的分支（ruleaction.cc:1116-1131）此前无条件
+`new_unique_out`，且把新 op 与统一 op 都插在被销毁 MULTIEQUAL 之前。
+oracle 语义逐行镜像补齐：
+
+- 输出地址保留（cc:1121-1124）：`buf1[0]->getAddr() == buf2[0]->getAddr()`
+  且 `!buf1[0]->isAddrTied()` 时走 `newVarnodeOut(size, buf1[0]->getAddr(),
+  substitute)`（Rugra `new_varnode_out_full`，含 assignHigh/laned/符号尾
+  全序列）；否则保持 `newUniqueOut`。glob_word 首分歧（stage 28 oppool1
+  op 35）即此：两输入同 SLEIGH 临时槽 u:23b00 时 oracle 输出沿用原地址，
+  旧实现造出 u:100002c5。
+- 插入位置（cc:1127/1130/1133）：替代 MULTIEQUAL 走 `opInsertBegin(sub,
+  bl)`（MULTIEQUAL 感知的前导组跳过），统一 op1 走 `opInsertAfter(op1,
+  substitute)`；res==0 走 `opInsertBegin(op1, bl)`。无块隶属的扁平单测
+  fixture 保留旧相对插入兜底（RUGRA-GLUE，仅测试可达）。
+- 删除非正典的 "substitute 无输出" 兜底——oracle 的 substitute（已有
+  MULTIEQUAL 或 CSE op）恒带输出；缺失按契约外处理（NO_CHANGE）。
+- `slot1` 仍在创建前由 `op_get_slot(op1, buf1)` 求值（cc:1114）。
+
+验证：glob_word 双投影 MATCH（u:23b00 族 4 个替代 MULTIEQUAL 与 oracle
+逐字节一致）；五银行投影 MATCH 保持；curl/httpd 门禁见 lane 终报。

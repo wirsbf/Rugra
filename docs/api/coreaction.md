@@ -3009,3 +3009,27 @@ triallist，交 `FuncProto::update_output_types`（fspec.cc:4136-4159）；
 ## 2026-09-24（CR29 返工）：build_localtypes 注释锚行修正
 
 TypeOpReturn::getInputLocal 引用随 typeop.cc 901 修正（原 883）。无行为变化。
+
+## 2026-09-24：ActionRestrictLocal effect 迭代走 FuncProto::effectBegin 回退（PM-GLOBWORD lane）
+
+Loop-2（saved-register 溢出槽 walk，coreaction.cc:1983-1999）此前读
+`fd.funcp.effects` 原始字段——分析期 FuncProto 的本地 effectlist 恒空，
+`<unaffected>`（RBX/RSP/RBP/R12-R15）记录全在解析模型的 effectlist 里，
+导致 walk 永远空转：
+
+- oracle `FuncProto::effectBegin/effectEnd`（fspec.cc:4243-4257）在本地
+  列表为空时回退 `model->effectBegin()`；Rugra 的
+  `FuncProto::effect_iter()`（fspec.rs，含同一回退）早已存在，本修复把
+  消费点从裸字段改为 `effect_iter().to_vec()`。
+- 因果链（glob_word）：push rbx/rbp/r12/r13 的溢出槽（stack:-0x20..-0x8）
+  经 RuleStoreVarnode 变 COPY 后，restrictlocal 第二轮应按 unaffected
+  记录 `markNotMapped(off, sz, false)`；未标记 → 槽留在 range tree →
+  restructure#2 建出 8 字节符号（unaliased=false）→ sync 走符号分支 →
+  输出 varnode 无 nolocalalias → RuleIndirectCollapse 拒折调用影子
+  INDIRECT（stage 65 首分歧 258-vs-250）。
+- 修复后：槽退出 range tree、无符号、unmapped 分支
+  `isUnmappedUnaliased`（无栈参窗口恒真）置 nolocalalias → INDIRECT
+  折叠 → pushmulti/propagatecopy 统一到寄存器值，与 oracle 一致。
+
+httpd 附带收益：ap_is_matchexp 骨架 5→0（消除 cVar2/cVar3 溢出影子
+双变量抖动，全函数 skeleton identical）。

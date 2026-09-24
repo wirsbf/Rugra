@@ -28,6 +28,7 @@ tests/fixtures/projections/
 | curl_myprogress | myprogress | 0x34d0 | 402 | 84,249 | bank sha256 |
 | curl_getparameter.constprop.0 | getparameter.constprop.0 | 0x3f00 | 371 | 913,373 | metadata functions map |
 | curl_glob_set | glob_set | 0x4bc0 | 366 | 141,943 | bank sha256 (capture-mode first, then frozen) |
+| curl_glob_word | glob_word | 0x4a60 | 335 | 208,414 | bank sha256 (capture mode, re-capture byte-verified) |
 
 Common provenance (also recorded per manifest):
 
@@ -90,9 +91,9 @@ RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=<selector> \
 
 Selector spellings: `next_url`, `match_url`, `myprogress`, `glob_set`,
 `parseconfig` (DWARF spelling of `parseconfig.constprop.0`),
-`getparameter` (DWARF spelling of `getparameter.constprop.0`); the
-address form `0x<entry>` is observation-equivalent (verified byte-identical
-on parseconfig).
+`getparameter` (DWARF spelling of `getparameter.constprop.0`),
+`glob_word`; the address form `0x<entry>` is observation-equivalent
+(verified byte-identical on parseconfig).
 
 ## Adding a function
 
