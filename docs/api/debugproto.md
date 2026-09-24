@@ -464,3 +464,29 @@ E2E（httpd 29 函数口径）：uRam 调用 87→0（82 thunk + 5 发现函数�
 另：前代 DWARF-VOID-UNKNOWN-MODEL-0001（0 参 DWARF 签名 → model "unknown"，
 golden 三函数 Unknown-calling-convention 警告见证）的单测期望已同步翻转
 （void_signature_dwarf_prototype_pins_unknown_model）。
+
+## 2026-09-24：LibcSignatureTable 原型钉 unknown 约定名（Lane CURB，PLTSTUB-WARNLOSS-0001 收口）
+
+`LibcSignatureTable::locked_proto` 产物在锁定 storage 之外现在额外钉
+`set_model_name("unknown")`——镜像 generic_clib 引入路径的约定名状态：
+ELF thunk 的 FunctionDB 从未被赋予 calling convention（ELF 导入器不给
+thunk 指定约定；`FunctionPrototype.grabFromFunction`（FunctionPrototype.java:
+129-141）回读为 "unknown"），`FuncProto::decode`（fspec.cc:4675 起）将
+model="unknown" 路由到 `createUnknownModel`（architecture.cc:1159-1166：
+UnknownProtoModel 从 defaultfp 克隆行为——paramrange/localrange/
+stackgrowsnegative 与默认模型一致、printInDecl=false），参数存储仍经该
+模型分配且 typelock 保留（ProtoStoreInternal::decode，fspec.cc:3464-3567）。
+可观测出口=`ActionPrototypeWarnings`（coreaction.cc:4901-4908：
+isModelUnknown && !hasCustomStorage && (inputLocked || outputLocked)）——
+锁定 curl golden 上恰好 24 个 generic_clib 锁定 PLT 桩
+（0x102310 strcpy / 0x102320 puts 等见 witnesses）的头注释
+`/* WARNING: Unknown calling convention -- yet parameter storage is locked */`；
+表外 21 个引入（curl_easy_*、__vfprintf_chk、__cxa_finalize 等）无锁定
+签名、golden 同样无警告。Rugra 只钉名字符串：绑定的 ProtoModelFull 仍是
+defaultfp 克隆，模型对象消费者（hasEffect、derive_input_map、varmap 名字
+键注册表回退 defaultfp）保持 UnknownProtoModel 的占位行为。
+
+验收（fast-release 亲测，基线=亲父 37014110）：curl 1329/0/0→1215/0/0
+（45 个 PLT 桩 diff 3/2→0；本节 −24 行 + jumptable 警告 −90 行合并账，
+jumptable 半边见 PLTSTUB-THUNKRELRO-0001）；零差函数 62→107；
+逐函数 0 回退；httpd 输出字节恒等；8/8 投影银行 MATCH。

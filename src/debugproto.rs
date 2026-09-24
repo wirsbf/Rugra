@@ -971,6 +971,32 @@ impl LibcSignatureTable {
         proto.set_input_lock(true);
         proto.set_output_lock(true);
         proto.set_model_lock(true);
+        // PLTSTUB-WARNLOSS-0001 (closed, CURB lane): the generic_clib
+        // import path sends the decompiler the same never-assigned
+        // convention the 0-param DWARF void-signature pin above documents:
+        // the ELF thunk's
+        // FunctionDB carries no calling convention (the importer never
+        // assigns one for external thunks; FunctionPrototype.grabFromFunction
+        // reads it back as "unknown" — FunctionPrototype.java:129-141), so
+        // FuncProto::decode (fspec.cc:4675-4711) sees model="unknown" and
+        // routes to createUnknownModel (architecture.cc:1159-1166: an
+        // UnknownProtoModel cloned from defaultfp — identical paramrange/
+        // localrange/stackgrowsnegative behavior, printInDecl=false), while
+        // ProtoStoreInternal::decode (fspec.cc:3464-3567) still assigns
+        // parameter storage through that model with the typelock bits kept.
+        // The observable, via ActionPrototypeWarnings (coreaction.cc:4901-
+        // 4908: isModelUnknown && !hasCustomStorage && (inputLocked ||
+        // outputLocked)), is the golden's "/* WARNING: Unknown calling
+        // convention -- yet parameter storage is locked */" header on
+        // exactly the 24 generic_clib-locked PLT stubs (locked curl witness
+        // 0x102310 strcpy / 0x102320 puts; the 21 imports outside the table
+        // — curl_easy_*, __vfprintf_chk, __cxa_finalize — stay unlocked and
+        // show no warning, matching the golden). Rugra pins the name string
+        // only: the bound ProtoModelFull stays the defaultfp clone, so
+        // every model-object consumer (hasEffect, derive_input_map,
+        // varmap's name-keyed registry lookup falling back to defaultfp)
+        // keeps the placeholder behavior UnknownProtoModel adopts.
+        proto.set_model_name("unknown");
         Ok(Some(proto))
     }
 }
