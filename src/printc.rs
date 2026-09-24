@@ -1201,6 +1201,32 @@ impl PrintC {
             self.mods = np.vnmod;
             // printlanguage.cc:523: pending -= 1
             self.rpn_pending -= 1;
+            // CALLIND calltarget transport (PRINTC-CALLIND-CODECAST-0001,
+            // print-layer half): the oracle IR carries a setcasts CAST on
+            // the CALLIND slot-0 input (TypeOpCallind::getInputLocal types
+            // slot 0 as the code pointer, typeop.cc:752-755; castInput
+            // inserts the CAST, coreaction.cc:2704+), and that CAST's
+            // dispatch (opTypeCast, printc.cc:459-462: pushOp(&typecast) +
+            // pushType) fires at exactly this drain point, wrapping
+            // whatever expression the target varnode holds. Rugra's IR
+            // carries the code* type directly on the input varnode instead
+            // of a CAST op, so the same two pushes are transported here —
+            // before the implied-def dispatch or the leaf atom — for both
+            // the leaf (GOT-slot symbol) and implied (LOAD-chain) forms.
+            let is_callind_target = op_guard.opcode == OpCode::CPUI_CALLIND
+                && op_guard
+                    .get_in(0)
+                    .is_some_and(|in0| std::sync::Arc::ptr_eq(&in0, &np.vn));
+            if is_callind_target {
+                self.rpn_push_op(self.rpn_tok_typecast);
+                let type_atom = crate::printlanguage::Atom::with_type(
+                    "code *",
+                    crate::printlanguage::TagType::TypeToken,
+                    crate::printlanguage::SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
             let is_implied = vn_guard.is_implied();
             // printlanguage.cc:525-534: implied-vs-explicit dispatch.
             if is_implied {
@@ -2009,7 +2035,9 @@ impl PrintC {
                 self.rpn_recurse();
             }
             // Ghidra: printc.cc:637 PrintC::opCallind
-            // Faithful token-protocol port. The oracle pushes
+            // Faithful token-protocol port (PRINTC-CALLIND-RPN-ASSIGN-0001,
+            // unblocked by the P6 callind analysis in prettyprint.rs). The
+            // oracle pushes
             //   cc:640 pushOp(&function_call,op)
             //   cc:641 pushOp(&dereference,op)
             //   cc:642-648 skip = getHiddenThisSlot(op,fc); count = numInput()-1
@@ -2026,41 +2054,59 @@ impl PrintC {
             // printlanguage.cc:142-148/165-185. The previous direct-print
             // arm bypassed the stack, leaking the assignment separator past
             // the statement boundary (observed thunks:
-            // `uVar1(*(code *)PTR_00116e98)();` + `return = uVar1;` —
-            // PRINTC-CALLIND-RPN-ASSIGN-0001).
-            // Ghidra: printc.cc:637 PrintC::opCallind
-            // Indirect calls retain the target expression and dereference it;
-            // they must not resolve the target offset as a named CALL.
-            // PRINTC-CALLIND-RPN-ASSIGN-0001 (registered, blocked on
-            // PRINTC-CALLIND-P6-NULLIFY-0001): the faithful token-protocol
-            // form (pushOp(function_call)+pushOp(dereference)+pushVn arms,
-            // cc:640-670) renders the assignment LHS correctly
-            // (`uVar1 = (*(code *)PTR_xxx)(); return uVar1;` — proven
-            // end-to-end down to the low-level byte dump), but
-            // EmitNoMarkup::post_process's P6 single-use
-            // inliner (prettyprint.rs, a Rugra-only compensation layer)
-            // then eliminates the now-valid `uVarN = <callind>();` line
-            // and its declaration, emptying the thunk body — a net
-            // regression until P6 is gated. Keep the legacy direct-print
-            // transport until that lands.
+            // `uVar1(*(code *)PTR_00116e98)();` + `return = uVar1;`).
+            //
+            // The `(code *)` facing cast on the target is NOT pushed here:
+            // in the oracle it comes from the setcasts CAST that inlines at
+            // pushVn(in0) drain time (see rpn_recurse's calltarget
+            // transport, PRINTC-CALLIND-CODECAST-0001 print-layer half).
             OpCode::CPUI_CALLIND => {
-                self.emit.print("(*(code *)");
-                if let Some(in0) = op.get_in(0) {
-                    let target = in0.read().unwrap();
-                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
-                        self.emit.print(&name);
-                    } else {
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
-                        self.rpn_recurse();
+                // cc:640-641: pushOp(&function_call,op); pushOp(&dereference,op)
+                self.rpn_push_op(self.rpn_tok_function_call);
+                self.rpn_push_op(self.rpn_tok_dereference);
+                // cc:642-645: fc = fd->getCallSpecs(op) (a missing callspec
+                // is an oracle LowlevelError; Rugra's driver always installs
+                // one with the op). cc:646: skip = getHiddenThisSlot(op,fc)
+                // — not ported (returns -1, matching Ghidra's own opCall
+                // TODO, printc.cc:619-623).
+                let skip = self.get_hidden_this_slot(op);
+                // cc:647-648: count = numInput()-1, minus 1 when a `this`
+                // slot is hidden.
+                let n_inputs = op.num_input();
+                let mut count = n_inputs.saturating_sub(1);
+                if skip >= 0 {
+                    count = count.saturating_sub(1);
+                }
+                if count > 1 {
+                    // cc:650-658: callable first, then count-1 comma ops,
+                    // then the implied args in reverse (numInput-1..=1),
+                    // skipping `skip`.
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    for _ in 0..(count - 1) {
+                        self.rpn_push_op(self.rpn_tok_comma);
                     }
+                    for i in (1..n_inputs).rev() {
+                        if i as i32 == skip {
+                            continue;
+                        }
+                        self.rpn_push_in(op_arc, op, i, self.mods);
+                    }
+                } else if count == 1 {
+                    // cc:660-665: the single arg (in(2) when the hidden
+                    // `this` occupies slot 1, else in(1)), then the callable.
+                    let arg_slot = if skip == 1 { 2 } else { 1 };
+                    self.rpn_push_in(op_arc, op, arg_slot, self.mods);
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                } else {
+                    // cc:667-669: void call — callable + EMPTY_STRING blank.
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    let blank = crate::printlanguage::Atom::new(
+                        "",
+                        crate::printlanguage::TagType::BlankToken,
+                        crate::printlanguage::SyntaxHighlight::NoColor,
+                    );
+                    self.rpn_push_atom(&blank);
                 }
-                self.emit.print(")(");
-                for i in 1..op.num_input() {
-                    if i > 1 { self.emit.print(", "); }
-                    self.rpn_push_in(op_arc, op, i, self.mods);
-                    self.rpn_recurse();
-                }
-                self.emit.print(")");
             }
             // printc.cc:596 opCall: pushOp(&function_call) then the name
             // atom and the implied parameters; the postsurround token's
@@ -10766,8 +10812,29 @@ impl PrintLanguage for PrintC {
     }
 
     // Ghidra: printc.cc:1472 PrintC::pushType
-    fn push_type(&mut self, dt: &Datatype) {
-        self.emit.tag_type(dt.get_name(), dt.get_id());
+    /// Faithful port of `PrintC::pushType(const Datatype*)` (printc.cc:
+    /// 1472-1478): `pushTypeStart(ct,true)` + EMPTY_STRING blank atom +
+    /// `pushTypeEnd(ct)` — the full declarator-stack render (base name plus
+    /// the PTR/ARRAY/CODE modifier chain), NOT a bare name print. A bare
+    /// `get_name()` print renders factory-built anonymous pointer types
+    /// (empty names — e.g. the `char *` return of a locked libc PLT-import
+    /// signature) as zero text, which is how the PLT stub family lost its
+    /// signature return type (` strcpy(...)` vs canon `char * strcpy(...)`,
+    /// RESIDMAP-PLTSTUB-EMITSHAPE-0001 ①).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `dt` borrowed read-only; emits only.
+    /// - Loop/order: none here — the walk lives in pushTypeStart/End.
+    /// - Counter: none.
+    /// - Sort key: none.
+    fn push_type(&mut self, dt: &Arc<Datatype>) {
+        // cc:1475: pushTypeStart(ct,true) — declarator stack, no identifier.
+        self.push_type_start_opt(Some(dt), true);
+        // cc:1476: pushAtom(Atom(EMPTY_STRING,blanktoken,no_color)) — zero
+        // text; its RPN role (completing the stack entry) is vacuous on the
+        // direct-print transport.
+        // cc:1477: pushTypeEnd(ct) — array/code suffix layers + parens.
+        self.push_type_end_opt(Some(dt));
     }
 
     // Ghidra: printc.cc:123 PrintC::pushVarnode

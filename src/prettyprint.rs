@@ -684,9 +684,31 @@ impl EmitNoMarkup {
         // LAB_ label on the corpora is still goto-referenced.
         let final_pass = looped;
 
-        // Sixth pass: text-level single-use variable inlining
-        // For `uVarX = EXPR;` where uVarX appears exactly twice (1 def + 1 use),
-        // substitute EXPR at the use site and remove the assignment + declaration
+        // Sixth pass: text-level single-use variable handling.
+        // INLINE arm (count==3 substitution) — RETIRED (PRINTC-CALLIND-
+        // P6-NULLIFY-0001, 2026-09-24; RESIDMAP-PLTSTUB-EMITSHAPE-0001).
+        // The oracle emitter has NO text post-processing:
+        // EmitNoMarkup/EmitPrettyPrint stream per-token (prettyprint.cc:614
+        // print(TokenSplit)), and every temp-assignment collapse Ghidra
+        // performs happens at the ACTION level on the IR — canon keeps
+        // single-use assignments verbatim: `pcVar1 = (char *)(*(code *)
+        // PTR_strcpy_00116e90)();` + `return pcVar1;` (golden:67-70) and
+        // `iVar4 = curl_easy_perform(lVar13);` (golden:993). The inline arm
+        // destroyed exactly those shapes: 23 corpus functions × 3 line
+        // mutations (RUGRA_POSTFIX_RAW_DIR dump, 2026-09-24) — the 22 PLT
+        // stubs' whole bodies (`uVarN = <callind>();` + decl + return
+        // substitution) and main's `uVar3 = curl_easy_perform(iVar10);`
+        // inlined into a CONCAT argument.
+        //
+        // DEAD-ELIM arm (count==2) — retained as an explicitly oracle-
+        // foreign compensation layer: dead single-assignments to never-read
+        // locals (`uVar1 = pRam...;`, no call/side-effect RHS) survive
+        // Rugra's action pipeline where the oracle's ActionDeadCode removes
+        // them at the IR level (canon carries no such lines — httpd
+        // ap_strcmp_match witness, golden:2df20). Retiring this arm leaked
+        // +19 httpd skeleton lines (9 functions, gate run 2026-09-24). The
+        // owner of the underlying gap is the IR-level dead-store removal
+        // (ActionDeadCode port); once that closes, this arm retires with it.
         let snap_p6 = PostfixStats::snap(&final_pass);
         let mut inlined = final_pass;
         {
@@ -701,49 +723,23 @@ impl EmitNoMarkup {
                         // Must be a simple uVarNNN name
                         if var_name.chars().skip(4).all(|c| c.is_ascii_digit()) {
                             let rhs = t[eq_pos + 3..].trim_end_matches(';').to_string();
-                            // Skip if RHS is a function call (contains "(" but not just "(")
-                            // We inline these since they're just value assignments
                             assignments.push((idx, var_name.to_string(), rhs));
                         }
                     }
                 }
             }
 
-            // For each assignment, count total occurrences of the variable name
+            // For each assignment, count total occurrences of the variable
+            // name; only the count==2 dead-store arm remains active.
             let full_text = inlined.join("\n");
-            let mut to_inline: Vec<(usize, String, String)> = Vec::new();
             let mut to_dead_elim: Vec<(usize, String)> = Vec::new();
             for (idx, var_name, rhs) in &assignments {
                 let count = Self::count_word_occurrences(&full_text, var_name);
-                if count == 3 {
-                    // 1 declaration + 1 assignment + 1 use → inline
-                    to_inline.push((*idx, var_name.clone(), rhs.clone()));
-                } else if count == 2 {
+                if count == 2 {
                     // 1 declaration + 1 assignment, never used → dead code
                     // Only eliminate if RHS has no side effects (no function calls)
                     if !rhs.contains('(') {
                         to_dead_elim.push((*idx, var_name.clone()));
-                    }
-                }
-            }
-
-            // Apply inlining (reverse order to preserve indices)
-            for (assign_idx, var_name, rhs) in to_inline.iter().rev() {
-                // Remove the assignment line
-                inlined[*assign_idx] = String::new();
-                
-                // Replace the use of var_name with rhs in all other lines
-                for i in 0..inlined.len() {
-                    if i == *assign_idx { continue; }
-                    let line = &inlined[i];
-                    let t = line.trim();
-                    // Skip declaration lines
-                    if t.contains(&format!(" {};", var_name)) {
-                        inlined[i] = String::new();
-                        continue;
-                    }
-                    if line.contains(var_name.as_str()) {
-                        inlined[i] = Self::replace_word(&line, var_name, rhs);
                     }
                 }
             }

@@ -965,3 +965,29 @@ HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0001 不变）；curl 与基**逐字节相同**
   签名与 `{` 之间注入 `int uVarN;` K&R 式重复声明（httpd ap_getparents、
   curl glob_word）。扩宽后该误判消除（curl −5 行全为死声明删除）。plain
   `int` 不在集合内（legacy 合法拼写），判定方向保持保守。
+
+## 2026-09-24: P6 单用内联臂退役(PRINTC-CALLIND-P6-NULLIFY-0001 + RESIDMAP-PLTSTUB-EMITSHAPE-0001)
+
+- `post_process_output_legacy` 第六 pass 的 **count==3 内联臂**(单用
+  `uVarN = EXPR;` 替换使用点+删赋值+删声明)**整体退役**;count==2 死赋值
+  消除臂保留(补偿层,见下)。oracle 证据:Ghidra 发射器是纯逐 token 流
+  (prettyprint.cc:614 EmitPrettyPrint::print 处理 TokenSplit,无任何
+  post-hoc 文本重写概念;`grep postprocess|post_process` 全空),单用赋值
+  的折叠全部发生在 Action 层 IR 上——canon 逐字保留
+  `pcVar1 = (char *)(*(code *)PTR_strcpy_00116e90)(); return pcVar1;`
+  (golden:67-70)与 `iVar4 = curl_easy_perform(lVar13);`(golden:993)、
+  httpd `pvVar5 = (void *)apr_palloc(param_1,lVar7); pvVar5 = memcpy(...)`
+  (golden:5913-5914 成对语句)。该臂破坏的语料证据(RUGRA_POSTFIX_RAW_DIR
+  落盘,2026-09-24):23 函数×3 行突变——22 个 PLT stub 全体
+  (`uVarN = <callind>();` 被内联清空)与 main 的
+  `uVar3 = curl_easy_perform(iVar10);` 被并进 CONCAT 实参。
+- **count==2 死赋值臂保留**为显式 oracle-foreign 补偿层:未读单赋值局部
+  (`uVar1 = pRam...;` 无调用/副作用 RHS)在 Rugra 动作管线存活而 oracle
+  的 ActionDeadCode 在 IR 层已移除(canon 无此类行,httpd ap_strcmp_match
+  @0x2df20 见证);整体退役曾泄漏 +19 行 httpd(9 函数,2026-09-24 门禁)。
+  底层缺口归属=IR 级死存储移除(ActionDeadCode 移植),该缺口关闭后此臂
+  随之退役。
+- 门禁:curl **2005/0/0**(亲父 9458a61b=2145,−140)、httpd 2068/0/0
+  (亲父 2057,+11=保留的 canon 形语句与 golden 命名/类型差,见
+  RESIDMAP-PLTSTUB-EMITSHAPE-0001 Differential);gcc 审计 104OK/20FAIL
+  (亲父 82OK/25FAIL)。
