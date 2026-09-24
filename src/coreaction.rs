@@ -1612,6 +1612,7 @@ impl Action for ActionRestructureVarnode {
                         if space == crate::space::AddressSpace::Register {
                             let input_vn = fd.find_varnode_input(
                                 dtype.get_size(),
+                                space,
                                 crate::address::Address::new(offset),
                             );
                             if let Some(vn_arc) = input_vn {
@@ -9599,9 +9600,11 @@ impl Action for ActionRestrictLocal {
             if effect.get_type() == crate::fspec::EffectType::KilledByCall {
                 continue;
             }
-            // cc:1987: vn = data.findVarnodeInput(size, address);
+            // cc:1987: vn = data.findVarnodeInput(size, address) — the
+            // EffectRecord address is (space, offset); the bank lookup is
+            // space-qualified. (BANK-FINDINPUT-SPACE-0001)
             let Some(vn_arc) =
-                fd.find_varnode_input(effect.get_size() as usize, crate::address::Address::new(effect.get_offset()))
+                fd.find_varnode_input(effect.get_size() as usize, effect.space, crate::address::Address::new(effect.get_offset()))
             else {
                 continue;
             };

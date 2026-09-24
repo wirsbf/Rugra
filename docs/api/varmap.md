@@ -1,5 +1,16 @@
 # `varmap.rs` API Reference
 
+## 2026-09-24：数组壳尺寸 = num × 元素 alignSize（VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001，wt/p3batch）
+
+`create_entry`（varmap.cc:617-628）的 num>1 数组壳尺寸修正：Ghidra
+`glb->types->getTypeArray(num,ct)` 构造 `TypeArray(n,ao) : Datatype(n*ao->getAlignSize(),…)`
+（type.hh:937）——数组壳尺寸 = **num × 元素 getAlignSize()**，即
+`floor(hint.size/align) × align ≤ hint.size`。非整扩展余数（open hint 被 varmap.cc:1315
+扩过界，如 14B/4B 元素 → num=3、壳 12B）尾部**留洞**，不进符号映射。Rugra 原以
+`hint.size` 整段作壳尺寸，把余数也映射进数组壳。本语料（curl/httpd）hint 全为整倍数
+=latent 零行为差；判据由 varmap 既有单测族 + 三门禁恒等锁定。与上一节
+（VARMAP-SPALIAS-RETYPE-0001：addSymbol 尺寸取自类型而非 hint.size）同域收口。
+
 ## 2026-09-24：create_entry 符号尺寸改由数据类型决定（VARMAP-SPALIAS-RETYPE-0001，wt/spalias2）
 
 **结论先行（车道裁决）**：GK 移交的两个症状——①SP-alias 栈符号陷入

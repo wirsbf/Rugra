@@ -6021,17 +6021,84 @@ impl RulePushMulti {
     // Ghidra: ruleaction.cc:1062 RulePushMulti
     pub fn new() -> Self { Self }
 
+    // Ghidra: block.cc:2778 BlockBasic::earliestUse
+    /// Get the earliest use/read of a Varnode in this basic block.
+    /// Faithful to `BlockBasic::earliestUse` (block.cc:2778-2795): scan the
+    /// varnode's descendants, keep those whose parent is this block, and
+    /// return the one with the smallest intra-block `SeqNum::order`; the
+    /// `<`-only compare never replaces on equality, so the FIRST-seen
+    /// descendant wins ties, mirroring the oracle's iteration order.
+    /// (RULEACTION-FINDSUB-BBFILTER-0001: consumed by applyOp cc:1095.)
+    fn earliest_use_in_block(
+        bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
+        let mut res: Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = None;
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        for op_arc in descendants {
+            // cc:2786: if (op->getParent() != this) continue — a parentless
+            // op never matches the (non-null) block.
+            let op_parent = op_arc
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade());
+            let parent_matches = op_parent
+                .map(|p| std::sync::Arc::ptr_eq(&p, bl))
+                .unwrap_or(false);
+            if !parent_matches {
+                continue;
+            }
+            let order = op_arc.read().unwrap().get_seq_num().order;
+            match &res {
+                None => res = Some(op_arc),
+                Some(cur) => {
+                    if order < cur.read().unwrap().get_seq_num().order {
+                        res = Some(op_arc);
+                    }
+                }
+            }
+        }
+        res
+    }
+
     /// Find a substitute MULTIEQUAL in the block that already merges in1/in2.
-    /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060).
+    /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060):
+    /// the descendant scan filters on `op->getParent() != bb` (cc:1040), and
+    /// the functional-equality CSE arm delegates to
+    /// `Funcdata::cseFindInBlock(op1,vn,bb,earliest)` (cc:1056), which
+    /// enforces the same block membership plus the earliest-order
+    /// constraint. (RULEACTION-FINDSUB-BBFILTER-0001)
     // Ghidra: ruleaction.cc:1031 RulePushMulti::findSubstitute
     fn find_substitute(
+        fd: &Funcdata,
         in1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         in2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        bb: &Option<
+            std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >,
+        >,
+        earliest: Option<&crate::op::PcodeOpRef>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
         // Search descendants of in1 for a MULTIEQUAL with inputs [in1, in2].
         let descends: Vec<_> = in1.read().unwrap().descend_iter().collect();
         for op_arc in descends {
             let op = op_arc.read().unwrap();
+            // cc:1040: if (op->getParent() != bb) continue — raw pointer
+            // inequality; null -bb- matches ONLY parentless ops (flat-bank
+            // fixtures keep their legacy reach inside that class).
+            let op_parent = op.parent.as_ref().and_then(|w| w.upgrade());
+            let parent_matches = match (&op_parent, bb) {
+                (Some(p), Some(b)) => std::sync::Arc::ptr_eq(p, b),
+                (None, None) => true,
+                _ => false,
+            };
+            if !parent_matches {
+                continue;
+            }
             if op.opcode != OpCode::CPUI_MULTIEQUAL {
                 continue;
             }
@@ -6069,33 +6136,20 @@ impl RulePushMulti {
                 let op2_in = op2.read().unwrap().inrefs.get(i).cloned();
                 if let Some(op2_in) = op2_in {
                     if std::sync::Arc::ptr_eq(&vn, &op2_in) {
-                        // Search for a CSE of op1 reading vn in the block.
-                        let vn_descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
-                        for d in vn_descends {
-                            let dr = d.read().unwrap();
-                            if std::sync::Arc::ptr_eq(&d, &op1) {
-                                continue;
-                            }
-                            // Check if this descendant has the same opcode and
-                            // matching inputs as op1.
-                            if dr.opcode == op1.read().unwrap().opcode
-                                && dr.inrefs.len() == op1.read().unwrap().inrefs.len()
-                            {
-                                let mut all_match = true;
-                                for j in 0..dr.inrefs.len() {
-                                    if !std::sync::Arc::ptr_eq(
-                                        &dr.inrefs[j], &op1.read().unwrap().inrefs[j],
-                                    ) {
-                                        all_match = false;
-                                        break;
-                                    }
-                                }
-                                if all_match {
-                                    drop(dr);
-                                    return Some(d);
-                                }
-                            }
-                        }
+                        // cc:1056: search for a cse of op1 in bb, under the
+                        // earliest-order constraint — the canonical
+                        // Funcdata::cseFindInBlock (funcdata_op.cc:1324-1345)
+                        // enforces block membership, the earliest bound, the
+                        // null-output skip, and depth-0 functional equality
+                        // of the outputs.
+                        return fd
+                            .cse_find_in_block(
+                                &crate::op::PcodeOpRef(op1.clone()),
+                                &vn,
+                                bb.as_ref(),
+                                earliest,
+                            )
+                            .map(|r| r.0);
                     }
                 }
             }
@@ -6151,6 +6205,21 @@ impl Rule for RulePushMulti {
             None => return Ok(action_status::NO_CHANGE),
         };
 
+        // cc:1094-1095: BlockBasic *bl = op->getParent();
+        // PcodeOp *earliest = bl->earliestUse(op->getOut()); — computed
+        // before BOTH findSubstitute arms (the COPY special case at
+        // cc:1096-1104 consumes it too). (RULEACTION-FINDSUB-BBFILTER-0001)
+        let bl = op_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        let earliest: Option<crate::op::PcodeOpRef> = bl
+            .as_ref()
+            .and_then(|b| Self::earliest_use_in_block(b, &out_vn))
+            .map(crate::op::PcodeOpRef);
+
         if op1_code == OpCode::CPUI_COPY {
             // Special case: MERGE of 2 shadowing varnodes.
             if res == 0 {
@@ -6159,7 +6228,8 @@ impl Rule for RulePushMulti {
             let substitute = match result
                 .pairs
                 .get(0)
-                .and_then(|p| Self::find_substitute(&p.0, &p.1)) {
+                .and_then(|p| Self::find_substitute(fd, &p.0, &p.1, &bl, earliest.as_ref()))
+            {
                 Some(s) => s,
                 None => return Ok(action_status::NO_CHANGE),
             };
@@ -6198,18 +6268,13 @@ impl Rule for RulePushMulti {
 
         // Ghidra cc:1094: bl = op->getParent() — the merge block owning the
         // MULTIEQUAL being destroyed; both insert forms below target it.
-        let bl = op_arc
-            .read()
-            .unwrap()
-            .parent
-            .as_ref()
-            .and_then(|w| w.upgrade());
+        // (Extracted once before the COPY arm together with -earliest-.)
 
         if res == 1 {
             // There's one pair that must be unified via a new MULTIEQUAL.
             let buf1 = &result.pairs[0].0;
             let buf2 = &result.pairs[0].1;
-            let substitute = Self::find_substitute(buf1, buf2);
+            let substitute = Self::find_substitute(fd, buf1, buf2, &bl, earliest.as_ref());
             let slot1 = fd.op_get_slot(&op1_ref, buf1) as usize;
             let sub_ref = match substitute {
                 Some(sub) => crate::op::PcodeOpRef(sub),
@@ -9072,7 +9137,7 @@ impl Rule for RuleMultiCollapse {
                         .find(|input| !input.read().unwrap().is_constant())
                         .and_then(|input| {
                             fd.cse_find_in_block(
-                            &source_ref, input, &parent, earliest.as_ref())
+                            &source_ref, input, Some(&parent), earliest.as_ref())
                         });
                     if let Some(substitute) = substitute {
                         let substitute_out = substitute.0.read().unwrap().output.clone()

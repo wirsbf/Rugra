@@ -3012,6 +3012,13 @@ TypeOpReturn::getInputLocal 引用随 typeop.cc 901 修正（原 883）。无行
 
 ## 2026-09-24：ActionRestrictLocal effect 迭代走 FuncProto::effectBegin 回退（PM-GLOBWORD lane）
 
+**2026-09-24 补注（BANK-FINDINPUT-SPACE-0001，wt/p3batch）**：Loop-2 的
+`fd.find_varnode_input(effect.get_size(), effect.space, …)` 现携带
+`EffectRecord.space`（cc:1987 `data.findVarnodeInput(size,(*eiter).getAddress())`
+的 Address 含空间；fspec.rs `EffectRecord{space,offset,size,…}` 本就带）。
+同族另一消费点：ActionRestructureVarnode 参数 typelock 的 Register 臂。
+语义变化仅当跨空间偏移碰撞时可见（x86-64 无碰撞=latent）。
+
 Loop-2（saved-register 溢出槽 walk，coreaction.cc:1983-1999）此前读
 `fd.funcp.effects` 原始字段——分析期 FuncProto 的本地 effectlist 恒空，
 `<unaffected>`（RBX/RSP/RBP/R12-R15）记录全在解析模型的 effectlist 里，

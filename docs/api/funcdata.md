@@ -1252,6 +1252,28 @@ SB-ORD159-NULLSLOT-0001 残差）。）
   2. **循环边界**：Ghidra 迭代器先推进再重写（cc:1551/1563-1564），**每个**原始 descendant 都被重定向到新克隆 op；没有「最后一个读者保留原 op」特例（旧 Rugra `last_idx` break 是移植缺陷）。原 op 留给 dead-code 移除（cc:1566）。
 - 验证：HEAD worktree 基线对比证明 5 个失败单测为域外既有（零新增）；E2E curl 124/124；全语料 5 连跑 sha256 一致（03d97945…）；差分 defects=0/numbering=0。
 
+### 2026-09-24：split_uses 类型携带 + newVarnode 正典化 + find 输入空间限定（FUNCDATA-SPLITUSES-NEWVN-TYPECARRY-0001 / BANK-FINDINPUT-SPACE-0001，wt/p3batch）
+
+- `split_uses(vn)` — cc:1556 `newvn = newVarnode(vn->getSize(),vn->getAddr(),vn->getType())`
+  的新 vn 现走**完整** `Funcdata::newVarnode(s,m,ct)` 路径（funcdata_varnode.cc:148-169）：
+  ①类型携带（源 vn 的 `v_type`，`ct==0` 回退工厂 unknown 基=Varnode 构造器默认）；
+  ②`assignHigh`；③`checkForLanedRegister`（`s >= minLanedSize`）；④`queryProperties`
+  符号尾（INVALID usepoint）。此前裸 `vbank.create_with_space` 丢全部四件携带（同类
+  携带 PM-F2S 已证明可观察；spacebase 标记循环 funcdata.cc:241-262 是唯一调用点）。
+- `new_varnode_typed_in_space(size, space, addr, ct)` — 新增 typed 显式空间形态的
+  `Funcdata::newVarnode`（`// Ghidra: funcdata_varnode.cc:148`）；`new_varnode_in_space`
+  改为委托它（`ct=None`），单一正典路径。类型非 bank 树键，插入后安装与
+  `create_unique_typed`（varnode.cc:1265）同款。
+- `find_varnode_input(size, space, addr)` — `Funcdata::findVarnodeInput`（funcdata.hh:324）
+  的 Address 携带空间：bank 查找现带空间限定（`VarnodeBank::findInput` 见 varnode.md）。
+  两消费点：ActionRestructureVarnode 参数 typelock（Register 臂）与
+  ActionRestrictLocal Loop-2 unaffected 溢出槽 walk（coreaction.rs，EffectRecord.space）。
+- `find_spacebase_input` — cc:298 `findInput(point.size, Address(point.space,point.offset))`
+  的 `point.space` 是基寄存器的 REGISTER 空间（`stack_pointer_space`），非被指空间。
+- `cse_find_in_block(op, vn, bl: Option<&…>, earliest)` — `bl` 参数改 Option 以镜像
+  Ghidra 裸指针不等式（cc:1334 `res->getParent() != bl`：null `bl` 仅匹配无 parent 的
+  op）；语义与调用方（RulePushMulti/RuleMultiCollapse）不变。
+
 ### 2026-06-27（续 5）：CSE 基础设施
 
 - `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1356-1398）。

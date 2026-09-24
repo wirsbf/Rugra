@@ -100,6 +100,8 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 **varnode 去重（find_or_create_input_space）**（2026-06-29）：新增 `VarnodeBank::find_or_create_input_space(size, space, offset)`——查找已有的同 (space, offset, size) 的 free/input varnode（不含 written），复用它；没有则创建。对齐 Ghidra `Funcdata::newVarnode`（funcdata_varnode.cc:148）——建 free varnode，由 rename 连接到 written。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
 
+**find_input 空间限定**（2026-09-24，`BANK-FINDINPUT-SPACE-0001`，wt/p3batch）：`VarnodeBank::find_input(size, space, loc)` 补空间匹配——对齐 `VarnodeBank::findInput`（varnode.cc:1465-1478）的 `beginLoc(s,loc,Varnode::input)` + `vn->getAddr()==loc` 全地址比较（空间+偏移）。此前只匹配 size/offset：x86-64 寄存器偏移与其它空间不碰撞故无可观察差，但其它 ABI（寄存器偏移与栈/唯一偏移重叠）下会跨空间误命中。消费面经 `Funcdata::find_varnode_input`/`find_spacebase_input`（见 funcdata.md）：RestrictLocal 的 EffectRecord 溢出槽 walk（`effect.space`）、RestructureVarnode 参数 typelock（Register 臂）、spacebase 输入定位（`point.space`=Register 空间）。
+
 **INSERT/activeHeritage flag 模型**（2026-06-29 续）：对齐 Ghidra varnode flag 语义。`VarnodeBank::create` 不设 INSERT（对齐 varnode.cc:1250，free varnode 无 INSERT → `isHeritageKnown` false → rename 处理）。`set_def`/`set_input` 设 INSERT（对齐 createDef/makeInput→xref）。新增 `addl_flags` 模块（ACTIVE_HERITAGE=0x01 等，对齐 varnode.hh:115）。`is_heritage_known()` 检查 `flags & (INSERT|CONSTANT|ANNOTATION)`（对齐 varnode.hh:298）。`set_active_heritage()`/`is_active_heritage()` 访问器。
 
 ### 2. 数据流节点语义

@@ -3606,14 +3606,27 @@ impl VarnodeBank {
 
     // Ghidra: varnode.cc:1465 VarnodeBank::findInput
     /// Find an input varnode at the given size and location. Faithful to
-    /// `VarnodeBank::findInput` (varnode.hh). Used by ActionRestrictLocal
-    /// and AncestorRealistic to find specific register inputs.
-    pub fn find_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+    /// `VarnodeBank::findInput` (varnode.cc:1465-1478): the lookup key is
+    /// the FULL Address — `beginLoc(s,loc,Varnode::input)` searches the
+    /// (size, space, offset) tree keys and the found varnode must satisfy
+    /// `vn->getAddr()==loc`, which compares space AND offset. Rugra keeps
+    /// space and offset split (ADDRESS-0001), so the space is an explicit
+    /// parameter. Used by ActionRestrictLocal and AncestorRealistic to
+    /// find specific register inputs. (BANK-FINDINPUT-SPACE-0001)
+    pub fn find_input(
+        &self,
+        size: usize,
+        space: AddressSpace,
+        loc: Address,
+    ) -> Option<Arc<RwLock<Varnode>>> {
         self.loc_tree
             .iter()
             .find(|v| {
                 let g = v.0.read().unwrap();
-                g.is_input() && g.get_size() == size && g.get_offset() == loc.as_u64()
+                g.is_input()
+                    && g.get_size() == size
+                    && g.address_space == space
+                    && g.get_offset() == loc.as_u64()
             })
             .map(|v| v.0.clone())
     }
