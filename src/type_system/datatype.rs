@@ -4352,7 +4352,9 @@ impl TypeSpacebase {
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
         // AddrSpace::byteToAddress(off, wordsize) (space.hh:523) = off / ws
         // (FM direction fix: mul→div; ws=1 makes both identity here).
-        let addr_off = off.wrapping_div(wordsize) as u64;
+        // Unsigned uintb division: negative stack offsets divide on the
+        // two's-complement bit pattern like the oracle, not as i64.
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
         match self.get_map() {
             None => (
                 Some(Arc::new(Datatype::Base(TypeBase::new(
@@ -4456,8 +4458,10 @@ impl TypeSpacebase {
     /// like the snapshot form.
     pub fn get_sub_type_in_map(&self, map: &SpacebaseMap<'_>, off: i64) -> (Option<Arc<Datatype>>, i64) {
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
-        // AddrSpace::byteToAddress(off, wordsize) = off / ws (space.hh:523).
-        let addr_off = off.wrapping_div(wordsize) as u64;
+        // AddrSpace::byteToAddress(off, wordsize) = off / ws (space.hh:523),
+        // unsigned uintb division on the bit pattern (negative offsets keep
+        // the oracle's huge-positive quotient at ws > 1; ws = 1 identity).
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
         match self.query_container_in_map(map, addr_off) {
             Some(hit) => {
                 // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
@@ -4491,8 +4495,9 @@ impl TypeSpacebase {
     ) -> ArrayedComponent {
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
         // byteToAddress(off, ws) = off / ws (space.hh:523); resolveConstant
-        // is modelled as the identity mapping into the space.
-        let addr = off.wrapping_div(wordsize) as u64;
+        // is modelled as the identity mapping into the space. Unsigned
+        // uintb division (see get_sub_type_in_map).
+        let addr = (off as u64).wrapping_div(wordsize as u64);
         // type.cc:2984-2985 — no container, or a partial piece
         // (getOffset() != 0): probe 32 address units ahead.
         let first = match self.query_container_in_map(map, addr) {

@@ -17968,7 +17968,7 @@ struct AddTreeState<'a> {
     size: i64,
     multsum: u64,
     nonmultsum: u64,
-    biggest_non_mult_coeff: u64,
+    biggest_non_mult_coeff: u32,
     multiple: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     coeff: Vec<i64>,
     nonmult: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
@@ -18216,7 +18216,11 @@ impl<'a> AddTreeState<'a> {
                             return self.span_add_tree(&def, val);
                         }
                     }
-                    let vncoeff: u64 = if sval < 0 { (-sval) as u64 } else { sval as u64 };
+                    // Ghidra: ruleaction.cc:6146 `uint4 vncoeff = (sval < 0) ?
+                    // (uint4)-sval : (uint4)sval;` — the cast to uint4 happens
+                    // BEFORE the comparison, so |sval| >= 2^32 wraps (possibly
+                    // to 0) before it can beat the running maximum.
+                    let vncoeff: u32 = if sval < 0 { sval.wrapping_neg() as u32 } else { sval as u32 };
                     if vncoeff > self.biggest_non_mult_coeff {
                         self.biggest_non_mult_coeff = vncoeff;
                     }
@@ -18231,8 +18235,10 @@ impl<'a> AddTreeState<'a> {
                 }
             }
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6158-6159 — compare at uint8 (treeCoeff) width
+        // against the uint4 field promoted to uint8, store truncated to uint4.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
@@ -18292,8 +18298,11 @@ impl<'a> AddTreeState<'a> {
             self.valid = false;
             return false;
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6210-6211 — `treeCoeff` (uint8) is compared at
+        // full 64-bit width against the uint4 field (promoted), but the STORE
+        // truncates to uint4: the running maximum only ever holds 32 bits.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
@@ -18391,7 +18400,7 @@ impl<'a> AddTreeState<'a> {
     /// (type.cc:3020/2971) and TYPE_STRUCT to the field walks
     /// (type.cc:1669/1698); every other metatype takes the base null walks
     /// (type.cc:201/188).
-    fn has_matching_sub_type(&self, off: i64, array_hint: u64, newoff: &mut i64) -> bool {
+    fn has_matching_sub_type(&self, off: i64, array_hint: u32, newoff: &mut i64) -> bool {
         use crate::type_system::datatype::{
             nearest_arrayed_component_backward, nearest_arrayed_component_forward, Datatype,
             SpacebaseMap, TypeMetatype,
@@ -18400,9 +18409,10 @@ impl<'a> AddTreeState<'a> {
             Some(bt) => bt.clone(),
             None => return false,
         };
-        // Ghidra passes the uint8 field biggestNonMultCoeff into the uint4
-        // formal arrayHint: the low 32 bits survive.
-        let array_hint = array_hint as u32;
+        // The formal is `uint4 coeff` (ruleaction.cc:6064) and the argument is
+        // the uint4 field `biggestNonMultCoeff` (ruleaction.hh:54): no
+        // truncation happens at this call in the oracle — the field is already
+        // 32-bit (stores truncate, see the three mirror sites above).
         let map: Option<SpacebaseMap<'_>> =
             if base_type.get_metatype() == TypeMetatype::Spacebase {
                 Some(self.spacebase_map(&base_type))

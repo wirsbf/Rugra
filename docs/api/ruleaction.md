@@ -1675,6 +1675,24 @@ flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate
   addressToByteInt(offset, ct wordsize)（uint8→int8 重解释 ×ws），extra 回转
   byteToAddress（÷ws，space.hh:523/541 方向：addressToByte 乘、byteToAddress
   除）；STRUCT 臂（6299-6313）同构接 hint 路径，边界检查按字节比较。
+
+## 2026-09-24：biggestNonMultCoeff u32 化 + 三处截断时点镜像（wt/postadsorb，R1）
+
+- 勘误：上文"uint8 biggestNonMultCoeff→uint4 形参的 32 位截断保留"引用的
+  字段宽度有误——oracle 字段本就是 `uint4 biggestNonMultCoeff`
+  （ruleaction.hh:54），形参也是 `uint4 coeff`（ruleaction.cc:6064），
+  调用点（cc:6290/6304）在 oracle 中**不发生任何截断**。
+- 字段 `biggest_non_mult_coeff` 由 u64 改为 u32；截断镜像三处：
+  ① check_mult_term（cc:6146-6147）`uint4 vncoeff=(sval<0)?(uint4)-sval:
+  (uint4)sval` —— 转换发生在**比较之前**，|sval|≥2^32 先回绕（可能为 0）
+  再参与竞争；②③ check_mult_term 尾/check_term 尾（cc:6158-6159/6210-6211）
+  —— `treeCoeff`（uint8）按 64 位宽与字段（uint4 提升后）比较，**store 时**
+  截断到 32 位。`!=0` 消费点（cc:6271）与 hasMatchingSubType 形参读取的
+  均为已截断存储值。`has_matching_sub_type` 形参改 u32，删除入口处
+  自造的 `as u32` 截断（现由字段宽度天然承载）。
+- 可达性：|sval|/treeCoeff ≥ 2^32 需 8 字节常量或 INT_MULT 系数累积；
+  当前语料不可达（E2E curl/httpd 双语素逐字节不变），登记为 CR24-R1
+  修复、ws=1/小系数域下 corpus-neutral。
 - 此前状态：两臂只建模 arrayHint==0 的 getSubType 直查（注释自认
   nearestArrayedComponent* 未建模），ord186 getparameter/ord186 parseconfig/
   ord150 myprogress 三处 oppool2 ptrarith 常量差 8 族（FG 归因

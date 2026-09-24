@@ -428,6 +428,19 @@ carrier 的身份修正；完整 TypeCode prototype、null output 和 dependency
   ruleaction.rs RulePtrsubUndo 的同名布尔版（testForArraySlack 专用）不同）。
 - `get_sub_type` 的 byte→address 换算由乘改除（space.hh:523
   byteToAddress=val/ws；ws=1 恒等，无行为变化）。
+
+## 2026-09-24：SPACEBASE 臂 byteToAddress 无符号除镜像（wt/postadsorb，R2）
+
+- `AddrSpace::byteToAddress(uintb val, uint4 ws) { return val/ws; }`
+  （space.hh:522-524）是 **uintb（无符号 64 位）除法**。Rugra 三处
+  `off.wrapping_div(wordsize) as u64`（`get_sub_type`/`get_sub_type_in_map`/
+  `nearest_arrayed_component_forward_in_map`）原为 i64 有符号除法后再转
+  u64——对负栈偏移（如 -0x4e8）在 ws>1 时会得到与 oracle 不同的商
+  （有符号负商 vs 无符号巨大正商）。三处改为
+  `(off as u64).wrapping_div(wordsize as u64)`，按补码位型做无符号除。
+- ws=1（当前 x86-64 全部空间）下逐位恒等，E2E 双语素逐字节不变；
+  wordsize>1 空间进入 TypeSpacebase 查询前为不可达分支（fixture 缺口
+  登记 TODO `RULEARITH-SPACEBASE-USDIV-0001`，P3 latent）。
 - 单测：test_spacebase_nearest_arrayed_walks_live_map（FG 反推的 oppool2
   ScopeLocal 形态 [8B 单元素数组@-0x4f8][8B 标量@-0x4f0][数组@-0x4e8]：
   backward@-0x4f8 命中 newoff=0、forward@-0x4f0 吸附 newoff=-8、远距 miss
