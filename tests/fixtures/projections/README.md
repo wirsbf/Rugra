@@ -4,8 +4,7 @@ Per-function stage-projection fixture bank: for each banked function, the
 frozen oracle-side and rugra-side v1.2 stage projections plus a manifest
 that pins provenance and byte identity. This directory is the durable,
 in-repo form of the RAM-disk lane evidence (the `/dev/shm/rugra-tests/sb-*`
-projection products are lost on reboot); it exists so that the wave's
-six proven-MATCH functions cannot silently regress.
+projection products are lost on reboot); it exists so that the banked
 proven-MATCH functions cannot silently regress.
 
 ## Layout
@@ -31,6 +30,7 @@ tests/fixtures/projections/
 | curl_glob_set | glob_set | 0x4bc0 | 366 | 141,943 | bank sha256 (capture-mode first, then frozen) |
 | curl_glob_word | glob_word | 0x4a60 | 335 | 208,414 | bank sha256 (capture mode, re-capture byte-verified) |
 | curl_file2string.part.0 | file2string.part.0 | 0x3a90 | 340 | 87,957 | bank sha256 (== sb-oracle pin c0981445…) |
+| curl_my_get_token | my_get_token | 0x3720 | 520 | 53,359 | bank sha256 (capture mode, direct MATCH, no fix needed) |
 
 Common provenance (also recorded per manifest):
 
