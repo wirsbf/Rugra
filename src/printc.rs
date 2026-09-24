@@ -1747,6 +1747,55 @@ impl PrintC {
     /// (*addr = value), CALL (name(args)), RETURN (return ...), CBRANCH
     /// (condition). Everything else is a no-op (BRANCH targets are rendered
     /// by the structurer; MULTIEQUAL/INDIRECT are internal).
+    // Ghidra: printc.cc:353 PrintC::checkArrayDeref
+    /// Decide whether a LOAD/STORE address Varnode can render in array-use
+    /// (subscript) form. Mirrors `bool PrintC::checkArrayDeref(const Varnode *vn) const`
+    /// (printc.cc:355-369): the address must be \e implied (printed inline as
+    /// an expression, never as a named variable) and written; a SEGMENTOP
+    /// wrapper is unwrapped to its pointer input (in(2)); the defining op must
+    /// then be a PTRSUB or PTRADD. Any other shape (leaf symbol, CAST, other
+    /// arithmetic) forces the `*(addr)` dereference form.
+    fn check_array_deref(vn: &crate::varnode::Varnode) -> bool {
+        // cc:358-359: if (!vn->isImplied()) return false;
+        //             if (!vn->isWritten()) return false;
+        if !vn.is_implied() {
+            return false;
+        }
+        let mut def_arc = match vn.get_def() {
+            Some(d) => d,
+            None => return false,
+        };
+        let mut code = {
+            let d = def_arc.read().unwrap();
+            d.opcode
+        };
+        // cc:361-366: unwrap SEGMENTOP — the real address is in(2).
+        if code == OpCode::CPUI_SEGMENTOP {
+            let inner = {
+                let d = def_arc.read().unwrap();
+                d.get_in(2).cloned()
+            };
+            let Some(inner) = inner else { return false };
+            {
+                let v = inner.read().unwrap();
+                if !v.is_implied() {
+                    return false;
+                }
+            }
+            let next_def = {
+                let v = inner.read().unwrap();
+                v.get_def()
+            };
+            let Some(next) = next_def else { return false };
+            def_arc = next;
+            code = def_arc.read().unwrap().opcode;
+        }
+        // cc:367-368: PTRSUB/PTRADD are the array-use shapes.
+        code == OpCode::CPUI_PTRSUB || code == OpCode::CPUI_PTRADD
+    }
+
+    // Ghidra: typeop.hh:170 TypeOp::push (virtual dispatch — the per-opcode
+    // PrintC::opXxx bodies are printc.cc:481+; see each arm's own anchor)
     fn dispatch_op_rpn(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -1924,10 +1973,27 @@ impl PrintC {
                 // leaf atoms via pushVnExplicit (byte-identical text).
                 self.rpn_push_in(op_arc, op, 0, self.mods);
             }
-            // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
+            // printc.cc:486-498 opLoad: usearray = checkArrayDeref(in1);
+            //   if (usearray && !isSet(force_pointer)) m |= print_load_value
+            //   else pushOp(&dereference,op);
+            //   pushVn(op->getIn(1),op,m);
             OpCode::CPUI_LOAD => {
-                self.rpn_push_op(self.rpn_tok_dereference);
-                self.rpn_push_in(op_arc, op, 1, self.mods);
+                // cc:490-496: array-use form lets the implied PTRADD/PTRSUB
+                // address def render `p[i]` (opPtradd printval branch).
+                let mut m = self.mods;
+                let usearray = op
+                    .get_in(1)
+                    .map(|vn| {
+                        let v = vn.read().unwrap();
+                        Self::check_array_deref(&v)
+                    })
+                    .unwrap_or(false);
+                if usearray && !self.is_set(crate::printlanguage::modifiers::FORCE_POINTER) {
+                    m |= print_mods::PRINT_LOAD_VALUE;
+                } else {
+                    self.rpn_push_op(self.rpn_tok_dereference);
+                }
+                self.rpn_push_in(op_arc, op, 1, m);
             }
             // STORE has no outvn; render *(addr) = value inline.
             // printc.cc:500-518 opStore: pushOp(assignment); [pushOp(deref)];
@@ -1938,8 +2004,28 @@ impl PrintC {
             // PTRSUB write address or an implied value expression) inline at
             // the use site exactly as printlanguage.cc:526-536 prescribes.
             OpCode::CPUI_STORE => {
-                // Check INT_ADD(struct_ptr, field_offset) -> ptr->field
+                // printc.cc:506-513: m = mods; usearray = checkArrayDeref(in1);
+                //   if (usearray && !isSet(force_pointer)) m |= print_store_value;
+                //   else pushOp(&dereference,op);
+                // The subscript path renders the STORE address as `p[i]`
+                // (opPtradd's printval branch, printc.cc:885-886) instead of
+                // prefixing `*` — this is the oracle's array-use emission arm.
+                let mut m = self.mods;
+                let usearray = op
+                    .get_in(1)
+                    .map(|vn| {
+                        let v = vn.read().unwrap();
+                        Self::check_array_deref(&v)
+                    })
+                    .unwrap_or(false);
+                let deref_form = !usearray || self.is_set(crate::printlanguage::modifiers::FORCE_POINTER);
+                if !deref_form {
+                    m |= print_mods::PRINT_STORE_VALUE;
+                }
+                // Legacy substitute (pre-dates the checkArrayDeref port):
+                // INT_ADD(struct_ptr, field_offset) -> `ptr->field` write.
                 let mut field_access = false;
+                if deref_form {
                 if let Some(in1) = op.get_in(1) {
                     let addr_vn = in1.read().unwrap();
                     if let Some(ref def_weak) = addr_vn.def {
@@ -1999,9 +2085,15 @@ impl PrintC {
                         }
                     }
                 }
+                } // end deref_form field_access substitute guard
                 if !field_access {
-                    self.emit.tag_op("*");
-                    self.rpn_push_in(op_arc, op, 1, self.mods);
+                    // cc:509-513: `*` prefix only in the dereference form;
+                    // subscript form lets the implied PTRADD/PTRSUB def emit
+                    // `p[i]` itself (its ` = ` RHS follows below).
+                    if deref_form {
+                        self.emit.tag_op("*");
+                    }
+                    self.rpn_push_in(op_arc, op, 1, m);
                     self.rpn_recurse();
                 }
                 self.emit.tag_op(" = ");
@@ -2426,9 +2518,24 @@ impl PrintC {
                         // findTruncation(suboff,0). Rugra uses find_partial_field
                         // (same offset/size containment test). Default fallback
                         // name is "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                        let fieldname = Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
-                            .map(|(name, _, _)| name)
-                            .unwrap_or_else(|| format!("field_0x{:x}", in1const));
+                        let (fieldname, fieldtype) = Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
+                            .map(|(name, _, ftype)| (name, Some(ftype)))
+                            .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None));
+                        // printc.cc:1011-1016: arrayvalue = false; if the
+                        // field's type is an ARRAY, the '&' is dropped (the
+                        // value form prints the array as `f[0]`).
+                        //   arrayvalue = valueon; // If printing value, use [0]
+                        //   valueon = true;       // Don't print &
+                        let mut valueon_here = valueon;
+                        let mut arrayvalue = false;
+                        if fieldtype
+                            .as_ref()
+                            .map(|ft| ft.get_metatype() == TypeMetatype::Array)
+                            .unwrap_or(false)
+                        {
+                            arrayvalue = valueon_here; // cc:1014
+                            valueon_here = true; // cc:1015
+                        }
                         let field_atom = Atom::with_field(
                             &fieldname,
                             TagType::FieldToken,
@@ -2442,11 +2549,14 @@ impl PrintC {
                         //   pushVn(in0); pushAtom(fieldname)
                         // printc.cc:1046-1052 (valueon, !flex):
                         //   pushOp(&pointer_member); pushVn(in0); pushAtom(fieldname)
+                        // printc.cc:1037-1038/1053-1054 (arrayvalue):
+                        //   pushOp(&subscript) precedes the member ops and
+                        //   push_integer(0) follows the field atom — `in0->f[0]`.
                         // Rugra has no isValueFlexible; we treat flex as false
                         // (the common case for typed pointer dereferences),
                         // selecting the pointer_member (`->`) shape rather than
                         // the object_member (`.`) shape.
-                        if !valueon {
+                        if !valueon_here {
                             self.rpn_push_op(self.rpn_tok_addressof);
                         }
                         self.rpn_push_op(self.rpn_tok_pointer_member);
@@ -2455,6 +2565,12 @@ impl PrintC {
                         self.rpn_push_in(op_arc, op, 0, self.mods);
                         // pushAtom(fieldname) drains the pending in0 first.
                         self.rpn_push_atom(&field_atom);
+                        if arrayvalue {
+                            // cc:1053-1054: push_integer(0,...) — the terminal
+                            // `[0]` of the array-value form (same suffix shape
+                            // as the spacebase arm's arrayvalue below).
+                            self.emit.print("[0]");
+                        }
                         return;
                     }
                     if meta == TypeMetatype::Array {
@@ -2504,6 +2620,49 @@ impl PrintC {
                                 symbol = Some(hit.symbol_name.clone());
                                 symbol_type_array =
                                     hit.type_metatype == TypeMetatype::Array;
+                            }
+                        }
+                        // Stack-spacebase fallback: for a STACK TypeSpacebase
+                        // the linked symbol is a function-local (ScopeLocal)
+                        // symbol, resolved in the oracle by the SAME
+                        // linkSymbolReference attachment (variable.cc:419-432
+                        // queries fd->getScopeLocal() for stack references).
+                        // Rugra's stand-in: query the print-time ScopeLocal
+                        // snapshot (`self.scope`, snapshot_local_scope) with
+                        // the same container semantics — find_container_entry
+                        // is the Scope::findContainer port (database.cc:2262-
+                        // 2282: whole-range containment, smallest entry wins).
+                        // Only whole-symbol hits print (cc:1084-1086
+                        // pushSymbol at symbol-offset 0); a mid-symbol offset
+                        // needs pushPartialSymbol (cc:1088-1093), still the
+                        // PRINTC-SPACEBASE-PARTIALSYM-0001 residual, so those
+                        // keep the unnamed-location form.
+                        if symbol.is_none() {
+                            let is_stack_spacebase = matches!(
+                                ct.as_ref().map(|c| &**c),
+                                Some(Datatype::Spacebase(
+                                    sb
+                                )) if sb.spaceid == Some(crate::space::AddressSpace::Stack)
+                            );
+                            if is_stack_spacebase {
+                                if let Some(scope) = self.scope.as_ref() {
+                                    if let Some(entry) = scope.find_container_entry(
+                                        crate::space::AddressSpace::Stack,
+                                        in1const,
+                                        1,
+                                        None,
+                                    ) {
+                                        if entry.offset == 0 && entry.start == in1const {
+                                            let sym = &scope.symbols[entry.sym];
+                                            symbol = Some(sym.display_name.clone());
+                                            symbol_type_array = sym
+                                                .dtype
+                                                .as_ref()
+                                                .map(|dt| dt.get_metatype() == TypeMetatype::Array)
+                                                .unwrap_or(false);
+                                        }
+                                    }
+                                }
                             }
                         }
                         if symbol.is_some() {

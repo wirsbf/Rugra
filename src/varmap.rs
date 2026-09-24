@@ -929,7 +929,22 @@ fn resolve_rsp_offset_via_bank(
     None
 }
 
-// Ghidra: varmap.hh:137 AliasChecker::resolveRspOffsetSigned
+// RUGRA-GLUE: no single Ghidra counterpart. Rugra's x86 lift keeps stack
+// accesses as RSP-derived address expressions instead of Ghidra's stack-space
+// varnodes (see gather_spacebase below), so this backward-walking resolver
+// substitutes for that visibility. Its per-opcode semantics mirror the two
+// oracle kin it must stay consistent with:
+//   - AliasChecker::gatherAdditiveBase (varmap.cc:741) walks forward from the
+//     spacebase through COPY/INT_ADD/INT_SUB/PTRADD/PTRSUB/SEGMENTOP
+//     (PTRSUB arm cc:791, PTRADD arm cc:783-789);
+//   - AliasChecker::gatherOffset (varmap.cc:817) computes constant offsets:
+//     PTRSUB like INT_ADD (cc:830-834), PTRADD const-index*stride with the
+//     non-constant index followed only when stride==1 (cc:839-849).
+// Unlike gatherOffset's lenient partial sums, this resolver is strict (it
+// returns None unless the whole chain resolves to a constant offset): its
+// caller synthesizes *fixed* RangeHints, which in the oracle come from
+// constant-address varnodes only (MapState::gatherVarnodes varmap.cc:1124);
+// variable-index (open) references enter through gather_open instead.
 /// Signed-offset variant: returns the offset relative to RSP as i64, then the
 /// caller masks to u64. This lets additive chains compose correctly.
 fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)> {
@@ -987,6 +1002,61 @@ fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)>
             let in0 = op.inrefs.first()?.clone();
             drop(op);
             resolve_rsp_offset_signed(&in0)
+        }
+        // Ghidra's AliasChecker::gatherOffset (varmap.cc:830-834) treats
+        // PTRSUB exactly like INT_ADD: base offset + the constant byte
+        // offset. Without this arm, every PTRSUB-addressed stack access
+        // (the form Rugra's rules produce for `lea`-shaped loads/stores)
+        // was invisible to the gather_spacebase hint synthesis.
+        OpCode::CPUI_PTRSUB => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term_const = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some(i1.get_offset() as i64)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term_const) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_add(tc), w)),
+                _ => None,
+            }
+        }
+        // gatherOffset's PTRADD arm (varmap.cc:839-849): a constant index
+        // contributes `index * stride` bytes; a non-constant index is only
+        // followed when the stride is 1 (a plain ADD in disguise — "we only
+        // follow getIn(1) if the PTRADD multiply is by 1"). Any other shape
+        // (variable index with stride != 1) cannot be resolved to a fixed
+        // stack offset.
+        OpCode::CPUI_PTRADD => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            let stride = op
+                .inrefs
+                .get(2)
+                .map(|v| v.read().unwrap().get_offset())
+                .unwrap_or(1);
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term: Option<i64> = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some((i1.get_offset() as i64).wrapping_mul(stride as i64))
+                } else if stride == 1 {
+                    drop(i1);
+                    resolve_rsp_offset_signed(in1).map(|(o, _)| o)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_add(tc), w)),
+                _ => None,
+            }
         }
         _ => None,
     }

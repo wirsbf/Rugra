@@ -374,3 +374,25 @@ ScopeLocal::queryProperties，创建期 mapped 位与 oracle 不同）。
 ## 引用行号勘误（2026-08-24，root，getstr 复核必改项）
 
 survivor-clear 注释引用 varmap.cc:1273 修正为 1259（`clearUnlockedCategory(-1)` 实际位置；1275 是 function_parameter 的另一调用）。
+
+## RESIDMAP-NEGRIDX-PRINTFAMILY-0001（2026-09-24，wt/idxemit，基 3925922a）
+
+A 族 varmap 侧前提补全：`resolve_rsp_offset_signed`（RSP 派生地址的常量偏移回解，
+服务 gather_spacebase 的固定 RangeHint 合成）新增两个臂，语义对齐
+AliasChecker::gatherOffset（varmap.cc:817-855）：
+
+- **PTRSUB 臂（cc:830-834，与 INT_ADD 同构）**：`base_off + 常量字节偏移`。此前所有
+  PTRSUB 寻址的栈访问（`lea` 形 load/store 的规则产物）对 hint 合成不可见。
+- **PTRADD 臂（cc:839-849）**：常量索引贡献 `index * stride`；非常量索引仅当
+  stride==1 时继续跟进（oracle 注释原文 "We only follow getIn(1) if the PTRADD
+  multiply is by 1"），其余形态（变索引×非 1 步长）不可解为固定栈偏移。
+
+与 gatherOffset 的差异（有意，注释在案）：oracle gatherOffset 是宽松部分和（叶节点
+贡献 0 继续累加），本解析器严格（任一项不可解即 None）——调用方合成的是**固定**
+RangeHint，oracle 中固定 hint 只来自常量地址 varnode（MapState::gatherVarnodes
+varmap.cc:1124），变索引（open）引用走 gather_open 通道。
+
+实证：httpd main 正向下标族（`puVar10[0xb]` 等）经此臂获得符号化前提后由 printc
+下标发射消费，E2E httpd −160；包装偏移合计 wrapping_add/wrapping_mul 与 oracle
+uintb 模 2^64 算术一致。机制 C：本改动落在 varmap AliasChecker 域，commit 已请求
+独立 Cross-Review。
