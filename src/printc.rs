@@ -303,7 +303,15 @@ pub mod display_format {
 fn sanitize_c_ident(name: &str) -> String {
     name.chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }
+            // `:` passes through so qualified analyzer names keep the
+            // oracle's namespace spelling: the locked golden prints
+            // `switchD_00154265::default(void)` (httpd 0x12b7fa) — Ghidra's
+            // printer emits the function name string raw via
+            // emit->tagFuncName(fd->getDisplayName(), ...) with no
+            // identifier sanitization, so the scope separator `::` survives.
+            // DRIVER-SWITCHD-DEFFN-0001. No other caller can see a `:` today
+            // (symbol/param names are plain identifiers).
+            if c.is_ascii_alphanumeric() || c == '_' || c == ':' { c } else { '_' }
         })
         .collect()
 }

@@ -723,6 +723,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // DRIVER-SWITCHD-DEFFN-0001: discover the analyzer-named switch
+    // default-handler functions (see the scan helper below for the
+    // locked-oracle rule). Empty under the raw-BFD mirror (no analyzer
+    // symbol layer) and for corpora whose switch defaults stay in-function
+    // (curl), which keeps the layer a constructive no-op there.
+    let switchd_default_fns: Vec<(u64, usize, u64)> = if mirror {
+        Vec::new()
+    } else {
+        scan_switch_default_handlers(&obj, &buffer, &functions)
+    };
+    if !switchd_default_fns.is_empty() {
+        eprintln!(
+            "[PREPASS] {} switchD default-handler functions discovered",
+            switchd_default_fns.len()
+        );
+    }
+
     // PLT sections for tail-call detection: PLT stubs
     // (apr_pool_cleanup_kill@plt 0x2a970, ...) carry no .symtab entries
     // but are thunk functions on the Ghidra side; a stub START is
@@ -1161,6 +1178,158 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // DRIVER-SWITCHD-DEFFN-0001 emission: the analyzer-named default
+    // handlers print as their own functions after the symbol window —
+    // golden dumps every discovered function, and these carry the base
+    // symbol name `default` in the header with the qualified
+    // `switchD_<dispatch>::default` signature (analyzer namespace
+    // spelling; golden httpd 0x12b7fa/0x12b804/0x12b80e). Tail jumps out
+    // of the tiny bodies (e.g. 0x12b7fa -> 0x1542b0) are Ghidra
+    // out-of-function branch targets, which the decompiler renders as
+    // calls: same CALL_RETURN transport as the main loop, with the
+    // analysis-discovered callee named through the HTTPD-URAM-SYMBOLIZE
+    // -0001 FUN_ channel. Skipped entirely for stage single-function runs
+    // and empty under the mirror gate.
+    if stage_selector.is_none() {
+        for &(thunk_addr, thunk_size, dispatch) in &switchd_default_fns {
+            let qualified_name = format!(
+                "switchD_{:08x}::default",
+                ANALYZE_HEADLESS_IMAGE_BASE + dispatch
+            );
+            eprintln!(
+                "[DECOMP] switchD default handler {} @0x{:x}",
+                qualified_name, thunk_addr
+            );
+
+            let mut file_off = 0usize;
+            if let Object::Elf(elf) = &obj {
+                for header in elf.section_headers.iter() {
+                    if thunk_addr >= header.sh_addr
+                        && thunk_addr < header.sh_addr + header.sh_size
+                    {
+                        file_off = (header.sh_offset + (thunk_addr - header.sh_addr)) as usize;
+                        break;
+                    }
+                }
+            }
+            if file_off == 0 || file_off + thunk_size > buffer.len() {
+                total_fail += 1;
+                continue;
+            }
+            let code_bytes = &buffer[file_off..file_off + thunk_size];
+
+            let mut raw_ops = Vec::new();
+            let mut disasm = X86_64Disassembler::new();
+            let instructions = match disasm.disassemble(code_bytes, Address::new(thunk_addr)) {
+                Ok(insts) => insts,
+                Err(_) => {
+                    total_fail += 1;
+                    continue;
+                }
+            };
+            let mut lifter = X86Lifter::new();
+            for inst in &instructions {
+                let mut ops = lifter.lift(inst);
+                for op in &mut ops {
+                    op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+                }
+                raw_ops.extend(ops);
+            }
+
+            let sym_table = symbol_table.clone();
+            let default_effects = default_effects.clone();
+            let thread_arch = tracked_arch.clone();
+            let handle = std::thread::spawn(move || -> Option<String> {
+                let mut fd = Funcdata::new(
+                    &format!("switchD_{:08x}::default", ANALYZE_HEADLESS_IMAGE_BASE + dispatch),
+                    Address::new(thunk_addr),
+                    thunk_size as i32,
+                );
+                fd.set_arch(std::sync::Arc::new(thread_arch));
+                fd.funcp.effects = default_effects;
+                for (&addr, name) in &sym_table {
+                    fd.add_symbol(addr, name.clone());
+                }
+                // Out-of-function direct jumps become tail calls (Ghidra
+                // renders cross-function branch targets as calls), with
+                // the analysis-discovered callee named through the same
+                // FUN_ channel as the HTTPD-URAM-SYMBOLIZE-0001 defaults.
+                for raw in &raw_ops {
+                    if rugra::opcodes::OpCode::from_i32(raw.get_opcode())
+                        != Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                    {
+                        continue;
+                    }
+                    let Some(tgt) = raw.inputs().first() else { continue };
+                    if tgt.space != rugra::space::AddressSpace::Ram {
+                        continue;
+                    }
+                    if (thunk_addr..thunk_addr + thunk_size as u64).contains(&tgt.offset) {
+                        continue;
+                    }
+                    fd.add_symbol(
+                        tgt.offset,
+                        rugra::debugproto::analyze_headless_function_symbol_name(
+                            tgt.offset,
+                            ANALYZE_HEADLESS_IMAGE_BASE,
+                        ),
+                    );
+                    if let Some(seq) = raw.seq_num() {
+                        fd.localoverride.insert_flow_override(
+                            seq.get_addr(),
+                            rugra::override_rs::FlowOverride::CallReturn,
+                        );
+                    }
+                }
+                fd.inject_raw_ops(&raw_ops);
+
+                let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+                fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
+                let mut db = ActionDatabase::new();
+                db.set_default_actions();
+                {
+                    let mut fd_write = fd_arc.write().unwrap();
+                    let result = db.perform_action("decompile", &mut fd_write);
+                    eprintln!(
+                        "[THREAD] {} actions done ({})",
+                        qualified_name,
+                        if result.is_ok() { "ok" } else { "err" }
+                    );
+                }
+
+                let fd_read = fd_arc.read().unwrap();
+                let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+                printer.doc_function(&fd_read);
+                let output = printer.take_emit();
+                let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
+                Some(text.get_output())
+            });
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            let join_handle = handle;
+            std::thread::spawn(move || {
+                let result = join_handle.join();
+                let _ = tx.send(result);
+            });
+            let received = rx.recv_timeout(std::time::Duration::from_secs(15));
+            match received {
+                Ok(Ok(Some(output))) => {
+                    println!("/* ---- 0x{:x}: default ({} bytes) ---- */", thunk_addr, thunk_size);
+                    println!("{}", output);
+                    println!();
+                    total_success += 1;
+                }
+                Ok(Ok(None)) | Ok(Err(_)) => {
+                    total_fail += 1;
+                }
+                Err(_) => {
+                    println!("/* ---- 0x{:x}: default TIMEOUT (>15s) ---- */", thunk_addr);
+                    total_fail += 1;
+                }
+            }
+        }
+    }
+
     if stage_selector.is_some() && !stage_seen {
         eprintln!(
             "RUGRA_STAGE_FUNC={:?} matched no function in the ELF symbol tables",
@@ -1173,6 +1342,168 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              total_success, total_fail);
 
     Ok(())
+}
+
+// ===========================================================================
+// DRIVER-SWITCHD-DEFFN-0001: analyzer-named switch default-handler
+// functions (driver-side analyzer emulation; no decompiler .cc
+// counterpart — the mirrored oracle mechanism is the headless
+// DecompilerSwitchAnalysis pass that consumes the decompiler's recovered
+// jumptables and names out-of-function destinations). Locked-oracle rule
+// (12.0.4 e40ed130):
+//   * JumpTable::foldInOneGuard (jumptable.cc:1373-1398): a switch guard
+//     CBRANCH whose non-switch out-edge target is not already an
+//     address-table destination gets that target appended to the table
+//     with JumpValues::NO_LABEL + setLastAsDefault (jumptable.cc:2497-2506
+//     addBlockToSwitch/defaultBlock=lastBlock), and the precondition is
+//     adjacency: the guard block must flow directly into the BRANCHIND
+//     block (cc:1382-1383 `cbranchblock->getOut(indpath) != switchbl`)
+//     with no intervening statement (cc:1391).
+//   * The headless analyzer then creates, in namespace
+//     `switchD_<image-based dispatch addr>`, LABEL `caseD_<hex>` at every
+//     labelled destination and `default` at the NO_LABEL destination; a
+//     destination that is its own function start names the FUNCTION
+//     (base symbol `default`), so the decompiler prints
+//     `switchD_<dispatch>::default(void)` — golden httpd has exactly
+//     three: 0x12b7fa (dispatch 0x154265), 0x12b804 (dispatch 0x177493),
+//     0x12b80e (dispatch 0x17766d); the in-function destinations of the
+//     same switches keep the FT3 LABEL spellings instead.
+// Driver mirror: one linear .text disassembly; function-entry candidates =
+// ELF function symbols ∪ endbr64 (Intel CET function-start marks); entry
+// spans tile .text between consecutive candidates, so the only blocks
+// escaping every function body live before the first candidate. A
+// conditional branch whose direct target escapes all spans AND whose
+// contiguous fallthrough reaches an indirect jump with no intervening
+// control transfer (the foldInOneGuard adjacency precondition, checked
+// structurally at the disassembly level) identifies the (dispatch,
+// default target) pair; the discovered handler's body extent runs from
+// the entry to its first terminal instruction (matching the golden
+// 10/10/6-byte sizes). Corpus check: this yields exactly the golden three
+// on httpd and zero on curl (curl's golden has no switchD functions —
+// every default destination is in-function there). Skipped under the
+// raw-BFD mirror, which has no analyzer symbol layer.
+// ===========================================================================
+fn scan_switch_default_handlers(
+    obj: &Object,
+    buffer: &[u8],
+    functions: &[(u64, usize, u64, String)],
+) -> Vec<(u64, usize, u64)> {
+    // .text bounds (vaddr, file offset, length).
+    let mut text: Option<(u64, usize, usize)> = None;
+    if let Object::Elf(elf) = obj {
+        for header in elf.section_headers.iter() {
+            let is_text = elf
+                .shdr_strtab
+                .get_at(header.sh_name)
+                .map(|n| n == ".text")
+                .unwrap_or(false);
+            if is_text {
+                text = Some((header.sh_addr, header.sh_offset as usize, header.sh_size as usize));
+                break;
+            }
+        }
+    }
+    let Some((text_va, text_off, text_len)) = text else { return Vec::new() };
+    if text_off >= buffer.len() || text_off + text_len > buffer.len() {
+        return Vec::new();
+    }
+    let text_end = text_va + text_len as u64;
+
+    let mut disasm = X86_64Disassembler::new();
+    let Ok(insns) = disasm.disassemble(&buffer[text_off..text_off + text_len], Address::new(text_va)) else {
+        return Vec::new();
+    };
+    let insn_at: HashMap<u64, usize> = insns
+        .iter()
+        .enumerate()
+        .map(|(idx, inst)| (inst.address.as_u64(), idx))
+        .collect();
+
+    // Function-entry candidates: ELF function symbols plus every endbr64.
+    // Entry spans tile .text between consecutive candidates, so a block is
+    // outside every function body iff it precedes the first candidate.
+    let mut entries: Vec<u64> = functions.iter().map(|f| f.0).collect();
+    entries.extend(
+        insns
+            .iter()
+            .filter(|inst| inst.mnemonic == "endbr64")
+            .map(|inst| inst.address.as_u64()),
+    );
+    entries.retain(|addr| *addr >= text_va && *addr < text_end);
+    entries.sort_unstable();
+    entries.dedup();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let outside_all_spans = |addr: u64| -> bool {
+        entries.partition_point(|&entry| entry <= addr) == 0
+    };
+
+    let mut found: HashMap<u64, (usize, u64)> = HashMap::new();
+    for (idx, inst) in insns.iter().enumerate() {
+        // Conditional branch with a direct in-.text target.
+        if !inst.is_branch() || inst.is_call() || inst.is_return() {
+            continue;
+        }
+        if inst.mnemonic == "jmp" {
+            continue;
+        }
+        let Some(target_addr) = inst.branch_target() else { continue };
+        let target = target_addr.as_u64();
+        if target < text_va || target >= text_end {
+            continue;
+        }
+        if !outside_all_spans(target) {
+            continue;
+        }
+        // foldInOneGuard adjacency: contiguous straight-line fallthrough
+        // from the guard to the BRANCHIND with no intervening control
+        // transfer (the table lookup is a handful of ALU/mov insns).
+        let mut dispatch: Option<u64> = None;
+        let mut cur_end = inst.address.as_u64() + inst.length as u64;
+        let mut steps = 0usize;
+        'fallthrough: for next in &insns[idx + 1..] {
+            if next.address.as_u64() != cur_end {
+                break; // alignment gap or data — not adjacent
+            }
+            let indirect_jump =
+                next.is_branch() && !next.is_call() && next.branch_target().is_none();
+            if indirect_jump {
+                dispatch = Some(next.address.as_u64());
+                break 'fallthrough;
+            }
+            if next.is_branch() || next.is_call() || next.is_return() {
+                break; // another control transfer first — not a switch guard
+            }
+            cur_end += next.length as u64;
+            steps += 1;
+            if steps > 32 {
+                break; // table lookups are a handful of ALU/mov insns
+            }
+        }
+        let Some(dispatch) = dispatch else { continue };
+        // Body extent: entry to the first terminal instruction (cold
+        // single-block handlers end in a tail jump or ret).
+        let Some(start) = insn_at.get(&target).copied() else { continue };
+        let mut size = 0usize;
+        for probe in &insns[start..] {
+            size += probe.length;
+            if probe.is_return() || (probe.is_branch() && !probe.is_call()) {
+                break;
+            }
+            if size > 256 {
+                break; // not a small cold handler; keep the walk bounded
+            }
+        }
+        if size == 0 {
+            continue;
+        }
+        found.entry(target).or_insert((size, dispatch));
+    }
+    let mut handlers: Vec<(u64, usize, u64)> =
+        found.into_iter().map(|(addr, (size, dispatch))| (addr, size, dispatch)).collect();
+    handlers.sort_unstable();
+    handlers
 }
 
 // ===========================================================================
