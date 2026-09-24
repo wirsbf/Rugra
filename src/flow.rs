@@ -806,6 +806,11 @@ impl<'a> FlowInfo<'a> {
         let fd_size = self.fd.size;
         let arch = self.fd.get_arch().cloned();
         let mut partial = Funcdata::new(&nm, entry, fd_size);
+        // RESIDMAP-PRINTBATCH-0001: the partial clone inherits the source
+        // function's display image-base delta so its jumptable Lowlevel
+        // warning texts (recover_addresses_classified, jumptable.cc:2629)
+        // print the same oracle printRaw spelling as the parent.
+        partial.display_image_base = self.fd.display_image_base;
         if let Some(arch) = arch {
             partial.set_arch(arch);
         }
@@ -2173,12 +2178,14 @@ impl<'a> FlowInfo<'a> {
             if start == addr.as_u64() {
                 // flow.cc:1379-1398: exact visited instruction start — PIC.
                 // flow.cc:1380-1384: warningHeader("Possible PIC construction
-                // at <opaddr>: Changing call to branch"). Ghidra renders the
-                // op address with Address::printRaw; Rugra's legacy flow
-                // Address renders via Display (0x-hex, ADDRESS-0001).
+                // at <opaddr>: Changing call to branch"). The op address
+                // renders via Address::printRaw (flow.cc:1382) — Rugra's
+                // Funcdata helper ports the AddrSpace::printRaw spelling
+                // (0x + zero-pad + display base delta, RESIDMAP-PRINTBATCH
+                // -0001), replacing the legacy spaceless Display form.
                 let msg = format!(
                     "Possible PIC construction at {}: Changing call to branch",
-                    op.0.read().unwrap().get_addr()
+                    self.fd.print_raw_code_addr(op.0.read().unwrap().get_addr().as_u64())
                 );
                 self.fd.warning_header(&msg);
                 // flow.cc:1385: data.opSetOpcode(op,CPUI_BRANCH).

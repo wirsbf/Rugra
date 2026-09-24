@@ -2528,3 +2528,28 @@ httpd 3 处 label-only(无 goto 消费者)经全 setter 插桩(BlockGoto 2856-28
 基线)、next_url+match_url Phase 2 投影 **MATCH 保持**(stage_bisect --v1 vs
 /dev/shm/rugra-tests/sb-oracle 钉板);printc 单测 12/12;gcc 审计 curl 82OK/25FAIL==基线;
 lib 串行 1650/18(失败集=既有 flaky 家族)。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— 浮点转换三元组 RPN 发射 + 隐式内联可达表补齐
+
+- `dispatch_op_rpn` 新增三个此前落入空 catch-all（静默丢操作数）的浮点转换臂：
+  - `CPUI_FLOAT_INT2FLOAT` → 新 `rpn_op_float_int2float`（printc.cc:830-842
+    `PrintC::opFloatInt2Float` 逐字镜像）：先做 `absorbZext`（typeop.cc:1864-1880
+    ——in0 written+implied 且 def 为 INT_ZEXT 时打印穿透到 zext 的输入），再
+    `pushOp(&typecast)+pushType(out 类型)` 后推入（可能穿透的）输入，输出
+    `(float)x` 形；
+  - `CPUI_FLOAT_FLOAT2FLOAT | CPUI_FLOAT_TRUNC` → 复用 `rpn_op_type_cast`
+    （printc.hh:326-327 两虚函数均转发 `opTypeCast`——宽/窄浮点转换与浮点截断
+    都是 C 可转型）。
+- `rpn_def_inline_reachable`（RUGRA-GLUE 谓词，PRINT-RPN-0001 残留）补齐上述
+  三 opcode（`has(0)` 单目臂）：此前隐式 FLOAT_INT2FLOAT 输出因谓词 false 走
+  叶原子回退，无符号 High 落 `pushUnnamedLocation` 泄漏
+  `register0x00001200/00001240`（XMM0_Qa/XMM1_Qa 浮点临时）。修复后按
+  printlanguage.cc:526-533 `recurse` 的隐式分支内联 def op，curl myprogress 打出
+  canon 同形 `fVar9 = (float)uVar7 / (float)(dltotal + ultotal);` 与
+  `__sprintf_chk((double)fVar8,...)`。
+- 差分门禁（机制 B，白名单文件）：curl **2131/0/0**（基线 2145/0/0，−14，唯一
+  形变函数=myprogress）、httpd **2057/0/0**（==基线，字节恒等）；双跑 cmp 恒等；
+  gcc 审计 curl 82OK/25FAIL（==基线——myprogress 残余 FAIL 为 uint8 typed 拼写
+  族 EQ3 ⑤，非本域）/httpd 9OK/20FAIL（基线 21，−1=ap_make_dirstr_prefix）。
+  register0x token 族：curl 9→0、httpd 4→2（残 2=main 未恢复跳表的 RAX 开关
+  变量，I 族 JUMPTABLE-TABLEAPI 域）。

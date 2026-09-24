@@ -1366,6 +1366,14 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_CEIL
             | OpCode::CPUI_FLOAT_FLOOR
             | OpCode::CPUI_FLOAT_ROUND => has(0),
+            // printc.cc:830 opFloatInt2Float (absorbZext + typecast form)
+            // and printc.hh:326-327 opFloatFloat2Float/opFloatTrunc →
+            // opTypeCast: all three have total unary emitting arms, so an
+            // implied conversion output inlines as `(float)x` instead of
+            // leaking its register temp as an unnamed-location token.
+            OpCode::CPUI_FLOAT_INT2FLOAT
+            | OpCode::CPUI_FLOAT_FLOAT2FLOAT
+            | OpCode::CPUI_FLOAT_TRUNC => has(0),
             OpCode::CPUI_LOAD => has(1),
             OpCode::CPUI_STORE
             | OpCode::CPUI_CALL
@@ -1924,6 +1932,20 @@ impl PrintC {
                 // leaf atoms via pushVnExplicit (byte-identical text).
                 self.rpn_push_in(op_arc, op, 0, self.mods);
             }
+            // printc.cc:830 PrintC::opFloatInt2Float: absorb an implied
+            // INT_ZEXT input (TypeOpFloatInt2Float::absorbZext,
+            // typeop.cc:1864-1880) and print the float typecast presurround
+            // + the (possibly skipped-through) input: `(float)x`.
+            OpCode::CPUI_FLOAT_INT2FLOAT => {
+                self.rpn_op_float_int2float(op_arc, op);
+            }
+            // printc.hh:326-327: PrintC::opFloatFloat2Float and
+            // PrintC::opFloatTrunc both forward to opTypeCast — a plain
+            // `(type)input` cast (widening/narrowing float conversions and
+            // float→int truncation are all C-convertible).
+            OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_TRUNC => {
+                self.rpn_op_type_cast(op_arc, op);
+            }
             // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
             OpCode::CPUI_LOAD => {
                 self.rpn_push_op(self.rpn_tok_dereference);
@@ -2000,7 +2022,17 @@ impl PrintC {
                     }
                 }
                 if !field_access {
-                    self.emit.tag_op("*");
+                    // printc.cc:512 pushOp(&dereference,op): route the STORE
+                    // address under the unary dereference TOKEN so the token
+                    // protocol's parentheses() decision (printlanguage.cc:287
+                    // -292, unary_prefix prec 62 vs the address op's token)
+                    // wraps every lower-precedence address expression — a
+                    // PTRADD/INT_ADD address prints `*(puVar4 + 3)`, a legal
+                    // lvalue, instead of the rvalue `*puVar4 + 3` the old
+                    // hand-emitted tag_op("*") produced (equal-preference
+                    // unary/cast addresses and leaf atoms stay paren-free,
+                    // exactly matching the oracle token table pairing).
+                    self.rpn_push_op(self.rpn_tok_dereference);
                     self.rpn_push_in(op_arc, op, 1, self.mods);
                     self.rpn_recurse();
                 }
@@ -2697,6 +2729,75 @@ impl PrintC {
         }
         // printc.cc:463: pushVn(op->getIn(0),op,mods).
         self.rpn_push_in(op_arc, op, 0, self.mods);
+    }
+
+    // Ghidra: printc.cc:830 PrintC::opFloatInt2Float
+    /// RPN-path port of `PrintC::opFloatInt2Float(const PcodeOp*)`
+    /// (printc.cc:830-842):
+    /// ```text
+    /// const PcodeOp *zextOp = TypeOpFloatInt2Float::absorbZext(op);
+    /// const Varnode *vn0 = (zextOp != 0) ? zextOp->getIn(0) : op->getIn(0);
+    /// Datatype *dt = op->getOut()->getHighTypeDefFacing();
+    /// if (!option_nocasts) { pushOp(&typecast,op); pushType(dt); }
+    /// pushVn(vn0,op,mods);
+    /// ```
+    /// The INT_ZEXT absorption (typeop.cc:1864-1880) treats an implied
+    /// INT_ZEXT feeding the conversion as part of the unsigned→float
+    /// conversion: the printed operand skips through to the zext's input.
+    fn rpn_op_float_int2float(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // typeop.cc:1865-1879 absorbZext: vn0 = op->getIn(0); if
+        // (vn0->isWritten() && vn0->isImplied()) { zextOp = vn0->getDef();
+        /// if (zextOp->code() == CPUI_INT_ZEXT) return zextOp; }
+        let vn0_arc = op.get_in(0).and_then(|in0_arc| {
+            let in0 = in0_arc.read().unwrap();
+            if in0.is_written() && in0.is_implied() {
+                let def = in0.get_def();
+                drop(in0);
+                if let Some(def_arc) = def {
+                    let def = def_arc.read().unwrap();
+                    if def.opcode == OpCode::CPUI_INT_ZEXT {
+                        return def.get_in(0).cloned();
+                    }
+                }
+            }
+            Some(in0_arc.clone())
+        });
+        // printc.cc:836: dt = op->getOut()->getHighTypeDefFacing().
+        let out_dt = op
+            .get_out()
+            .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+        // printc.cc:837-839: pushOp(&typecast,op); pushType(dt).
+        if !self.option_nocasts {
+            self.rpn_push_op(self.rpn_tok_typecast);
+            if let Some(ref dt) = out_dt {
+                let type_name = Self::cast_type_string(dt);
+                let type_atom = Atom::with_type(
+                    &type_name,
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            } else {
+                let type_atom = Atom::with_type(
+                    "float",
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
+        }
+        // printc.cc:841: pushVn(vn0,op,mods) — the (possibly skipped-through)
+        // operand records into nodepend so implied defs inline on the drain.
+        if let Some(vn0) = vn0_arc {
+            self.rpn_push_vn(vn0, op_arc.clone(), self.mods);
+        }
     }
 
     // Ghidra: printc.cc:424 PrintC::opFunc
