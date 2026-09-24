@@ -3178,20 +3178,24 @@ impl Merge {
     /// force-merges.
     fn merge_op(&mut self, fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
         use crate::opcodes::OpCode;
-        let (max, high_out, inputs) = {
+        let (max, high_out) = {
             let o = op.0.read().unwrap();
             let max = if o.opcode == OpCode::CPUI_INDIRECT { 1 } else { o.num_input() };
             let out_vn = o.output.clone();
-            let ins: Vec<Arc<RwLock<Varnode>>> = o.inrefs.iter().cloned().collect();
-            (max, out_vn, ins)
+            (max, out_vn)
         };
         let Some(out_vn) = high_out else { return };
         let high_out_arc = out_vn.read().unwrap().high.clone();
         let Some(high_out_arc) = high_out_arc else { return };
 
         // Phase 1: non-cover mergeTestRequired restrictions (merge.cc:730-741).
+        // Both `op->getIn(i)` (cc:731) and `op->getIn(j)` (cc:737) are live
+        // reads: a trim of an earlier slot replaces that slot's Varnode (and
+        // its HighVariable, fresh via allocateCopyTrim's wire_unique_high)
+        // mid-loop, so later slots must be tested against the POST-trim high,
+        // not a pre-loop snapshot.
         for i in 0..max {
-            let high_in = inputs.get(i).and_then(|v| v.read().unwrap().high.clone());
+            let high_in = op.0.read().unwrap().inrefs.get(i).and_then(|v| v.read().unwrap().high.clone());
             let Some(high_in) = high_in else { continue };
             if !self.merge_test_required(&high_out_arc, &high_in) {
                 self.trim_op_input(fd, op, i);
@@ -3200,7 +3204,7 @@ impl Merge {
             // Check against earlier inputs (merge.cc:736-740).
             let mut conflict = false;
             for j in 0..i {
-                let high_j = inputs.get(j).and_then(|v| v.read().unwrap().high.clone());
+                let high_j = op.0.read().unwrap().inrefs.get(j).and_then(|v| v.read().unwrap().high.clone());
                 if let Some(hj) = high_j {
                     if !self.merge_test_required(&hj, &high_in) {
                         conflict = true;
