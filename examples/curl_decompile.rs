@@ -18,7 +18,7 @@ use rugra::address::Address;
 use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase};
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
-use rugra::funcdata::Funcdata;
+use rugra::funcdata::{CommittedLocal, Funcdata};
 use rugra::override_rs::{FlowOverride, FlowOverrideRecord};
 use rugra::prettyprint::EmitPrettyPrint;
 use rugra::printc::PrintC;
@@ -61,6 +61,110 @@ fn mirror_bare_load_enabled() -> bool {
 // table).
 fn mirror_fixture_data_enabled() -> bool {
     mirror_bundle_enabled() || std::env::var("RUGRA_ORACLE_FIXTURE_DATA").is_ok()
+}
+
+// HEADLESS-BRIDGE-V1-TYPESEED W1b (C1 TYPE-SEED-LOCAL, curl roll-in): the
+// opt-in committed-local seed channel, mirroring the httpd driver's
+// HEADLESS-BRIDGE-V1-TYPESEED gate 1:1 (BRIDGE1 lane, same channel family).
+// The curl canon golden is the C++ library PLUS the Java analyzer stack's
+// committed symbols transported over `<localdb>` (funcdata.cc:804-810 ->
+// ScopeInternal::decode -> Scope::addMapSym); the direct-runner/bare-load
+// contract has no such layer (HEADLESS_BRIDGE_V1_DESIGN.md §2 C1: curl
+// `local_` references 117 vs 0 on the library side). The gate loads the
+// harvested manifest (tools/harvest_local_manifest.py over
+// tests/golden/ghidra_curl_1204.c; KNOWN_BASES-filtered so every entry is
+// a table-served spelling in parse_c_type — post-TYPEFIX no-fallback bail
+// means an unknown base would be a dead entry, the harvest excludes those)
+// and decompile_request attaches the canon-address-keyed seeds to
+// Funcdata::committed_locals before any action runs; the library-side
+// ActionRestructureVarnode scope-construction arm materializes them as
+// name+type-locked stack symbols. Isolated workers inherit the controller
+// environment (Command::new default env), so the subprocess reads the same
+// gate; the prototype pre-pass never seeds (hermetic param inference — the
+// httpd driver likewise seeds only its decompile threads). Default (env
+// unset) = the exact historical load: no manifest IO, the OnceLock caches
+// None, committed_locals stays empty, byte-identical output. Any mirror
+// component (bundle/flow/bare/fixture-data) keeps the gate closed — the
+// five-projection bank must stay byte-identical.
+static TYPESEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: per-process manifest handle — one read per process (isolated
+// workers are one-job processes, the compare-functions direct path reuses
+// the controller's cache).
+fn typeseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal>>> {
+    TYPESEED_LOCALS
+        .get_or_init(|| {
+            if !std::env::var("RUGRA_TYPESEED").is_ok() {
+                return None;
+            }
+            if mirror_flow_enabled()
+                || mirror_bare_load_enabled()
+                || mirror_fixture_data_enabled()
+            {
+                eprintln!("[TYPESEED] RUGRA_TYPESEED ignored under the mirror gate (projection purity)");
+                return None;
+            }
+            let path = std::env::var("RUGRA_TYPESEED_MANIFEST")
+                .unwrap_or_else(|_| "tests/golden/manifests/local_seed_curl_1204.json".to_string());
+            match fs::read_to_string(&path) {
+                Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                    Err(err) => {
+                        eprintln!("[TYPESEED] manifest {} is not a JSON object map: {}", path, err);
+                        None
+                    }
+                    Ok(raw) => {
+                        // The manifest's top level is {"functions": {addr: {...}}};
+                        // decode the inner table defensively, keeping the file
+                        // human-inspectable (same decode walk as the httpd gate).
+                        let mut table = HashMap::new();
+                        let mut count = 0usize;
+                        if let Some(serde_json::Value::Object(functions)) = raw.get("functions") {
+                            for (addr, entry) in functions {
+                                let Some(serde_json::Value::Array(locals)) = entry.get("locals")
+                                else {
+                                    continue;
+                                };
+                                let mut seeds = Vec::new();
+                                for local in locals {
+                                    let (Some(serde_json::Value::Number(offset)), Some(
+                                        serde_json::Value::String(name)),
+                                     Some(serde_json::Value::String(type_expr))) = (
+                                        local.get("offset"),
+                                        local.get("name"),
+                                        local.get("type"),
+                                    ) else {
+                                        continue;
+                                    };
+                                    let Some(offset) = offset.as_i64() else { continue };
+                                    seeds.push(CommittedLocal {
+                                        offset,
+                                        name: name.clone(),
+                                        type_expr: type_expr.clone(),
+                                    });
+                                }
+                                count += seeds.len();
+                                if !seeds.is_empty() {
+                                    table.insert(addr.clone(), seeds);
+                                }
+                            }
+                        }
+                        eprintln!(
+                            "[TYPESEED] loaded {}: {} functions / {} committed locals",
+                            path,
+                            table.len(),
+                            count
+                        );
+                        Some(table)
+                    }
+                },
+                Err(err) => {
+                    eprintln!("[TYPESEED] cannot read manifest {}: {} (seeding disabled)", path, err);
+                    None
+                }
+            }
+        })
+        .as_ref()
 }
 
 /// The locked 12.0.4 golden corpus for the curl fixture: every function the
@@ -3856,6 +3960,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // code-label layer carries); warning texts that embed an address render
     // through Funcdata::print_raw_code_addr.
     fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
+    // HEADLESS-BRIDGE-V1-TYPESEED W1b (C1): attach the canon-address-keyed
+    // committed-local seeds before any action runs — the `<localdb>`
+    // transport position (the httpd driver attaches the same carrier at its
+    // per-function decompile thread spawn). Manifest keys are
+    // analyzeHeadless addresses = this driver's base-0 vaddr + 0x100000.
+    // Unseeded default: the table is None, the field stays empty, and the
+    // run is byte-identical to the pre-gate build.
+    if let Some(table) = typeseed_local_table() {
+        if let Some(seeds) =
+            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+        {
+            eprintln!(
+                "[TYPESEED] {} typeseed: {} committed locals",
+                target.name,
+                seeds.len()
+            );
+            fd.committed_locals = seeds.clone();
+        }
+    }
     // FLOW-SHAREDRETURN-0001: the controller supplies the out-of-band
     // `<flowoverridelist>` projection for exactly this function. Seed it
     // before FlowInfo construction because Ghidra's constructor caches
