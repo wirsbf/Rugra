@@ -2744,9 +2744,32 @@ impl Heritage {
     /// containing the range (branch (1) in the global scope) and
     /// register/unique-scope routing keep the flagbase-only tail; Rugra's
     /// ScopeLocal has no parent linkage (fixtures and the stack/register
-    /// pipeline never rely on it). The `getProperty` flagbase fallback
-    /// reads Architecture::symboltab when present; an arch-less Funcdata
-    /// gets 0.
+    /// pipeline never rely on it).
+    ///
+    /// Flagbase space partitioning (HERITAGE-FLAGBASE-SPACELESS-0001): the
+    /// oracle's `getProperty(addr)` tails (database.cc:1276/1279) read
+    /// `flagbase.getValue(addr)` (database.hh:946) with the FULL
+    /// space-qualified `Address`, and `Address::operator<`
+    /// (address.hh:375-390) orders by space index BEFORE offset, so a
+    /// property range installed in one space never covers an address of
+    /// another: a Register/Unique/Stack-space lookup only ever sees the
+    /// default partition (0 — the locked pspec carries zero `<volatile>`
+    /// ranges, and loader-derived `<readonly>` ranges live in the RAM
+    /// space, architecture.cc:1427 `readonlypropagate=false` aside). Rugra's
+    /// `PartMap` is keyed by the legacy SPACELESS `Address` (only
+    /// default-data RAM ranges are ever installed — the SYMDB driver's
+    /// `set_property_range` calls), so consulting it from a non-Ram space
+    /// can only cross-space collide (an R-only PT_LOAD at [0,0x29000)
+    /// marking register/unique/stack offsets READONLY, whence
+    /// ActionVarnodeProps' hasActionProperty branch
+    /// (coreaction.cc:1318-1326) skipped the NZMask/consume removal of the
+    /// flagged varnodes). The projection here therefore folds the oracle's
+    /// per-space answer for the locked configuration: the flagbase is
+    /// consulted ONLY for the Ram space (the funcdata.rs
+    /// `query_properties_parent_scope` / ruleaction.rs consumer guard
+    /// pattern); every other space folds 0. Residual: a pspec that ever
+    /// installs non-Ram flagbase partitions needs the space-keyed flagbase
+    /// first.
     // RUGRA-GLUE: static scope-local projection of the oracle's
     // fd->getScopeLocal()->queryProperties call; Funcdata owns ScopeLocal
     // by value (varmap.rs), not through the Database scope graph.
@@ -2808,21 +2831,21 @@ impl Heritage {
             // scope is never global, database.cc:1273's persist is skipped).
             // The scope's RangeList carries the space identity
             // (Scope::inScope -> RangeList::inRange), so only the scope's
-            // own (stack) space can hit this branch.
+            // own (stack) space can hit this branch. The cc:1276 property
+            // fold `flags |= getProperty(addr)` runs in the oracle with the
+            // STACK-space Address — outside every RAM-space flagbase
+            // partition (address.hh:375-390 space-index-first ordering),
+            // i.e. the locked-pspec oracle value is 0 — and Rugra's
+            // spaceless PartMap cannot express a stack-space query at all
+            // (consulting it would cross-space collide with the RAM
+            // readonly ranges), so the fold projects to 0 here.
             let in_scope = space == scope.space
                 && scope
                     .local_range
                     .iter()
-                    .any(|&(first, range_last)| first <= offset && last <= range_last
-                    );
+                    .any(|&(first, range_last)| first <= offset && last <= range_last);
             if in_scope {
-                let mut f = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
-                if let Some(a) = fd.get_arch() {
-                    if let Some(db) = a.symboltab.as_ref() {
-                        f |= db.read().unwrap().get_property(addr);
-                    }
-                }
-                return f;
+                return varnode_flags::MAPPED | varnode_flags::ADDRTIED;
             }
         }
         // (3) oracle database.cc:1271-1276's finalscope tail: an address
@@ -2841,9 +2864,9 @@ impl Heritage {
         // Without this branch the write-only globals of the corpus (e.g.
         // getparameter's `config.timecond = TIMECOND_NONE`) lose their
         // lattice at the first removal-allowed deadcode pass and vanish
-        // (GETPARAM-EMPTYELSE-0001). Residual: register/unique spaces keep
-        // the flagbase-only tail (the oracle's scope chain for those
-        // spaces is not modeled in Rugra).
+        // (GETPARAM-EMPTYELSE-0001). The register/unique/other-space
+        // remainder falls to the (4) tail below, whose flagbase-only value
+        // folds to the locked-pspec oracle answer 0.
         if space == AddressSpace::Ram {
             let mut f = varnode_flags::MAPPED
                 | varnode_flags::ADDRTIED
@@ -2855,12 +2878,27 @@ impl Heritage {
             }
             return f;
         }
-        // (4) property flagbase only.
-        if let Some(a) = fd.get_arch() {
-            if let Some(db) = a.symboltab.as_ref() {
-                return db.read().unwrap().get_property(addr);
-            }
-        }
+        // (4) property flagbase only — for every space the walk above did
+        // not claim (const/register/unique/join/iop, and stack outside the
+        // discovery range). The oracle tail (database.cc:1278-1279) reads
+        // `getProperty(addr)` with the full space-qualified Address: a
+        // non-Ram address sorts in its own space-index region
+        // (address.hh:375-390) and only ever sees the flagbase's default
+        // partition — 0 under the locked pspec (zero `<volatile>` ranges;
+        // loader-derived `<readonly>` ranges are RAM-space only), the
+        // space-qualified answer CURB2's probe registered as the oracle
+        // value. Rugra's PartMap is keyed by the spaceless legacy Address,
+        // so a lookup here cross-space collides with the RAM readonly
+        // ranges instead (parent c010bbb3 gated probe: 17 Register-space
+        // varnodes at offsets 0x0-0xb8/0x110 across 26 functions falsely
+        // READONLY; the consumers are ActionVarnodeProps' hasActionProperty
+        // branch (coreaction.cc:1318 `continue`) skipping the NZMask/consume
+        // removal, jumptable ispoint (jumptable.cc:441) rejecting the switch
+        // variable, and the single-branch readonly rescue (jumptable.cc:1224)
+        // feeding loader bytes as the table). Fold to the oracle's 0 (the
+        // funcdata/ruleaction consumers' Ram-only guard pattern). Residual:
+        // a pspec installing non-Ram flagbase partitions needs the
+        // space-keyed flagbase first.
         0
     }
 

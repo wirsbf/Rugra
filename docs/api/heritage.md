@@ -1192,6 +1192,23 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   （/tmp/w-nonconverge2-ore）：18 次 deadcode ENTER（pass 1..9 含一次
   restart 归 1），ram:delay=1/1，17620/17628 从非 deletion 候选。
   register/unique 空间仍走 flagbase 尾巴（residual，scope 链未建模）。
+- **2026-09-25 补（HERITAGE-FLAGBASE-SPACELESS-0001）**：上一行的"flagbase 尾巴"
+  在 SYMDB 门控态被证为跨空间碰撞缺陷——oracle 的 `getProperty(addr)`
+  （database.cc:1276/1279 → database.hh:946 `flagbase.getValue`）以**全址**
+  （空间+偏移）查 `partmap<Address,uint4>`，而 `Address::operator<`
+  （address.hh:375-390）先比空间索引再比偏移，故 RAM 空间的 readonly/volatile
+  分区永不覆盖 Register/Unique/Stack 地址（锁定 pspec 零 `<volatile>`，loader
+  readonly 均在 RAM——非 ram 查询的 oracle 值恒 0）。Rugra 的 `PartMap` 键是
+  legacy **无空间** `Address`（只装过 RAM 域），非 ram 查询只能与 RAM 分区按
+  偏移碰撞：门控态 R-only PT_LOAD `[0,0x29000)` 把 Register/Unique/Stack 小偏移
+  varnode 标 READONLY → `ActionVarnodeProps` 的 `hasActionProperty` 分支
+  （coreaction.cc:1318-1326 `continue`）跳过 NZMask/consume 消除分支 →
+  门控 main 丢整条 call 语句（+74 行残差的主导项）。修复：`guard_query_properties`
+  臂 (2)（stack in-scope）的属性折算与臂 (4)（非 ram flagbase 尾）均折算为
+  oracle 的 0（同 funcdata/ruleaction 消费点的 Ram-only guard 模式）；臂 (3)
+  （Ram global tail）的 flagbase 查询保留（.rodata readonly → printc 字符串
+  字面量通道）。残差：pspec 若将来装非 RAM flagbase 分区，需先落地空间键
+  flagbase。
 - **`guard_range`**：fl 改为真实查询（原硬编码 0）；调用顺序
   guardCalls → **guardReturns**（新接入）→ `high_ptr_possible` 门控
   guardStores/guardLoads（cc:1194，原无条件调用）；write 表项由
