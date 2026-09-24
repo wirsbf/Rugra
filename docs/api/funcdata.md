@@ -2717,3 +2717,26 @@ PT_LOAD 所有权范围）时以 `uRam0000000000000008/80/90` 兜底名打印
 push_multiequals → new_varnode(Ram@0x90)`（ci=9964-9966，双态皆现）。
 行为面：register-range push（语料主路径）空间不变；验收见
 docs/api/heritage.md 同日节（默认路径输出 cmp 字节恒等、门控 −42、兜底名 0）。
+
+## 2026-09-25：op_zero_multi 零输入 varnode 空间限定（FUNCDATA-OPZEROMULTI-SPACE-0001）
+
+`Funcdata::opZeroMulti`（funcdata_block.cc:177-187）零输入臂
+`opInsertInput(op, newVarnode(op->getOut()->getSize(), op->getOut()->getAddr()), 0)`
+中，oracle 的 `op->getOut()->getAddr()` 是 out varnode 的**完整存储地址（空间+偏移）**
+——被清零 MULTIEQUAL 的 out 常为寄存器，新输入 varnode 落寄存器空间。Rugra 侧
+（funcdata.rs `op_zero_multi`）沿用无空间 `new_varnode` 适配器 **implicit-RAM**，
+把寄存器空间 MULTIEQUAL 的清零输入伪造为 `Ram@register偏移` 垃圾——与
+push_multiequals 同族（HERITAGE-CROSSSPACE-MERGE 兄弟位点）。修复：
+捕获 out 的 `address_space` 后改走
+`new_varnode_in_space(size, out_space, out_addr)`（cc:181 完整地址构造，
+与 push_multiequals cc:135 修法同构）；out 为 None 的防御臂保持 Ram 默认
+（oracle 无该路径，out 解引用为硬前提）。此后 `new_varnode` 无空间适配器在
+funcdata.rs 映射面仅余 double_precis.rs 调用方（另行核对的邻接位点）。
+
+验收实证（亲父 9d839715 A/B，release 亲测）：默认路径 httpd/curl 输出与亲父
+**cmp 字节恒等**；门控 RUGRA_SYMDB=1 httpd 骨架 1519→1519（逐函数 diff 亦恒等）。
+临时探针实锤：op_zero_multi 零输入臂在 curl/httpd-default/httpd-SYMDB 三态
+**0 次触发**（该臂需 MULTIEQUAL 失去最后一条入边；ActionUnreachable 禁用 +
+ActionDoNothing 链语料未构造出零输入 phi）——位点语料休眠，恒等由
+RAM 臂构造严格等价（`Varnode::new` ≡ `new_with_space(Ram,…)`，varnode.rs:550）
++ 零触发共同保证；寄存器空间 out 一旦触发即走正确空间（correct-by-construction）。
