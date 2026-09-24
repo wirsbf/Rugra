@@ -279,7 +279,7 @@ Rugra 的验证工作不是单一测试，而是分层目标：
 
 这一层是项目走向稳定工程化的关键，但当前仍应视为**持续建设中**。
 
-#### Level 4 已落地资产：投影 fixture 银行（2026-09-25 扩至 71 条）
+#### Level 4 已落地资产：投影 fixture 银行（2026-09-25 扩至 391 条）
 
 `tests/fixtures/projections/` 固化了 71 个函数的锁 oracle / Rugra 双侧
 stage projection（v1.2），每函数一个目录（oracle.projection +
@@ -303,13 +303,19 @@ fixture 按控制台 `load <addr>` 语义在入口注册函数；全部首验即
 首分歧残差与地址臂机制见银行 README）。结构、重捕获 recipe 与新增条目
 流程见 `tests/fixtures/projections/README.md`。
 
-httpd 侧同族 PLT-thunk 总群已于 2026-09-25（lane HBANK）盘点并完成
-oracle 侧全量捕获（320 条：PLT0 @0x29020 + 2 个 .plt.got + 317 个
-.plt.sec，形态同 curl——186/742 桩与 191/1240 PLT0；双跑 cmp 恒等），
-但**尚未入库**：httpd 驱动的 stage 可选函数账本只含 dynsym 定义符号
-（473 条），地址形 selector 选不中 thunk（curl 侧是 GOLDEN_CORPUS_LEDGER
-把 thunk 烤进账本才可行）。阻塞登记 `HBANK-DRIVER-STAGELEDGER-0001`，
-解锁后按银行 README 的新增条目流程批量入库（预期 71→391）。
+httpd 侧同族 PLT-thunk 总群已于 2026-09-25 全量入库（lane HBANK 盘点
++ oracle 侧 320 条捕获，lane HBANK2 解锁驱动并批量入库）：320 条
+（PLT0 @0x29020 + 2 个 .plt.got + 317 个 .plt.sec，形态同 curl——
+186/742 桩与 191/1240 PLT0）**全部首验即 MATCH**，银行 71→391。
+解锁形态 = 驱动 stage 门内 PLT-thunk 账本臂（`HBANK-DRIVER-STAGELEDGER-
+0001` 已收口，commit 534f9802）：.plt 头 PLT0（golden 拼写
+`FUN_00129020`）+ .plt.got 槽位 GOT-tail 解码（bnd/plain 两种拼写，
+httpd 为 plain `ff 25`）+ .plt.sec 槽 i 对第 i 条 .rela.plt JUMP_SLOT，
+账本 793 = 473 dynsym + 320 thunk；地址形 selector
+`RUGRA_STAGE_FUNC=0x<entry>` 可选 thunk。臂仅扩 selector 面：stage 门内
+生效、落在所有其他账本消费者之后，env 全 unset 的默认 E2E 输出与亲父
+构建 cmp 字节恒等（stderr 唯一差异是亲父自身两次运行也出现的
+`[INJECT]` 日志交错序，非本改动引入）。详见银行 README httpd 节。
 
 #### Level 4 补充资产：varmap gatheropen/guard 双侧 fixture 的 untyped 臂（2026-09-25，RANGEHINT-CR-F1）
 
