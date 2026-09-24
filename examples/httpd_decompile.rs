@@ -1060,6 +1060,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .entry(dest)
                         .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
                 }
+                // DRIVER-SWITCHD-LABEL-0001: the headless
+                // DecompilerSwitchAnalysis pass consumes the decompiler's
+                // dumped <jumptable> XML (jumptable.cc:2769-2790
+                // JumpTable::encode: one <dest> per address-table entry with
+                // its case label when not JumpValues::NO_LABEL) and creates
+                // LABEL symbols at every case destination named
+                // `caseD_<hex label>` in the namespace `switchD_<dispatch
+                // addr>` (the BRANCHIND address), plus `default` at the
+                // default destination; later passes print the qualified
+                // form through emitLabel's queryCodeLabel (printc.cc:3176)
+                // -> ScopeGhidra::findCodeLabel (database_ghidra.cc:308-325).
+                // Mirrored here from the recovered JumpTables: first entry
+                // wins a shared destination (curl glob_set 0x4c5e is both
+                // case 0x5e and the folded default and prints caseD_5e),
+                // `default` only where no caseD label landed (resolved as
+                // the default_block out-edge target of the BRANCHIND
+                // block), overriding the plain LAB_ defaults. Skipped in
+                // the raw-BFD mirror (no analyzer symbol layer there).
+                let mut switchd_labels: HashMap<u64, String> = HashMap::new();
+                for jt in &fd_read.jump_tables {
+                    let jt_rg = jt.read().unwrap();
+                    if jt_rg.addresstable.is_empty() {
+                        continue;
+                    }
+                    let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
+                    for (i, dest) in jt_rg.addresstable.iter().enumerate() {
+                        let case_value = jt_rg.label.get(i).copied();
+                        if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
+                            switchd_labels.entry(dest.as_u64()).or_insert_with(|| {
+                                format!("switchD_{:08x}_caseD_{:x}", dispatch, case_value.unwrap())
+                            });
+                        }
+                    }
+                    if jt_rg.default_block >= 0 {
+                        let default_addr = jt_rg.indirect.as_ref().and_then(|indirect| {
+                            let parent = indirect.read().unwrap().parent.clone()?;
+                            let blk = parent.upgrade()?;
+                            let blk_rg = blk.read().unwrap();
+                            let slot = jt_rg.default_block as usize;
+                            if slot >= blk_rg.size_out() {
+                                return None;
+                            }
+                            let edge = blk_rg.get_out(slot)?;
+                            let tgt = edge.point.read().unwrap();
+                            Some(tgt.get_start_addr().as_u64())
+                        });
+                        if let Some(default_addr) = default_addr {
+                            if !switchd_labels.contains_key(&default_addr) {
+                                switchd_labels
+                                    .entry(default_addr)
+                                    .or_insert_with(|| format!("switchD_{:08x}_default", dispatch));
+                            }
+                        }
+                    }
+                }
+                for (addr, name) in switchd_labels {
+                    code_labels.insert(addr, name);
+                }
                 printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
             }
             printer.doc_function(&fd_read);

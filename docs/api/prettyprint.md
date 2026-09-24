@@ -1,5 +1,19 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-24：DRIVER-SWITCHD-LABEL-0001 — P9 goto→尾调用改写排除 `switchD_` 标号族
+
+驱动符号层（`examples/curl_decompile.rs`/`examples/httpd_decompile.rs` 的
+code_labels 层，EX2 LAB_ 同机制）开始为 jumptable case 目标合成
+`switchD_<dispatch 8位hex>_caseD_<case值hex>`/`switchD_<...>_default` 名
+（headless DecompilerSwitchAnalysis 分析器行为：消费 jumptable.cc:2764-2791
+`JumpTable::encode` 的 `<jumptable>` XML，在 case 目标建 LABEL 符号；
+printc.cc:3164-3193 `emitLabel` 经 queryCodeLabel 命中打印全限定拼写）。
+该族与 `LAB_`/`code_r0x…` 同类——goto 目标标号，永不是被调函数；golden 双语料
+0 处 `return switchD`。P9 的"goto 已知 libc 名→`return f();` 尾调用"改写以
+小写首字母+无 `code_`/`joined_`/`dup_` 前缀识别函数名,小写 `s` 开头的
+`switchD_` 若不排除会整体改写成隐式声明调用 `return switchD_...();`（gcc
+拒绝）。排除规则：`!func_name.starts_with("switchD_")`。
+
 ## 2026-09-22：WARN-EMIT2 R4 — 签名启发式排除比较运算符（glob_range 重复声明 0→6→0）
 
 `backfill_missing_locals`（RUGRA-GLUE，无 oracle 对应）的签名形状启发式第四次

@@ -1062,6 +1062,15 @@ impl EmitNoMarkup {
                 // names — exclude them or every flat tail goto gets rewritten
                 // into a bogus `return code_r0x...();` call (which gcc rejects
                 // as an implicit-function-declaration of a label).
+                // DRIVER-SWITCHD-LABEL-0001: the `switchD_<dispatch>_caseD_<v>`/
+                // `_default` family is the analyzer's case-destination LABEL
+                // symbol (the headless DecompilerSwitchAnalysis pass consuming
+                // JumpTable::encode's <jumptable> XML, jumptable.cc:2769-2790),
+                // the same symbol class as `LAB_` — a goto target, never a
+                // callee. Golden spellings keep `goto switchD_...;` (0 `return
+                // switchD` across both corpora). Without the exclusion the
+                // lowercase `s` start rewrites every switchD goto into an
+                // implicit-declaration `return switchD_...();` call.
                 if func_name
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -1072,6 +1081,7 @@ impl EmitNoMarkup {
                     && !func_name.starts_with("code_")
                     && !func_name.starts_with("joined_")
                     && !func_name.starts_with("dup_")
+                    && !func_name.starts_with("switchD_")
                 {
                     let indent = final_cleaned[i9].len() - final_cleaned[i9].trim_start().len();
                     let indent_str: String = " ".repeat(indent);
