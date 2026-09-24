@@ -2700,3 +2700,20 @@ readonly 救援随即读 GOT 槽值（驱动镜像已施加 JUMP_SLOT/GLOB_DAT �
 thunk → fail_thunk → 无警告 CALLIND。投影银行 8/8 MATCH、curl/httpd 全量
 逐函数 0 回退实证该尾对其余函数面行为中性（这些函数的自由 ram 输入在
 其 DB 环境无符号命中、属性为 0）。
+
+## 2026-09-25：push_multiequals 替换 varnode 空间限定（HERITAGE-CROSSSPACE-MERGE-0001）
+
+`Funcdata::pushMultiequals` cc:135 的替换 varnode
+`replacevn = newVarnode(origvn->getSize(), origvn->getAddr())` 中，oracle 的
+`origvn->getAddr()` 是**完整存储地址（空间+偏移）**。Rugra 无空间
+`new_varnode` 适配器 **implicit-RAM**，把被 push 的 REGISTER 空间 MULTIEQUAL
+输出伪造为 `Ram@register偏移`（x86-64 寄存器 0x8/0x80/0x90）——该假 RAM
+varnode 进入 loc_tree 后被 heritage 当作 RAM disjoint range 处理，长出
+输出/输入跨空间的 MULTIEQUAL，门控（SYMDB DB 使 mapGlobals 命中 [0,0x29000)
+PT_LOAD 所有权范围）时以 `uRam0000000000000008/80/90` 兜底名打印
+（ap_getparents）。修复：`new_varnode_in_space(orig_size, orig_space, orig_addr)`
+——origvn 自带空间，neednewunique 臂不变。backtrace 实锤注入链：
+`ActionDoNothing → remove_do_nothing_block → block_remove_internal →
+push_multiequals → new_varnode(Ram@0x90)`（ci=9964-9966，双态皆现）。
+行为面：register-range push（语料主路径）空间不变；验收见
+docs/api/heritage.md 同日节（默认路径输出 cmp 字节恒等、门控 −42、兜底名 0）。
