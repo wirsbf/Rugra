@@ -2965,6 +2965,24 @@ impl Scope {
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "func");
         sym.symbol_id = id;
+        // FunctionSymbol::buildType (database.cc:514-520): the symbol's
+        // data-type is the generic code type (type.cc:3692
+        // TypeFactory::getTypeCode) and the symbol carries
+        // namelock|typelock. container_hit surfaces the metatype, which
+        // PrintC::opPtrsub's spacebase arm reads (printc.cc:1068-1069
+        // `TYPE_CODE → valueon = true` — a function symbol drops the '&').
+        sym.dtype = Some(std::sync::Arc::new(crate::type_system::datatype::Datatype::Code(
+            crate::type_system::datatype::TypeCode::new(),
+        )));
+        sym.flags |= symbol_flags::NAMELOCK | symbol_flags::TYPELOCK;
+        // Scope::addMap (database.cc:1131-1133, 1147-1151) — the whole-map
+        // point integration on a global scope sets `persist`, and a valid
+        // address with an EMPTY uselimit sets `addrtied` (both fold into
+        // the symbol flags before addMapInternal). addrtied is load-bearing
+        // for SymbolEntry::inUse (database.cc:114-119: an address-tied
+        // entry is valid at ANY usepoint, including the invalid usepoint
+        // linkSymbolReference and PrintC's spacebase arm query with).
+        sym.flags |= symbol_flags::PERSIST | symbol_flags::ADDRTIED;
         // Build the FunctionSymbol view for the caller (database.cc:1615 return).
         let fs = FunctionSymbol::new(self.unique_id, nm, consume_size, addr);
         self.symbols.insert(id, Arc::new(RwLock::new(sym)));
