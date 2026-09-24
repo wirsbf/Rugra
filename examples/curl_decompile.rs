@@ -91,78 +91,125 @@ static TYPESEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<Committed
 
 // RUGRA-GLUE: per-process manifest handle — one read per process (isolated
 // workers are one-job processes, the compare-functions direct path reuses
-// the controller's cache).
+// the controller's cache). Shared by every committed-local seed gate
+// (W1b TYPESEED, C2 DWARFSEED): identical decode walk, distinct env gates
+// and default manifests so each channel's contribution stays independently
+// attributable (RUGRA_TYPESEED=1 alone must keep reproducing the W1b
+// witness).
+fn load_committed_local_manifest(
+    gate_env: &str,
+    manifest_env: &str,
+    default_path: &str,
+    tag: &str,
+) -> Option<HashMap<String, Vec<CommittedLocal>>> {
+    if !std::env::var(gate_env).is_ok() {
+        return None;
+    }
+    if mirror_flow_enabled() || mirror_bare_load_enabled() || mirror_fixture_data_enabled() {
+        eprintln!("[{}] {} ignored under the mirror gate (projection purity)", tag, gate_env);
+        return None;
+    }
+    let path = std::env::var(manifest_env).unwrap_or_else(|_| default_path.to_string());
+    match fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Err(err) => {
+                eprintln!("[{}] manifest {} is not a JSON object map: {}", tag, path, err);
+                None
+            }
+            Ok(raw) => {
+                // The manifest's top level is {"functions": {addr: {...}}};
+                // decode the inner table defensively, keeping the file
+                // human-inspectable (same decode walk as the httpd gate).
+                let mut table = HashMap::new();
+                let mut count = 0usize;
+                if let Some(serde_json::Value::Object(functions)) = raw.get("functions") {
+                    for (addr, entry) in functions {
+                        let Some(serde_json::Value::Array(locals)) = entry.get("locals") else {
+                            continue;
+                        };
+                        let mut seeds = Vec::new();
+                        for local in locals {
+                            let (Some(serde_json::Value::Number(offset)), Some(
+                                serde_json::Value::String(name)),
+                             Some(serde_json::Value::String(type_expr))) = (
+                                local.get("offset"),
+                                local.get("name"),
+                                local.get("type"),
+                            ) else {
+                                continue;
+                            };
+                            let Some(offset) = offset.as_i64() else { continue };
+                            seeds.push(CommittedLocal {
+                                offset,
+                                name: name.clone(),
+                                type_expr: type_expr.clone(),
+                            });
+                        }
+                        count += seeds.len();
+                        if !seeds.is_empty() {
+                            table.insert(addr.clone(), seeds);
+                        }
+                    }
+                }
+                eprintln!(
+                    "[{}] loaded {}: {} functions / {} committed locals",
+                    tag,
+                    path,
+                    table.len(),
+                    count
+                );
+                Some(table)
+            }
+        },
+        Err(err) => {
+            eprintln!("[{}] cannot read manifest {}: {} (seeding disabled)", tag, path, err);
+            None
+        }
+    }
+}
+
 fn typeseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal>>> {
     TYPESEED_LOCALS
         .get_or_init(|| {
-            if !std::env::var("RUGRA_TYPESEED").is_ok() {
-                return None;
-            }
-            if mirror_flow_enabled()
-                || mirror_bare_load_enabled()
-                || mirror_fixture_data_enabled()
-            {
-                eprintln!("[TYPESEED] RUGRA_TYPESEED ignored under the mirror gate (projection purity)");
-                return None;
-            }
-            let path = std::env::var("RUGRA_TYPESEED_MANIFEST")
-                .unwrap_or_else(|_| "tests/golden/manifests/local_seed_curl_1204.json".to_string());
-            match fs::read_to_string(&path) {
-                Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-                    Err(err) => {
-                        eprintln!("[TYPESEED] manifest {} is not a JSON object map: {}", path, err);
-                        None
-                    }
-                    Ok(raw) => {
-                        // The manifest's top level is {"functions": {addr: {...}}};
-                        // decode the inner table defensively, keeping the file
-                        // human-inspectable (same decode walk as the httpd gate).
-                        let mut table = HashMap::new();
-                        let mut count = 0usize;
-                        if let Some(serde_json::Value::Object(functions)) = raw.get("functions") {
-                            for (addr, entry) in functions {
-                                let Some(serde_json::Value::Array(locals)) = entry.get("locals")
-                                else {
-                                    continue;
-                                };
-                                let mut seeds = Vec::new();
-                                for local in locals {
-                                    let (Some(serde_json::Value::Number(offset)), Some(
-                                        serde_json::Value::String(name)),
-                                     Some(serde_json::Value::String(type_expr))) = (
-                                        local.get("offset"),
-                                        local.get("name"),
-                                        local.get("type"),
-                                    ) else {
-                                        continue;
-                                    };
-                                    let Some(offset) = offset.as_i64() else { continue };
-                                    seeds.push(CommittedLocal {
-                                        offset,
-                                        name: name.clone(),
-                                        type_expr: type_expr.clone(),
-                                    });
-                                }
-                                count += seeds.len();
-                                if !seeds.is_empty() {
-                                    table.insert(addr.clone(), seeds);
-                                }
-                            }
-                        }
-                        eprintln!(
-                            "[TYPESEED] loaded {}: {} functions / {} committed locals",
-                            path,
-                            table.len(),
-                            count
-                        );
-                        Some(table)
-                    }
-                },
-                Err(err) => {
-                    eprintln!("[TYPESEED] cannot read manifest {}: {} (seeding disabled)", path, err);
-                    None
-                }
-            }
+            load_committed_local_manifest(
+                "RUGRA_TYPESEED",
+                "RUGRA_TYPESEED_MANIFEST",
+                "tests/golden/manifests/local_seed_curl_1204.json",
+                "TYPESEED",
+            )
+        })
+        .as_ref()
+}
+
+// HEADLESS-BRIDGE-V1 C2 (DWARF semantic-name channel, W1B residual
+// attribution follow-up): curl's canon golden names locals from .debug_info
+// (urlnum/urls/usedarg/ap/...), a layer the direct-runner contract has no
+// source for — the names live outside the library (same C1 channel family,
+// different name source). The gate loads the DWARF-harvested manifest
+// (tools/harvest_local_manifest.py --dwarf over examples/curl; exprloc
+// DW_OP_fbreg locations only, offset = fbreg+8, KNOWN_BASES-only types,
+// canon-committed bool retyping — every rule locked-oracle-validated via
+// stage_seed_diag <localdb> seeding) and decompile_request extends
+// fd.committed_locals with the canon-address-keyed seeds after the W1b
+// TYPESEED attach. Gates are additive and independently attributable:
+// RUGRA_TYPESEED=1 alone keeps the exact W1b witness; RUGRA_DWARFSEED=1
+// layers the DWARF-named slots (disjoint from local_ slots by construction
+// — canon prints a DWARF name wherever one exists, local_ otherwise).
+// Mirror components keep the gate closed (five-projection purity); the
+// default path is constructively identical (no manifest IO, empty field).
+static DWARFSEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: per-process DWARF manifest handle (mirrors typeseed_local_table).
+fn dwarfseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal>>> {
+    DWARFSEED_LOCALS
+        .get_or_init(|| {
+            load_committed_local_manifest(
+                "RUGRA_DWARFSEED",
+                "RUGRA_DWARFSEED_MANIFEST",
+                "tests/golden/manifests/local_seed_curl_1204_dwarf.json",
+                "DWARFSEED",
+            )
         })
         .as_ref()
 }
@@ -3977,6 +4024,35 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 seeds.len()
             );
             fd.committed_locals = seeds.clone();
+        }
+    }
+    // HEADLESS-BRIDGE-V1 C2 (DWARF semantic names): extend the carrier with
+    // the DWARF-named seeds (disjoint slots by construction — canon prints
+    // a DWARF name wherever one exists, synthesized local_/auStack_
+    // otherwise; an offset collision would mean a manifest defect, so it is
+    // surfaced loudly rather than silently merged).
+    if let Some(table) = dwarfseed_local_table() {
+        if let Some(seeds) =
+            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+        {
+            let taken: std::collections::HashSet<i64> =
+                fd.committed_locals.iter().map(|l| l.offset).collect();
+            for seed in seeds {
+                if taken.contains(&seed.offset) {
+                    eprintln!(
+                        "[DWARFSEED] {} offset {} collision with an earlier seed: manifest defect",
+                        target.name,
+                        seed.offset
+                    );
+                    continue;
+                }
+                fd.committed_locals.push(seed.clone());
+            }
+            eprintln!(
+                "[DWARFSEED] {} dwarfseed: {} DWARF-named locals",
+                target.name,
+                seeds.len()
+            );
         }
     }
     // FLOW-SHAREDRETURN-0001: the controller supplies the out-of-band
