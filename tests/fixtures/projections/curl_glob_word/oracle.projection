@@ -1,7 +1,7 @@
 META side=oracle oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86:LE:64:default cspec=gcc
 META analysis_options=default build_flags=v1-no-OPACTION_DEBUG
 META binary_sha256=8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41 func_entry=0x4a60 func_name=glob_word load_mode=single_function_bfd
-META producer=f6cb61d14fd3df7be2e65a74381c303326c3e0dc maxrestarts=1 unique_base=0x364200
+META producer=24a4bec28f2786d0b0f4b23e540c67228519b92f maxrestarts=1 unique_base=0x364200
 @BEGIN 1 universal
 @BEGIN 2 universal:start
 @END 2 universal:start result=0 count=0 tests=0 apply=0

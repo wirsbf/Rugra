@@ -279,9 +279,9 @@ Rugra 的验证工作不是单一测试，而是分层目标：
 
 这一层是项目走向稳定工程化的关键，但当前仍应视为**持续建设中**。
 
-#### Level 4 已落地资产：投影 fixture 银行（2026-09-24）
+#### Level 4 已落地资产：投影 fixture 银行（2026-09-25 扩至 71 条）
 
-`tests/fixtures/projections/` 固化了 25 个函数的锁 oracle / Rugra 双侧
+`tests/fixtures/projections/` 固化了 71 个函数的锁 oracle / Rugra 双侧
 stage projection（v1.2），每函数一个目录（oracle.projection +
 rugra.projection + manifest.toml，记录 oracle commit e40ed130、capture
 命令、日期、sha256 pin 与验证状态）。门禁入口：
@@ -292,12 +292,15 @@ tools/verify_projection_bank.sh        # 全部条目；sha256 完整性 + run_s
 
 当前条目：next_url / match_url / parseconfig.constprop.0 / myprogress /
 getparameter.constprop.0 / glob_set / glob_word / file2string.part.0 /
-my_get_token / glob_range（前 10 条逐 lane 入库），以及 HARVEST 级联收割
+my_get_token / glob_range（前 10 条逐 lane 入库），HARVEST 级联收割
 批 15 条：main_free / main_init / SetHTTPrequest.part.0 / SetHTTPrequest /
 glob_url / frame_dummy / __do_global_dtors_aux / _init / _fini /
 __libc_csu_fini / __libc_csu_init / deregister_tm_clones /
-register_tm_clones / GetStr / my_fwrite（全 MATCH；首分歧残差与 oracle
-侧 PLT-thunk 捕获限制见银行 README）。结构、重捕获 recipe 与新增条目
+register_tm_clones / GetStr / my_fwrite，helpf（PM-HF），以及 ADDRARM2
+（2026-09-25）经 oracle harness **地址-only 臂**收割的 PLT-thunk 全量
+45 条（PLT0 + .plt.got + 43 个 .plt.sec 桩，runner 函数名位置传 `-`，
+fixture 按控制台 `load <addr>` 语义在入口注册函数；全部首验即 MATCH；
+首分歧残差与地址臂机制见银行 README）。结构、重捕获 recipe 与新增条目
 流程见 `tests/fixtures/projections/README.md`。
 
 ---
