@@ -281,7 +281,7 @@ Rugra 的验证工作不是单一测试，而是分层目标：
 
 #### Level 4 已落地资产：投影 fixture 银行（2026-09-24）
 
-`tests/fixtures/projections/` 固化了 5 个函数的锁 oracle / Rugra 双侧
+`tests/fixtures/projections/` 固化了 6 个函数的锁 oracle / Rugra 双侧
 stage projection（v1.2），每函数一个目录（oracle.projection +
 rugra.projection + manifest.toml，记录 oracle commit e40ed130、capture
 命令、日期、sha256 pin 与验证状态）。门禁入口：

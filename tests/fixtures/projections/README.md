@@ -5,7 +5,7 @@ frozen oracle-side and rugra-side v1.2 stage projections plus a manifest
 that pins provenance and byte identity. This directory is the durable,
 in-repo form of the RAM-disk lane evidence (the `/dev/shm/rugra-tests/sb-*`
 projection products are lost on reboot); it exists so that the wave's
-five proven-MATCH functions cannot silently regress.
+proven-MATCH functions cannot silently regress.
 
 ## Layout
 
@@ -27,6 +27,7 @@ tests/fixtures/projections/
 | curl_parseconfig.constprop.0 | parseconfig.constprop.0 | 0x3c80 | 335 | 130,099 | bank sha256 (== lane pin b2ace56a…) |
 | curl_myprogress | myprogress | 0x34d0 | 402 | 84,249 | bank sha256 |
 | curl_getparameter.constprop.0 | getparameter.constprop.0 | 0x3f00 | 371 | 913,373 | metadata functions map |
+| curl_file2string.part.0 | file2string.part.0 | 0x3a90 | 340 | 87,957 | bank sha256 (== sb-oracle pin c0981445…) |
 
 Common provenance (also recorded per manifest):
 
@@ -87,9 +88,11 @@ RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=<selector> \
 
 Selector spellings: `next_url`, `match_url`, `myprogress`,
 `parseconfig` (DWARF spelling of `parseconfig.constprop.0`),
-`getparameter` (DWARF spelling of `getparameter.constprop.0`); the
+`getparameter` (DWARF spelling of `getparameter.constprop.0`),
+`file2string` (DWARF spelling of `file2string.part.0`); the
 address form `0x<entry>` is observation-equivalent (verified byte-identical
-on parseconfig).
+on parseconfig). The `file2string` entry's advisory-only `func_name` META
+difference is the same constprop-clone BFD/DWARF spelling class.
 
 ## Adding a function
 
