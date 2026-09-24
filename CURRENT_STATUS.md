@@ -1,10 +1,45 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（DFLIP 默认脸快照 + HSEED 阶梯补充）
+**日期**: 2026-09-25（SEEDFLIP 种子门默认转正快照 + DFLIP/HSEED 历史快照）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-25 DFLIP 默认脸快照（当前事实源）
+## 2026-09-25 SEEDFLIP 种子门默认转正快照（当前事实源）
+
+**种子门默认转正**（Lane SEEDFLIP，wt/seedflip @ master 898a975b）：committed-local 种子门
+（curl 的 TYPESEED/DWARFSEED/STRUCTSEED 三门 + httpd 的 TYPESEED 门）自本快照起为**默认行为**
+（转正判据：三门零已知错误 + 全量零回退验证——C2DWARF/C3NEXT 逐函数 0 回退 + HSEED 正交
+叠加判决 + DFLIP 门反转形态先例；manifest 在库 `tests/golden/manifests/`）。**新默认脸 ==
+原叠加态逐字节**（curl 767 == 三门态、httpd 1197 == TYPESEED 态，亲测 cmp 恒等）；任意二进制
+**无 manifest 优雅 no-op = 裸脸**（"cannot read manifest … (seeding disabled)" 非致命告警，
+stripped 兼容已由 HSEED 判决背书——无 DWARF 语料的 DWARF/STRUCT 通道天然空转）。
+
+| 门禁（fast-release 亲测，@ master 898a975b + SEEDFLIP） | 数字 | 说明 |
+|---|---|---|
+| curl E2E（新默认脸） | **767 / 0 / 0**（skeleton/defects/numbering，124 函数） | vs `tests/golden/ghidra_curl_1204.c`；==原三门叠加态（RUGRA_TYPESEED=1 DWARFSEED=1 STRUCTSEED=1）逐字节；双跑 cmp 恒等 |
+| httpd E2E（新默认脸） | **1197 / 0 / 0**（34 函数） | vs `tests/golden/ghidra_httpd_1204.c`；==原 TYPESEED 门控态逐字节；双跑 cmp 恒等 |
+| 全局逃生门 RUGRA_SEEDS=0 | curl **1096/0/0**、httpd **1315/0/0** | ==转正前默认脸逐字节（裸种子脸，未删除）；两驱动同语义 |
+| 单门退（如 RUGRA_TYPESEED=0） | curl ==双门态逐字节 | 各门独立退；旧 =1 显式形态继续等效（==新默认） |
+| mirror（RUGRA_MIRROR=1，含 +显式=1） | 输出 cmp 恒等基线 mirror | mirror 分量在场 → 拒装一切种子（转正前后同契约） |
+| 无 manifest（任意二进制） | ==裸脸逐字节 | 优雅 no-op（两驱动亲测，_MANIFEST 指向缺失路径） |
+| curl gcc 审计（新默认脸） | 104 OK / 20 FAIL | fail 函数名集与三门叠加态**逐名相同**（真子集不回退判据的更强形态） |
+| 投影银行（B2 钉板） | **71/71 MATCH** | 全部 curl 语料 + mirror 裸径采集契约 → 不受种子门转正影响（亲验） |
+| cargo test --lib | 1712 passed / 1 failed | 唯一失败 `test_nonzeromask_pipeline_wiring` 预存（多车道共证） |
+
+**种子门 env 语义矩阵（转正后，单门 X ∈ {TYPESEED, DWARFSEED, STRUCTSEED}）**：
+
+| env 形态 | 行为 |
+|---|---|
+| （无） | **种子门全开**（新默认；manifest 在库即装） |
+| `RUGRA_X=1` | 显式开——与默认等效（历史 opt-in 见证形态保留） |
+| `RUGRA_X=0` | 单门退（仅 X 关；curl 其余门保持默认开） |
+| `RUGRA_SEEDS=0` | **全局退**——一切种子门关，拿回裸脸（逃生门） |
+| mirror 分量在场（RUGRA_MIRROR/RUGRA_FLOW_MIRROR/…） | 恒裸——压制一切种子形态（含显式 =1），判定短路左侧 |
+
+注意：`RUGRA_X=0` 在转正前语义为"任意值=开"（`is_ok()` 判定），转正后按字面意义改为单门退——
+仓库内无任何脚本/测试依赖旧语义（grep 亲查）；需要历史等价形态用 `=1`。
+
+## 2026-09-25 DFLIP 默认脸快照（历史，数字被本节取代）
 
 **SYMDB 默认转正**（Lane DFLIP，wt/dflip）：httpd 驱动的 action 侧符号 Database 建库+attach+
 spacebase scope source 装配与 canon 装配 emitter（EmitPrettyPrint，Oppen 100 列）自本快照起为
@@ -29,9 +64,9 @@ emitter，纯库真值通道）。
 | 通道 | 环境变量 | 状态 | 语料 |
 |---|---|---|---|
 | action 侧符号 DB + EmitPrettyPrint | `RUGRA_SYMDB` | **默认开**（`RUGRA_SYMDB=0` opt-out 拿回旧脸） | httpd |
-| TYPESEED 提交局部类型种子 | `RUGRA_TYPESEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持 | httpd/curl |
-| DWARFSEED 原型种子 | `RUGRA_DWARFSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持 | curl |
-| STRUCTSEED 结构复合种子 | `RUGRA_STRUCTSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持 | curl |
+| TYPESEED 提交局部类型种子 | `RUGRA_TYPESEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持（→ 同日 SEEDFLIP 转正默认开，见上节） | httpd/curl |
+| DWARFSEED 原型种子 | `RUGRA_DWARFSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持（→ 同日 SEEDFLIP 转正默认开，见上节） | curl |
+| STRUCTSEED 结构复合种子 | `RUGRA_STRUCTSEED`(+`_MANIFEST`) | manifest 驱动 opt-in，维持（→ 同日 SEEDFLIP 转正默认开，见上节） | curl |
 | mirror 裸库真值 | `RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR` | 在场即恒裸（压制一切 SYMDB 形态），维持 | httpd/curl |
 
 **2026-09-25 HSEED 阶梯补充（Lane HSEED，wt/hseed @ master 33894226 亲测）**——SYMDB 默认脸 ×
