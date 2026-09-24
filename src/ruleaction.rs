@@ -6196,41 +6196,90 @@ impl Rule for RulePushMulti {
         fd.op_set_output(&op1_ref, out_vn.clone());
         fd.op_uninsert(&op1_ref);
 
+        // Ghidra cc:1094: bl = op->getParent() — the merge block owning the
+        // MULTIEQUAL being destroyed; both insert forms below target it.
+        let bl = op_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade());
+
         if res == 1 {
             // There's one pair that must be unified via a new MULTIEQUAL.
             let buf1 = &result.pairs[0].0;
             let buf2 = &result.pairs[0].1;
             let substitute = Self::find_substitute(buf1, buf2);
             let slot1 = fd.op_get_slot(&op1_ref, buf1) as usize;
-            let sub_out = if let Some(sub) = substitute {
-                sub.read().unwrap().output.clone().unwrap_or_else(|| {
-                    // Fallback: create a new MULTIEQUAL if substitute has no output.
+            let sub_ref = match substitute {
+                Some(sub) => crate::op::PcodeOpRef(sub),
+                None => {
+                    // cc:1117-1127: create the unifying MULTIEQUAL. Its output
+                    // preserves the pair's shared storage address when both
+                    // inputs carry the same address and that storage is not
+                    // addr-tied (cc:1121-1124); otherwise a fresh unique is
+                    // allocated (newUniqueOut, cc:1124).
                     let addr = op_arc.read().unwrap().get_addr();
                     let new_op = fd.new_op(2, addr);
                     fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
-                    let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
+                    let (size, space, offset, addr_tied) = {
+                        let b1 = buf1.read().unwrap();
+                        (
+                            b1.get_size(),
+                            b1.get_space(),
+                            b1.get_offset(),
+                            b1.is_addr_tied(),
+                        )
+                    };
+                    let shared_addr = {
+                        let b2 = buf2.read().unwrap();
+                        b2.get_space() == space && b2.get_offset() == offset
+                    };
+                    if shared_addr && !addr_tied {
+                        fd.new_varnode_out_full(
+                            size,
+                            space,
+                            crate::address::Address::new(offset),
+                            &new_op,
+                        );
+                    } else {
+                        fd.new_unique_out(size, &new_op);
+                    }
                     fd.op_set_input(&new_op, buf1.clone(), 0);
                     fd.op_set_input(&new_op, buf2.clone(), 1);
-                    fd.op_insert_before(&new_op, &op_ref);
-                    sub_vn
-                })
-            } else {
-                // Create a new MULTIEQUAL to unify buf1/buf2.
-                let addr = op_arc.read().unwrap().get_addr();
-                let new_op = fd.new_op(2, addr);
-                fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
-                let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
-                fd.op_set_input(&new_op, buf1.clone(), 0);
-                fd.op_set_input(&new_op, buf2.clone(), 1);
-                fd.op_insert_before(&new_op, &op_ref);
-                sub_vn
+                    // cc:1127: opInsertBegin(substitute, bl) — block-begin
+                    // insert (MULTIEQUAL-aware leading-group skip), not an
+                    // insert relative to the destroyed op. Flat-bank unit
+                    // fixtures without block membership keep the legacy
+                    // relative insert (RUGRA-GLUE).
+                    match &bl {
+                        Some(bl) => fd.op_insert_begin(&new_op, bl),
+                        None => fd.op_insert_before(&new_op, &op_ref),
+                    }
+                    new_op
+                }
+            };
+            // cc:1129: opSetInput(op1, substitute->getOut(), slot1) — replace
+            // the unified op's input with the substitute's output varnode.
+            let sub_out = match sub_ref.0.read().unwrap().output.clone() {
+                Some(o) => o,
+                // Oracle substitutes always carry an output (an existing
+                // MULTIEQUAL or a CSE op); a parentless one is outside the
+                // contract.
+                None => return Ok(action_status::NO_CHANGE),
             };
             fd.op_set_input(&op1_ref, sub_out, slot1);
-            // Re-insert op1 after the substitute (or before op).
-            fd.op_insert_before(&op1_ref, &op_ref);
+            // cc:1130: opInsertAfter(op1, substitute) — complete the move of
+            // the unified op into the merge block right behind the substitute.
+            fd.op_insert_after(&op1_ref, &sub_ref);
         } else {
-            // res == 0: inputs are identical, just move op1 to the merge block.
-            fd.op_insert_before(&op1_ref, &op_ref);
+            // res == 0: inputs are identical, just move op1 to the merge block
+            // (cc:1133 opInsertBegin(op1, bl)); flat-bank fixtures keep the
+            // legacy relative insert (RUGRA-GLUE).
+            match &bl {
+                Some(bl) => fd.op_insert_begin(&op1_ref, bl),
+                None => fd.op_insert_before(&op1_ref, &op_ref),
+            }
         }
         // Destroy the original MULTIEQUAL and the duplicate op2.
         let op2_ref = crate::op::PcodeOpRef(op2_arc);

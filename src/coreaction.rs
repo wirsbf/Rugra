@@ -9582,7 +9582,14 @@ impl Action for ActionRestrictLocal {
         // descendant writing stack storage — the spill slot
         // (isUnaffectedStorage, varmap.hh:244: out space == scope space) —
         // marks that slot unmapped with parameter=false.
-        let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effects.clone();
+        // Ghidra coreaction.cc:1983-1985: iterate through
+        // `data.getFuncProto().effectBegin()/effectEnd()` — which fall back
+        // to the resolved ProtoModel's effect list when the prototype-local
+        // list is empty (fspec.cc:4243-4247). Reading the raw local field
+        // here showed analysis-time prototypes (no local records) an empty
+        // list, so the saved-register spill walk never marked the
+        // unaffected-register push slots unmapped.
+        let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effect_iter().to_vec();
         for effect in &effects {
             // cc:1986: if ((*eiter).getType() == EffectRecord::killedbycall)
             //   continue;
