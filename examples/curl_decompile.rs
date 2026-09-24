@@ -458,7 +458,7 @@ fn collect_known_entry_shared_return_overrides(
     Ok(result.into_values().collect())
 }
 
-const WORKER_PROTOCOL_VERSION: u32 = 2;
+const WORKER_PROTOCOL_VERSION: u32 = 3;
 // Per-function decompile deadline. Aligned with Ghidra's suggested
 // per-function decompile timeout — DecompileOptions.java:289
 // SUGGESTED_DECOMPILE_TIMEOUT_SECS = 30, installed as the default at :522
@@ -535,6 +535,22 @@ struct DecompileRequest {
     /// (the oracle's facing type for PTR_ labels — golden witness
     /// `PTR___gmon_start___00116fe8 != (undefined *)0x0`).
     db_symbol_entries: Vec<(u64, String, i32, bool)>,
+    /// CURL-CODEREF-SYMBOLIZE-0001: the print-side function-symbol layer
+    /// (entry address, display name) the worker registers as
+    /// FunctionSymbols in the global scope of the print-only symbol DB —
+    /// the analyzer front-end's function registry that
+    /// `PrintC::pushPtrCodeConstant` (printc.cc:1736
+    /// `symboltab->getGlobalScope()->queryFunction`) resolves code-address
+    /// constants through, printing the callback's name bare (canon golden
+    /// witness: `curl_easy_setopt(lVar13,0x4e2b,my_fwrite)`). Canon mode =
+    /// ELF STT_FUNC symbols ∪ ledger-discovered functions inside executable
+    /// sections (the analyzeHeadless front-end creates a Function for every
+    /// loader/analyzer entry; EXTERNAL-space slots live in a separate
+    /// address space in the oracle and never resolve in ram); bare-load
+    /// mirror mode = every loader symbol (architecture.cc:346-359
+    /// readLoaderSymbols registers each LoadImageFunc record via
+    /// scope->addFunction with no data/function distinction).
+    fn_symbol_entries: Vec<(u64, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3526,8 +3542,10 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         Some(
         std::sync::Arc::new(worker_memory_load_image(elf, &request.binary_image)),
     );
+    // CURL-CODEREF-SYMBOLIZE-0001: the Arc clone keeps `program_db`
+    // reachable for the post-action print-DB install below.
     let worker_arch =
-        worker_architecture_with_program_db(program_db, program_loader)?;
+        worker_architecture_with_program_db(program_db.clone(), program_loader)?;
 
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
@@ -3925,6 +3943,51 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
 
     }
     eprintln!("[STEP] {} action done {:?}", target.name, t0.elapsed());
+
+    // CURL-CODEREF-SYMBOLIZE-0001 (print-only install): swap the
+    // action-phase Architecture for a clone whose symboltab Database
+    // carries the front-end function registry, so PrintC::doc_function's
+    // snapshot (printc.rs doc_function: fd.arch.symboltab) resolves
+    // code-address constants through the global scope
+    // (pushPtrCodeConstant, printc.cc:1736). The action-phase queries
+    // (ActionConstantPtr's queryContainer, linkSymbol's parent-walk, the
+    // data-symbol graph) keep the exact Database they ran with — the
+    // clone starts from the program DB's contents (data entries + readonly
+    // ranges the print phase's string rendering also reads) and only adds
+    // FunctionSymbols, so no print-side data channel regresses. The
+    // consume size is 1 (glb->min_funcsymbol_size default, the same
+    // contract the httpd driver's layer uses).
+    {
+        let mut print_symbol_db = match &program_db {
+            Some(db_arc) => db_arc.read().unwrap().clone(),
+            None => rugra::database::Database::new(false),
+        };
+        let mut code_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        {
+            let db_scope = print_symbol_db
+                .get_global_scope_mut()
+                .ok_or_else(|| "print symbol DB has no global scope".to_string())?;
+            for (entry_addr, entry_name) in &request.fn_symbol_entries {
+                db_scope.add_function(Address::new(*entry_addr), entry_name, 1);
+                code_entries.insert(*entry_addr);
+            }
+        }
+        eprintln!(
+            "[PREPASS] CURL-CODEREF-SYMBOLIZE-0001 print DB: {} function symbols",
+            code_entries.len()
+        );
+        let mut fd_write = fd_arc
+            .write()
+            .map_err(|_| "Funcdata write lock poisoned during print DB install".to_string())?;
+        if let Some(a) = fd_write.arch.clone() {
+            let mut print_arch = (*a).clone();
+            print_arch.set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(
+                print_symbol_db,
+            )));
+            fd_write.arch = Some(std::sync::Arc::new(print_arch));
+        }
+        drop(fd_write);
+    }
 
     if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
         if dump_fn == target.name {
@@ -5465,6 +5528,73 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     prototype_entries.sort_by_key(|(address, _)| *address);
 
+    // CURL-CODEREF-SYMBOLIZE-0001: the print-side function-symbol layer —
+    // the global-scope function registry the canon oracle harness carries
+    // (every function the analyzeHeadless front-end discovered is a
+    // FunctionSymbol in the global scope; PrintC::pushPtrCodeConstant,
+    // printc.cc:1736, resolves code-address constants through it and prints
+    // the callback name bare — canon witness
+    // `curl_easy_setopt(lVar13,0x4e2b,my_fwrite)` in main). The worker
+    // installs this layer into a print-only symbol DB clone AFTER the
+    // action pipeline (same install contract as the httpd driver's
+    // HTTPD-CODEREF-SYMBOLIZE-0001), so the action-phase query channels
+    // keep the exact channel state the current baseline was pinned on.
+    // Entry set:
+    // - canon mode = ELF STT_FUNC symbols ∪ ledger functions inside an
+    //   executable section (the corpus ledger mirrors the front-end's
+    //   loader/PLT/external discovery, FULL-CORPUS-0001; EXTERNAL-space
+    //   slots at 0x19000+ are a separate oracle address space and never
+    //   resolve in ram, so the exec-range gate excludes them);
+    // - bare-load mirror = every loader symbol
+    //   (architecture.cc:346-359 readLoaderSymbols registers each
+    //   LoadImageFunc record via scope->addFunction with no data/function
+    //   distinction — the direct-runner oracle's global scope).
+    let fn_symbol_entries: Vec<(u64, String)> = {
+        let mut entries: Vec<(u64, String)> = if mirror_bare_load_enabled() {
+            // readLoaderSymbols mirror: the raw symbol table the BFD loader
+            // walks, no type filter.
+            match &obj {
+                Object::Elf(elf) => elf
+                    .syms
+                    .iter()
+                    .filter(|sym| sym.st_value != 0 && !sym.is_import())
+                    .filter_map(|sym| {
+                        elf.strtab
+                            .get_at(sym.st_name)
+                            .filter(|name| !name.is_empty())
+                            .map(|name| (sym.st_value, name.to_string()))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            }
+        } else {
+            let exec_ranges: Vec<(u64, u64)> = match &obj {
+                Object::Elf(elf) => elf
+                    .section_headers
+                    .iter()
+                    .filter(|h| h.sh_flags & 0x4 != 0) // SHF_EXECINSTR
+                    .map(|h| (h.sh_addr, h.sh_addr + h.sh_size))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let in_exec = |addr: u64| exec_ranges.iter().any(|&(lo, hi)| addr >= lo && addr < hi);
+            // Ledger functions (ELF-backed names win per the merge rules)
+            // inside executable sections.
+            functions
+                .iter()
+                .filter(|f| in_exec(f.vaddr))
+                .map(|f| (f.vaddr, f.name.clone()))
+                .collect()
+        };
+        entries.sort_by_key(|(address, _)| *address);
+        entries.dedup_by_key(|(address, _)| *address);
+        eprintln!(
+            "[PREPASS] CURL-CODEREF-SYMBOLIZE-0001 print layer: {} function symbols",
+            entries.len()
+        );
+        entries
+    };
+
     // EXTERNAL-block import slots (EXTERNAL-STUB-SUPPORT-0001): one 8-byte
     // slot per UND .dynsym symbol in symbol order, starting at the
     // linkage-aligned block base (see external_block_base). These are the
@@ -5549,6 +5679,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     .collect(),
                 rodata_span,
                 db_symbol_entries: db_symbol_entries.clone(),
+                // CURL-CODEREF-SYMBOLIZE-0001: the print-side function
+                // registry (see the build site above).
+                fn_symbol_entries: fn_symbol_entries.clone(),
             },
         };
         let direct_output = if matches!(mode, DriverMode::CompareFunctions(_)) {
