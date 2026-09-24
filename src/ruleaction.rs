@@ -18574,7 +18574,7 @@ impl<'a> AddTreeState<'a> {
                         self.valid = false; // Cannot find mapped variable but nonmult is non-empty.
                         return;
                     }
-                    let extra = extra.wrapping_div(wordsize);
+                    let extra = ((extra as u64) / (wordsize as u64)) as i64; // Ghidra: ruleaction.cc:6294 AddrSpace::byteToAddress (uintb unsigned divide, space.hh:523-525)
                     self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
                     self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     self.is_subtype = true;
@@ -27141,6 +27141,176 @@ mod tests {
         let non_leaves = stack.iter().filter(|n| !n.is_leaf()).count();
         assert_eq!(leaves, 4); // leaf_a..leaf_d
         assert_eq!(non_leaves, 2); // hi8, lo8
+    }
+#[test]
+    fn test_add_tree_vncoeff_truncates_before_compare() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // MULT #1: constant 0xFFFFFFFBFFFFFFFD (8-byte) ×1 → val keeps the
+        // full pattern; sign_extend(·,63) gives sval = -0x100000003.
+        let vn1 = fd.vbank.create_constant(8, 0xFFFF_FFFB_FFFF_FFFD);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn1];
+            o.output = Some(out1.clone());
+        }
+        // MULT #2: coefficient 5 > 3 (u32 compare) → final accumulator 5.
+        let vn2 = fd.vbank.create_constant(8, 5);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x50);
+        let op2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op2.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn2];
+            o.output = Some(out2.clone());
+        }
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 1));
+        // (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+        assert!(state.check_mult_term(&out2, &op2, 1));
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+    }
+#[test]
+    fn test_add_tree_treecoeff_fullwidth_compare_truncated_store() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // vnconst NOT constant → the cc:6129 constant block is skipped and
+        // control reaches the cc:6158 treeCoeff site.
+        let nonconst = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x60);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), nonconst];
+            o.output = Some(out1.clone());
+        }
+        // cc:6210 site: an INPUT (unwritten, non-free) varnode falls
+        // straight to the checkTerm treeCoeff accumulator.
+        let input_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x70);
+        input_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 0x1_0000_0005));
+        // Full-width 0x100000005 > 0 wins the compare; store truncates to 5.
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+        assert!(state.check_mult_term(&out1, &op1, 6));
+        assert_eq!(state.biggest_non_mult_coeff, 6);
+        assert!(state.check_term(&input_vn, 0x1_0000_0003));
+        // 0x100000003 > 6 full width → stores (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+    }
+#[test]
+    fn test_add_tree_spacebase_extra_unsigned_byte_to_address() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
+        };
+        let mut fd = Funcdata::new("sbws2", Address::new(0x1000), 0x10);
+        // ScopeLocal with one whole, address-tied array symbol int[8]
+        // (size 32) at stack offset 0x2000 — the forward arrayed-component
+        // walk's +32 probe target.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let arr_t = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("int[8]".into(), 32, TypeMetatype::Array),
+            array_of: int_t.clone(),
+            num_elements: 8,
+        }));
+        let mut sl = crate::varmap::ScopeLocal::new();
+        let mut sym = crate::varmap::LocalSymbol::new("arr", 0x2000, 32, Some(arr_t), -1);
+        sym.addrtied = true;
+        sl.symbols.push(sym);
+        sl.mapentry_log.push(crate::varmap::LocalMapEntry {
+            sym: 0,
+            space: crate::space::AddressSpace::Stack,
+            start: 0x2000,
+            size: 32,
+            offset: 0,
+            extraflags: 0,
+            uselimit: Vec::new(),
+            subsort: crate::varmap::EntrySubsort { useindex: 0, useoffset: 0 },
+        });
+        fd.scope = Some(sl);
+        // spacebase for THIS function's frame (localframe == fd address so
+        // spacebase_map resolves the live ScopeLocal), pointer wordsize 2 —
+        // the ws > 1 divergence condition.
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: Some(crate::space::AddressSpace::Stack),
+            localframe: Address::new(0x1000),
+            scope: None,
+        }));
+        let ct = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 2,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ct);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        // The non-multiple term that routes calc_subtype into the SPACEBASE
+        // arm (created before the state borrows fd).
+        let nm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let mut state = AddTreeState::new(&mut fd, add_op, 0);
+        // Seed the accumulator so calc_subtype lands in the SPACEBASE arm:
+        // offset = 0xFF8 (spacebase size 0 → tmpoff passthrough),
+        // offsetbytes = 0xFF8 × 2 = 0x1FF0; the array hint 4 (== int
+        // element size) routes hasMatchingSubType through the forward walk,
+        // which misses at 0x1FF0, probes 0x2010 into the int[8] symbol, and
+        // answers extra = 0x1FF0 - 0x2000 = -16 (cc:6088-6090).
+        state.multsum = 0xFF8;
+        state.biggest_non_mult_coeff = 4;
+        state.nonmult.push(nm);
+        state.calc_subtype();
+        assert!(state.valid);
+        assert!(state.is_subtype);
+        // extra = byteToAddress(-16, 2) = 0xFFFFFFFFFFFFFFF0 / 2 =
+        // 0x7FFFFFFFFFFFFFF8 (unsigned). offset = 0xFF8 - that, mod 2^64.
+        assert_eq!(state.offset, 0x8000_0000_0000_1000);
+        assert_eq!(state.correct, 0x8000_0000_0000_0008);
     }
 }
 
