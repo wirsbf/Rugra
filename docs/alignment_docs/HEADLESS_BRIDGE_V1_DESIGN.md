@@ -297,3 +297,79 @@ va_list ap typedef 族（DWARF-named 域）+ 寄存器溢出赋值吸收族
 parseconfig 余 59 = usedarg/filebuffer（DWARF-named bool）+ 临时编号
 偏移 + 字符串常量形（C5-邻域）；main 余 206 = urlnum/urls/outs/heads/
 progressbar/fileinfo/errorbuffer（DWARF-named/结构体域）。
+
+## §11 C2DWARF 交付记录（Lane C2DWARF，2026-09-25，基=亲父 36d5efb6）
+
+W1b 差额归因指认的 DWARF-named 域（curl −45 的余额大头）落成：C1 通道的
+DWARF 语义名扩展（名字来自 .debug_info，位置来自 inline DW_OP_fbreg，
+经 `<localdb>` 种子运输）。**零 src/ 改动**（机制 C 工具/驱动域豁免：
+tools/harvest_local_manifest.py 扩展 + manifest + examples 门）。
+
+### 11.1 oracle 级预验证（先行，BRIDGE1 方法论照做）
+
+仪器化：`stage_seed_diag`（锁定库 e40ed130，真 `<localdb>` decode 链）+
+pyelftools 全量 DWARF 盘点（/dev/shm/rugra-tests/c2dwarf/，21 条
+exprloc-fbreg 条目/9 函数）→ 按规则构造种子 XML → 逐函数 seeded/unseeded
+对照 canon：
+
+- **声明层逐名复现**：6 函数全部命中——main `int urlnum; bool[256]
+  errorbuffer`、myprogress `char[40] format; bool[256] line; bool[256]
+  outline`、my_get_line `bool[4096] buf`、file2string `bool[256] buffer`、
+  parseconfig `bool usedarg; bool[256] filebuffer`、getparameter
+  `time_t now`；下标形/`== true` 体形态同步复现。
+- **fbreg→偏移换算钉死**：offset = fbreg(N)+8（frame_base=
+  call_frame_cfa=CFA=RSP_entry+8，Ghidra stack 0=RSP_entry 槽）；机码级
+  校准 urlnum fbreg(-0x22c)→`cmpl 0x34(%rsp)`→-0x224、errorbuffer
+  fbreg(-0x150)→`lea 0x110(%rsp)`。
+- **canon-committed typing 判决**：DWARF 说 char[256]/[4096]，canon 打印
+  bool——char 种子（--dwarf-raw-types 形态）不匹配 canon decl，bool 种子
+  匹配 ⇒ Java 分析器提交层把 boolean 用途的 char 数组重定型为 bool
+  （C6 DTP 族交叠），manifest 取 canon-committed 形态。
+- **sec_offset 域判决**：canon 从不为 loc-list 变量命名（main 的
+  i/res/url/infd/... 全部无名）⇒ Ghidra DWARF importer 丢弃 loc-list，
+  harvest 同域排除（防 over-seed）。
+- **邻接吸收判决（file2string）**：仅 seed `buffer bool[256]` 时锁定
+  oracle 也产出 `bool abStack_150[8]`（数组吸收未提交邻槽）——canon 保持
+  `undefined8 uStack_150` 独立 ⇒ canon 的提交层含该合成槽（C1 无名提交）；
+  buffer+uStack_150 双种子下 oracle 复现 canon 分区 ⇒ harvest 增加
+  canon-decl 邻接采纳规则（source=canon-decl 标注）。
+- **槽主规则**：main -504 槽首声明 progressbar（struct，C4 残差）⇒
+  passarg（bool，后声明）canon 从不打印 ⇒ 首声明拥有槽，不可服务首声明
+  连带遮蔽后续同槽可服务者。
+
+### 11.2 manifest 与装载
+
+- `tests/golden/manifests/local_seed_curl_1204_dwarf.json`：6 函数/11 种子
+  （10 DWARF + 1 canon-decl 邻接守卫 uStack_150）+10 drops 全归账；指纹
+  齐备（oracle e40ed130 + binary sha256 + golden sha256 aca37988 实测
+  复核）；harvest_rule 全规则留档。
+- `examples/curl_decompile.rs`：`RUGRA_DWARFSEED=1`（+
+  `RUGRA_DWARFSEED_MANIFEST` 覆写，默认上述路径）独立门——与 W1b
+  `RUGRA_TYPESEED` 门共享 `load_committed_local_manifest` 解码器但 env
+  独立 ⇒ **TYPESEED=1 单开保持 W1b 见证字节恒等**（归因可分）；attach
+  在 TYPESEED 之后 extend committed_locals（偏移碰撞 = manifest 缺陷，
+  响亮告警）；mirror 四分量在场恒拒载（实测 RUGRA_MIRROR+双门输出与纯
+  mirror cmp 恒等）；默认路径构造性恒等（无 manifest IO）。
+
+### 11.3 C2DWARF 验收（亲测，基=亲父 36d5efb6）
+
+| 门禁 | 默认（无 env） | TYPESEED=1 | TYPESEED=1+DWARFSEED=1 |
+|---|---|---|---|
+| curl E2E canon | **1099/0/0**，cmp 亲父字节恒等 | **1054/0/0**，cmp 亲父字节恒等（W1b 见证保持） | **944/0/0**（−110） |
+| 投影银行 | 71/71 PASS（离线，frozen） | mirror 门恒闭 | mirror 门恒闭（实测拒载） |
+| gcc 审计 | 103 OK/21 FAIL（=亲父） | 同 | **104 OK/20 FAIL**（my_get_line 修复，零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 | cmp 恒等 |
+
+逐函数（TYPESEED→双门，**0 回退**硬门 ✓；118 未播种函数字节恒等）：
+main 206→186、myprogress 33→15、my_get_line 30→16（gcc FAIL 同步修复）、
+file2string 76→39（邻接守卫）、parseconfig 59→39、getparameter 385→384、
+helpf 50→50（未触碰）。
+
+### 11.4 残差登记（不可经本通道复现 → HEAD/C3/C4 域）
+
+main `URLGlob *urls`（C4 pointee）/`OutStruct outs,heads`/`ProgressData
+progressbar`（+passarg 槽遮蔽）/`stat fileinfo`/canon-only `URLGlob glob`
+（inlined glob_url 参数，C3+C4）；helpf `va_list ap`（typedef→struct，C4）；
+getparameter `stat statbuf`/`LongShort aliases[50]`（C4）；match_url
+`URLGlob glob`（栈参数，C3）；全部 sec_offset loc-list 变量（Ghidra 自身
+丢弃）。C4 组合类型（V4-W4）与 C3 签名锁（V3-W3）是这些残差的归属通道。
