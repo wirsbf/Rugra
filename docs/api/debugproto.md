@@ -495,9 +495,39 @@ jumptable 半边见 PLTSTUB-THUNKRELRO-0001）；零差函数 62→107；
 
 `parse_c_type` 改为 `pub(crate)` 并扩展两类输入（HEADLESS-BRIDGE-V1-TYPESEED
 的 manifest 声明拼写）：①最外层数组声明符（`long[4]`、`char *[2]`）——按
-`TypeFactory::get_array`（type.cc:3902 getTypeArray 镜像）自右向左折叠，
+`TypeFactory::get_array`（type.cc:3902 getTypeArray 镜像）折叠，
 对应 TypeArray::decode 的 arraysize×alignsize 重建（type.cc:1330-1342）；
 ②x86-64 gcc 数据布局基类型表（undefined/undefined1/2/4/8、uint4、ulong8、
 byte1、short2、float4、double8、bool1）。既有 24 条 libc 签名拼写路径不变
 （新臂只在新拼写上点火）。指针层与名字树解析（factory_named_base/
 find_by_name 身份复用）保持 GL 判例语义。
+
+## 2026-09-25：BRIDGE1-TYPESEED 三连修（Lane TYPEFIX：PIDT/MULTIDIM/PARSEFAIL）
+
+CR-BRIDGE1 复核登记的三个条件项收口（基亲父 22957a15）：
+
+- **`__pid_t`（PIDT，P2）**：基类型表补 glibc typedef 镜像条目
+  `"__pid_t" => (4, Int)`——httpd canon 在 ap_signal_server 提交
+  `__pid_t local_34;`（ghidra_httpd_1204.c:24574，glibc `typedef int
+  __pid_t` 的 analyzeHeadless DWARF 导入），oracle 侧 `<localdb>` 编码表
+  （gen_seed_xml.py BASES，stage_seed_diag 验证）同载 (4,int)。httpd 驱动
+  无 DWARF 名字索引，提交 typedef 与其它种子基一样走表解析。
+- **未知命名基禁止 address_size 回退（PIDT 根因面）**：`parse_c_type`
+  的 other 臂不再静默铸造 8B 未知基——oracle 两条路径都不允许裸名猜尺寸：
+  `<type>` 传输只读显式 ATTRIB_SIZE（`Datatype::decodeBasic`，type.cc:623-637，
+  经 `TypeFactory::decodeTypeNoRef` default 臂 type.cc:4536-4543），C 签名
+  路径经 `glb->types->findByName`（grammar.cc:2989）解析，未知名仅产出
+  IDENTIFIER 使解析失败。不可解析基现为 parse error，由种子调用方
+  （coreaction 的 PARSERFAIL 降级臂）报告并跳过。
+- **多维数组维序（MULTIDIM，P3）**：数组折叠改剥**最左**维（C 声明维序，
+  `long[2][4]` = array(2) of array(4) of long，镜像 TypeArray::encode 的
+  外层 arraysize=左维嵌套，type.cc:1326-1347）；原最右维剥离产生倒置的
+  array(4) of array(2)。单维拼写形状不变。
+- 新增单测 3 例：`typeseed_pidt_base_carries_committed_four_byte_int` /
+  `typeseed_unknown_base_is_parse_error_not_address_sized_mint` /
+  `typeseed_multidim_array_strips_leftmost_dimension`。
+
+coreaction 侧（F3，注释声明不改逻辑）：种子 parse 失败臂登记
+BRIDGE1-TYPESEED-PARSEFAIL 降级——oracle 的 decodeType 失败抛 LowlevelError
+使整函数数据库解码失败；Rust 通道按符号 skip+eprintln（仅损坏 manifest
+可观测），详见 docs/api/coreaction.md 同日节。

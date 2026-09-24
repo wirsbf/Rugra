@@ -2548,10 +2548,10 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 - **FUNCDATA-OPZEROMULTI-ORACLE-FIXTURE** | P3 | B2 | 零输入臂无 oracle fixture（需 DoNothing 链塌缩喂 phi 用例）；fixture 落地前该臂记 UNTESTED 不支撑 L3 | owner: 待认领
 - **FUNCDATA-OPZEROMULTI-LINEREF** | P4 | funcdata.rs:10213 | 注释指 cc:178 应为定义起始行 177，下次编辑顺带纠正 | owner: 待认领
 
-## 2026-09-25 CR-BRIDGE1 复核登记（独立 reviewer，APPROVE 附条件）
-- **BRIDGE1-TYPESEED-PIDT** | **P2** | src/debugproto.rs:1165-1170 | `__pid_t` 双侧解码不一致: Rust other 臂回退 factory_named_base(8B,Unknown) vs oracle 侧编码器 BASES 4B(int)——manifest 条目 ap_signal_server offset -52 在 Rust 侧 8B 与 local_30(8B@-48) 重叠→双 typelock merge 错→函数早退; oracle 4B 正常分区。**潜伏: 任何 E2E 窗口扩容/W1b curl 复用前必须修复**（34-fn 窗口未触发）。修正方向: parse_c_type 对非表命名基类禁止 address_size 回退（镜像 cspec typedef 或 manifest 显式 size 或 harvest 剔除）| owner: 待认领
-- **BRIDGE1-TYPESEED-MULTIDIM** | P3 | src/debugproto.rs:1085-1086 | 多维数组递归剥最右维（C 声明维序应剥最左）; gen_seed_xml 侧多维直接抛错——双侧不对称，manifest 0 条多维纯潜伏 | owner: 待认领
-- **BRIDGE1-TYPESEED-PARSEFAIL** | P3 | src/coreaction.rs:1658-1666 | 解析失败 Rust=skip+eprintln vs oracle=decodeType 抛 LowlevelError 整函数失败; 仅损坏 manifest 可观测，glue 决策可接受但需注释声明降级 | owner: 待认领
+## 2026-09-25 CR-BRIDGE1 复核登记（独立 reviewer，APPROVE 附条件；三条件项同日由 Lane TYPEFIX 收口）
+- **BRIDGE1-TYPESEED-PIDT** | **P2** | **DONE(2026-09-25,Lane TYPEFIX,commit 见 `git log --grep TYPESEED`)** | 修复形态=parse_c_type 基表补 glibc typedef 镜像条目 `__pid_t => (4,Int)`（oracle 证据=golden ghidra_httpd_1204.c:24574 ap_signal_server `__pid_t local_34;` 的 analyzeHeadless DWARF 提交 + gen_seed_xml BASES (4,int) 的 stage_seed_diag 验证）**并移除 other 臂 address_size 静默回退**（未知命名基→parse error 走 PARSERFAIL 臂响亮跳过）——oracle 两臂均不裸名猜尺寸：`<type>` 传输只读显式 ATTRIB_SIZE（type.cc:4536-4543 default 臂→decodeBasic type.cc:623-637），C 签名 findByName 未知名只产 IDENTIFIER 使解析失败（grammar.cc:2989）。验证=ap_signal_server stage+TYPESEED 探针：亲父分区退化（6 处 `(undefined4)local_34` 强转+25 行 uStack/stack/unique 泄漏临时）→修复后 0 强转 0 泄漏，声明对与 golden 逐字一致，vs oracle 391→367 行（余量=超越通道残差族同 main 族） | 收口
+- **BRIDGE1-TYPESEED-MULTIDIM** | P3 | **DONE(同上 commit)** | 数组折叠改剥最左维（C 声明维序：`long[2][4]`=array(2) of array(4) of long，镜像 TypeArray::encode 外层 arraysize=左维嵌套 type.cc:1326-1347）；单维拼写形状不变（`char *[2]` 同形）；单测 typeseed_multidim_array_strips_leftmost_dimension 锁定 | 收口
+- **BRIDGE1-TYPESEED-PARSEFAIL** | P3 | **DONE(同上 commit)** | coreaction.rs 种子 parse 失败臂注释登记降级（逻辑零改动）：oracle decodeType 失败=LowlevelError 整函数不进 action 管线（type.cc:4179/1339-1341）；Rust=按符号 skip+eprintln，仅 harvest 门禁外损坏 manifest 可观测；PIDT 回退移除后该臂兼为不可解析基拼写的指定响亮处理路径 | 收口
 
 ## 2026-09-25 CR-FLAGBASE 复核登记（独立 reviewer，APPROVE 条件项）
 - **FLAGBASE-CR-F1** | P3 | heritage.rs 臂(4) 残差注释 | 补"开放尾 Ram range"（pspec range="X:" → getLastAddrOpen invalid → 末分区非零无闭合）也会使折 0 偏离; 触发条件=pspec 出现开放属性 range | owner: 待认领
