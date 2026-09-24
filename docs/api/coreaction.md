@@ -3009,3 +3009,21 @@ triallist，交 `FuncProto::update_output_types`（fspec.cc:4136-4159）；
 ## 2026-09-24（CR29 返工）：build_localtypes 注释锚行修正
 
 TypeOpReturn::getInputLocal 引用随 typeop.cc 901 修正（原 883）。无行为变化。
+
+## 2026-09-24：input_metatype 表按锁定 oracle ctor 重建（PM-F2S）
+
+`ActionSetCasts::cast_input` 泛化臂的 `input_metatype(opc)` 原先把全部
+INT_* 算术/逻辑/移位 ops 统一映射为 `Int`。锁定 oracle 的每个 TypeOp ctor
+第 4 参（metain，typeop.cc:1168-1692）并非一致：
+
+- INT metain（typeop.cc:1168/1319/1381/1503/1568/1618/1652/1692）：INT_ADD、
+  INT_SUB、INT_MULT、INT_SDIV、INT_SREM、INT_2COMP、INT_LEFT、INT_SRIGHT。
+- UINT metain（typeop.cc:1395/1409/1442/1475/1528/1632/1672）：INT_NEGATE、
+  INT_XOR、INT_AND、INT_OR、INT_RIGHT、INT_DIV、INT_REM —— 注册为
+  `TypeOpBinary/Unary(...,TYPE_UINT,TYPE_UINT)`。
+
+修正前症状：INT_AND slot0 的 inputTypeLocal 基类型请求为 int8 而 oracle 为
+uint8（typeop.cc:1442），trim CAST 输出类型随之错签；setcasts 下一 slot 的
+markExplicitUnsigned firstvn 卫（cast.cc:53-58）读另一侧 metatype=Int 而非
+Uint，未按 oracle 提前返回，多计一次 count（file2string.part.0 投影
+ord337 的 29vs30 根因之三）。

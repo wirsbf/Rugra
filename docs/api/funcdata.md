@@ -1085,6 +1085,7 @@ PcodeOpRaw
 - `new_unique_out(s, op)` — `Funcdata::newUniqueOut` (281)
 - `new_constant(s, val)` — `Funcdata::newConstant` (283)
 - `new_unique(s)` — `Funcdata::newUnique` (288)
+- `new_unique_typed(s, ct)` — `Funcdata::newUnique(int4 s, Datatype *ct)` 的 typed 形（funcdata_varnode.cc:83-95）。**2026-09-24（PM-F2S）**：补齐 `ct` 参数通道——None 默认工厂 unknown base（cc:86-87），Some(ct) 经 `VarnodeBank::createUnique(s, ct)` 成为新 varnode 的数据类型（ctor `type = dt`，varnode.cc:583）。`Merge::allocateCopyTrim`（merge.cc:416/429）与 `Merge::trimOpOutput`（merge.cc:668/677）的 trim COPY 输出必须经此通道携带源 varnode 类型；缺失时 setcasts 的 castInput 会给 COPY 输入多插一个 CAST（file2string.part.0 投影 ord337 分歧根因之二）。
 - `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)。**2026-07-02**：对齐 `PcodeOp::setOpcode` (op.cc:276) — 清除 opcode 派生 flag 位（CALL/BRANCH/RETURNS/MARKER/CODEREF/...）后按新 OpCode 重设。修复前 CPUI_CALL 的 output 永远不带 CALL flag → ActionMarkExplicit 的 `def->isCall()` 失败 → output 未被 force-explicit → ActionMarkImplied 标 implied → printc 跳过 CALL 语句（curl 丢失约 130 处调用）。
 - `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
 - `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput`（funcdata_op.cc:308-317）：
@@ -1241,7 +1242,7 @@ SB-ORD159-NULLSLOT-0001 残差）。）
 ### 2026-06-29：spacebase() + split_uses()（底层阻塞解除）
 
 - `spacebase()` — `Funcdata::spacebase()`（funcdata.cc:230-269）：标记映射到虚拟地址空间的寄存器（栈指针 RSP @ Register@0x20, size 8）为 `SPACEBASE` 标志。对已标记且有多后代的空间基 varnode，调用 `split_uses()` 复制定义 op 使各加法用户独立寻址。**这是 Ghidra 让 varmap/ActionStackPtrFlow 识别 RSP 为栈空间指针的规范机制**——不需要 lifter 发出 Stack-space varnode。接入主管线为 `ActionSpacebase`（coreaction.cc:5506，在 ActionHeritage 之后、infertypes 之前）。
-- `split_uses(vn)` — `Funcdata::splitUses`（funcdata_varnode.cc:1540-1567）：若 vn 由 op 定义（如 INT_ADD）且有多个后代，复制定义 op 使每个读取者获得独立输出副本。允许按用户分析（如同一空间基派生指针的不同栈偏移）。
+- `split_uses(vn)` — `Funcdata::splitUses`（funcdata_varnode.cc:1540-1567）：若 vn 由 op 定义（如 INT_ADD）且有多个后代，复制定义 op 使每个读取者获得独立输出副本。允许按用户分析（如同一空间基派生指针的不同栈偏移）。**2026-09-24（PM-F2S）**：slot 计算时机修正——`slot = useop->getSlot(vn)` 必须在循环体内对**活状态**求值（cc:1554，每轮改写后重新求值），不能进循环前快照；同一 op 在多个 slot 读 vn 时（如 MULTIEQUAL 重复 RSP 输入），每轮应认领下一个尚未改写的 slot。快照版会让第二轮覆盖第一轮的安装，留下一个永不接线的新 op（file2string.part.0 投影 ord178 分歧根因）。
 - **验证**：curl uVar 碎片 149→0，httpd uVar→0，while/goto 不变，776/776 测试 + curl 24/24 + httpd 29/29 gcc 审计通过。
 
 ### 2026-08-15：split_uses 对齐 VarnodeBank 转换（VARNODE-INPLACE-MUTATION-SITES-0001）

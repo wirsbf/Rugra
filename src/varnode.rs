@@ -47,7 +47,7 @@ fn compare_address_spaces(a: AddressSpace, b: AddressSpace) -> std::cmp::Orderin
 // oracle's single Architecture. Bank-local `xunknown{size}` minting (the
 // former adapter) is gone — unknown types now carry the canonical
 // `undefined{size}` spelling and per-factory identity.
-fn default_unknown_type(
+pub(crate) fn default_unknown_type(
     factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     size: usize,
 ) -> Arc<Datatype> {
@@ -3153,6 +3153,23 @@ impl VarnodeBank {
         offset: u64,
     ) -> Arc<RwLock<Varnode>> {
         self.insert_free(Varnode::new_with_space(size, space, offset))
+    }
+
+    // Ghidra: varnode.cc:1265 VarnodeBank::createUnique
+    /// Create a new unique varnode with an explicit data-type (the ct
+    /// parameter of `createUnique(int4 s,Datatype *ct)`; Ghidra requires it
+    /// non-null — Funcdata::newUnique defaults null to the factory unknown
+    /// base before calling in).
+    pub fn create_unique_typed(
+        &mut self,
+        size: usize,
+        ct: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> Arc<RwLock<Varnode>> {
+        let offset = self.uniqid;
+        self.uniqid += size as u64;
+        let vn = self.insert_free(Varnode::new_with_space(size, self.uniq_space, offset));
+        vn.write().unwrap().v_type = Some(ct);
+        vn
     }
 
     // Ghidra: varnode.cc:1265 VarnodeBank::createUnique

@@ -2698,6 +2698,9 @@ impl Merge {
     /// union field types via `inheritResolution`/`forceFacingType`/`getUnionField`.
     /// Rugra has no union-resolution infrastructure; this path is skipped
     /// (the COPY is created without union field forcing — conservative).
+    /// The base data-type carry (cc:416 `ct = inVn->getType()` → cc:429
+    /// `newUnique(inVn->getSize(),ct)`) is NOT part of that omission: the
+    /// trim COPY's output varnode observes the input varnode's data-type.
     fn allocate_copy_trim(
         &mut self,
         fd: &mut Funcdata,
@@ -2708,8 +2711,10 @@ impl Merge {
         let copy_op = fd.new_op(1, addr);
         fd.op_set_opcode(&copy_op, crate::opcodes::OpCode::CPUI_COPY);
         let size = in_vn.read().unwrap().size;
-        // new_unique returns a free Varnode; set as COPY output.
-        let out_vn = fd.new_unique(size);
+        // cc:416/429: ct = inVn->getType(); outVn = newUnique(size, ct)
+        let ct = in_vn.read().unwrap().v_type.clone();
+        // new_unique_typed returns a free Varnode with ct as its data-type.
+        let out_vn = fd.new_unique_typed(size, ct);
         Self::wire_unique_high(fd, &out_vn);
         fd.op_set_output(&copy_op, out_vn);
         fd.op_set_input(&copy_op, in_vn.clone(), 0);
@@ -3161,7 +3166,13 @@ impl Merge {
         let op_addr = op.0.read().unwrap().get_addr();
         let copyop = fd.new_op(1, op_addr);
         fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
-        let uniq = fd.new_unique(vn.read().unwrap().size);
+        // cc:668/677: Datatype *ct = vn->getType() (read BEFORE any
+        // rewiring); uniq = data.newUnique(vn->getSize(),ct).
+        let (size, ct) = {
+            let v = vn.read().unwrap();
+            (v.size, v.v_type.clone())
+        };
+        let uniq = fd.new_unique_typed(size, ct);
         // op output → uniq; copyop output → original vn; copyop input → uniq.
         fd.op_set_output(op, uniq.clone());
         fd.op_set_output(&copyop, vn);

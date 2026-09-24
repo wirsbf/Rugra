@@ -1213,3 +1213,13 @@ queryProperties/inUse 差异)。
 `op_input_type_local` 的 RETURN 臂注释锚行随 typeop.cc 修正：定义行 901（原
 883=printRaw，行漂移），fp->getOutputType()=cc:918，void/尺寸失配=cc:919-920。
 无行为变化。
+
+## 2026-09-24：create_unique_typed（PM-F2S）
+
+`VarnodeBank::create_unique_typed(size, ct)` — `VarnodeBank::createUnique(int4 s,
+Datatype *ct)`（varnode.cc:1265-1271）的 typed 镜像：分配 unique 地址偏移后以
+显式 `ct` 构造 varnode（ctor `type = dt`，varnode.cc:583）。Ghidra 要求 ct 非空
+（null 默认在 `Funcdata::newUnique` cc:86-87 完成），Rugra 侧由
+`Funcdata::new_unique_typed` 承担同一默认。调用方：
+`Merge::allocateCopyTrim`（merge.cc:416/429）与 `Merge::trimOpOutput`
+（merge.cc:668/677）的 trim COPY 输出携带源 varnode 类型（PM-F2S ord337 修复）。
