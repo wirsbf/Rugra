@@ -2580,3 +2580,37 @@ lib 串行 1650/18(失败集=既有 flaky 家族)。
   RESIDMAP-PLTSTUB-VARTYPE-0001)②警告 3 行(PLTSTUB-WARNLOSS/JUMPTABLE
   域));free/puts 等 void stub 体 `(*(code *)PTR_free_00116e80)();` 全
   canon MATCH;gcc 审计 82→104 OK。
+## RESIDMAP-NEGRIDX-PRINTFAMILY-0001（2026-09-24，wt/idxemit，基 3925922a）
+A 族（FP top1 下标形缺失 ~41/~170）print 侧三件套落地：
+**① checkArrayDeref 移植（printc.cc:353-369）**：`check_array_deref` —— 地址 vn 必须
+implied+written，SEGMENTOP 解包到 in(2) 后 def 必须是 PTRSUB/PTRADD，其余形态（叶子
+符号/CAST/算术）一律 `*(addr)` deref 形。opLoad（cc:487-498）/opStore（cc:500-518）
+按 oracle 接线：`usearray && !force_pointer` → `m |= print_load_value/print_store_value`
+（值 mod 下传），否则 pushOp(dereference)。值 mod 经 nodepend.vnmod → rpn_recurse →
+dispatch_op_rpn 传递，由 CPUI_PTRADD 臂（cc:880-893 printval/subscript 分支）消费成
+`p[i]` 下标形。实证：httpd main 正向偏移族 `*(puVar10 + 0xb)` → `puVar10[0xb]`、
+curl `(&glob->literal)[SEXT48(i)]` 族全转下标；负向偏移族（~102 处
+`*(undefined8 *)((int *)puVar10 - 8)`）维持 deref 形——直接 oracle（direct-runner
+golden 3206-3217 行）同位同形 `*(xunknown8 *)((int8)piVar10 + -8)`，判据=该族 IR 是
+CAST(undefined8*,INT_ADD(CAST(int*,X),-8))，checkArrayDeref 按 oracle 语义必须 false；
+彻底转 `p[-1]` 需 ruleaction 域 INT_ADD→PTRADD 元素重标度（FV2/FW2/FS3 在飞，非本 lane
+写域）。
+**② opPtrsub STRUCT/UNION 臂 arrayvalue 补全（cc:1011-1016/1037-1038/1053-1054）**：
+fieldtype 为 ARRAY 时 `arrayvalue = valueon; valueon = true`（`&` 抹除），valueon 路径
+追加 `[0]` 后缀。实证：curl `*puVar18 = pUVar15->literal;` → `*puVar18 = pUVar15->literal[0];`
+（canon 742 行同形）；next_url `(&glob->pattern)[SEXT48(iVar4)]->type` →
+`glob->pattern[SEXT48(iVar4)]->type`（`(&glob->` 10→0；余距=SEXT48+`->`vs`.`，他族）。
+**③ opPtrsub SPACEBASE 臂栈符号回查（cc:1057-1097 stand-in 扩展）**：oracle 的 symbol
+来源是 linkSymbolReference 挂接（variable.cc:419-432，对 stack 引用查 fd->getScopeLocal）
+——Rugra stand-in 原先只查全局容器（栈 PTRSUB 恒 miss → `&0xffffffffffffff38` 裸偏移形）。
+补：spaceid==Some(Stack) 且全局 miss 时查 `self.scope`（snapshot_local_scope 的 ScopeLocal
+快照）`find_container_entry(Stack, in1const, 1, None)`（Scope::findContainer 同构，
+database.cc:2262-2282），仅整符号命中（entry.start==in1const && entry.offset==0，对应
+cc:1084-1086 off==0 pushSymbol）打印符号名；mid-symbol 命中仍走 unnamed（partial-symbol
+仍是 PRINTC-SPACEBASE-PARTIALSYM-0001 残差）。ARRAY 符号按 cc:1064-1067 抹 `&`。
+实证：`puVar10 = (undefined8 *)&0xffffffffffffff38;` → `puVar10 = (undefined8 *)auStack_c8;`
+（direct oracle 3198 行 `piVar10 = (int8 *)axStack_c8;` 同形）、httpd 17 处裸偏移全消。
+**三门禁（亲父 3925922a 基线 curl 2147/httpd 2059/gcc 82-25）**：curl **2119/0/0**（−28）、
+httpd **1899/0/0**（−160）、gcc 82OK/25FAIL 恒等；next_url 92/match_url 46/parseconfig 83
+三投影 defects=0 numbering=0 保持；双跑字节恒等；printc 单测 12/12；lib 串行 1682/18
+（失败集=FUNCDATA-TESTS-FLAKY-0001 既有集逐名相同）。
