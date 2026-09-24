@@ -20,6 +20,8 @@ Usage (C1 golden-decl mode):
   harvest_local_manifest.py GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--typed-only]
 Usage (C2 DWARF-name mode):
   harvest_local_manifest.py --dwarf BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--dwarf-raw-types]
+Usage (C4 DWARF-struct mode):
+  harvest_local_manifest.py --struct BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json
 """
 import hashlib
 import json
@@ -183,6 +185,41 @@ DWARF_HARVEST_RULE = (
     "abStack_150[8]' in the locked oracle too, while canon commits "
     "undefined8 uStack_150 and keeps the partition; both-seeded oracle "
     "reproduces canon's separate slots)"
+)
+
+# C4 STRUCT-SEED domain rule (HEADLESS-BRIDGE-V1 C3NEXT, the §11.4 residual
+# set: urls/outs/heads/progressbar+passarg/fileinfo/glob x2/ap/statbuf/
+# aliases). Names/offsets from .debug_info exactly like the C2 DWARF-name
+# channel, but the type spelling names a DWARF composite (structure/union/
+# enum) or a typedef over a composite/array, which parse_c_type resolves
+# through the shared TypeFactory name tree (glb->types->findByName mirror,
+# grammar.cc:2989; the factory is populated by the driver's unconditional
+# parse_type_names DWARF import). Locked-oracle pre-validation
+# (stage_seed_diag, /dev/shm/rugra-tests/c3next): the struct seed set
+# reproduces canon's committed declaration layer (URLGlob *urls; OutStruct
+# outs/heads; ProgressData progressbar; stat fileinfo; stat statbuf;
+# LongShort aliases [50]; Configurable *local_5b8; HttpPost *local_5a8;
+# va_list ap) and the field-form family (outs.stream/outs.filename/
+# heads.stream/fileinfo.st_size/progressbar.total/ap[0].gp_offset,
+# by-value ap passing). va_list must seed as the ARRAY form (typedef over
+# __va_list_tag[1]): the struct-collapsed variant prints ap.field and
+# passes &ap, the array form prints ap[0].field and passes ap — canon is
+# the array form (oracle-verified). Canon-decl adoption: local_[0-9a-f]+
+# declarators whose base names a DWARF composite (getparameter
+# Configurable *local_5b8 / HttpPost *local_5a8) adopt name+offset from
+# the golden decl layer, base must exist in the DWARF named-type set
+# (TYPEFIX-equivalent: an unknown base is a dead entry under the factory
+# name lookup). KNOWN_BASES spellings stay in the C1/C2 manifests
+# (disjoint by construction); first-DIE slot claim keeps the
+# progressbar-over-passarg shadowing.
+STRUCT_HARVEST_RULE = (
+    "DWARF walk as DWARF_HARVEST_RULE but the type domain is DWARF-named "
+    "composites/typedefs (base must exist in the .debug_info named-type "
+    "set with a size; arrays as Base[N], pointers as Base *); local_[hex] "
+    "canon-decl adoption for struct-pointer bases; KNOWN_BASES domain "
+    "excluded (C1/C2 manifests); slot ownership first-DIE-claim; oracle "
+    "prevalidation stage_seed_diag witness in "
+    "/dev/shm/rugra-tests/c3next (seed_*.xml + oracle_*_seeded.c)"
 )
 
 # canon synthesized stack-name forms with the offset embedded in the name
@@ -416,6 +453,278 @@ def _scope_range(die):
     return [lo.value, hi_v]
 
 
+def _named_composite_set(dw):
+    """DWARF names resolvable by the Rust factory name lookup (the
+    parse_type_names mirror): typedefs over composite/enum/array-with-size
+    and named structure/union/enumeration DIEs with byte_size."""
+    named = set()
+    for unit in dw.iter_CUs():
+        for die in unit.iter_DIEs():
+            if die.tag in (
+                "DW_TAG_structure_type",
+                "DW_TAG_union_type",
+                "DW_TAG_enumeration_type",
+            ):
+                name = _attr_str(_die_attr(die, "DW_AT_name"))
+                size = _die_attr(die, "DW_AT_byte_size")
+                if name and size is not None and size.value > 0:
+                    named.add(name)
+            elif die.tag == "DW_TAG_typedef":
+                name = _attr_str(_die_attr(die, "DW_AT_name"))
+                if not name:
+                    continue
+                tattr = _die_attr(die, "DW_AT_type")
+                if tattr is None:
+                    continue
+                tdir = unit.get_DIE_from_refaddr(_ref_abs(unit, tattr))
+                # chase through typedef/qualifier layers to a sized carrier
+                for _ in range(16):
+                    if tdir is None:
+                        break
+                    if tdir.tag in (
+                        "DW_TAG_typedef",
+                        "DW_TAG_const_type",
+                        "DW_TAG_volatile_type",
+                    ):
+                        nxt = _die_attr(tdir, "DW_AT_type")
+                        tdir = (
+                            unit.get_DIE_from_refaddr(_ref_abs(unit, nxt))
+                            if nxt is not None
+                            else None
+                        )
+                        continue
+                    break
+                if tdir is None:
+                    continue
+                if tdir.tag in (
+                    "DW_TAG_structure_type",
+                    "DW_TAG_union_type",
+                    "DW_TAG_enumeration_type",
+                ):
+                    size = _die_attr(tdir, "DW_AT_byte_size")
+                    if size is not None and size.value > 0:
+                        named.add(name)
+                elif tdir.tag == "DW_TAG_array_type":
+                    named.add(name)  # va_list-class: array typedef
+    return named
+
+
+def _type_spell_struct(unit, tattr, named, depth=0):
+    """DW_AT_type attr -> (spelling|None, reason) in the C4 struct domain:
+    bases must be DWARF-named composites/typedefs (factory name lookup);
+    KNOWN_BASES spellings are the C1/C2 channel's domain, dropped here."""
+    if depth > 12 or tattr is None:
+        return None, "no-type"
+    tdir = unit.get_DIE_from_refaddr(_ref_abs(unit, tattr))
+    if tdir is None:
+        return None, "unresolved-type"
+    if tdir.tag in ("DW_TAG_const_type", "DW_TAG_volatile_type"):
+        return _type_spell_struct(
+            unit, _die_attr(tdir, "DW_AT_type"), named, depth + 1
+        )
+    if tdir.tag == "DW_TAG_typedef":
+        name = _attr_str(_die_attr(tdir, "DW_AT_name")) or ""
+        if name in named:
+            return name, None
+        return None, "typedef-unservable-" + name
+    if tdir.tag == "DW_TAG_pointer_type":
+        inner = _die_attr(tdir, "DW_AT_type")
+        spell, why = _type_spell_struct(unit, inner, named, depth + 1)
+        if spell is None:
+            return None, why or "ptr-inner"
+        return spell + " *", None
+    if tdir.tag == "DW_TAG_array_type":
+        count = None
+        for child in tdir.iter_children():
+            if child.tag == "DW_TAG_subrange_type":
+                cnt = _die_attr(child, "DW_AT_count")
+                if cnt is not None:
+                    count = cnt.value
+                else:
+                    ub = _die_attr(child, "DW_AT_upper_bound")
+                    if ub is not None and isinstance(ub.value, int):
+                        count = ub.value + 1
+        inner_spell, why = _type_spell_struct(
+            unit, _die_attr(tdir, "DW_AT_type"), named, depth + 1
+        )
+        if inner_spell is None:
+            return None, why or "array-inner"
+        if count is None:
+            return None, "array-unknown-count"
+        return "%s[%d]" % (inner_spell, count), None
+    if tdir.tag in (
+        "DW_TAG_structure_type",
+        "DW_TAG_union_type",
+        "DW_TAG_class_type",
+        "DW_TAG_enumeration_type",
+    ):
+        name = _attr_str(_die_attr(tdir, "DW_AT_name"))
+        if name and name in named:
+            return name, None
+        return None, "composite-unnamed"
+    if tdir.tag == "DW_TAG_base_type":
+        name = _attr_str(_die_attr(tdir, "DW_AT_name")) or ""
+        return None, "c1c2-domain-" + name
+    return None, tdir.tag
+
+
+def harvest_struct(binary, golden_path):
+    """C4 struct-seed table: DWARF-named composite locals + canon-decl
+    struct-pointer local_[hex] adoption. Returns (functions, drops)."""
+    from elftools.elf.elffile import ELFFile
+
+    inventory = []
+    dwarf_functions = set()
+    with open(binary, "rb") as fh:
+        elf = ELFFile(fh)
+        dw = elf.get_dwarf_info()
+        named = _named_composite_set(dw)
+        for unit in dw.iter_CUs():
+            for top in unit.iter_DIEs():
+                if top.tag != "DW_TAG_subprogram":
+                    continue
+                low = _die_attr(top, "DW_AT_low_pc")
+                if low is None:
+                    continue
+                fn_name = None
+                for die in _origin_chain(unit, top):
+                    fn_name = _attr_str(_die_attr(die, "DW_AT_name"))
+                    if fn_name:
+                        break
+                dwarf_functions.add((low.value, fn_name))
+                stack = [(top, None)]
+                while stack:
+                    node, scope = stack.pop()
+                    for child in node.iter_children():
+                        if child.tag == "DW_TAG_subprogram":
+                            if _die_attr(child, "DW_AT_low_pc") is not None:
+                                stack.append((child, None))
+                        elif child.tag in (
+                            "DW_TAG_lexical_block",
+                            "DW_TAG_inlined_subroutine",
+                        ):
+                            stack.append((child, child))
+                        elif child.tag == "DW_TAG_variable":
+                            inventory.append((low.value, fn_name, unit, child))
+        functions = {}
+        drops = []
+        entries = []
+        for low_pc, fn_name, unit, die in inventory:
+            chain = _origin_chain(unit, die)
+            name = None
+            for cdie in chain:
+                name = _attr_str(_die_attr(cdie, "DW_AT_name"))
+                if name:
+                    break
+            loc = _chain_attr(chain, "DW_AT_location")
+            if loc is None:
+                continue
+            if loc.form not in (
+                "DW_FORM_exprloc",
+                "DW_FORM_block",
+                "DW_FORM_block1",
+                "DW_FORM_block2",
+                "DW_FORM_block4",
+            ):
+                continue
+            fbreg = _decode_fbreg(bytes(loc.value))
+            if fbreg is None:
+                continue
+            tattr = _chain_attr(chain, "DW_AT_type")
+            spell, why = _type_spell_struct(unit, tattr, named)
+            entries.append(
+                {
+                    "fn": fn_name or "<anon>",
+                    "name": name,
+                    "canon": "0x%x" % (low_pc + 0x100000),
+                    "offset": fbreg + 8,
+                    "type": spell,
+                    "drop": why,
+                }
+            )
+        # first DWARF claim per (function, slot) owns the slot (the
+        # progressbar/passarg shadowing rule carries over verbatim)
+        slot_owner = {}
+        for e in entries:
+            key = (e["canon"], e["offset"])
+            if key not in slot_owner:
+                slot_owner[key] = e
+        seen = set()
+        for e in entries:
+            label = "%s/%s@%d" % (e["fn"], e["name"], e["offset"])
+            if label in seen:
+                drops.append((e["fn"], e["name"], "duplicate"))
+                continue
+            seen.add(label)
+            if e["type"] is None:
+                drops.append((e["fn"], e["name"], e["drop"] or "unservable"))
+                continue
+            owner = slot_owner[(e["canon"], e["offset"])]
+            if owner is not e:
+                drops.append(
+                    (
+                        e["fn"],
+                        e["name"],
+                        "slot-owned-by-%s(%s)"
+                        % (owner["name"], owner["drop"] or owner["type"]),
+                    )
+                )
+                continue
+            fn = functions.setdefault(
+                e["canon"], {"name": e["fn"], "locals": []}
+            )
+            fn["locals"].append(
+                {
+                    "offset": e["offset"],
+                    "name": e["name"],
+                    "type": e["type"],
+                    "typelock": True,
+                    "source": "dwarf-struct",
+                }
+            )
+        # canon-decl adoption: local_[hex] declarators whose base names a
+        # DWARF composite (getparameter Configurable *local_5b8 /
+        # HttpPost *local_5a8); the function must itself be a DWARF
+        # subprogram (the committed type's provenance).
+        by_lowpc = {low: nm for low, nm in dwarf_functions}
+        golden_text = open(golden_path, "r", encoding="utf-8").read()
+        for addr, fn_name, lines in split_functions(golden_text):
+            low = int(addr, 16) - 0x100000 if int(addr, 16) >= 0x100000 else None
+            if low is None or low not in by_lowpc:
+                continue
+            for line in lines:
+                dm = re.match(
+                    r"^\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*(\*+)\s*"
+                    r"(local_[0-9a-f]+)\s*((?:\[\d+\])*)\s*;",
+                    line,
+                )
+                if dm is None:
+                    continue
+                base = dm.group(1).strip()
+                if base not in named:
+                    continue
+                type_expr = parse_type_expr(dm.group(1), dm.group(2), dm.group(4))
+                if type_expr is None:
+                    continue
+                name = dm.group(3)
+                fn = functions.setdefault(addr, {"name": fn_name, "locals": []})
+                if any(l["offset"] == -int(name[6:], 16) for l in fn["locals"]):
+                    continue
+                fn["locals"].append(
+                    {
+                        "offset": -int(name[6:], 16),
+                        "name": name,
+                        "type": type_expr,
+                        "typelock": True,
+                        "source": "canon-decl",
+                        "adopt_reason": "struct-pointer base in DWARF named-type set",
+                    }
+                )
+        for fn in functions.values():
+            fn["locals"].sort(key=lambda local: local["offset"])
+    return functions, drops
+
+
 def harvest_dwarf(binary, golden_path=None, canon_types=True):
     """Walk the binary's .debug_info and build the DWARF-name seed table
     keyed by canon golden addresses (low_pc + 0x100000). Returns
@@ -547,6 +856,45 @@ def harvest_dwarf(binary, golden_path=None, canon_types=True):
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--struct":
+        if len(sys.argv) < 6:
+            print(__doc__)
+            return 2
+        binary, golden, corpus, oracle_commit, out = sys.argv[2:7]
+        funcs, drops = harvest_struct(binary, golden)
+        nlocals = sum(len(f["locals"]) for f in funcs.values())
+        manifest = {
+            "oracle_commit": oracle_commit,
+            "corpus": corpus,
+            "source": "dwarf-struct",
+            "binary_sha256": hashlib.sha256(open(binary, "rb").read()).hexdigest(),
+            "golden_sha256": hashlib.sha256(open(golden, "rb").read()).hexdigest(),
+            "harvest_rule": STRUCT_HARVEST_RULE,
+            "functions": funcs,
+            "harvest_drops": [
+                {"function": f, "name": n or "<anon>", "reason": r}
+                for f, n, r in drops
+            ],
+            "residual_notes": [
+                "main `URLGlob glob` (canon-only inlined glob_url param): "
+                "no DWARF variable location; C3+C4 residual",
+                "match_url `glob` (by-value stack formal): C3 prototype domain",
+                "main `Configurable *config` (register variable, no stack "
+                "slot): localdb register-symbol domain residual",
+                "sec_offset loc-list variables: Ghidra's own importer drops "
+                "them (canon never names i/res/url); pre-registered domain",
+                "canon `/* Unresolved local var */` comment blocks: Java "
+                "front-end artifact (not in decompile/cpp), comment-channel "
+                "residual",
+            ],
+        }
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=1)
+        print(
+            "harvested %d functions / %d struct-typed locals (%d drops) -> %s"
+            % (len(funcs), nlocals, len(drops), out)
+        )
+        return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--dwarf":
         if len(sys.argv) < 6:
             print(__doc__)

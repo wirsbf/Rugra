@@ -1,5 +1,30 @@
 # `debugproto.rs` API Reference
 
+## 2026-09-25：OUTSTRUCT-ID0 命名类型注册修复（C4 STRUCT-SEED 通道前置）
+
+**根因（`find_by_name` 对直接命名复合体恒 None）**：`intern_named` 对 id=0 候选
+恒失效——`base_type`/`struct_type`/`union_type`/`enum_type` 构造时 `TypeBase id=0`，
+`TypeFactory::find_add` 拒绝零 id（type.cc:3417-3425 "Datatype must have a valid
+id"），`intern_imported` Err 后静默返回**未注册**候选：直接命名的 DWARF 复合体
+（`OutStruct`/`stat`/`LongShort`/`ProgressData`）从不进名树——HashMap 消费者
+（libc 签名表 type_names）无感，但任何名树解析（`find_by_name`）恒 None。typedef
+路径（`alias_type`）因显式 `hash_name` 而一直正常（`FILE`/`URLGlob` 可解析）。
+**修复（2 处）**：①`intern_named` 在注册前按 oracle 传输规则补 id：
+`id = hashName(name)`（type.cc:675-676 `Datatype::decodeBasic` "There must be
+some kind of id"）；零尺寸（`DW_AT_declaration` 不完整复合体）候选保持未注册
+课程——Ghidra 的 DWARF 前端从不把不完整复合体喂给 `findAdd`
+（`getPrimitiveAlignSize(0)` 对默认对齐表零项取模即除零，type.cc:3429-3437）。
+②`parse_c_type` 的 `other` 臂在 bail 前先查共享工厂名树——Ghidra C 解析器对
+TYPE_NAME token 的 `glb->types->findByName` 镜像（grammar.cc:2989）；工厂名树由
+驱动无条件 `parse_type_names` DWARF 导入填充，签名路径与种子路径同一身份域。
+**行为影响（身份统一，无门禁启用即发生）**：直接命名复合体现在真正驻留——
+同型分组/指针恒等比较生效；curl 默认 1099→1096（main −1、getparameter −2，
+零回退；W1b/C2DWARF 见证基线随之移 3 行，见 Differential 归因）；mirror 五投影
+新鲜复跑 next_url/getparameter **MATCH**（97,466 行投影体逐字节=冻结银行，仅
+META producer 行异）。C4 STRUCT-SEED 通道（RUGRA_STRUCTSEED 门）依赖本修复：
+`OutStruct`/`stat` 等拼写经名树解析为带字段复合体。
+
+
 ## 2026-09-24：GLIBC-PROTO-PARAMNAME-0001 签名类型工厂驻留（libc + DWARF 剩余碎片点）
 
 **根因（curl main 48 行 glibc 参数名族）**：canon headless（12.0.4/12.1.2 双证）在

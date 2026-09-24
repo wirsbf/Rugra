@@ -1,0 +1,166 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "curl",
+ "source": "dwarf-struct",
+ "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+ "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+ "harvest_rule": "DWARF walk as DWARF_HARVEST_RULE but the type domain is DWARF-named composites/typedefs (base must exist in the .debug_info named-type set with a size; arrays as Base[N], pointers as Base *); local_[hex] canon-decl adoption for struct-pointer bases; KNOWN_BASES domain excluded (C1/C2 manifests); slot ownership first-DIE-claim; oracle prevalidation stage_seed_diag witness in /dev/shm/rugra-tests/c3next (seed_*.xml + oracle_*_seeded.c)",
+ "functions": {
+  "0x1025a0": {
+   "name": "main",
+   "locals": [
+    {
+     "offset": -544,
+     "name": "urls",
+     "type": "URLGlob *",
+     "typelock": true,
+     "source": "dwarf-struct"
+    },
+    {
+     "offset": -536,
+     "name": "outs",
+     "type": "OutStruct",
+     "typelock": true,
+     "source": "dwarf-struct"
+    },
+    {
+     "offset": -520,
+     "name": "heads",
+     "type": "OutStruct",
+     "typelock": true,
+     "source": "dwarf-struct"
+    },
+    {
+     "offset": -504,
+     "name": "progressbar",
+     "type": "ProgressData",
+     "typelock": true,
+     "source": "dwarf-struct"
+    },
+    {
+     "offset": -472,
+     "name": "fileinfo",
+     "type": "stat",
+     "typelock": true,
+     "source": "dwarf-struct"
+    }
+   ]
+  },
+  "0x103980": {
+   "name": "helpf",
+   "locals": [
+    {
+     "offset": -216,
+     "name": "ap",
+     "type": "va_list",
+     "typelock": true,
+     "source": "dwarf-struct"
+    }
+   ]
+  },
+  "0x103f00": {
+   "name": "getparameter",
+   "locals": [
+    {
+     "offset": -1464,
+     "name": "local_5b8",
+     "type": "Configurable *",
+     "typelock": true,
+     "source": "canon-decl",
+     "adopt_reason": "struct-pointer base in DWARF named-type set"
+    },
+    {
+     "offset": -1448,
+     "name": "local_5a8",
+     "type": "HttpPost *",
+     "typelock": true,
+     "source": "canon-decl",
+     "adopt_reason": "struct-pointer base in DWARF named-type set"
+    },
+    {
+     "offset": -1416,
+     "name": "statbuf",
+     "type": "stat",
+     "typelock": true,
+     "source": "dwarf-struct"
+    },
+    {
+     "offset": -1272,
+     "name": "aliases",
+     "type": "LongShort[50]",
+     "typelock": true,
+     "source": "dwarf-struct"
+    }
+   ]
+  }
+ },
+ "harvest_drops": [
+  {
+   "function": "my_get_line",
+   "name": "buf",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "main",
+   "name": "errorbuffer",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "main",
+   "name": "urlnum",
+   "reason": "c1c2-domain-int"
+  },
+  {
+   "function": "main",
+   "name": "fileinfo",
+   "reason": "duplicate"
+  },
+  {
+   "function": "main",
+   "name": "passarg",
+   "reason": "typedef-unservable-bool"
+  },
+  {
+   "function": "myprogress",
+   "name": "line",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "myprogress",
+   "name": "outline",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "myprogress",
+   "name": "format",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "file2string",
+   "name": "buffer",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "parseconfig",
+   "name": "filebuffer",
+   "reason": "c1c2-domain-char"
+  },
+  {
+   "function": "parseconfig",
+   "name": "usedarg",
+   "reason": "typedef-unservable-bool"
+  },
+  {
+   "function": "getparameter",
+   "name": "now",
+   "reason": "typedef-unservable-time_t"
+  }
+ ],
+ "residual_notes": [
+  "main `URLGlob glob` (canon-only inlined glob_url param): no DWARF variable location; C3+C4 residual",
+  "match_url `glob` (by-value stack formal): C3 prototype domain",
+  "main `Configurable *config` (register variable, no stack slot): localdb register-symbol domain residual",
+  "sec_offset loc-list variables: Ghidra's own importer drops them (canon never names i/res/url); pre-registered domain",
+  "canon `/* Unresolved local var */` comment blocks: Java front-end artifact (not in decompile/cpp), comment-channel residual"
+ ]
+}

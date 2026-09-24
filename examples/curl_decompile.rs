@@ -214,6 +214,43 @@ fn dwarfseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal
         .as_ref()
 }
 
+// HEADLESS-BRIDGE-V1 C4 (DWARF struct-composite channel, C3NEXT lane):
+// the §11.4 residual set (urls/outs/heads/progressbar/fileinfo/ap/
+// statbuf/aliases + the canon-decl struct-pointer locals local_5b8/
+// local_5a8) — names/offsets from .debug_info like C2, but the type
+// spelling names a DWARF composite, resolved by parse_c_type through the
+// shared TypeFactory name tree (the grammar.cc:2989 findByName mirror;
+// the factory is populated by the driver's unconditional parse_type_names
+// import, one type identity domain for signatures and seeds). Locked-
+// oracle prevalidation (stage_seed_diag, e40ed130): the seed set
+// reproduces canon's committed declaration layer AND the field-form
+// family — outs.stream/outs.filename/heads.stream/fileinfo.st_size/
+// progressbar.total writes+loads, ap[0].gp_offset with by-value ap
+// passing (va_list must seed as the typedef'd ARRAY form; the struct-
+// collapsed variant prints ap.field/&ap, canon prints ap[0].field/ap —
+// oracle-verified domain judgment). Gate form mirrors C2 exactly:
+// additive after TYPESEED/DWARFSEED, offset collisions are loud manifest
+// defects, mirror components keep the gate closed (five-projection
+// purity), default path is constructively identical (no manifest IO,
+// empty field, no factory-name lookups fire — the existing manifests
+// carry only table-served spellings).
+static STRUCTSEED_LOCALS: std::sync::OnceLock<Option<HashMap<String, Vec<CommittedLocal>>>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: per-process struct manifest handle (mirrors dwarfseed_local_table).
+fn structseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLocal>>> {
+    STRUCTSEED_LOCALS
+        .get_or_init(|| {
+            load_committed_local_manifest(
+                "RUGRA_STRUCTSEED",
+                "RUGRA_STRUCTSEED_MANIFEST",
+                "tests/golden/manifests/local_seed_curl_1204_struct.json",
+                "STRUCTSEED",
+            )
+        })
+        .as_ref()
+}
+
 /// The locked 12.0.4 golden corpus for the curl fixture: every function the
 /// canonical Ghidra analyzeHeadless run decompiled
 /// (`tests/golden/ghidra_curl_1204.provenance.json` ledger, 124 entries,
@@ -4052,6 +4089,46 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 "[DWARFSEED] {} dwarfseed: {} DWARF-named locals",
                 target.name,
                 seeds.len()
+            );
+        }
+    }
+    // HEADLESS-BRIDGE-V1 C4 (DWARF struct composites, C3NEXT lane): layer
+    // the struct-typed seeds last — their spellings (URLGlob */OutStruct/
+    // stat/LongShort[50]/va_list/Configurable *) resolve through the
+    // shared TypeFactory name tree (populated by the unconditional
+    // parse_type_names DWARF import above), the glb->types->findByName
+    // mirror the oracle's C parser performs for a TYPE_NAME token
+    // (grammar.cc:2989). Locked-oracle prevalidation: the seed set
+    // reproduces canon's committed struct declaration layer and the
+    // field-form family (outs.stream / fileinfo.st_size / ap[0].gp_offset
+    // ...; stage_seed_diag witness in /dev/shm/rugra-tests/c3next). Slot
+    // collision against the earlier gates stays a loud manifest defect —
+    // the struct domain is disjoint from the C1/C2 KNOWN_BASES domain by
+    // construction (progressbar's first claim shadows passarg's slot the
+    // same way the canon commit layer does).
+    if let Some(table) = structseed_local_table() {
+        if let Some(seeds) =
+            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+        {
+            let taken: std::collections::HashSet<i64> =
+                fd.committed_locals.iter().map(|l| l.offset).collect();
+            let mut attached = 0usize;
+            for seed in seeds {
+                if taken.contains(&seed.offset) {
+                    eprintln!(
+                        "[STRUCTSEED] {} offset {} collision with an earlier seed: manifest defect",
+                        target.name,
+                        seed.offset
+                    );
+                    continue;
+                }
+                fd.committed_locals.push(seed.clone());
+                attached += 1;
+            }
+            eprintln!(
+                "[STRUCTSEED] {} structseed: {} DWARF-struct locals",
+                target.name,
+                attached
             );
         }
     }
