@@ -36,6 +36,14 @@ use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printlanguage::PrintLanguage;
 use rugra::address::Address;
+// DRIVER-RIPREL-CONSTFOLD-0001: AddressSpace for the fold pass's register/
+// const space tests (re-uses the enum's Copy+PartialEq).
+use rugra::space::AddressSpace;
+
+// ACTION-SYMDB-DATASYM-0001: the canon analyzeHeadless image base (the
+// golden addresses = this driver's base-0 raw addresses + this base);
+// hoisted to file scope for the action-side Database builders.
+const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
 
 // RUGRA-GLUE (RUGRA-FLOW-MIRROR-0001, httpd lane BP / MIRROR-ENVS-CANONICAL
 // -0001): the flow-mirror gate — the oracle single-function input contract.
@@ -58,6 +66,450 @@ use rugra::address::Address;
 // byte-identical.
 fn mirror_flow_enabled() -> bool {
     std::env::var("RUGRA_MIRROR").is_ok() || std::env::var("RUGRA_FLOW_MIRROR").is_ok()
+}
+
+// DRIVER-RIPREL-CONSTFOLD-0001: SLEIGH's rip-relative export model for the
+// iced-lift path. The Rugra X86_64Disassembler resolves every rip-relative
+// displacement to the ABSOLUTE target (probe: `48 8b 05 65 47 07 00` @0x2c8d4
+// reports displacement=0xa1040, the `ap_ugly_hack` GOT-slot address), but the
+// general memory arms (parse_operand/parse_dest_operand/compute_mem_addr in
+// x86_lift.rs) then emit `INT_ADD(reg:0x288:8 RIP, const abs)` — adding the
+// live RIP register on top of the already-absolute displacement, which
+// double-counts rip. SLEIGH's rrip constructor const-folds the whole EA
+// (`*[ram]rrip` exports the constant address; the lea/push/comis arms already
+// follow this convention per their in-lifter comments, e.g. "Adding next_rip
+// on top double-counted rip ... landing every string reference out-of-image").
+// Oracle evidence the folded shape is `LOAD(ram, const)`/`STORE(ram, const)`:
+// the direct-runner mirror golden renders suck_in_APR's
+// `mov 0x74765(%rip),%rax` as `return xRam00000000000a1040;` — a direct
+// global varnode read that only exists after RuleLoadVarnode
+// (ruleaction.cc:4277-4305) folds a constant-EA LOAD into
+// `COPY(newVarnode(ram@0xa1040))`. This pass rewrites every
+// `INT_ADD(RIP, const)` into the bare constant before injection (the
+// intermediate INT_ADD is dead afterward and drops out); the pipeline's
+// RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4319-4341) then reindex the
+// constant-EA accesses into direct global varnode references exactly as in
+// the oracle. Long-term home of this fold is the lifter's memory arms (the
+// SLEIGH exporter); the driver models it here because Rugra's driver IS the
+// front-end stand-in and the httpd corpus is this lane's write domain.
+fn fold_rip_relative_eas(raw_ops: &mut Vec<rugra::pcoderaw::PcodeOpRaw>) -> usize {
+    use rugra::opcodes::OpCode;
+    use rugra::pcoderaw::VarnodeRaw;
+    // Register-space RIP: x86_lift.rs get_register "rip"|"eip" => 0x288, the
+    // 8-byte form every 64-bit memory arm builds (get_register(b, 8)).
+    let is_rip =
+        |v: &VarnodeRaw| v.space == AddressSpace::Register && v.offset == 0x288 && v.size == 8;
+    // Pass 1: collect every INT_ADD(RIP, const) output temp and its constant.
+    let mut folds: Vec<(VarnodeRaw, VarnodeRaw)> = Vec::new();
+    for op in raw_ops.iter() {
+        if op.get_opcode() != OpCode::CPUI_INT_ADD as i32 {
+            continue;
+        }
+        let ins = op.inputs();
+        if ins.len() != 2 {
+            continue;
+        }
+        let replacement =
+            if is_rip(&ins[0]) && ins[1].space == AddressSpace::Const {
+                Some(ins[1])
+            } else if is_rip(&ins[1]) && ins[0].space == AddressSpace::Const {
+                Some(ins[0])
+            } else {
+                None
+            };
+        if let Some(c) = replacement {
+            if let Some(out) = op.output() {
+                folds.push((out.clone(), c.clone()));
+            }
+        }
+    }
+    if folds.is_empty() {
+        return 0;
+    }
+    let folded = folds.len();
+    // Pass 2a: drop the folded INT_ADDs (their outputs are fully replaced).
+    raw_ops.retain(|op| {
+        if op.get_opcode() == OpCode::CPUI_INT_ADD as i32 {
+            if let Some(out) = op.output() {
+                if folds.iter().any(|(o, _)| o == out) {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+    // Pass 2b: substitute every use of a folded temp with the constant.
+    for op in raw_ops.iter_mut() {
+        let updated: Vec<VarnodeRaw> = op
+            .inputs()
+            .iter()
+            .map(|v| {
+                folds
+                    .iter()
+                    .find(|(o, _)| o == v)
+                    .map(|(_, c)| *c)
+                    .unwrap_or(*v)
+            })
+            .collect();
+        if updated.iter().zip(op.inputs().iter()).any(|(a, b)| a != b) {
+            op.clear_inputs();
+            for v in updated {
+                op.add_input(v);
+            }
+        }
+    }
+    folded
+}
+
+/// ACTION-SYMDB-DATASYM-0001: harvest every constant memory-EA target of
+/// the window functions' disassembly (rip-relative and absolute
+/// displacement operands, both loads/stores and lea address forms). In the
+/// oracle these are exactly the references the front-end records, and each
+/// referenced data address without a pre-existing symbol receives a
+/// default `DAT_<imageaddr>` label.
+fn harvest_data_references(
+    buffer: &[u8],
+    functions: &[(u64, usize, u64, String)],
+) -> std::collections::HashSet<u64> {
+    let mut refs = std::collections::HashSet::new();
+    for &(vaddr, size, file_offset, _) in functions {
+        let max_size = std::cmp::min(size, 8192);
+        if file_offset as usize >= buffer.len() {
+            continue;
+        }
+        let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
+        let code_bytes = &buffer[file_offset as usize..end_off];
+        let mut disasm = X86_64Disassembler::new();
+        let Ok(insts) = disasm.disassemble(code_bytes, Address::new(vaddr)) else {
+            continue;
+        };
+        for inst in &insts {
+            for op in &inst.operands {
+                if let rugra::disasm::Operand::Memory {
+                    base,
+                    index,
+                    displacement,
+                    segment,
+                    ..
+                } = op
+                {
+                    if segment.is_some() {
+                        continue; // FS/GS-relative: never image references
+                    }
+                    // The X86_64Disassembler resolves rip-relative
+                    // displacement to the absolute target and reports
+                    // absolute disp-only operands verbatim.
+                    let rip_rel = base.as_deref() == Some("rip");
+                    let abs_disp = base.is_none() && index.is_none();
+                    if *displacement != 0 && (rip_rel || abs_disp) {
+                        refs.insert(*displacement as u64);
+                    }
+                }
+            }
+        }
+    }
+    refs
+}
+
+/// ACTION-SYMDB-DATASYM-0001: build the canon-mode action-side symbol
+/// Database — the front-end layer the locked oracle harness (analyzeHeadless
+/// + BfdArchitecture) installs BEFORE any decompilation, modeled from the
+/// same ELF image:
+///   1. every discovered function as a global-scope FunctionSymbol
+///      (the canon print DB's existing entry set);
+///   2. defined dynsym STT_OBJECT data symbols (e.g. ap_ugly_hack 8B
+///      @0xa1040 — the canon golden's `return ap_ugly_hack;` name source);
+///   3. R_X86_64_GLOB_DAT GOT slots of UNDEFINED imports as `PTR_<name>`
+///      8-byte symbols (the front-end's relocation-driven labeling — canon
+///      golden `PTR_apr_pool_cleanup_null_0019cfe0`);
+///   4. .rodata ASCII strings as typelocked char[] symbols (the Strings
+///      analyzer — the canon golden's `return "Apr 20 2024 20:23:43";`
+///      channel through ActionConstantPtr queryContainer ->
+///      spacebaseConstant -> PrintC::pushPtrCharConstant);
+///   5. every harvested data reference without a covering symbol as a
+///      `DAT_<imageaddr>` undefined8 label (the front-end's default data
+///      labels — canon golden `&DAT_001a0820` / `DAT_001a0830 = 0;`);
+///   6. read-only property ranges over the R-only PT_LOAD segments
+///      (architecture.cc fillinReadOnlyFromLoader — .rodata readonly is
+///      load-bearing for printc.cc:1709's string-literal gate).
+/// The Database is attached per-thread (a fresh clone) BEFORE the action
+/// pipeline so the action-side query channels run channel-present exactly
+/// as in the oracle: ActionConstantPtr isPointer's queryContainer
+/// (coreaction.cc:1151), setVarnodeProperties/mapGlobals, and
+/// ActionNameVars linkSymbolReference
+/// (funcdata_varnode.cc:1207 queryContainer). The mirror (direct-runner)
+/// mode attaches NOTHING and keeps the print-only dynsym-function DB: the
+/// bare-BFD harness registers no data symbols (mirror golden renders
+/// `xRam00000000000a1040`, not `ap_ugly_hack`).
+///
+/// PARKED behind RUGRA_SYMDB=1 (not the default path): with the Database
+/// attached the E2E skeleton moves 1446 -> 1455 — suck_in_APR joins the
+/// zero-diff bank (ACTION-SYMDB-DATASYM-0001 acceptance proven end-to-end)
+/// and ap_fini_vhost_config improves 239 -> 225, but three channel-present
+/// defects in the fixture-era query channels regress other functions
+/// (ap_getparents 74 -> 114 dominates; registered on the TODO board):
+///   1. FUNCDATA-MAPGLOBALS-DISCOVERSCOPE-0001 (FIXED here): a built
+///      Database must carry the global scope's ownership ranges
+///      (PT_LOAD blocks) or Funcdata::mapGlobals throws "Could not
+///      discover scope" (funcdata_varnode.cc:1704) on the first persist
+///      varnode — every function with a ram varnode failed mid-pipeline.
+///   2. HERITAGE-FLAGBASE-SPACELESS-0001: Heritage's property-flag tail
+///      (heritage.cc cc:2708 arm) consults the Database flagbase with a
+///      SPACELESS Address, so a readonly PT_LOAD range starting at 0
+///      (the ELF-header segment [0,0x29000)) marks register/unique/stack
+///      varnodes at offsets < 0x29000 READONLY (Ghidra's flagbase is
+///      space-qualified; Rugra's Address cannot be).
+///   3. HERITAGE-CROSSSPACE-MERGE-0001: MULTIEQUALs with RAM-space outputs
+///      at register offsets (Ram@0x8 = RCX's offset etc.) whose inputs are
+///      Register varnodes — a cross-space merge the oracle never forms
+///      (heritage's collect/guard windows probe the loc_tree with
+///      spaceless Addresses, catching other spaces' varnodes at equal
+///      offsets). Pre-existing garbage (visible as the unique0x<addr> print
+///      fallback names without the DB); mapGlobals channel-present names it
+///      Ram<offset> and prints the statements.
+fn build_action_data_symbol_db(
+    obj: &Object,
+    buffer: &[u8],
+    functions: &[(u64, usize, u64, String)],
+    string_table: &HashMap<u64, String>,
+    analysis_discovered: &[u64],
+    symbol_table: &HashMap<u64, String>,
+) -> rugra::database::Database {
+    use rugra::database::symbol_flags;
+    use rugra::type_system::datatype::{Datatype, TypeArray, TypeBase, TypeMetatype};
+    use std::sync::Arc;
+
+    let mut db = rugra::database::Database::new(false);
+    let global_scope_id = db.global_scope_id;    // Data-symbol ranges [start,end) already labeled — DAT_ creation skips
+    // these (the front-end never stacks a default label on a named symbol).
+    let mut covered: Vec<(u64, u64)> = Vec::new();
+    // Executable section ranges — references into code get FUN_/LAB_
+    // treatment through the existing channels, never DAT_ labels.
+    let mut exec_ranges: Vec<(u64, u64)> = Vec::new();
+    // vaddr -> file byte resolver (for NUL-termination checks on strings).
+    let mut vaddr_to_file: Vec<(u64, u64, u64)> = Vec::new(); // (sh_addr, sh_offset, sh_size)
+
+    let elf = match obj {
+        Object::Elf(elf) => elf,
+        _ => return db,
+    };
+    // (0) The global scope's ownership ranges — Ghidra's global scope
+    // decodes `<range_mappings>` over the loader's memory blocks (every
+    // PT_LOAD segment, BfdArchitecture maps them all). Without these,
+    // `Scope::discoverScope`'s inScope walk (database.cc:1353-1365) finds
+    // no owning scope and `Funcdata::mapGlobals` throws "Could not
+    // discover scope" (funcdata_varnode.cc:1704-1705) on the first
+    // persist varnode — the channel-present failure mode this DB's first
+    // attach exposed (every function with a ram varnode failed mid-
+    // pipeline and printed printRaw fallback names).
+    for ph in elf.program_headers.iter() {
+        const PT_LOAD: u32 = 1;
+        if ph.p_type != PT_LOAD || ph.p_memsz == 0 {
+            continue;
+        }
+        let first = Address::new(ph.p_vaddr);
+        let last = Address::new(ph.p_vaddr + ph.p_memsz - 1);
+        if let Some(range) = rugra::address::Range::new(first, last) {
+            db.add_range(global_scope_id, range);
+        }
+    }
+    for header in elf.section_headers.iter() {
+        if (header.sh_flags & 0x4) != 0 {
+            // SHF_EXECINSTR
+            exec_ranges.push((header.sh_addr, header.sh_addr + header.sh_size));
+        }
+        if header.sh_type == 1 && header.sh_size > 0 {
+            vaddr_to_file.push((header.sh_addr, header.sh_offset, header.sh_size));
+        }
+    }
+    let byte_at = |vaddr: u64| -> Option<u8> {
+        vaddr_to_file
+            .iter()
+            .find(|&&(a, _, sz)| vaddr >= a && vaddr < a + sz)
+            .map(|&(a, off, _)| (off + (vaddr - a)) as usize)
+            .and_then(|i| buffer.get(i).copied())
+    };
+    let undefined_t = |sz: usize| {
+        Arc::new(Datatype::Base(TypeBase::new(
+            format!("undefined{sz}"),
+            sz,
+            TypeMetatype::Unknown,
+        )))
+    };
+
+    // (1) Function symbols — the canon print DB's entry set.
+    {
+        let db_entries: Vec<(u64, String)> = functions
+            .iter()
+            .map(|&(v, _, _, ref n)| (v, n.clone()))
+            .chain(
+                analysis_discovered
+                    .iter()
+                    .filter_map(|t| symbol_table.get(t).map(|n| (*t, n.clone()))),
+            )
+            .collect();
+        if let Some(scope) = db.get_global_scope_mut() {
+            for (entry_addr, entry_name) in db_entries {
+                scope.add_function(Address::new(entry_addr), &entry_name, 1);
+            }
+        }
+    }
+
+    // (2) Defined dynsym STT_OBJECT data symbols.
+    for sym in elf.dynsyms.iter() {
+        if sym.st_value == 0 || sym.st_type() != goblin::elf::sym::STT_OBJECT {
+            continue;
+        }
+        let Some(name) = elf.dynstrtab.get_at(sym.st_name) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let size = if sym.st_size > 0 { sym.st_size as usize } else { 8 };
+        if db
+            .add_symbol_mapped(
+                global_scope_id,
+                name,
+                Some(undefined_t(size)),
+                Address::new(sym.st_value),
+                size as i32,
+            )
+            .is_some()
+        {
+            covered.push((sym.st_value, sym.st_value + size as u64));
+        }
+    }
+
+    // (3) GOT slots of undefined imports (R_X86_64_GLOB_DAT): PTR_<name>.
+    for rel in elf.dynrelas.iter() {
+        if rel.r_type != goblin::elf::reloc::R_X86_64_GLOB_DAT {
+            continue;
+        }
+        let Some(sym) = elf.dynsyms.get(rel.r_sym) else { continue };
+        if sym.st_value != 0 {
+            continue; // defined symbol: its own dynsym entry labels it
+        }
+        let Some(base) = elf.dynstrtab.get_at(sym.st_name) else { continue };
+        if base.is_empty() {
+            continue;
+        }
+        let slot = rel.r_offset;
+        let name = format!("PTR_{}_{:08x}", base, ANALYZE_HEADLESS_IMAGE_BASE + slot);
+        if db
+            .add_symbol_mapped(
+                global_scope_id,
+                &name,
+                Some(undefined_t(8)),
+                Address::new(slot),
+                8,
+            )
+            .is_some()
+        {
+            covered.push((slot, slot + 8));
+        }
+    }
+
+    // (4) .rodata ASCII strings: typelocked char[] symbols (the Strings
+    // analyzer's data is type-locked, so spacebaseCenter's
+    // ptr-to-stripped-element typing locks onto char* — canon golden's
+    // `char * ap_get_server_built(void) { return "..."; }`).
+    let char_t = Arc::new(Datatype::Base(TypeBase::new_char(
+        "char".to_string(),
+        TypeMetatype::Uint,
+    )));
+    let mut string_starts: Vec<u64> = string_table.keys().copied().collect();
+    string_starts.sort_unstable();
+    for &saddr in &string_starts {
+        let s = &string_table[&saddr];
+        let len = s.len();
+        // Ghidra's string data includes the NUL terminator when present.
+        let array_len = if byte_at(saddr + len as u64) == Some(0) {
+            len + 1
+        } else {
+            len
+        };
+        let arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new(
+                format!("char[{array_len}]"),
+                array_len,
+                TypeMetatype::Array,
+            ),
+            array_of: char_t.clone(),
+            num_elements: array_len,
+        }));
+        // Ghidra-style discovered-string name (never rendered — the string
+        // literal channel prints the quoted contents).
+        let sanitized: String = s
+            .chars()
+            .take(16)
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+            .collect();
+        let name = format!("s_{}_{:08x}", sanitized, ANALYZE_HEADLESS_IMAGE_BASE + saddr);
+        if let Some(sym_id) = db.add_symbol_mapped(
+            global_scope_id,
+            &name,
+            Some(arr),
+            Address::new(saddr),
+            array_len as i32,
+        ) {
+            db.set_symbol_flag(global_scope_id, sym_id, symbol_flags::TYPELOCK, true);
+            covered.push((saddr, saddr + array_len as u64));
+        }
+    }
+
+    // (5) DAT_ labels for referenced data addresses without a symbol.
+    let refs = harvest_data_references(buffer, functions);
+    let mut ref_list: Vec<u64> = refs.into_iter().collect();
+    ref_list.sort_unstable();
+    let mut dat_count = 0usize;
+    for raw in ref_list {
+        if exec_ranges.iter().any(|&(a, b)| raw >= a && raw < b) {
+            continue;
+        }
+        if covered.iter().any(|&(a, b)| raw >= a && raw < b) {
+            continue;
+        }
+        let name = format!("DAT_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + raw);
+        if db
+            .add_symbol_mapped(
+                global_scope_id,
+                &name,
+                Some(undefined_t(8)),
+                Address::new(raw),
+                8,
+            )
+            .is_some()
+        {
+            covered.push((raw, raw + 8));
+            dat_count += 1;
+        }
+    }
+
+    // (6) Read-only property ranges over R-only PT_LOAD segments.
+    for ph in elf.program_headers.iter() {
+        const PT_LOAD: u32 = 1;
+        const PF_X: u32 = 1;
+        const PF_W: u32 = 2;
+        const PF_R: u32 = 4;
+        if ph.p_type != PT_LOAD || (ph.p_flags & PF_R) == 0 || (ph.p_flags & PF_W) != 0 {
+            continue;
+        }
+        let first = Address::new(ph.p_vaddr);
+        let last = Address::new(ph.p_vaddr + ph.p_filesz - 1);
+        if let Some(range) = rugra::address::Range::new(first, last) {
+            db.set_property_range(
+                rugra::varnode::varnode_flags::READONLY,
+                range,
+            );
+        }
+    }
+
+    eprintln!(
+        "[PREPASS] ACTION-SYMDB-DATASYM-0001: {} dynsym objects, {} strings, {} DAT_ labels, readonly ranges installed",
+        covered.len().saturating_sub(dat_count),
+        string_starts.len(),
+        dat_count
+    );
+    db
 }
 
 // RUGRA-GLUE (RUGRA-FLOW-MIRROR-0001, httpd lane BP): the vaddr-keyed
@@ -774,7 +1226,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the canon golden prints `FUN_0012dc80` for the cleanup-callback
     // constant in ap_pregfree, via printc.cc:1730 pushPtrCodeConstant's
     // queryFunction on the analyzer-created function).
-    const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
     let analysis_discovered: Vec<u64> = call_targets
         .iter()
         .copied()
@@ -976,6 +1427,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::sync::Arc::new(std::sync::RwLock::new(symbol_db))
     };
 
+    // ACTION-SYMDB-DATASYM-0001 (canon mode only): the action-side symbol
+    // Database — functions + dynsym objects + GOT PTR_ labels + string
+    // char[] symbols + DAT_ reference labels + readonly ranges — installed
+    // per-thread BEFORE the action pipeline. The canon oracle
+    // (analyzeHeadless) decompiles with this front-end layer present, so
+    // the action-side query channels (ActionConstantPtr isPointer's
+    // queryContainer coreaction.cc:1151, setVarnodeProperties, mapGlobals,
+    // linkSymbolReference funcdata_varnode.cc:1207) run channel-present.
+    // The mirror keeps the print-only swap below (the bare-BFD direct
+    // runner registers no data symbols).
+    // OPT-IN (RUGRA_SYMDB=1): the channel-present defects below keep the
+    // Database off the default path until they are fixed — the default
+    // canon run stays byte-identical to the fold-only driver.
+    let action_db_template: Option<rugra::database::Database> = if mirror
+        || std::env::var("RUGRA_SYMDB").ok().as_deref() != Some("1")
+    {
+        None
+    } else {
+        Some(build_action_data_symbol_db(
+            &obj,
+            &buffer,
+            &functions,
+            &string_table,
+            &analysis_discovered,
+            &symbol_table,
+        ))
+    };
+
     for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
         if idx >= max_functions && stage_selector.is_none() { break; }
         if stage_selector.is_some() {
@@ -1002,6 +1481,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // HTTPD-CODEREF-SYMBOLIZE-0001: per-thread share of the print-side
         // symbol Database (read-only at print time).
         let print_db = print_symbol_db.clone();
+        // ACTION-SYMDB-DATASYM-0001: per-thread fresh clone of the action
+        // Database template — the pipeline's mapGlobals/linkSymbolReference
+        // additions stay function-local (no cross-thread pollution; the
+        // oracle's sequential headless run shares one Database, but every
+        // observable name it derives is a pure function of (address, type)
+        // through buildVariableName, so the pristine-per-function clone is
+        // order-independent and deterministic).
+        let action_db = action_db_template.clone();
 
         let mut raw_ops = Vec::new();
         // PRINTC-LABSPELL-LABSYMS-0001: the front-end reference set — every
@@ -1033,6 +1520,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
                 }
                 raw_ops.extend(ops);
+            }
+            // DRIVER-RIPREL-CONSTFOLD-0001: fold the iced-lift path's
+            // rip-relative memory EAs (`INT_ADD(RIP, const)` -> the const)
+            // before injection. The X86_64Disassembler already resolves a
+            // rip-relative displacement to the ABSOLUTE target, so the
+            // general memory arms' `INT_ADD(reg:0x288:8, abs)` double-counts
+            // rip; SLEIGH's rrip/disp const-fold exports the constant EA
+            // directly (oracle dumps: push/comis arms — `COPY val <-
+            // ram:abs` / `FLOAT_NAN in=(ram:0x1c:4)` with no LOAD, no addr
+            // ops; the direct-runner mirror golden's `return
+            // xRam00000000000a1040;` for suck_in_APR's `mov 0x74765(%rip),
+            // %rax`). The folded shapes LOAD(ram,const)/STORE(ram,const,v)
+            // are exactly the oracle's constant-EA pcode, which
+            // RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4277/4319)
+            // then reindex into direct global varnodes.
+            let folded_eas = fold_rip_relative_eas(&mut raw_ops);
+            if folded_eas > 0 {
+                eprintln!("[PREPASS] DRIVER-RIPREL-CONSTFOLD-0001: {} rip-relative EAs folded in {}", folded_eas, name);
             }
         }
 
@@ -1126,6 +1631,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 thread_arch.loader = Some(std::sync::Arc::new(
                     rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image.to_vec()),
                 ));
+            }
+            // ACTION-SYMDB-DATASYM-0001 (canon only): attach the action-side
+            // Database BEFORE any pipeline query — setVarnodeProperties
+            // fires as early as the iced prelude's input promotions, and
+            // ActionConstantPtr's isPointer queryContainer
+            // (coreaction.cc:1151) runs mid-pipeline. Mirror keeps
+            // symboltab unset through the pipeline (bare-BFD parity).
+            let action_db_attached = action_db.is_some();
+            if let Some(db) = action_db {
+                thread_arch.set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(db)));
             }
             fd.set_arch(std::sync::Arc::new(thread_arch));
             // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
@@ -1336,7 +1851,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)` at both
             // call sites vs the analyzer-less direct-runner golden's
             // `0x2dc80`).
-            {
+            // ACTION-SYMDB-DATASYM-0001: MIRROR-ONLY while the action DB is
+            // attached. When no action Database was attached (the default
+            // fold-only path), the historical print swap keeps serving the
+            // print-side code-ref channel exactly as before.
+            if mirror_fn || !action_db_attached {
                 let mut fd_write = fd_arc.write().unwrap();
                 if let Some(a) = fd_write.arch.clone() {
                     let mut print_arch = (*a).clone();
@@ -1562,6 +2081,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
                 }
                 raw_ops.extend(ops);
+            }
+            // DRIVER-RIPREL-CONSTFOLD-0001: same SLEIGH rrip const-fold as
+            // the main loop's lift path (the switchD bodies are canon-only,
+            // never mirrored).
+            let folded_eas = fold_rip_relative_eas(&mut raw_ops);
+            if folded_eas > 0 {
+                eprintln!(
+                    "[PREPASS] DRIVER-RIPREL-CONSTFOLD-0001: {} rip-relative EAs folded in switchD handler {}",
+                    folded_eas, qualified_name
+                );
             }
 
             let sym_table = symbol_table.clone();
