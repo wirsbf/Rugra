@@ -1869,11 +1869,22 @@ impl MapState {
         // getTypeReadFacing(op) resolves union pointers via
         // TypePointer::findResolve (type.cc:1192-1202), so the op form is
         // required; getIn(1) is read at slot 1 (op->getSlot(this) == 1).
+        // Ghidra's Varnode ALWAYS carries a data-type — every construction
+        // path installs the factory's getBase(s,TYPE_UNKNOWN)
+        // (funcdata_varnode.cc:107 newVarnodeOut, :132 newUniqueOut,
+        // :153-154 newVarnode) and getTypeReadFacing returns `type`
+        // verbatim for non-unions (varnode.cc:639-645) — so the oracle's
+        // addGuard never sees a null ct (varmap.cc:1009-1038 has no
+        // null-ct early return). Rust models the untyped varnode as
+        // v_type=None: stand in the factory's unknown base of the address
+        // varnode's SIZE, the exact value getIn(1)->getTypeReadFacing
+        // returns in the oracle, instead of dropping the guard hint.
         let mut ct: Option<Arc<Datatype>> = {
             let op = op_arc.read().unwrap();
             let Some(in1) = op.inrefs.get(1) else { return; };
             let vn = in1.read().unwrap();
             vn.get_type_read_facing_op(&op, 1)
+                .or_else(|| Some(make_int_type(types, vn.get_size())))
         };
         // if (ct->getMetatype() == TYPE_PTR) { ct = ptrTo;
         // while (ct->getMetatype() == TYPE_ARRAY) ct = base; } (cc:1010-1014)
@@ -1885,8 +1896,6 @@ impl MapState {
                 }
                 ct = Some(base);
             }
-        } else {
-            return;
         }
         let Some(ct) = ct else { return };
         // int4 outSize; if (opc == CPUI_STORE) outSize = getIn(2)->getSize();

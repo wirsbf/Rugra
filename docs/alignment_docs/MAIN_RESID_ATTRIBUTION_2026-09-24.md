@@ -342,3 +342,56 @@ InferTypes 域(本车道写域)无需改动——值/LD 出边类型已正确喂
   (curl 1262/httpd 1405 亲父数)+零回退+五投影 MATCH。
 - 探针脚本/日志留存 /dev/shm/rugra-tests/addrslot/(main_resid.py+census.py 已适配本 worktree 路径;
   httpd_{base,dbg2,ci,pa2,pu,gs2,sb}.* 为证据;基线 httpd_base.c 与撤针后输出 cmp 恒等)。
+
+## 7. RANGEHINT 车道复核（2026-09-25,wt/rangehint 基亲父 7a63a1b1——VARMAP-RANGEHINT-ARRAYELEM-0001 判定）
+
+**结论:§6.2 的"首因=RangeHint dtype 丢失"假设被 oracle 侧仪器化运行推翻。锁定 oracle 的反编译器库
+对 main 的 RangeHint 流与终态符号表与 Rugra 逐位一致（-0xc8 = 1B 元素 undefined1[32] 双侧同形）;
+canon 的 `long local_c8[4]` 是 analyzeHeadless 桥接层（整程序分析回灌）效应,非 varmap/库层分歧。
+varmap 域可修的唯一真实移植偏差（addGuard null-ct 早退）已补齐,行为中性（E2E 逐字节恒等）。**
+
+### 7.1 oracle 侧证据链（/dev/shm/rugra-tests/rangehint/diag/,可复现）
+
+1. **仪器**:stage_drill_1204.cc 诊断变体（副本 + `fd->getScopeLocal()->turnOnDebug()` + 终态
+   `printEntries` dump;编译走 tools/build_stage_drill_oracle.sh 同链,git-archive 锁定
+   e40ed130,-DOPACTION_DEBUG;`setarch -R env -i STAGE_DRILL_FUNC=main STAGE_DRILL_ADDR=0x2b820`）。
+   开启 varmap.cc:1263-1266 的 MapState debug → 逐 pass "Add Range" 流。
+2. **hint 流**:main 全程 11 个 restructure pass,-0xc8(0xff..f38) **每个 pass 都只有 1B hint**
+   (`ffffffffffffff38:1 xunknown1`),从不出现 8B;pass2+ 的 8B hint 在 -0xd0/-0xa8/-0x9c/-0x40
+   （-0xa8/-0x9c/-0x40 与 Rugra 一一对应;-0xd0 的调用返回地址槽 hint 双侧均不存活为符号）。
+   即 **oracle 库自己也不会给 -0xc8 造 8B 元素 hint**——§6.2 假设的"canon 经 RangeHint 8B 元素"
+   路径在库层不存在。
+3. **终态符号表**（诊断 harness @DONE 后 dump）:
+   `axStack_c8 : s0xff..f38:32 xunknown1[32]`、`xStack_a8 : xunknown8`、`axStack_9c : xunknown4[23]`
+   （92B）、`xStack_40 : xunknown8` —— 与 Rugra main 输出 `undefined1[32] auStack_c8;
+   undefined8 uStack_a8; undefined4[23] auStack_9c; undefined8 uStack_40` **逐符号同形同界**。
+4. **direct-runner golden 独立佐证**:ghidra_httpd_1204.direct-runner.c main 同为
+   `xunknown1 axStack_c8[32]` + `*(xunknown8 *)((int8)piVar10 + -8) = 0x2b874;` 形
+   （与 Rugra 的 `*(undefined8 *)((long)puVar10 + -8)` 同构）——纯库真值与 Rugra 一致,canon
+   独有的 `long local_c8[4]`/`plVar12[-1]` 属 main_resid 域判定中的 HEAD（headless 桥接层）。
+5. **canon↔direct 差量本身是已知事实**:main_resid 域判定 LOST/HEAD=153（canon-only、direct 亦无）,
+   下标形族在其内;分析=analyzeHeadless 先跑整程序 auto-analysis（Decompiler Parameter ID 等,
+   跨函数原型/类型回灌、栈帧分析）再 decompileFunction——库单函数隔离跑不可能复现。
+
+### 7.2 Rugra 侧对位探针（撤针前采集,/dev/shm/rugra-tests/rangehint/httpd_probe*.err）
+
+- gatherOpen AddBase@-0xc8:12 pass base=undefined8(非指针→ct=NULL→1B,同 Ghidra varmap.cc:1230)、
+  6 pass base=Pointer(undefined1)（符号反馈,pointee 1B→仍 1B）。双侧同陷 1B 反馈环——oracle 亦然。
+- addGuard:全程仅 2 个 step=8 STORE guard（min=-2136/-64,均非 -0xc8）;Rugra add_guard 此前在
+  地址输入 v_type=None 时早退（Ghidra 无此分支,ct 恒非 null——funcdata_varnode.cc:107/132/153-154
+  构造即装 getBase(s,TYPE_UNKNOWN),varnode.cc:639-645 原样返回）。**已修**:None 臂代以工厂
+  `undefined<addr_size>`,与 varmap.cc:1009-1038 单流一致。curl/httpd E2E 输出与基线 cmp 恒等
+  （None 路径在双语料不触发,行为中性)。
+- gather_varnodes 栈 varnode 探针:-0xc8..-0xb0 无栈 varnode（双侧同——指令形为 lea 基指针寻址,
+  RuleStoreVarnode 的 spacebase+const 判定（ruleaction.cc:4173-4227 correctSpacebase 需 isInput）
+  不触发);-0xa8 的 INDIRECT/MULTIEQUAL 栈 varnode 双侧同在。
+
+### 7.3 处置
+
+- **VARMAP-RANGEHINT-ARRAYELEM-0001 判定否定**（varmap 域无可收敛改动;验收条款"下标形收敛"对
+  库真值不可达)。下标形 61 族的 canon 侧形态归 **headless 桥接层差异**（与 STRING_LIT/RAM 等
+  HEAD 族同类）,若未来要收敛需整程序分析回灌（参数 ID/跨函数类型/栈帧分析)——超出当前桥接
+  范围,登记为桥接层限制,不开库层 TODO。
+- varmap 域交付:addGuard null-ct 移植补齐（见上,行为中性+Ghidra 行级对齐）。
+- 工件:/dev/shm/rugra-tests/rangehint/（diag/ 仪器化 harness+构建脚本+oracle drill 输出+
+  symdump;main_resid.py/census.py 已适配本 worktree;curl/httpd base+fix 输出恒等证据)。
