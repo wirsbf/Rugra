@@ -20,7 +20,7 @@ tests/fixtures/projections/
     manifest.toml                    <- provenance + sha256 pins + status
 ```
 
-## Banked functions (all MATCH, verified 2026-09-24)
+## Banked functions (all MATCH, verified 2026-09-24; 10 original + 15 cascade-harvest = 25)
 
 | entry | function | entry addr | stages | ops | oracle pin |
 |---|---|---|---|---|---|
@@ -34,6 +34,21 @@ tests/fixtures/projections/
 | curl_glob_range | glob_range | 0x4d60 | 299 | 68,330 | bank sha256 (capture mode, double-run byte-verified) |
 | curl_file2string.part.0 | file2string.part.0 | 0x3a90 | 340 | 87,957 | bank sha256 (== sb-oracle pin c0981445…) |
 | curl_my_get_token | my_get_token | 0x3720 | 520 | 53,359 | bank sha256 (capture mode, direct MATCH, no fix needed) |
+| curl_main_free | main_free | 0x4970 | 150 | 200 | bank sha256 (capture mode, cascade harvest) |
+| curl_main_init | main_init | 0x4960 | 155 | 615 | bank sha256 (capture mode, cascade harvest) |
+| curl_SetHTTPrequest.part.0 | SetHTTPrequest.part.0 | 0x3c50 | 191 | 1,655 | bank sha256 (capture mode, cascade harvest) |
+| curl_SetHTTPrequest | SetHTTPrequest | 0x4980 | 191 | 4,511 | bank sha256 (capture mode, cascade harvest) |
+| curl_glob_url | glob_url | 0x4f70 | 191 | 7,288 | bank sha256 (capture mode, cascade harvest) |
+| curl_frame_dummy | frame_dummy | 0x3450 | 186 | 2,785 | bank sha256 (capture mode, cascade harvest) |
+| curl___do_global_dtors_aux | __do_global_dtors_aux | 0x3410 | 191 | 5,363 | bank sha256 (capture mode, cascade harvest) |
+| curl__init | _init | 0x2000 | 191 | 2,149 | bank sha256 (capture mode, cascade harvest) |
+| curl__fini | _fini | 0x5478 | 150 | 506 | bank sha256 (capture mode, cascade harvest) |
+| curl___libc_csu_fini | __libc_csu_fini | 0x5470 | 150 | 200 | bank sha256 (capture mode, cascade harvest) |
+| curl___libc_csu_init | __libc_csu_init | 0x5400 | 227 | 7,064 | bank sha256 (capture mode, cascade harvest) |
+| curl_deregister_tm_clones | deregister_tm_clones | 0x33a0 | 186 | 1,172 | bank sha256 (capture mode, cascade harvest) |
+| curl_register_tm_clones | register_tm_clones | 0x33d0 | 186 | 2,747 | bank sha256 (capture mode, cascade harvest) |
+| curl_GetStr | GetStr | 0x36d0 | 191 | 5,349 | bank sha256 (capture mode, cascade harvest) |
+| curl_my_fwrite | my_fwrite | 0x3460 | 268 | 7,788 | bank sha256 (capture mode, cascade harvest) |
 
 Common provenance (also recorded per manifest):
 
@@ -103,6 +118,38 @@ observation-equivalent (verified byte-identical on parseconfig).
 address form `0x<entry>` is observation-equivalent (verified byte-identical
 on parseconfig). The `file2string` entry's advisory-only `func_name` META
 difference is the same constprop-clone BFD/DWARF spelling class.
+
+The 15 cascade-harvest entries (2026-09-24, lane HARVEST) were captured
+with the address-form selector `RUGRA_STAGE_FUNC=0x<entry>`
+(`main_free`, `main_init`, `SetHTTPrequest.part.0`, `SetHTTPrequest`,
+`glob_url`, `frame_dummy`, `__do_global_dtors_aux`, `_init`, `_fini`,
+`__libc_csu_fini`, `__libc_csu_init`, `deregister_tm_clones`,
+`register_tm_clones`, `GetStr`, `my_fwrite`); their manifests record
+the exact per-entry commands. All entries and pins use the oracle
+harness's nm-style address convention (no 0x100000 image base), the
+same convention as `main@0x25a0` in the metadata functions map.
+
+Non-MATCH scan residue from the same harvest pass (first divergence
+recorded for later lanes; not banked):
+
+| function | entry | kind | first divergence |
+|---|---|---|---|
+| hugehelp | 0x4a00 | op-line | ordinal 2 `universal:start` op 14: oracle `BRANCH in=n:ram:2320:1` vs rugra `CALL in=f:4a0f:c`; op totals 1,699 vs 4,314 |
+| main | 0x25a0 | op-line | ordinal 5 `universal:extrapopsetup` op 1792: identical INT_ADD at differing op-creation ordinal (`2d04:c15` oracle vs `2d04:c0e` rugra, +7 pool offset); op totals 2,414,145 vs 2,413,566 |
+| my_get_line | 0x3840 | result-count | ordinal 52 `universal:fullloop:mainloop:condconst`: result/count 2 vs 1 |
+| helpf | 0x3980 | result-count | ordinal 70 `universal:fullloop:mainloop:stackstall:oppool1`: result/count 118 vs 110 |
+| _start | 0x3370 | result-count | ordinal 149 `universal:fullloop:mainloop:constantptr`: result/count/apply 3/3/1 vs 0/0/0 (ACTION-SYMDB-DATASYM-0001 class) |
+| progressbarinit | 0x49a0 | op-line | ordinal 123 `universal:fullloop:activereturn` op 9: CALL out `n:register:0:8` vs `u:0:8` |
+
+Oracle-side capture limitation observed in the same pass: PLT thunk
+functions (the 1-byte `.plt.sec` stubs and the 11-byte `.plt` entries,
+e.g. `free@0x22f0`) carry no BFD symbol, so
+`tools/run_stage_projection_oracle.sh` cannot target them by
+`STAGE_PROJ_FUNC` (BFD name lookup misses; probe logged "free was not
+found in the BFD symbol table"). The ~90 curl PLT-thunk functions stay
+unreachable for the bank until the harness grows an address-only
+target arm (STAGE_PROJ_FUNC unset + STAGE_PROJ_ADDR; only the
+zero-argument default mode exercises that path today).
 
 ## Adding a function
 
