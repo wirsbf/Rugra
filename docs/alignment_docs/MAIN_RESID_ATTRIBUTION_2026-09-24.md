@@ -134,3 +134,21 @@ heritage::test_heritage_creation），单跑皆过、单线程复现、且在亲
 printc.rs 下同样 18 个失败 — 为亲父已存在的测试间状态污染，非本修复引入，不在本 lane
 write-set 内（建议另立 TODO）。
 
+
+## 7. GK 后续（wt/spindex，2026-09-24）：SP 下标族 ruleaction 环节落地
+
+§3/§4-1 的 SP 下标族两环节之一（ruleaction INT_ADD→PTRADD 改写）已修复
+（`RULE-SPINDEX-UNSIGN-0001`，见 TODO_BOARD GK 行）：`AddTreeState::
+calc_subtype` 头部 `tmpoff < size` 比较在有符号化移植下把负字节偏移
+（向下生长栈 SP-alias）误入 `offset = tmpoff` 分支清零 multsum 并判
+`valid=false`，oracle（ruleaction.cc:6256，uint8×int4 → 无符号）走模除
+路径生成 PTRADD。亲测（基=亲父 75b5d18f）：httpd 1698→**1628**（main
+715→645，SP-cast 形 101→40、下标形 33→94，向 canon 136/direct 152
+收敛）；curl 1744→1745（唯一 +1 = main 破损 for 单行变 oracle 同构
+while 两行）；双门禁 defects/numbering 0/0；逐函数零回退；五投影
+MATCH ×5；ptrarith_addtree oracle fixture 5 用例双侧重跑 MATCH。
+
+varmap 环节（SP-alias 符号类型 `long[4]` 固定点 + local_d0/local_d8
+缺失）未动，登记 `VARMAP-SPALIAS-RETYPE-0001` +
+`RULEACTION-SPALIAS-INDIRECTPTR-0002`（含探针实证的符号表/alias 轮
+演变数据与调查入口）。

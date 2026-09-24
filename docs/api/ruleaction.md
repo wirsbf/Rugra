@@ -1738,3 +1738,35 @@ flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate
 - 2026-09-24 (CR25 unlock A+B): calc_subtype SPACEBASE arm extra conversion switched to unsigned divide per ruleaction.cc:6294 (byteToAddress, space.hh:523-525); STRUCT arm keeps signed byteToAddressInt per cc:6311. Three behavior-lock tests added; ten test helpers annotated.
 
 - 2026-09-24: two test helpers (make_copy_written_vnterm, make_varlen_add_tree_state) joined the behavior locks from the sibling branch.
+
+## 2026-09-24：AddTreeState calc_subtype 头部比较改无符号（RULE-SPINDEX-UNSIGN-0001，GK lane）
+
+- 根因（httpd main SP 下标族差分定位）：`calc_subtype` 开头
+  `tmpoff < size` 的比较，Ghidra（ruleaction.cc:6256）是
+  `uint8 tmpoff < int4 size` —— C++ 常规算术转换把两侧提升为 uint8，
+  **无符号比较**；Rugra 此前写成 `(tmpoff as i64) < size` 有符号比较。
+  对向下生长栈的 SP-alias 加法（multsum=0xfff..f8 即 -8 字节），
+  oracle 走模除路径（offset=0、multsum 保留 -8 → PTRADD 生成），
+  Rugra 走 `offset = tmpoff` 分支把 multsum 清零，随后
+  `nonmult 空 && multsum==0 && multiple 空` 判 `valid=false` ——
+  整个 INT_ADD→PTRADD 改写对负偏移 SP-alias 全灭（httpd main
+  `*(undefined8 *)((int *)puVar10 - 8) = X` 印 101 行）。
+- 修复一行：`tmpoff < self.size as u64`（size 恒 ≥0，正数域行为不变；
+  仅高位为 1 的 tmpoff 即负字节和改走 oracle 同款模除路径）。
+- 验证：httpd E2E 1698→**1628**（main 715→645，SP-cast 形 101→40、
+  下标形 33→94 向 canon 136/152 收敛）；curl 1744→1745（main 413→414
+  唯一 +1 = `for (var_8; …; var_8 = var_8 + 18446744073709551615)` 破损
+  单行变 oracle 同构 while 两行，质量向 golden 靠拢）；双门禁
+  defects/numbering 0/0；逐函数零回退；gcc 审计两口径与亲父基线
+  逐函数相同（curl 104/20、httpd 21/8，GI2 §6 的 23/6 为 b5b949dd 期
+  旧数）；五投影 MATCH ×5 保持；
+  `tools/run_ptrarith_addtree_oracle.sh` 5 用例在修复后 crate 上
+  双侧重跑 MATCH（本机 g++ 11.4 vs pin 16.2.1 的 host-compiler 钉板
+  漂移为亲父已存在环境缺口，scratch 重跑仅豁免身份钉、输出口径钉
+  全保持）。
+- 残余（登记 TODO）：varmap 侧 SP-alias 符号类型固定点（auStack_c8
+  `undefined1[32]` vs oracle `long local_c8[4]`）+ 后续 restructure 轮
+  alias 链经 phi/INDIRECT 重路由后 -0xd0/-0xd8 open hint 消失
+  （oracle 有 local_d0/local_d8）+ main 残余 40 行 SP-cast 中 1 处
+  phi（INDIRECT 输入 long 整型化）未获指针型 —— 见 TODO_BOARD
+  VARMAP-SPALIAS-RETYPE-0001 / RULEACTION-SPALIAS-INDIRECTPTR-0002。
