@@ -130,6 +130,21 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
   of reducing it to a base `(size, metatype)` pair. This preserves character
   flags/submeta and pointer/array/composite shape. Rugra still has no
   `TypeTypedef` variant or importer-side TypeFactory registry identity;
+  **exception（PRINTC-BOOLLITERAL-0001, 2026-09-24）**: the conventional
+  boolean typedef names (`bool`/`_Bool`, 1-byte underlying) short-circuit to
+  the factory's core `bool` via `TypeFactory::dwarf_conventional_bool`
+  (docs/api/type_system/typefactory.md) — mirroring Ghidra's DWARF front end
+  mapping `typedef char bool` (curl.h line 394) to its boolean primitive, the
+  identity behind the canonical golden's `true`/`false` constant prints on
+  typedef-bool fields (`::config.showerror = true;` /
+  `::config.progressmode = (bool)(::config.progressmode ^ 1);`) via
+  `ActionSetCasts::castInput`'s constant absorption (coreaction.cc:2687-2691)
+  and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771). Known
+  residual of the same family: plain-`char` fields (`config.remotefile`) and
+  `bool[N]` stack arrays in the canonical golden come from the Java-headless
+  analyzer layer (Data Type Propagation), which has no decompiler-library
+  counterpart — the library-level direct-runner golden prints `'\0'`/`'\x01'`
+  for those same stores;
 - recursive type graphs (`FILE` → `struct _IO_FILE` → `_chain FILE *`) break
   at the back edge with a shallow named projection (name/size/metatype, no
   fields), mirroring how Ghidra's two-phase type manager exposes an

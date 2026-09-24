@@ -62,6 +62,24 @@ Create a new TypeFactory and initialize core types
 
 Find a type by name
 
+### `pub fn dwarf_conventional_bool(&self, name: &str) -> Option<Arc<Datatype>>`
+
+Resolve a DWARF typedef whose NAME is a conventional boolean spelling
+(`bool`/`_Bool`) to this factory's registered core boolean type
+(`setCoreType("bool",1,TYPE_BOOL,false)` shape — sleigh_arch.cc:216,
+type.cc:3178-3195). Returns `None` for any other name, or when the
+factory's `bool` entry is not the exact core shape (metatype BOOL, size 1),
+in which case callers fall back to their alias materialization.
+
+**2026-09-24（PRINTC-BOOLLITERAL-0001）**: the DWARF import boundary
+(`debugproto.rs` resolve_type 的 typedef 分支,1-byte underlying 门控) consults
+this helper so a `typedef bool -> char` (curl.h line 394) lands as the core
+TYPE_BOOL instead of a renamed char clone — the type identity that drives
+`ActionSetCasts::castInput`'s constant absorption (coreaction.cc:2687-2691)
+and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771), printing
+`true`/`false` for the canonical golden's typedef-bool fields
+(`::config.showerror = true;`).
+
 ### `pub fn get_base(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
 
 Compat projection of `getBase` (type.cc:3631-3660): preferred core cache

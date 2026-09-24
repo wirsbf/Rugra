@@ -510,6 +510,42 @@ impl TypeFactory {
         self.types.get(name).cloned()
     }
 
+    // Ghidra: sleigh_arch.cc:216 SleighArchitecture::buildCoreTypes
+    /// Resolve a DWARF typedef whose NAME is a conventional boolean spelling
+    /// to this factory's registered core boolean type.
+    ///
+    /// Ghidra's DWARF front end maps the conventional C boolean typedef names
+    /// (`bool`/`_Bool`) to its boolean primitive before anything reaches the
+    /// decompiler, so a `typedef bool -> char` in DWARF (curl.h line 394
+    /// `typedef char bool;`, DWARF `DW_TAG_typedef "bool" -> base char`) lands
+    /// in the decompiler as the core `bool` registered by
+    /// `setCoreType("bool",1,TYPE_BOOL,false)` (sleigh_arch.cc:216,
+    /// type.cc:3178-3195), NOT as a renamed char clone. Every downstream
+    /// boolean-literal behavior follows from that metatype:
+    /// `ActionSetCasts::castInput`'s constant arm (coreaction.cc:2687-2691
+    /// `vn->updateType(ct)`) absorbs the requirement type into the constant,
+    /// and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771 ->
+    /// pushBoolConstant printc.cc:1488-1495) prints it `true`/`false` — the
+    /// canonical-oracle behavior witnessed on `::config.showerror = true;`
+    /// (ghidra_curl_1204.c main) for the typedef-bool fields, versus the
+    /// library-level direct-runner golden printing `'\x01'` for the same
+    /// store when no DWARF front end names the type.
+    ///
+    /// Returns the core `bool` only when this factory actually registered one
+    /// with metatype BOOL and size 1 (`setCoreType`'s exact shape); any other
+    /// registration state falls back to the caller's alias materialization.
+    pub fn dwarf_conventional_bool(&self, name: &str) -> Option<Arc<Datatype>> {
+        if !matches!(name, "bool" | "_Bool") {
+            return None;
+        }
+        let core = self.find_by_name(name)?;
+        if core.get_metatype() == TypeMetatype::Bool && core.get_size() == 1 {
+            Some(core)
+        } else {
+            None
+        }
+    }
+
     // Ghidra: type.cc:3631 TypeFactory::getBase
     /// Get a base scalar type of `size` bytes with metatype `m`.
     ///
