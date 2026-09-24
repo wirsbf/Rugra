@@ -979,3 +979,39 @@ HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0001 不变）；curl 与基**逐字节相同**
   签名与 `{` 之间注入 `int uVarN;` K&R 式重复声明（httpd ap_getparents、
   curl glob_word）。扩宽后该误判消除（curl −5 行全为死声明删除）。plain
   `int` 不在集合内（legacy 合法拼写），判定方向保持保守。
+
+## 2026-09-24（FULLEMPTY-ELSE lane FZ）：P6 声明删除谓词换用真声明行判据
+
+HTTPD-FULLEMPTY-ELSE-0001 residual（FX 在 9458a61b 父链复现登记，本 lane 于
+亲父 720551db 亲测归因收口）：httpd 全量 470 函数唯一 defect——
+ap_get_server_name L21 空 `else {}`。
+
+**根因（双探针钉死）**：printc 侧 else 臂结构/ops 全部健在（sblocks 树
+If[cond BB2, then BB3, else BB4] 与 oracle 同形；BB4 的 CALL/STORE 活、
+非 implied、parent 正确，主 pass 确实走到 emit_statement——RUGRA_FZRAW
+原始文本层快照实证 else 臂**本已打印**两行：
+`uVar5 = apr_pstrdup(*puVar2,…);` + `*puVar2 + 0xb = uVar5;`）。
+凶手是 P6 单用内联的**声明删除谓词**：`contains(" uVar5;")` 把尾置裸变量的
+使用行（`… = uVar5;`、`return uVar5;`）也判成声明——inline 臂同时删掉
+赋值行与唯一使用行（decl 检查先于 replace_word 且 `continue` 短路），
+双删后 else 臂残空。RUGRA_POSTFIX_STATS 实测该函数 P6=3 突变（31→30 行）。
+
+**修复**：新增 `is_declaration_line(t, var_name)` 判据——`<类型头> uVarN;`
+整行尾匹配 + 类型头字符集仅限 `[A-Za-z0-9_ *]` + 语句关键字黑名单
+（return/goto/break/continue/case/default）；inline 与 dead-elim 两臂统一
+换用。使用行不再被当声明清空，落入 `replace_word` 正常内联为
+`*puVar2 + 0xb = apr_pstrdup(*puVar2,…);`（该地址拼写缺括号为 printc
+STORE 臂既有骨架差，非 defect 类，另案）。
+
+**验收**（fast-release，亲父 720551db 双 worktree 对照亲测）：httpd 全量
+L2 vs direct-runner **38672/1/0 → 38726/0/0**（defects 1→0——空 else 消失；
+skeleton +54 = **55 条被 P6 静默吞掉的真实语句恢复打印**（apr_pstrdup/
+apr_array_make 调用、全局/指针 STORE、`x^x` 清零等，逐行 diff base/fix
+核实全部为 restored-statement 类，11 行删除全为空白行），语句恢复方向与
+golden 一致、文本形态仍异（缺括号 STORE 臂拼写=printc 既有骨架差另案）；
+httpd 门禁面 29 fns **2698/0/0 == 基线恒等**（受影响函数均在门禁面外）；
+curl E2E 与亲父基线**逐字节相同**（P6 谓词变更对 curl 语料零命中）；
+gcc 审计 per-function OK/FAIL 集与基线恒等（101/369，int8 族预存）；
+三投影 next_url/match_url/parseconfig.constprop.0(RUGRA_MIRROR=1)
+stage_bisect --v1 **MATCH×3**。该修复为 POSTFIX-RETIRE-0001 补偿层内
+误伤封堵，不改变退役路线（P6 整层退役时随之消失）。

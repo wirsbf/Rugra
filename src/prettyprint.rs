@@ -629,6 +629,31 @@ impl EmitNoMarkup {
         Self::post_process_output_legacy(input)
     }
 
+    // RUGRA-GLUE: P6 声明行判据(HTTPD-FULLEMPTY-ELSE-0001 residual;Ghidra 无对应物,
+    // 补偿层内部 helper)。声明行 = 纯类型头(`undefined8`、`undefined8 *` 等
+    // 标识符/`*`/空格字符组成)+ ` uVarN;` 尾。运算符/括号/逗号/语句关键字
+    // (`return` 等)出现即非声明——旧 `contains(" uVarN;")` 谓词把尾置裸变量的
+    // 使用行(`*ptr + off = uVarN;` / `return uVarN;`)也当声明删掉,制造空 else。
+    fn is_declaration_line(t: &str, var_name: &str) -> bool {
+        let suffix = format!(" {};", var_name);
+        if !t.ends_with(&suffix) {
+            return false;
+        }
+        let head = &t[..t.len() - suffix.len()];
+        if head.is_empty() {
+            return false;
+        }
+        if !head
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '*' || c == ' ')
+        {
+            return false;
+        }
+        !head.split_whitespace().any(|tok| {
+            matches!(tok, "return" | "goto" | "break" | "continue" | "case" | "default")
+        })
+    }
+
     // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——
     // oracle 发射路径零后处理:prettyprint.hh:547-594 的 EmitNoMarkup 是无缓冲直写
     // emitter,printc.cc:2665 docFunction 以 flush() 结束,无任何 post-process)。
@@ -737,8 +762,17 @@ impl EmitNoMarkup {
                     if i == *assign_idx { continue; }
                     let line = &inlined[i];
                     let t = line.trim();
-                    // Skip declaration lines
-                    if t.contains(&format!(" {};", var_name)) {
+                    // Skip declaration lines. HTTPD-FULLEMPTY-ELSE-0001
+                    // residual: the old `contains(" uVarN;")` predicate
+                    // also matched USE lines whose tail is the bare var
+                    // (`*ptr + off = uVar5;`, `return uVar5;`), so the
+                    // inline pass deleted both the assignment AND its only
+                    // use site — the surviving empty `else {}` defect
+                    // (ap_get_server_name L21). A declaration line is a
+                    // pure type head (`undefined8`, `undefined8 *`, ...)
+                    // followed by the var: no operators, parens, commas,
+                    // or statement keywords.
+                    if Self::is_declaration_line(t, var_name) {
                         inlined[i] = String::new();
                         continue;
                     }
@@ -751,10 +785,12 @@ impl EmitNoMarkup {
             // Apply dead code elimination
             for (assign_idx, var_name) in to_dead_elim.iter().rev() {
                 inlined[*assign_idx] = String::new();
-                // Also remove the declaration
+                // Also remove the declaration (same declaration-line
+                // predicate as the inline arm above; count==2 excludes
+                // use sites, this keeps the two removals consistent).
                 for i in 0..inlined.len() {
                     let t = inlined[i].trim();
-                    if t.contains(&format!(" {};", var_name)) {
+                    if Self::is_declaration_line(t, var_name) {
                         inlined[i] = String::new();
                         break;
                     }
