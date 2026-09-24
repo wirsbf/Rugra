@@ -223,3 +223,78 @@ local_* 24（HEAD）> WARN 31（blockaction）> `(undefined8 *)` 杂项 ~43（�
 
 gates/{curl,httpd}_{base,final,final2}.c + compare 输出 + 五投影 *.projection + perfunc.py +
 main_resid.py（sb-mainattr2 适配）/census.py / probe/opdump_main.txt（终态 op+类型 dump）。
+
+---
+
+# Lane AFINI 续章（wt/afini，2026-09-25）— ap_fini_vhost_config 符号集差归因（负结果：varmap/merge 无缺陷）
+
+基=亲父 4160d9e7 亲测复现：httpd **1405/0/0**、curl **1262/0/0**、ap_fini_vhost_config
+canon skeleton **239**。任务假设（VHOST ④移交）：符号集差=extraout_RDX×3/uVar15/in_RIP/
+unique 集形状，gold 知道这些符号而 Rugra 不知道（或反之），落在 varmap/merge 域。
+
+## 1. 裁决：四族符号差逐族定性（证据=双侧 golden 三方对照 + IR 探针）
+
+对照三方：canon golden（headless 桥接层）、direct-runner golden（无 Java 分析器的库级
+truth，ap_fini@0x2d020）、Rugra 两种驱动形态（default=iced 线性注入；RUGRA_MIRROR=1=
+SLEIGH 全镜像=oracle 加载契约）。
+
+| 族 | canon golden | direct-runner golden | Rugra default(iced) | Rugra MIRROR | 裁决 |
+|---|---|---|---|---|---|
+| extraout_{DX,RDX,RDX_00/01/02} | ap_fini **0** 处（全文件仅 7 函数有） | ap_fini **11 refs/5 decls** | ap_fini 8 refs | ap_fini **11 refs/5 decls** | **MIRROR=逐字 parity；canon 侧残差=headless Parameter-ID 桥接层（FI 判例域，库不可也不应复现）** |
+| in_RIP | 0（2000+ 函数全无） | 0 | **23 refs/6 函数** | **0** | **iced lifter rip 相对寻址不折叠（x86_lift.rs parse_operand/compute_mem_addr 无 rip 分支）；SLEIGH 路径天然折叠** |
+| unique0x\<rep-offset\>（STORE 址/读点印成 unique0x000a0830 形） | 无此形（有 DAT_ 符号） | piRam00000000000a0830（读+写**同一**符号名） | 无（iced 走 in_RIP 形） | 8 refs（读=plRam…，写=unique0x…） | **persist 全局 HIGH 在 channel-absent 动作管线下无符号无名 → printc 未名位置回退混用 vn 自身空间+name-rep 偏移（printc/driver 域）** |
+| uVar15 vs uVar8（unique 计数形状） | uVar8 | uVar5/uVar10 | uVar13/uVar15 | uVar6/uVar11 | **共享计数器位置漂移，随上述 decl 集差被动产生，无独立缺陷** |
+
+## 2. oracle 机制对照（本 session 逐行读，hook 回执）
+
+- **extraout 命名**=database.cc:2423-2518 `ScopeInternal::buildVariableName`
+  `indirect_creation` 臂（:2492-2503 `"extraout_"+registerName`）：call 输出 COPY 的
+  间接创建 varnode 专属，direct-runner 侧 ap_fini 5 符号/11 引用，Rugra MIRROR 逐数相同
+  （全 corpus 4 函数 5/5、3/3、11/11、3/3 refs/decls 全 parity）。
+- **persist 全局符号**=funcdata_varnode.cc:1653 `Funcdata::mapGlobals`（ActionGlobalMap
+  coreaction.hh:885）:persist varnode 分组→`queryProperties`→miss 时
+  `discoverScope`+`buildVariableName(addrtied|persist)`→`addSymbol`（oracle 中符号生而
+  有名 piRam…）；:1156 `Funcdata::linkSymbol`+ActionNameVars::linkSymbols
+  （coreaction.cc:2925-2981）经 `Scope::queryProperties`（database.cc:1266-1287
+  mapScope+stackContainer 走到 global scope）`setSymbolEntry` 挂回 varnode/high →
+  printlanguage.cc:237-243 `pushSymbolDetail` 读 high 符号名，读/写同形。Rugra 的
+  channel-absent 基线（driver 显式决策：print-only DB 安装）使 mapGlobals 只写
+  Funcdata.symbol_table 代理、linkSymbol 无法回挂 → 读走 printc 代理梯（plRam 形）、
+  STORE 址实例（unique 空间 phi/CAST 输出）落到未名位置回退。**注意 Rugra 回退
+  `unnamed_location_token(vn.space, rep.offset)` 与 oracle
+  `pushUnnamedLocation(rep->getAddr())`（地址=空间+偏移同取自 rep）尚有一处空间取值
+  差异**——即便回退，oracle 形也应是 `ram0x000a0830` 而非 `unique0x000a0830`。
+- **rip 相对寻址**：x86-64 .sla 的 rip 相对构造器在 SLEIGH 语义期折叠为绝对
+  `*[ram]:8 abs`（x86_lift.rs:1574-1600 既有注释+probe 引：oracle pcode=ram:0x2270 直连）；
+  comis/push/lea 臂已实现该折叠，**parse_operand/compute_mem_addr/parse_dest_operand 的
+  通用 Memory 臂漏掉 rip**（base=rip 走 get_register("rip")→0x288 → INT_ADD(RIP,abs)+LOAD，
+  RIP 读前无写→in_RIP 输入符号，database.cc:2476-2486 irregular-input 臂命名）。
+
+## 3. canon-gate ap_fini=239 的成分测量（209 行双侧 LCS 分类）
+
+stackdecl 52（local_ vs Stack 命名=HEAD 桥接层）/other 90（表达式形状=explicitization
+域 coreaction：memcmp 实参/指针载入的前置具名化，gold int4 iVar4+int8 iVar11 vs Rugra
+内联）/vardecl 31（同前因的 decl 集差）/globalref 18（DAT_ vs pxRam=HEAD）/
+in_RIP 10（iced lifter）/extraout 8（HEAD：canon 无 extraout）。
+**varmap.rs/merge.rs 名下成分为零**——MIRROR 形态下 ap_fini 的 varmap 符号族
+（extraout 全家、stack 形状 [256]/[16]/8 字节 860、in_FS_OFFSET）与库级 oracle 全 parity，
+唯一直接残差=1 个 decl（gold iVar4=memcmp 结果临时，explicitization 域，非符号命名域）。
+
+## 4. 移交（新登记）
+
+1. `X86LIFT-AFINI-RIPFOLD-0001`（P2）：parse_operand/compute_mem_addr/parse_dest_operand
+   rip 折叠（写域 src/disasm/x86_lift.rs+docs/api/disasm/x86_lift.md；对照 comis 臂
+   :3997-4010 与 push 臂 :1574-1600 既有实现；预期 canon gate httpd 显著下降——in_RIP
+   23 refs/6 函数 + uStack_860/85c 4+4 分裂与 auStack_58[24] 同为其 iced pcode 形状级联）。
+2. `PRINTC-AFINI-UNIQUELOC-0001`（P3）：persist 全局 HIGH 未名实例的回退形
+   （printc 未名位置回退混 vn 空间与 rep 偏移 vs oracle `pushUnnamedLocation(rep->getAddr())`；
+   根修复方向=动作期 DB 通道安装（driver 决策域）或回退形修正（printc.rs））。
+
+## 5. 验证（本 lane 零 src 改动，门禁=亲父基线复测）
+
+curl **1262/0/0**、httpd **1405/0/0**（亲测复现）、ap_fini 239 维持（无 src 改动的
+预期恒等）；投影 bank `tools/verify_projection_bank.sh` **25/25 MATCH**（含五投影
+next_url/match_url/getparameter/myprogress/parseconfig）；cargo test --lib 1708P/1F
+（唯一失败 test_nonzeromask_pipeline_wiring=VHOST 报告在案的基线预存）。
+产物=/dev/shm/rugra-tests/afini/（httpd_{base,mirror}.c、apfini_{rug,gold}.txt、
+probe1/probe2.err IR 探针 dump）。
