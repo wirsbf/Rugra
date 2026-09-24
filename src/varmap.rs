@@ -3584,14 +3584,24 @@ impl ScopeLocal {
         };
 
         // addSymbol("",ct,addr,usepoint) — usepoint is the default invalid Address.
+        // The symbol's byte size is the (possibly array-wrapped) TYPE size,
+        // exactly as Ghidra's addSymbol sizes the Symbol from ct
+        // (database.cc: Symbol/SymbolEntry take the mapping extent from the
+        // data-type): varmap.cc:627 passes only the type, never a.size. An
+        // open hint extended past the next symbol's start (varmap.cc:1315
+        // `cur.size = next->sstart-cur.sstart`) routinely carries a
+        // non-integral size — e.g. 12 bytes over undefined8 elements — and
+        // createEntry rounds DOWN to whole elements (num = a.size/align,
+        // varmap.cc:623), leaving the tail bytes unmapped (oracle httpd
+        // main: -0xa8 hint extends to 12, symbol is 8 bytes, [-0xa0,-0x9c)
+        // stays symbol-less). Stamping the raw hint size here (the old
+        // `symbols[idx].size = hint.size`) extended the mapping over the
+        // hole — VARMAP-SPALIAS-RETYPE-0001 drill evidence. add_symbol
+        // already sizes the symbol from final_dt; no post-write.
         let start = hint.start;
-        let size = hint.size;
-        let idx = self.add_symbol(
+        let _ = self.add_symbol(
             crate::space::AddressSpace::Stack, "", Some(final_dt), start, None,
         );
-        // SymbolEntry extent: [start, start+size); kept on LocalSymbol for
-        // Rugra's query_by_addr/find_symbol consumers.
-        self.symbols[idx].size = size;
     }
 
     // Ghidra: varmap.cc:548 ScopeLocal::buildVariableName
