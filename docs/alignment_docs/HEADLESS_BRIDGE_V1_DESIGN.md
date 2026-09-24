@@ -466,3 +466,51 @@ canon 形（`pCVar13 = (Configurable *)aliases; ... ->useragent`）。
   0x96; ...)`）与 canary 声明位/编号级联 → 库级 typeprop/merge 域
   （与 §9.3 下标形残差同族）。
 - sec_offset loc-list 全域（Ghidra importer 自身丢弃，预登记）。
+
+## §13 HSEED 交付记录（Lane HSEED，2026-09-25，基=亲父 33894226=master DFLIP 后）
+
+任务原设：把 curl 已验证的 C2(DWARF 名)/C4(结构体) 种子公式复制到 httpd 语料。
+
+### 13.1 语料判决：C2/C4 对 httpd **语料级不可用**（机器可复核）
+
+- `examples/httpd`（sha256 `805f89cdbdce827f…`，与 golden provenance 钉值一致）为
+  **stripped PIE——零 `.debug_*` 节**（`readelf -SW` 亲查；无 `.gnu_debuglink`）。
+  C2/C4 公式的输入端（`.debug_info` 的变量名 + exprloc fbreg 偏移 + 命名复合体集）
+  在该语料不存在。
+- 机器证据：`harvest_local_manifest.py --dwarf/--struct` 对 httpd 实测
+  **0 函数 / 0 种子 / 0 drops**；工具本轮加固——DWARF-less 语料显式
+  `WARNING: … carries no .debug_info section`（manifest 字节不变，curl 重收割
+  字节恒等复证，--struct residual_notes 按 corpus 参数化防跨语料残差串写）。
+- canon 侧交叉验证：`ghidra_httpd_1204.c` 声明层为纯合成名（`local_*`/`*Stack_*`/
+  `xVar*`，1046 条 local_ 全部 KNOWN_BASES——已尽收于 C1 manifest）；唯二结构体
+  类型声明 `sigaction local_b8`@ap_fatal_signal_setup(0x14a1b0) 与
+  `sigset_t local_c0`@ap_mpm_run(0x16ff30)（均带 C4 字段形用法：
+  `local_b8.sa_mask`/`.__sigaction_handler.sa_handler`）被 --struct 的
+  "base 必须存在于 DWARF 命名类型集" 规则正确丢弃——工厂名树
+  （curl 侧由 `parse_type_names` DWARF 导入填充，httpd 驱动无此源）为空，
+  parse_c_type 无回退 bail ⇒ 死条目。
+- oracle 预验证（§12.1 方法论）：**N/A（空集）**——无种子可 stage，抽验无从抽取；
+  空手写 manifest 或死门接线违反铁律 1.4（占位实现），故
+  `examples/httpd_decompile.rs` 本轮**零改动**（DWARFSEED/STRUCTSEED 门不接线）。
+- 解锁路径（root 级语料决策，TODO `HTTPD-CORPUS-DWARF-0001`）：①带 DWARF 的
+  httpd 构建产物入库 + ②`tools/regen_golden.py` 重生成 canon golden（需 Ghidra
+  headless 发行版，全量差分基线重置为预期行为）+ ③C1 manifest 重跑 + ④harvest
+  两模式 + ⑤stage_seed_diag 预验证 ≥3 函数。
+
+### 13.2 基线阶梯（SYMDB 默认脸 × TYPESEED 叠加态首次实测，亲测 @ 33894226）
+
+| 阶梯 | env | skeleton/defects/numbering | 附加验证 |
+|---|---|---|---|
+| 新默认脸 | （无） | **1315/0/0** | ==DFLIP final 逐字节；双跑 cmp 恒等 |
+| +TYPESEED | `RUGRA_TYPESEED=1` | **1197/0/0** | −118 全由 6 播种函数贡献（main 644→622、ap_fini_vhost_config 191→158、ap_update_vhost_from_headers 81→56、ap_parse_vhost_addrs 27→9、ap_os_is_path_absolute 23→7、ap_ht_time 17→13）；逐函数零回退；gcc 审计函数名集与默认脸逐名相同（14OK/15FAIL，pRam 未声明族=在账 PRINTC-AFINI-UNIQUELOC-0001 等预存项） |
+| 逃生门+TYPESEED | `RUGRA_SYMDB=0 RUGRA_TYPESEED=1` | **1360/0/0** | ==BRIDGE1 历史 opt-in 见证（1472 基）精确复现：通道完整性再证 |
+| mirror×TYPESEED | `RUGRA_MIRROR=1 RUGRA_TYPESEED=1` | — | 输出 cmp 恒等基线 mirror；`[TYPESEED] ignored under the mirror gate` 亲证：投影纯度在新默认脸保持 |
+
+判决：SYMDB 默认脸与 TYPESEED 门**正交可叠加、严格收敛、零回退**
+（组合语义=两通道各自收益相加：1315−118=1197，与旧脸 1472−112=1360 同构）。
+
+### 13.3 残差登记
+
+- httpd C2/C4 种子域=**空（语料性质）**，非通道缺陷；curl 侧两通道不受影响。
+- `sigaction`/`sigset_t` 两 golden decl（C4 字段形在场）=语料解锁后的首批
+  种子候选；当前无工厂名树不可服务。

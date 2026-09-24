@@ -568,6 +568,19 @@ def _type_spell_struct(unit, tattr, named, depth=0):
     return None, tdir.tag
 
 
+def _warn_if_no_dwarf(binary, elf):
+    """Loud zero-yield verdict for DWARF-less corpora (HSEED lane: the
+    httpd corpus is stripped — no .debug_* sections — so the C2/C4 channels
+    are corpus-inapplicable, not merely empty). stdout stays parseable;
+    the manifest bytes are unchanged (curl determinism preserved)."""
+    if not any(s.name == ".debug_info" for s in elf.iter_sections()):
+        sys.stderr.write(
+            "WARNING: %s carries no .debug_info section (stripped corpus): "
+            "the DWARF seed channel is corpus-inapplicable; harvest yield "
+            "is provably 0 (C2/C4 need a DWARF-bearing binary)\n" % binary
+        )
+
+
 def harvest_struct(binary, golden_path):
     """C4 struct-seed table: DWARF-named composite locals + canon-decl
     struct-pointer local_[hex] adoption. Returns (functions, drops)."""
@@ -577,6 +590,7 @@ def harvest_struct(binary, golden_path):
     dwarf_functions = set()
     with open(binary, "rb") as fh:
         elf = ELFFile(fh)
+        _warn_if_no_dwarf(binary, elf)
         dw = elf.get_dwarf_info()
         named = _named_composite_set(dw)
         for unit in dw.iter_CUs():
@@ -734,6 +748,7 @@ def harvest_dwarf(binary, golden_path=None, canon_types=True):
     inventory = []
     with open(binary, "rb") as fh:
         elf = ELFFile(fh)
+        _warn_if_no_dwarf(binary, elf)
         dw = elf.get_dwarf_info()
         for unit in dw.iter_CUs():
             for top in unit.iter_DIEs():
@@ -863,6 +878,31 @@ def main():
         binary, golden, corpus, oracle_commit, out = sys.argv[2:7]
         funcs, drops = harvest_struct(binary, golden)
         nlocals = sum(len(f["locals"]) for f in funcs.values())
+        # HSEED lane: the residual ledger below is curl-corpus truth (the
+        # C3NEXT §12.4 registration); any other corpus must not inherit
+        # curl's residual claims. Curl keeps the exact historical notes so
+        # a re-harvest stays byte-identical to the committed manifest.
+        if corpus == "curl":
+            residual_notes = [
+                "main `URLGlob glob` (canon-only inlined glob_url param): "
+                "no DWARF variable location; C3+C4 residual",
+                "match_url `glob` (by-value stack formal): C3 prototype domain",
+                "main `Configurable *config` (register variable, no stack "
+                "slot): localdb register-symbol domain residual",
+                "sec_offset loc-list variables: Ghidra's own importer drops "
+                "them (canon never names i/res/url); pre-registered domain",
+                "canon `/* Unresolved local var */` comment blocks: Java "
+                "front-end artifact (not in decompile/cpp), comment-channel "
+                "residual",
+            ]
+        else:
+            residual_notes = [
+                "corpus residual ledger not yet established (non-curl "
+                "first harvest); register per-residual after oracle "
+                "prevalidation",
+                "sec_offset loc-list variables: Ghidra's own importer drops "
+                "them (corpus-independent domain)",
+            ]
         manifest = {
             "oracle_commit": oracle_commit,
             "corpus": corpus,
@@ -875,18 +915,7 @@ def main():
                 {"function": f, "name": n or "<anon>", "reason": r}
                 for f, n, r in drops
             ],
-            "residual_notes": [
-                "main `URLGlob glob` (canon-only inlined glob_url param): "
-                "no DWARF variable location; C3+C4 residual",
-                "match_url `glob` (by-value stack formal): C3 prototype domain",
-                "main `Configurable *config` (register variable, no stack "
-                "slot): localdb register-symbol domain residual",
-                "sec_offset loc-list variables: Ghidra's own importer drops "
-                "them (canon never names i/res/url); pre-registered domain",
-                "canon `/* Unresolved local var */` comment blocks: Java "
-                "front-end artifact (not in decompile/cpp), comment-channel "
-                "residual",
-            ],
+            "residual_notes": residual_notes,
         }
         with open(out, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=1)
