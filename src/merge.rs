@@ -1069,11 +1069,25 @@ impl Merge {
         // hits (or the high's own flag is set); otherwise read the stored
         // cover directly, exactly as the oracle reads internalCover.
         let high_instances: Vec<Arc<RwLock<Varnode>>> = high.instances.clone();
-        let high_needs_refresh = high.is_cover_dirty()
-            || high_instances.iter().any(|inst| {
-                (inst.read().unwrap().flags & crate::varnode::varnode_flags::COVERDIRTY) != 0
-            });
-        let high_cover_fresh: Cover = if high_needs_refresh {
+        // merge.cc:1621-1622: testCache.updateHigh(high); const Cover
+        // &highCover(high->internalCover). The oracle's updateHigh
+        // (variable.cc:1146) rebuilds internalCover only when the high is
+        // dirty, relying on the invariant that EVERY mutation which dirties
+        // a member Varnode cover also propagates coverDirty to the owning
+        // high (varnode.cc:352-360 setFlags → high->coverDirty, fired by
+        // addDescend/eraseDescend/calcCover). Rugra's mutation paths do not
+        // all maintain that propagation (a rebuilt member cover leaves the
+        // high "clean" with a stale stored aggregate — the
+        // CANARY-EXPLICIT/loop-temp family: the PTRADD/PTRSUB for-header
+        // temps' own covers end at their single COPY read, but the stored
+        // high aggregate still ran to the block bottom, making
+        // inflateTest see a whole-interval intersection where the oracle
+        // sees a boundary touch and keeps the temp implied). Aggregate
+        // fresh from the lazily-rebuilt member covers unconditionally:
+        // the product equals the oracle's internalCover under its
+        // maintained invariant, and can only be MORE current than the
+        // stale stored form.
+        let high_cover_fresh: Cover = {
             for inst_arc in &high_instances {
                 // Oracle chain: updateHigh → updateCover → member getCover()
                 // rebuild. NOTE LOCK DISCIPLINE: unlike refresh_cover_lazy,
@@ -1103,8 +1117,6 @@ impl Merge {
                 }
             }
             fresh
-        } else {
-            high.cover.clone()
         };
         // First loop: instances of a's HighVariable (merge.cc:1623-1632).
         // Snapshot the instance arcs, then drop the read guard BEFORE the

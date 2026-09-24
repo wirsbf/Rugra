@@ -3838,6 +3838,416 @@ fn call_entry_address(fc: &crate::fspec::FuncCallSpecs) -> crate::address::Addre
         .unwrap_or(crate::address::Address::new(0))
 }
 
+// Ghidra: block.cc:3399 BlockWhileDo::finalizePrinting (whole-function sweep)
+/// Extract for-loop header statements from every WhileDo loop: detect the
+/// induction-variable configuration (findLoopVariable, block.cc:3158),
+/// locate the initializer (findInitializer, block.cc:3218), render the two
+/// header statements, and mark BOTH ops non-printing (block.cc:3421-3423)
+/// so the block emitters skip them while `emit_for_loop` prints the
+/// `for (init; cond; iter)` header from the rendered text.
+///
+/// PLACEMENT NOTE: Ghidra runs this from `Funcdata::print` (the
+/// BlockGraph::finalizePrinting sweep, block.cc:1364), i.e. after ALL
+/// actions, when variable names (ActionNameVars :5734) and casts
+/// (ActionSetCasts :5735) are final. Rugra's print entry lives in
+/// printc.rs (lane-frozen this round), so the earliest faithful hook is
+/// the tail of the last coreaction action before print
+/// (ActionPrototypeWarnings :5737). Relocate to the print entry when
+/// printc.rs reopens.
+pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
+    use crate::block::BlockType;
+    use crate::op::pcodeop_flags::NONPRINTING;
+
+    // Ghidra bails unless the architecture has analyze_for_loops set
+    // (block.cc:3360).
+    let analyze_for_loops = fd
+        .arch
+        .as_ref()
+        .map(|a| a.analyze_for_loops)
+        .unwrap_or(false);
+    if !analyze_for_loops {
+        return;
+    }
+    if fd.sblocks.blocks.is_empty() {
+        return;
+    }
+    // Post-order component walk (BlockGraph::finalTransform,
+    // block.cc:1355-1362): visit every component in list order before the
+    // enclosing BlockWhileDo performs its own transform (block.cc:3356).
+    let mut transform_order = Vec::new();
+    let mut transform_stack = fd
+        .sblocks
+        .blocks
+        .iter()
+        .rev()
+        .map(|block| (block.clone(), false))
+        .collect::<Vec<_>>();
+    let mut discovered = std::collections::HashSet::new();
+    while let Some((block, children_done)) = transform_stack.pop() {
+        let identity = Arc::as_ptr(&block) as *const () as usize;
+        if children_done {
+            transform_order.push(block);
+            continue;
+        }
+        if !discovered.insert(identity) {
+            continue;
+        }
+        let children = {
+            let rg = block.read().unwrap();
+            match rg.get_type() {
+                BlockType::List => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockList>()
+                    .map(|list| list.children.clone())
+                    .unwrap_or_default(),
+                BlockType::Condition => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockCondition>()
+                    .map(|condition| vec![condition.first.clone(), condition.second.clone()])
+                    .unwrap_or_default(),
+                BlockType::If => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockIf>()
+                    .map(|if_block| {
+                        let mut components = vec![if_block.condition.clone()];
+                        // A one-component BlockIf is the unstructured
+                        // if-goto form (block.hh:652-655).
+                        if if_block.goto_target.is_none() {
+                            components.push(if_block.if_body.clone());
+                            if let Some(else_body) = &if_block.else_body {
+                                components.push(else_body.clone());
+                            }
+                        }
+                        components
+                    })
+                    .unwrap_or_default(),
+                BlockType::WhileDo => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockWhileDo>()
+                    .map(|while_do| vec![while_do.condition.clone(), while_do.body.clone()])
+                    .unwrap_or_default(),
+                BlockType::DoWhile => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockDoWhile>()
+                    .map(|do_while| vec![do_while.condition.clone()])
+                    .unwrap_or_default(),
+                BlockType::InfLoop => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockInfLoop>()
+                    .map(|inf_loop| vec![inf_loop.body.clone()])
+                    .unwrap_or_default(),
+                BlockType::Switch => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockSwitch>()
+                    .map(|switch| {
+                        let mut components = vec![switch.control.clone()];
+                        components.extend(switch.cases.iter().cloned());
+                        if let Some(default_case) = &switch.default_case {
+                            if !components
+                                .iter()
+                                .any(|component| Arc::ptr_eq(component, default_case))
+                            {
+                                components.push(default_case.clone());
+                            }
+                        }
+                        components
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        };
+        transform_stack.push((block, true));
+        for child in children.into_iter().rev() {
+            transform_stack.push((child, false));
+        }
+    }
+    for bl_arc in transform_order {
+        // Downcast to BlockWhileDo (block.rs:1449). WhileDo has named
+        // `condition` (head) and `body` (tail) fields.
+        let wd = {
+            let rg = bl_arc.read().unwrap();
+            if rg.get_type() != BlockType::WhileDo {
+                continue;
+            }
+            let any = rg.as_any();
+            let Some(wd) = any.downcast_ref::<crate::block::BlockWhileDo>() else {
+                continue;
+            };
+            if wd.has_overflow_syntax() {
+                continue;
+            }
+            // Clone the Arcs out so we can drop the borrow before mutating.
+            (wd.condition.clone(), wd.body.clone())
+        };
+        let (condition_arc, body_arc) = wd;
+
+        // block.cc:3362-3365: getFrontLeaf() yields the BlockCopy at the
+        // front of the loop condition; subBlock(0) is its live Basic.
+        let Some(copy_leaf) = crate::block::front_leaf(&bl_arc) else {
+            continue;
+        };
+        let head_arc = {
+            let leaf = copy_leaf.read().unwrap();
+            if leaf.get_type() != BlockType::Copy {
+                continue;
+            }
+            let Some(head) = leaf.sub_block(0) else {
+                continue;
+            };
+            head
+        };
+        let head_ops = {
+            let head = head_arc.read().unwrap();
+            if head.get_type() != BlockType::Basic {
+                continue;
+            }
+            head.get_ops()
+        };
+
+        // block.cc:3371-3372 uses the condition subtree's virtual
+        // lastOp(), not a concrete BlockBasic downcast.
+        let cbranch = {
+            let condition = condition_arc.read().unwrap();
+            let Some(cbranch) = condition.last_op() else {
+                continue;
+            };
+            let is_cb = cbranch.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+            if !is_cb {
+                continue;
+            }
+            cbranch
+        };
+
+        // block.cc:3366-3376 obtains the body subtree's virtual lastOp,
+        // then follows the op's parent to the actual tail Basic.
+        let body_last = {
+            let body = body_arc.read().unwrap();
+            let Some(last) = body.last_op() else {
+                continue;
+            };
+            last
+        };
+        let Some(tail_arc) = body_last
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.upgrade())
+        else {
+            continue;
+        };
+        let tail_slot = {
+            let tail = tail_arc.read().unwrap();
+            if tail.get_type() != BlockType::Basic || tail.size_out() != 1 {
+                continue;
+            }
+            let Some(edge) = tail.get_out(0) else {
+                continue;
+            };
+            if !Arc::ptr_eq(&edge.point, &head_arc) || edge.reverse_index < 0 {
+                continue;
+            }
+            edge.reverse_index as usize
+        };
+        let last_op = if body_last.0.read().unwrap().is_branch() {
+            let Some(previous) = body_last
+                .0.read()
+                .unwrap()
+                .previous_op_in_block(&fd.obank)
+            else {
+                continue;
+            };
+            previous
+        } else {
+            body_last
+        };
+        // findLoopVariable (block.cc:3164-3213): the CBRANCH condition
+        // (slot 1) must be written by a comparison; one of that
+        // comparison's inputs must be defined by a MULTIEQUAL living in the
+        // head block, and that MULTIEQUAL's tail-slot input must be defined
+        // by our iterate op in the tail block.
+        //   cbranch.in[1].def  = comparison op
+        //   comparison.in[k].def = MULTIEQUAL (in head)
+        //   MULTIEQUAL.in[tailslot].def = iterate op (in tail)
+        let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
+        let Some(cond_vn) = cond_vn else { continue };
+        let comparison = cond_vn.read().unwrap().get_def();
+        let Some(comparison) = comparison else { continue ;
+        };
+        // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
+        // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
+        // non-MULTIEQUAL defs; for the common `i < N` form the loop
+        // variable is a direct comparison input, which we handle here.
+        let mut found: Option<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = None;
+        #[allow(unused_imports)]
+        use crate::opcodes::OpCode;
+        let comp_ref = crate::op::PcodeOpRef(comparison.clone());
+        let comp_incount = comp_ref.0.read().unwrap().num_input();
+        for k in 0..comp_incount {
+            let vn = match comp_ref.0.read().unwrap().get_in(k) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let multieq = vn.read().unwrap().get_def();
+            let Some(multieq) = multieq else { continue };
+            // The MULTIEQUAL must live in the head block. Compare by Arc
+            // pointer identity with head_ops.
+            let me_parent = multieq
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade());
+            let in_head = me_parent
+                .as_ref()
+                .map(|p| Arc::ptr_eq(p, &head_arc))
+                .unwrap_or(false)
+                || head_ops.iter().any(|o| Arc::ptr_eq(&o.0, &multieq));
+            if !in_head {
+                continue;
+            }
+            let me_ref = crate::op::PcodeOpRef(multieq.clone());
+            // block.cc:3174/3190 selects the MULTIEQUAL input whose slot
+            // is the tail edge's reciprocal slot at the loop head.
+            let Some(tivn) = me_ref.0.read().unwrap().get_in(tail_slot).cloned() else {
+                continue;
+            };
+            let Some(idef) = tivn.read().unwrap().get_def() else {
+                continue;
+            };
+            let iparent = idef
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.upgrade());
+            if !iparent
+                .as_ref()
+                .map(|parent| Arc::ptr_eq(parent, &tail_arc))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if idef.read().unwrap().is_marker() {
+                continue;
+            }
+            // Rugra still lacks the full PcodeOp::isMoveable closure.
+            // Preserve the existing conservative INT_ADD gate whenever
+            // the candidate is not already the tail's final statement.
+            if !Arc::ptr_eq(&idef, &last_op.0)
+                && idef.read().unwrap().opcode != OpCode::CPUI_INT_ADD
+            {
+                continue;
+            }
+            found = Some((me_ref, crate::op::PcodeOpRef(idef)));
+            break;
+        }
+        let Some((loop_def, iterate_op)) = found else {
+            continue;
+        };
+        // block.cc:3218-3244 findInitializer: the initialize statement
+        // lives in the block feeding the head's non-tail input slot; the
+        // def of loopDef's entry input must terminate that block, and the
+        // block must flow only into the head. Returns (init op, its
+        // block, last non-branch op of that block).
+        let entry_slot = if tail_slot == 1 { 0 } else { 1 };
+        let init_op: Option<crate::op::PcodeOpRef> = {
+            let head_in_count = {
+                let head = head_arc.read().unwrap();
+                head.size_in()
+            };
+            if head_in_count != 2 {
+                None
+            } else {
+                let init_vn = loop_def
+                    .0
+                    .read()
+                    .unwrap()
+                    .get_in(entry_slot)
+                    .and_then(|vn| vn.read().unwrap().get_def());
+                match init_vn {
+                    Some(init_def) => {
+                        let idef = init_def.read().unwrap();
+                        if idef.is_marker() {
+                            None
+                        } else {
+                            let parent = idef.parent.as_ref().and_then(|w| w.upgrade());
+                            let expected_block = {
+                                let head = head_arc.read().unwrap();
+                                head.get_in(entry_slot).map(|edge| edge.point)
+                            };
+                            let parent_ok = match (&parent, &expected_block) {
+                                (Some(p), Some(e)) => Arc::ptr_eq(p, e),
+                                _ => false,
+                            };
+                            if parent_ok {
+                                // cc:3235-3236: initializer block must
+                                // flow only into the for loop.
+                                let out_count =
+                                    expected_block.unwrap().read().unwrap().size_out();
+                                if out_count == 1 {
+                                    Some(crate::op::PcodeOpRef(init_def.clone()))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            }
+        };
+        // Ghidra testTerminal (block.cc:3258-3291) requires the iterator
+        // statement's root output to be an explicit variable read by
+        // loopDef, and testIterateForm (block.cc:3296-3315) requires the
+        // loop variable as input. The rendering below only accepts the
+        // COPY-const initializer and INT_ADD(var,±const) iterator forms;
+        // anything else bails (no for-header conversion, statement stays
+        // visible — the fail-closed equivalent of testTerminal refusing).
+        let Some(initialize_op) = init_op else {
+            continue;
+        };
+
+        // Render the init slot: emitExpression(initializeOp) for the
+        // COPY-const form → "<name(out)> = <const>". The name mirrors
+        // printc's pushVnExplicit name slice (printlanguage.cc:218-262 →
+        // PrintC::push_varnode Priority 1: high name, symbol-backed
+        // verbatim, typed name passthrough; unnamed/raw-register highs
+        // cannot be rendered faithfully here — bail).
+        let init_str = ActionStructureTransform::render_for_header_copy_const(&initialize_op);
+        // Render the iterate slot: emitExpression(iterateOp) for the
+        // INT_ADD(var, const) form → "<name(out)> = <name(var)> + <const>".
+        let iter_str = ActionStructureTransform::render_for_header_int_add(&iterate_op);
+        // Rugra can suppress the statements only when it can carry both
+        // expressions into its for-loop printer. Otherwise keep the
+        // statements visible, matching Ghidra's fail-closed transform.
+        let (Some(init_str), Some(iter_str)) = (init_str, iter_str) else {
+            continue;
+        };
+        // block.cc:3421-3423 finalizePrinting: BOTH the iterator and the
+        // initializer statements are extracted into the for header and
+        // marked non-printing for the block emitters.
+        iterate_op.0.write().unwrap().flags |= NONPRINTING;
+        initialize_op.0.write().unwrap().flags |= NONPRINTING;
+        let mut bl_write = bl_arc.write().unwrap();
+        if let Some(wd) = bl_write
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockWhileDo>()
+        {
+            wd.for_init = Some(init_str);
+            wd.for_iter = Some(iter_str);
+        }
+        // Ghidra's ActionStructureTransform::apply never increments the
+        // inherited count (blockaction.cc:2110-2115 calls finalTransform
+        // and returns 0 without touching the member) — no local
+        // counting and no take_count_delta harvest; the conversion is
+        // witnessed by the for-loop metadata + NONPRINTING mark alone.
+    }
+}
+
 impl Action for ActionPrototypeWarnings {
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1047
     fn get_flags(&self) -> u32 {
@@ -3928,6 +4338,14 @@ impl Action for ActionPrototypeWarnings {
             }
         }
         // coreaction.cc:4935: return 0; (no IR mutation).
+        //
+        // RUGRA ADDITION — for-loop header extraction
+        // (BlockWhileDo::finalizePrinting, block.cc:3399-3423): Ghidra runs
+        // this sweep from Funcdata::print after every action; Rugra's print
+        // entry (printc.rs) is lane-frozen, so the last coreaction action
+        // before print is the earliest faithful hook. See
+        // `for_loop_finalize_printing` for the placement note.
+        for_loop_finalize_printing(fd);
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "prototypewarnings" mirrors ctor at coreaction.hh:1047
@@ -4649,6 +5067,20 @@ impl ActionMarkImplied {
         let Some(high_arc) = high_arc else {
             return false; // no HighVariable — shouldn't happen post-merge
         };
+
+        // cc:3385/3403 read the cover via `vn->getCover()`, which lazily
+        // REBUILDS a dirty Varnode Cover first (varnode.hh:202 → varnode.cc:231
+        // Varnode::updateCover → cover->rebuild). Rugra's Action-sequence
+        // pipeline (each merge step a separate Action, action.rs :5717-5729)
+        // has no eager compute_varnode_covers sweep at this point, so the
+        // raw `.cover` field can still be the empty post-calcCover shell
+        // with COVERDIRTY set. Mirror the lazy rebuild via
+        // Varnode::update_cover_locked before reading (CANARY-EXPLICIT
+        // family root cause: reading the raw empty cover let whole-function
+        // loads — e.g. the entry canary read whose only use is the exit
+        // compare — pass the CALL-crossing test and become implied, losing
+        // the `lVar2 = *(long *)(in_FS_OFFSET + 0x28)` explicit statement).
+        crate::varnode::Varnode::update_cover_locked(vn_arc);
 
         let def_op = def_op_arc.read().unwrap();
         let def_opc = def_op.opcode;
@@ -15780,6 +16212,138 @@ impl ActionStructureTransform {
     pub fn new() -> Self {
         Self { count: 0 }
     }
+    // Ghidra: printlanguage.cc:218 PrintLanguage::pushVnExplicit (name slice)
+    // (the emitExpression(op) product for the two canonical loop forms).
+    /// Name a for-header varnode the way printc's pushVnExplicit name slice
+    /// does (printlanguage.cc:218-262 → printc.rs push_varnode Priority 1):
+    /// the HighVariable name — symbol-backed names verbatim, typed
+    /// `<prefix>Var<n>` names as-is. Returns None when the high is unnamed
+    /// or carries a raw register name (printc rewrites those through its own
+    /// tables, which the action-time renderer cannot consult faithfully).
+    fn for_header_var_name(
+        vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<String> {
+        let vn_rg = vn.read().unwrap();
+        let high_arc = vn_rg.high.clone()?;
+        let high = high_arc.read().unwrap();
+        let name = high.get_name();
+        if name.is_empty() {
+            return None;
+        }
+        if high.symbol.is_some() {
+            return Some(name.to_string());
+        }
+        // Typed auto-name (`lVar11`-style): the type prefix already matches
+        // the print form (maybe_apply_type_prefix is the identity for a
+        // prefix that agrees with the propagated type). Accept only that
+        // shape; anything else (raw register names, glue names) bails.
+        if Self::for_header_is_typed_auto_name(name) {
+            Some(name.to_string())
+        } else {
+            None
+        }
+    }
+
+    // RUGRA-GLUE: shape gate for the typed auto-name grammar `<base>Var<n>`
+    /// Recognize printc's typed local-variable auto-name shape
+    /// (`[a-z]+Var<digits>`, e.g. `lVar11`, `pcVar7`) — the form whose type
+    /// prefix agrees with the propagated type and therefore prints verbatim.
+    fn for_header_is_typed_auto_name(name: &str) -> bool {
+        if let Some(pos) = name.rfind("Var") {
+            let (prefix, digits) = name.split_at(pos + 3);
+            !prefix.is_empty()
+                && prefix.ends_with("Var")
+                && prefix[..pos]
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase())
+                && !digits.is_empty()
+                && digits.chars().all(|ch| ch.is_ascii_digit())
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer (constant text core)
+    /// Render an integer constant the way push_integer does for a plain
+    /// (no Symbol display format, no forced mods) context: signed types
+    /// flip to the negated value when the two's-complement sign bit is set,
+    /// values ≤ 10 print decimal, everything else prints hex exactly when
+    /// mostNaturalBase is 16.
+    fn for_header_const_text(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<String> {
+        let vn_rg = vn.read().unwrap();
+        if !vn_rg.is_constant() {
+            return None;
+        }
+        let sz = vn_rg.get_size();
+        let mut v = vn_rg.get_offset();
+        let signed = vn_rg
+            .v_type
+            .as_ref()
+            .map(|t| t.get_metatype() == crate::type_system::TypeMetatype::Int)
+            .unwrap_or(false);
+        let mut neg = false;
+        if signed {
+            let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
+            let flip = v ^ mask;
+            if flip < v {
+                neg = true;
+                v = flip.wrapping_add(1);
+            }
+        }
+        // printc.cc:1325-1337 with displayFormat==0 and no force mods:
+        // val<=10 → decimal; mostNaturalBase(val)==16 → hex; else decimal.
+        let use_hex = v > 10 && crate::printlanguage::most_natural_base(v) == 16;
+        let mut t = String::new();
+        if neg {
+            t.push('-');
+        }
+        if use_hex {
+            t.push_str(&format!("0x{:x}", v));
+        } else {
+            t.push_str(&format!("{}", v));
+        }
+        Some(t)
+    }
+
+    // Ghidra: printc.cc:2957 PrintC::emitForLoop (initializer statement text)
+    /// `emitExpression(initializeOp)` for the COPY-const initializer form:
+    /// `<name(out)> = <const>`.
+    fn render_for_header_copy_const(op: &crate::op::PcodeOpRef) -> Option<String> {
+        let op_rg = op.0.read().unwrap();
+        if op_rg.opcode != OpCode::CPUI_COPY || op_rg.num_input() < 1 {
+            return None;
+        }
+        let out = op_rg.output.as_ref()?.clone();
+        let in0 = op_rg.get_in(0)?.clone();
+        let name = Self::for_header_var_name(&out)?;
+        let cnst = Self::for_header_const_text(&in0)?;
+        Some(format!("{} = {}", name, cnst))
+    }
+
+    // Ghidra: printc.cc:2957 PrintC::emitForLoop (iterator statement text)
+    /// `emitExpression(iterateOp)` for the INT_ADD(var, const) iterator
+    /// form: `<name(out)> = <name(var)> + <const>`.
+    fn render_for_header_int_add(op: &crate::op::PcodeOpRef) -> Option<String> {
+        let op_rg = op.0.read().unwrap();
+        if op_rg.opcode != OpCode::CPUI_INT_ADD || op_rg.num_input() < 2 {
+            return None;
+        }
+        let out = op_rg.output.as_ref()?.clone();
+        let in0 = op_rg.get_in(0)?.clone();
+        let in1 = op_rg.get_in(1)?.clone();
+        let lhs = Self::for_header_var_name(&out)?;
+        let (var_vn, const_vn) = if in1.read().unwrap().is_constant() {
+            (in0, in1)
+        } else if in0.read().unwrap().is_constant() {
+            (in1, in0)
+        } else {
+            return None;
+        };
+        let rhs_var = Self::for_header_var_name(&var_vn)?;
+        let rhs_const = Self::for_header_const_text(&const_vn)?;
+        Some(format!("{} = {} + {}", lhs, rhs_var, rhs_const))
+    }
+
 }
 
 impl Action for ActionStructureTransform {
@@ -15817,359 +16381,18 @@ impl Action for ActionStructureTransform {
         if !analyze_for_loops {
             return Ok(action_status::NO_CHANGE);
         }
-        // BlockGraph::finalTransform (block.cc:1355-1362) recursively visits
-        // every component in list order before the enclosing BlockWhileDo
-        // performs its own transform (block.cc:3356). Rugra stores each
-        // structured subtype's components directly, so build the same
-        // post-order explicitly. The pointer set only guards malformed/shared
-        // Rust stand-ins; Ghidra's component hierarchy is a tree.
-        let mut transform_order = Vec::new();
-        let mut transform_stack = fd
-            .sblocks
-            .blocks
-            .iter()
-            .rev()
-            .map(|block| (block.clone(), false))
-            .collect::<Vec<_>>();
-        let mut discovered = std::collections::HashSet::new();
-        while let Some((block, children_done)) = transform_stack.pop() {
-            let identity = Arc::as_ptr(&block) as *const () as usize;
-            if children_done {
-                transform_order.push(block);
-                continue;
-            }
-            if !discovered.insert(identity) {
-                continue;
-            }
-            let children = {
-                let rg = block.read().unwrap();
-                match rg.get_type() {
-                    BlockType::List => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockList>()
-                        .map(|list| list.children.clone())
-                        .unwrap_or_default(),
-                    BlockType::Condition => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockCondition>()
-                        .map(|condition| vec![condition.first.clone(), condition.second.clone()])
-                        .unwrap_or_default(),
-                    BlockType::If => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockIf>()
-                        .map(|if_block| {
-                            let mut components = vec![if_block.condition.clone()];
-                            // A one-component BlockIf is the unstructured
-                            // if-goto form (block.hh:652-655).
-                            if if_block.goto_target.is_none() {
-                                components.push(if_block.if_body.clone());
-                                if let Some(else_body) = &if_block.else_body {
-                                    components.push(else_body.clone());
-                                }
-                            }
-                            components
-                        })
-                        .unwrap_or_default(),
-                    BlockType::WhileDo => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockWhileDo>()
-                        .map(|while_do| vec![while_do.condition.clone(), while_do.body.clone()])
-                        .unwrap_or_default(),
-                    BlockType::DoWhile => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockDoWhile>()
-                        .map(|do_while| vec![do_while.condition.clone()])
-                        .unwrap_or_default(),
-                    BlockType::InfLoop => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockInfLoop>()
-                        .map(|inf_loop| vec![inf_loop.body.clone()])
-                        .unwrap_or_default(),
-                    BlockType::Switch => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockSwitch>()
-                        .map(|switch| {
-                            let mut components = vec![switch.control.clone()];
-                            components.extend(switch.cases.iter().cloned());
-                            if let Some(default_case) = &switch.default_case {
-                                if !components
-                                    .iter()
-                                    .any(|component| Arc::ptr_eq(component, default_case))
-                                {
-                                    components.push(default_case.clone());
-                                }
-                            }
-                            components
-                        })
-                        .unwrap_or_default(),
-                    _ => Vec::new(),
-                }
-            };
-            transform_stack.push((block, true));
-            for child in children.into_iter().rev() {
-                transform_stack.push((child, false));
-            }
-        }
-        for bl_arc in transform_order {
-            // Downcast to BlockWhileDo (block.rs:1449). WhileDo has named
-            // `condition` (head) and `body` (tail) fields.
-            let wd = {
-                let rg = bl_arc.read().unwrap();
-                if rg.get_type() != BlockType::WhileDo {
-                    continue;
-                }
-                let any = rg.as_any();
-                let Some(wd) = any.downcast_ref::<crate::block::BlockWhileDo>() else {
-                    continue;
-                };
-                if wd.has_overflow_syntax() {
-                    continue;
-                }
-                // Clone the Arcs out so we can drop the borrow before mutating.
-                (wd.condition.clone(), wd.body.clone())
-            };
-            let (condition_arc, body_arc) = wd;
-
-            // block.cc:3362-3365: getFrontLeaf() yields the BlockCopy at the
-            // front of the loop condition; subBlock(0) is its live Basic.
-            let Some(copy_leaf) = crate::block::front_leaf(&bl_arc) else {
-                continue;
-            };
-            let head_arc = {
-                let leaf = copy_leaf.read().unwrap();
-                if leaf.get_type() != BlockType::Copy {
-                    continue;
-                }
-                let Some(head) = leaf.sub_block(0) else {
-                    continue;
-                };
-                head
-            };
-            let head_ops = {
-                let head = head_arc.read().unwrap();
-                if head.get_type() != BlockType::Basic {
-                    continue;
-                }
-                head.get_ops()
-            };
-
-            // block.cc:3371-3372 uses the condition subtree's virtual
-            // lastOp(), not a concrete BlockBasic downcast.
-            let cbranch = {
-                let condition = condition_arc.read().unwrap();
-                let Some(cbranch) = condition.last_op() else {
-                    continue;
-                };
-                let is_cb = cbranch.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
-                if !is_cb {
-                    continue;
-                }
-                cbranch
-            };
-
-            // block.cc:3366-3376 obtains the body subtree's virtual lastOp,
-            // then follows the op's parent to the actual tail Basic.
-            let body_last = {
-                let body = body_arc.read().unwrap();
-                let Some(last) = body.last_op() else {
-                    continue;
-                };
-                last
-            };
-            let Some(tail_arc) = body_last
-                .0
-                .read()
-                .unwrap()
-                .parent
-                .as_ref()
-                .and_then(|parent| parent.upgrade())
-            else {
-                continue;
-            };
-            let tail_slot = {
-                let tail = tail_arc.read().unwrap();
-                if tail.get_type() != BlockType::Basic || tail.size_out() != 1 {
-                    continue;
-                }
-                let Some(edge) = tail.get_out(0) else {
-                    continue;
-                };
-                if !Arc::ptr_eq(&edge.point, &head_arc) || edge.reverse_index < 0 {
-                    continue;
-                }
-                edge.reverse_index as usize
-            };
-            let last_op = if body_last.0.read().unwrap().is_branch() {
-                let Some(previous) = body_last
-                    .0.read()
-                    .unwrap()
-                    .previous_op_in_block(&fd.obank)
-                else {
-                    continue;
-                };
-                previous
-            } else {
-                body_last
-            };
-            // findLoopVariable (block.cc:3164-3213): the CBRANCH condition
-            // (slot 1) must be written by a comparison; one of that
-            // comparison's inputs must be defined by a MULTIEQUAL living in the
-            // head block, and that MULTIEQUAL's tail-slot input must be defined
-            // by our iterate op in the tail block.
-            //   cbranch.in[1].def  = comparison op
-            //   comparison.in[k].def = MULTIEQUAL (in head)
-            //   MULTIEQUAL.in[tailslot].def = iterate op (in tail)
-            let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
-            let Some(cond_vn) = cond_vn else { continue };
-            let comparison = cond_vn.read().unwrap().get_def();
-            let Some(comparison) = comparison else { continue ;
-            };
-            // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
-            // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
-            // non-MULTIEQUAL defs; for the common `i < N` form the loop
-            // variable is a direct comparison input, which we handle here.
-            let mut found: Option<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = None;
-            let comp_ref = crate::op::PcodeOpRef(comparison.clone());
-            let comp_incount = comp_ref.0.read().unwrap().num_input();
-            for k in 0..comp_incount {
-                let vn = match comp_ref.0.read().unwrap().get_in(k) {
-                    Some(v) => v.clone(),
-                    None => continue,
-                };
-                let multieq = vn.read().unwrap().get_def();
-                let Some(multieq) = multieq else { continue };
-                // The MULTIEQUAL must live in the head block. Compare by Arc
-                // pointer identity with head_ops.
-                let me_parent = multieq
-                    .read()
-                    .unwrap()
-                    .parent
-                    .as_ref()
-                    .and_then(|w| w.upgrade());
-                let in_head = me_parent
-                    .as_ref()
-                    .map(|p| Arc::ptr_eq(p, &head_arc))
-                    .unwrap_or(false)
-                    || head_ops.iter().any(|o| Arc::ptr_eq(&o.0, &multieq));
-                if !in_head {
-                    continue;
-                }
-                let me_ref = crate::op::PcodeOpRef(multieq.clone());
-                // block.cc:3174/3190 selects the MULTIEQUAL input whose slot
-                // is the tail edge's reciprocal slot at the loop head.
-                let Some(tivn) = me_ref.0.read().unwrap().get_in(tail_slot).cloned() else {
-                    continue;
-                };
-                let Some(idef) = tivn.read().unwrap().get_def() else {
-                    continue;
-                };
-                let iparent = idef
-                    .read()
-                    .unwrap()
-                    .parent
-                    .as_ref()
-                    .and_then(|parent| parent.upgrade());
-                if !iparent
-                    .as_ref()
-                    .map(|parent| Arc::ptr_eq(parent, &tail_arc))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                if idef.read().unwrap().is_marker() {
-                    continue;
-                }
-                // Rugra still lacks the full PcodeOp::isMoveable closure.
-                // Preserve the existing conservative INT_ADD gate whenever
-                // the candidate is not already the tail's final statement.
-                if !Arc::ptr_eq(&idef, &last_op.0)
-                    && idef.read().unwrap().opcode != OpCode::CPUI_INT_ADD
-                {
-                    continue;
-                }
-                found = Some((me_ref, crate::op::PcodeOpRef(idef)));
-                break;
-            }
-            let Some((loop_def, iterate_op)) = found else {
-                continue;
-            };
-            // iterateOp located (block.cc:3379). Build the for-loop init/iter
-            // expressions and set them on the BlockWhileDo so printc can emit
-            // for(init;cond;iter) instead of while(cond).
-            // Init: the MULTIEQUAL input opposite the tail reciprocal slot.
-            // Iter: the iterate op expression (e.g. "i + 1").
-            let init_str = {
-                let mut result = String::new();
-                if tail_slot <= 1 {
-                    let entry_slot = 1 - tail_slot;
-                    if let Some(entry_vn) = loop_def.0.read().unwrap().get_in(entry_slot) {
-                        let vn_rg = entry_vn.read().unwrap();
-                        if vn_rg.is_constant() {
-                            result = format!("#{}", vn_rg.get_offset());
-                        } else {
-                            result = format!("var_{:x}", vn_rg.get_offset());
-                        }
-                    }
-                }
-                result
-            };
-            // Iter: the iterate op's expression. For INT_ADD(i, #1) → "i + 1".
-            let iter_str = {
-                let io = iterate_op.0.read().unwrap();
-                if io.opcode == OpCode::CPUI_INT_ADD && io.num_input() >= 2 {
-                    let in0 = io.get_in(0).map(|v| v.clone());
-                    let in1 = io.get_in(1).map(|v| v.clone());
-                    let out = io.output.as_ref().map(|v| v.clone());
-                    let lhs = out
-                        .map(|v| {
-                        let vr = v.read().unwrap();
-                        format!("var_{:x}", vr.get_offset())
-                    })
-                        .unwrap_or_default();
-                    let rhs = match (&in0, &in1) {
-                        (Some(a), Some(b)) => {
-                            let ar = a.read().unwrap();
-                            let br = b.read().unwrap();
-                            if br.is_constant() {
-                                format!("var_{:x} + {}", ar.get_offset(), br.get_offset())
-                            } else if ar.is_constant() {
-                                format!("var_{:x} + {}", br.get_offset(), ar.get_offset())
-                            } else {
-                                format!("var_{:x} + var_{:x}", ar.get_offset(), br.get_offset())
-                            }
-                        }
-                        _ => String::new(),
-                    };
-                    if !lhs.is_empty() && !rhs.is_empty() {
-                        format!("{} = {}", lhs, rhs)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                }
-            };
-            // Rugra can suppress the iterator only when it can also carry
-            // both expressions into its for-loop printer. Otherwise keep the
-            // statement visible, matching Ghidra's fail-closed transform.
-            if init_str.is_empty() || iter_str.is_empty() {
-                continue;
-            }
-            iterate_op.0.write().unwrap().flags |= NONPRINTING;
-            let mut bl_write = bl_arc.write().unwrap();
-            if let Some(wd) = bl_write
-                .as_any_mut()
-                .downcast_mut::<crate::block::BlockWhileDo>()
-            {
-                wd.for_init = Some(init_str);
-                wd.for_iter = Some(iter_str);
-            }
-            // Ghidra's ActionStructureTransform::apply never increments the
-            // inherited count (blockaction.cc:2110-2115 calls finalTransform
-            // and returns 0 without touching the member) — no local
-            // counting and no take_count_delta harvest; the conversion is
-            // witnessed by the for-loop metadata + NONPRINTING mark alone.
-        }
+        // The WhileDo for-header extraction (findLoopVariable /
+        // findInitializer / finalizePrinting, block.cc:3158-3423) does NOT
+        // run here: Ghidra's finalTransform only RELOCATES ops at this
+        // point (block.cc:3381-3396) — a move Rugra's op bank cannot
+        // express — and the header statements are rendered at PRINT time
+        // (BlockWhileDo::finalizePrinting, invoked from Funcdata::print)
+        // when variable names are final. Rugra performs the whole
+        // extraction late, in the last coreaction action before print
+        // (`for_loop_finalize_printing`, hooked at
+        // ActionPrototypeWarnings: names are assigned by ActionNameVars
+        // :5734 and casts by ActionSetCasts :5735 by then; see the
+        // placement note there).
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
     }
@@ -19326,11 +19549,54 @@ mod tests {
         // Build the live CFG shape consumed by block.cc:3362-3378. The entry
         // edge is inserted before the tail back-edge so the latter occupies
         // head incoming slot 1, matching MULTIEQUAL input slot 1 above.
-        let entry = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        let entry_bb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             2,
             Address::new(0x0800),
-        ))) as std::sync::Arc<
+        )));
+        let entry = entry_bb.clone() as std::sync::Arc<
             std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        // Initializer statement in the entry block: i_init = COPY(#5),
+        // mirroring the real induction loop (block.cc:3218 findInitializer
+        // requires the loopDef entry input to be defined in the block that
+        // flows only into the head).
+        let five_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(5, 4)));
+        let mut init_copy = PcodeOp::new(
+            SeqNum::new(Address::new(0x0804), 0),
+            OpCode::CPUI_COPY,
+        );
+        init_copy.parent = Some(std::sync::Arc::downgrade(&(
+            entry_bb.clone() as std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >
+        )));
+        init_copy.inrefs = vec![five_vn];
+        init_copy.output = Some(i_init.clone());
+        let init_copy_ref =
+            PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(init_copy)));
+        i_init.write().unwrap().def =
+            Some(std::sync::Arc::downgrade(&init_copy_ref.0));
+        entry_bb.write().unwrap().add_op(init_copy_ref.clone());
+        // Named highs (typed auto-name grammar) so the late renderer can
+        // resolve for-header variable names the way printc would.
+        {
+            let int4 = std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "int".to_string(),
+                    4,
+                    crate::type_system::TypeMetatype::Int,
+                ),
+            ));
+            let make_high = |vn: &std::sync::Arc<std::sync::RwLock<Varnode>>, nm: &str| {
+                let mut h = crate::variable::HighVariable::new(int4.clone());
+                h.name = nm.to_string();
+                h.instances = vec![vn.clone()];
+                let ha = std::sync::Arc::new(std::sync::RwLock::new(h));
+                vn.write().unwrap().high = Some(ha);
+            };
+            make_high(&i_init, "iVar2");
+            make_high(&i_vn, "iVar3");
+            make_high(&i_update, "iVar4");
+        }
         let exit = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             3,
             Address::new(0x3000),
@@ -19372,23 +19638,53 @@ mod tests {
         fd.sblocks.add_block(list);
         // iterate op (INT_ADD) must be printable before.
         assert_eq!(add_ref.0.read().unwrap().flags & NONPRINTING, 0);
+        // ActionStructureTransform (:5715) only relocates ops in Ghidra and
+        // does NOT extract the header statements (that is finalizePrinting,
+        // block.cc:3399, at print time). Its apply must leave the block
+        // untouched.
         let mut a = ActionStructureTransform::new();
         let _ = a.apply(&mut fd).unwrap();
-        // After the transform the iterate op is marked non-printing and the
-        // BlockWhileDo carries the for-loop expressions. Ghidra's apply
-        // never increments the inherited count (blockaction.cc:2110-2115),
-        // so the member must stay 0 — the conversion is witnessed by the
-        // metadata + NONPRINTING mark below, not by a count.
         assert_eq!(a.count, 0, "structuretransform never counts (blockaction.cc:2110-2115)");
         {
             let rg = wd_arc.read().unwrap();
             let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(
+                wd.for_init.is_none() && wd.for_iter.is_none(),
+                "structuretransform does not extract for-headers (finalizePrinting's job)"
+            );
+        }
+        assert_eq!(
+            add_ref.0.read().unwrap().flags & NONPRINTING,
+            0,
+            "iterate op stays printable until finalizePrinting"
+        );
+        // The late extraction (Rugra placement of BlockWhileDo::
+        // finalizePrinting, hooked at ActionPrototypeWarnings :5737).
+        crate::coreaction::for_loop_finalize_printing(&mut fd);
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
             assert!(wd.for_init.is_some() && wd.for_iter.is_some(), "one for-loop detected");
+            assert_eq!(
+                wd.for_init.as_deref(),
+                Some("iVar2 = 5"),
+                "init slot renders <name> = <const>"
+            );
+            assert_eq!(
+                wd.for_iter.as_deref(),
+                Some("iVar4 = iVar3 + 1"),
+                "iterate slot renders <name> = <name> + <const>"
+            );
         }
         assert_ne!(
             add_ref.0.read().unwrap().flags & NONPRINTING,
             0,
-            "iterate op must be marked non-printing (for-loop semantics)"
+            "iterate op must be marked non-printing (block.cc:3421)"
+        );
+        assert_ne!(
+            init_copy_ref.0.read().unwrap().flags & NONPRINTING,
+            0,
+            "initializer must be marked non-printing (block.cc:3422-3423)"
         );
 
         // block.cc:3361 refuses overflow syntax before inspecting the loop.
@@ -19400,9 +19696,7 @@ mod tests {
             wd.for_iter = None;
             wd.set_overflow_syntax();
         }
-        let mut overflow_action = ActionStructureTransform::new();
-        let _ = overflow_action.apply(&mut fd).unwrap();
-        assert_eq!(overflow_action.count, 0, "Ghidra never counts in structuretransform");
+        crate::coreaction::for_loop_finalize_printing(&mut fd);
         {
             let rg = wd_arc.read().unwrap();
             let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
