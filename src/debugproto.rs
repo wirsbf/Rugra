@@ -1066,13 +1066,33 @@ fn factory_named_base(
 }
 
 // RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
-fn parse_c_type(
+// HEADLESS-BRIDGE-V1-TYPESEED extension: the committed-local seed manifest
+// (C1) feeds the canon golden's own declaration spellings here, so the base
+// table now also covers the analyzer-committed bases (undefined/undefinedN,
+// uint/ulong/byte/short/float/double/bool with their x86-64 gcc sizes) and
+// the outermost array declarator (`long[4]`, `char *[2]` -> TypeFactory::
+// getTypeArray, type.cc:3902 — the mirror of TypeArray::decode's
+// arraysize*alignsize reconstruction, type.cc:1330-1342).
+pub(crate) fn parse_c_type(
     type_text: &str,
     address_size: usize,
     type_names: Option<&HashMap<String, Arc<Datatype>>>,
 ) -> Result<Arc<Datatype>> {
     let types = crate::type_system::typefactory::TypeFactory::shared_default();
-    let (base_text, pointer_depth) = split_pointer_depth(type_text);
+    let trimmed = type_text.trim();
+    // Outermost array declarator first: `long[2][4]` and `char *[2]` reduce
+    // by stripping the rightmost dimension and recursing on the base.
+    if trimmed.ends_with(']') {
+        if let Some(open) = trimmed.rfind('[') {
+            let count: usize = trimmed[open + 1..trimmed.len() - 1].parse()?;
+            let base = parse_c_type(&trimmed[..open], address_size, type_names)?;
+            let mut factory = types
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            return Ok(factory.get_array(base, count));
+        }
+    }
+    let (base_text, pointer_depth) = split_pointer_depth(trimmed);
     // Ghidra parses every platform signature through the ONE Architecture
     // TypeFactory: base spellings resolve via the name tree
     // (`glb->types->findByName`, grammar.cc:2989) and declarator pointers
@@ -1126,6 +1146,22 @@ fn parse_c_type(
             factory_named_base(&types, address_size, TypeMetatype::Uint, base_text)
         }
         "ushort" => factory_named_base(&types, 2, TypeMetatype::Uint, "ushort"),
+        // C1 seed bases (x86-64 gcc data_organization sizes): the canon
+        // declaration layer's undefined/uint/byte/... spellings with their
+        // committed sizes, mirroring the base core types the oracle's
+        // TypeFactory already interns for the bare harness.
+        "ulong" => factory_named_base(&types, address_size, TypeMetatype::Uint, "ulong"),
+        "uint" => factory_named_base(&types, 4, TypeMetatype::Uint, "uint"),
+        "byte" => factory_named_base(&types, 1, TypeMetatype::Uint, "byte"),
+        "short" => factory_named_base(&types, 2, TypeMetatype::Int, "short"),
+        "float" => factory_named_base(&types, 4, TypeMetatype::Float, "float"),
+        "double" => factory_named_base(&types, 8, TypeMetatype::Float, "double"),
+        "bool" => factory_named_base(&types, 1, TypeMetatype::Bool, "bool"),
+        "undefined" => factory_named_base(&types, 1, TypeMetatype::Unknown, "undefined"),
+        "undefined1" => factory_named_base(&types, 1, TypeMetatype::Unknown, "undefined1"),
+        "undefined2" => factory_named_base(&types, 2, TypeMetatype::Unknown, "undefined2"),
+        "undefined4" => factory_named_base(&types, 4, TypeMetatype::Unknown, "undefined4"),
+        "undefined8" => factory_named_base(&types, 8, TypeMetatype::Unknown, "undefined8"),
         other => type_names
             .and_then(|index| index.get(other))
             .cloned()

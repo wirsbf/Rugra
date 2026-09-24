@@ -387,6 +387,26 @@ impl Ord for LanedStorage {
     }
 }
 
+/// One analyzer-committed stack local harvested from the canonical golden's
+/// declaration layer (C1 TYPE-SEED-LOCAL, HEADLESS-BRIDGE-V1-TYPESEED).
+/// RUGRA-GLUE: the `<localdb>` `<mapsym>` payload of the headless transport
+/// (funcdata.cc:804-810 -> database.cc:1564 Scope::addMapSym): stack offset
+/// (negative = below the frame base), the committed name (`local_c8`), and
+/// the C type spelling (`long[4]`, `undefined8 *`) that
+/// `Symbol::decodeBody` -> `TypeFactory::decodeType` materializes. Installed
+/// name+type locked so `ScopeLocal::restructureVarnode`'s
+/// `clearUnlockedCategory(-1)` keeps them and `MapState::gatherSymbols`
+/// feeds them as `RangeHint::fixed` boundaries (varmap.cc:1044-1059).
+#[derive(Debug, Clone)]
+pub struct CommittedLocal {
+    /// Stack offset in bytes, negative for frame locals (−0xc8 → -200).
+    pub offset: i64,
+    /// The committed symbol name (`local_c8`).
+    pub name: String,
+    /// C type spelling as printed by the canon golden (`long[4]`).
+    pub type_expr: String,
+}
+
 /// Main container for a function being decompiled
 ///
 /// Corresponds to Ghidra's `Funcdata` class. This class ties together
@@ -475,6 +495,20 @@ pub struct Funcdata {
     /// (coreaction.cc:2274) and queried by printc's stack-variable resolution.
     /// Corresponds to Ghidra's `Funcdata::getScopeLocal()`.
     pub scope: Option<crate::varmap::ScopeLocal>,
+    /// Committed-local seeds carried from the driver's C1 TYPE-SEED-LOCAL
+    /// manifest (HEADLESS-BRIDGE-V1-TYPESEED). RUGRA-GLUE: models the
+    /// `<localdb>` transport channel of `Funcdata::decode`
+    /// (funcdata.cc:804-810: `<localdb>` -> `Database::decodeScope` ->
+    /// `ScopeInternal::decode` installs the analyzer-committed symbols
+    /// BEFORE any action runs). The headless canon golden is produced with
+    /// that channel present; the bare driver contract (direct-runner
+    /// golden) is produced with it absent. Rugra's driver installs the
+    /// harvested list here under the opt-in env gate and
+    /// ActionRestructureVarnode materializes the symbols into the fresh
+    /// ScopeLocal at its first apply (the lifecycle position mirroring the
+    /// oracle's construction -> localdb-decode -> action order). Empty by
+    /// default — the default path stays byte-identical to the bare load.
+    pub committed_locals: Vec<CommittedLocal>,
     /// HighVariable → ScopeLocal symbol index association (keyed by the
     /// HighVariable's Arc pointer). RUGRA-GLUE: models `HighVariable::symbol`
     /// (variable.hh:161-176) for the varmap `ScopeLocal` symbol model — the
@@ -618,6 +652,7 @@ impl Funcdata {
             ),
             external_prototypes: HashMap::new(),
             scope: None,
+            committed_locals: Vec::new(),
             high_symbols: HashMap::new(),
             symbol_entry_cache: HashMap::new(),
             callspecs: Vec::new(),

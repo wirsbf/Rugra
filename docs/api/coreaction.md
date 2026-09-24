@@ -3054,3 +3054,17 @@ uint8（typeop.cc:1442），trim CAST 输出类型随之错签；setcasts 下一
 markExplicitUnsigned firstvn 卫（cast.cc:53-58）读另一侧 metatype=Int 而非
 Uint，未按 oracle 提前返回，多计一次 count（file2string.part.0 投影
 ord337 的 29vs30 根因之三）。
+
+## ActionRestructureVarnode：committed-local 种子物化（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+
+scope 首次构造臂（fd.scope 为 None 的分支）在平台参数符号安装之后新增
+`fd.committed_locals` 物化循环：每条种子经 `parse_c_type`（debugproto，
+shared_default 工厂，GL 判例的类型身份域单一原则）解析后以
+`ScopeLocal::add_symbol(Stack, name, dtype, wrapped_offset, usepoint=None)`
+安装，并置 `typelock=true; namelock=true`。对应 oracle 生命周期 =
+Funcdata 构造 → `<localdb>` decode → action（种子在 decode 期入库）；
+`clearUnlockedCategory(-1)`（varmap.cc:1259）保证 typelock 符号跨 pass 存活，
+`MapState::gatherSymbols`（varmap.cc:1044-1059）把它们作为 RangeHint::fixed
+边界喂给 restructure——这正是 canon 声明层分区（92B auStack_9c 被种子切成
+28B+16B+48B）与下标形（8B 元素 → scale-8 PTRADD）的机制。默认
+committed_locals 为空 = 零行为差异（E2E cmp 字节恒等亲父）。

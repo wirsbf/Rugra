@@ -490,3 +490,14 @@ defaultfp 克隆，模型对象消费者（hasEffect、derive_input_map、varmap
 （45 个 PLT 桩 diff 3/2→0；本节 −24 行 + jumptable 警告 −90 行合并账，
 jumptable 半边见 PLTSTUB-THUNKRELRO-0001）；零差函数 62→107；
 逐函数 0 回退；httpd 输出字节恒等；8/8 投影银行 MATCH。
+
+## parse_c_type 扩展：数组声明符 + C1 种子基类型（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+
+`parse_c_type` 改为 `pub(crate)` 并扩展两类输入（HEADLESS-BRIDGE-V1-TYPESEED
+的 manifest 声明拼写）：①最外层数组声明符（`long[4]`、`char *[2]`）——按
+`TypeFactory::get_array`（type.cc:3902 getTypeArray 镜像）自右向左折叠，
+对应 TypeArray::decode 的 arraysize×alignsize 重建（type.cc:1330-1342）；
+②x86-64 gcc 数据布局基类型表（undefined/undefined1/2/4/8、uint4、ulong8、
+byte1、short2、float4、double8、bool1）。既有 24 条 libc 签名拼写路径不变
+（新臂只在新拼写上点火）。指针层与名字树解析（factory_named_base/
+find_by_name 身份复用）保持 GL 判例语义。

@@ -1024,3 +1024,12 @@ atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon gol
 成 `- N`，使 Rugra 侧为 0 处——每一行都是骨架差分。该"算术简化"非 Ghidra
 行为（无 oracle 对应物），已删除。删除后 httpd 56 处、curl 相应恢复
 `+ -N` 正典拼写。
+
+## 声明回填 pass：后缀数组声明符识别（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+
+声明回填（backfill）收集已声明名时改为先剥掉尾部的 `[N]` 维度 token（及
+ glued 形）再取名字。旧实现在 `long local_c8 [4];` 上把 `[4]` 当成"声明的
+名字"，于是函数体里的 `local_c8` 使用被误判为未声明、回填注入了
+`int local_c8;` 重复声明（printc.cc:2502 pushTypeStart/pushSymbol 的符号
+声明后缀数组拼写是 C1 种子通道引入的常态形态）。默认路径无后缀数组局部
+声明，输出 cmp 字节恒等亲父。

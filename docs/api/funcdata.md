@@ -2740,3 +2740,18 @@ funcdata.rs 映射面仅余 double_precis.rs 调用方（另行核对的邻接�
 ActionDoNothing 链语料未构造出零输入 phi）——位点语料休眠，恒等由
 RAM 臂构造严格等价（`Varnode::new` ≡ `new_with_space(Ram,…)`，varnode.rs:550）
 + 零触发共同保证；寄存器空间 out 一旦触发即走正确空间（correct-by-construction）。
+## CommittedLocal（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+新增 `pub struct CommittedLocal { offset: i64, name: String, type_expr: String }`
+与 `Funcdata::committed_locals: Vec<CommittedLocal>`（默认空）。这是 headless
+正典 golden 的 `<localdb>` 传输通道载体（funcdata.cc:804-810 → Database::
+decodeScope → ScopeInternal::decode → Scope::addMapSym，database.cc:1564，
+每个 committed symbol 携带 ATTRIB_TYPELOCK/ATTRIB_NAMELOCK）：Java DecompInterface
+在任何 action 之前把它发给 C++ 库；bare driver 契约（direct-runner golden）
+没有该通道。Rugra 驱动在 opt-in 门（RUGRA_TYPESEED=1）下装载收割 manifest
+（tools/harvest_local_manifest.py × tests/golden/manifests/
+local_seed_httpd_1204.json），ActionRestructureVarnode 在 scope 构造点物化
+（见 docs/api/coreaction.md 同日节）。默认路径字段恒空，输出与 bare load
+字节恒等。oracle 侧验证：锁定库 + 种子（stage_seed_diag harness，/dev/shm/
+rugra-tests/bridge1/oracle_main_seeded.c）复现 canon main 声明层
+`long local_d8; long local_d0; long local_c8[4]; local_80[2]; local_70[6]`
+与下标形族。
