@@ -1570,6 +1570,20 @@ pub struct PcodeOpBank {
     pub alivelist: Vec<PcodeOpRef>,
     /// List of operations considered "dead" (Ghidra deadlist).
     pub deadlist: Vec<PcodeOpRef>,
+    /// List of retired PcodeOps (Ghidra deadandgone, op.hh:297).
+    /// PcodeOpBank::destroy removes the op from every index but KEEPS its
+    /// allocation alive here until clear() — Ghidra's op.cc:984-999 comment:
+    /// "The memory is not reclaimed until the whole container is destroyed,
+    /// in case pointer references still exist. These will all still be
+    /// marked as dead." The dangling references are the iop-space constants
+    /// that encode `Arc::as_ptr` (Funcdata::get_op_from_const decodes them
+    /// back into handles); without the retention, the freed chunk's tcache
+    /// metadata overwrites the Arc counts/inrefs and a later fabricated
+    /// handle double-drops garbage (HTTPD-FULL-SEGV: ap_content_length_filter
+    /// SIGSEGV inside RuleIndirectCollapse's indop drop at the dead-indop
+    /// totalReplace path).
+    pub deadandgone: Vec<PcodeOpRef>,
+
     /// Lists of ops by specific opcode (Ghidra op.hh:293-296).
     /// Used for fast iteration over STORE/LOAD/RETURN/CALLOTHER ops.
     pub storelist: Vec<PcodeOpRef>,
@@ -1588,6 +1602,7 @@ impl PcodeOpBank {
             optree: BTreeSet::new(),
             alivelist: Vec::new(),
             deadlist: Vec::new(),
+            deadandgone: Vec::new(),
             storelist: Vec::new(),
             loadlist: Vec::new(),
             returnlist: Vec::new(),
@@ -1717,10 +1732,18 @@ impl PcodeOpBank {
 
     // Ghidra: op.hh:311 PcodeOpBank::destroyDead
     pub fn destroy_dead(&mut self) {
-        for op in &self.deadlist {
+        // cc:977-981: iterate the deadlist, destroy each op. cc:980 destroy()
+        // erases it from optree/deadlist and RETIRES it into deadandgone —
+        // the allocation stays valid until clear() so iop-encoded pointers
+        // remain readable. Taking the list first keeps the per-op work O(log n)
+        // (Ghidra's O(1) stored-iterator erase equivalent) instead of a
+        // retain-scan per destroyed op.
+        let dead = std::mem::take(&mut self.deadlist);
+        for op in &dead {
             self.optree.remove(op);
+            self.remove_from_code_list(op);
         }
-        self.deadlist.clear();
+        self.deadandgone.extend(dead);
     }
 
     // Ghidra: op.hh:310 PcodeOpBank::destroy
@@ -1740,6 +1763,8 @@ impl PcodeOpBank {
                 .retain(|x| Arc::as_ptr(&x.0) != ptr);
         }
         self.remove_from_code_list(&op);
+        // cc:998: deadandgone.push_back(op) — retire, never free mid-run.
+        self.deadandgone.push(op);
     }
 
     // Ghidra: op.hh:320 PcodeOpBank::findOp
@@ -1758,6 +1783,9 @@ impl PcodeOpBank {
         self.optree.clear();
         self.alivelist.clear();
         self.deadlist.clear();
+        // cc:1203-1204/1209: delete + clear the retired ops — the end of the
+        // retention window; dropping the handles reclaims the allocations.
+        self.deadandgone.clear();
         self.clear_code_lists();
         self.uniqid = 0;
     }
