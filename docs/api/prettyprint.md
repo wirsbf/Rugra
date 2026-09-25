@@ -1,5 +1,27 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-25：PRINTC-EMIT-TAGLINE-ABS-0001 — `tagLine(int4)` 绝对形独立成 `tag_line_indent`
+
+oracle 的 Emit 基类有两个**分离的**换行 virtual（prettyprint.hh:173/180）：无参
+`tagLine()`（相对——当前缩进级：EmitNoMarkup 印 `indentlevel` 个空格，hh:557-558；
+EmitPrettyPrint 发 bump_t 令牌，hh:918-920）与带参 `tagLine(int4 indent)`（**绝对**——
+endl + 恰好 `indent` 个空格：EmitNoMarkup hh:559-560；EmitPrettyPrint 发 line_t 令牌，
+hh:922-924，break 路径 cc:674-676 `spaceremain = maxlinesize - indentbump` 后
+`lowlevel->tagLine(indentbump)`）。Rugra 的单一 `tag_line(indent)` 入口把两者合一：
+`indent==0` 落相对形——而 printc.cc:3211 `emitLabelStatement` 的 `emit->tagLine(0)`
+恰恰是**带参绝对形**（goto 标签 `LAB_…:`/`switchD_…_caseD_…:` 恒列 0 顶格，与嵌套
+深度无关），导致 curl 32 处/httpd 34 处标签行带缩进、canon 全部顶格。
+
+本提交按 oracle 结构拆分：`Emitter` trait 新增 `tag_line_indent(indent)`（带参绝对形，
+默认 no-op 对应 stub emitter），`EmitNoMarkup` 实现为换行 + `indent.max(0)` 个单空格，
+`EmitPrettyPrint` 实现为 emit_pending + checkbreak + line_t 令牌（cc:928-933 顺序）。
+`tag_line(indent)` 收窄为纯相对形（遗留 `indent>0` 绝对臂删除；全部剩余调用点传 0 =
+oracle 无参形态，debug_assert 钉死）。生产调用面：printc.rs 标签三调用点
+（emit_label_statement/emit_any_label_statement 两臂）`tag_line_indent(0)`；
+emit_line_comment 两处 fallback `tag_line_indent(indent)`（printlanguage.cc:597 亦带参
+绝对形——EmitNoMarkup downcast 臂字节原样，非 NoMarkup emitter 走 trait 绝对形）。
+后处理层（死区/P16 标签清除）全部基于 `trim()`，列不敏感，无需改动。
+
 ## 2026-09-25：P9 ` )` trim 豁免扩展到 BlockInfLoop 尾行（GENSMOKE-T6，wt/vshfix）
 
 第九遍结构清理（P9）的引号外 `" )"`→`")"` trim 与双空格折叠自
