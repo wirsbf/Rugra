@@ -423,7 +423,7 @@ impl MergeTypeIntersectCache {
     // Ghidra: variable.cc:1072 HighIntersectTest::testUntiedCallIntersection
     /// Test if the untied variable crosses any call that might affect the
     /// tied variable's storage. Faithful to `testUntiedCallIntersection`
-    /// (variable.cc:1072-1086): globals (persist) need no test; a local
+    /// (variable.cc:1072-1083): globals (persist) need no test; a local
     /// with no possible aliases is only in scope where written; otherwise
     /// the untied cover is intersected with the lazily populated
     /// StackAffectingOps set (CALL ops + guarded STOREs).
@@ -464,7 +464,7 @@ impl MergeTypeIntersectCache {
     /// Populate the CALL + guarded-STORE op set. Faithful to
     /// `StackAffectingOps::populate` (merge.cc:63-76): every CALL op from
     /// the call specs, plus the STORE ops with a valid store guard, then
-    /// `PcodeOpSet::finalize` (cover.cc:56-66) sorts by (block index,
+    /// `PcodeOpSet::finalize` (cover.cc:627-640) sorts by (block index,
     /// SeqNum order) and records the per-block start indices.
     fn populate_stack_affecting(&mut self, fd: &Funcdata) {
         use crate::opcodes::OpCode;
@@ -513,7 +513,7 @@ impl MergeTypeIntersectCache {
 
     // Ghidra: cover.cc:646 PcodeOpSet::compareByBlock
     /// Order ops by parent block index, then SeqNum order. Faithful to
-    /// `PcodeOpSet::compareByBlock` (cover.cc:49-54).
+    /// `PcodeOpSet::compareByBlock` (cover.cc:646-652).
     fn compare_by_block(
         a: &crate::op::PcodeOpRef,
         b: &crate::op::PcodeOpRef,
@@ -585,7 +585,7 @@ impl MergeTypeIntersectCache {
 // Ghidra: cover.cc:342 Cover::intersect(const PcodeOpSet&, Varnode*)
 /// Intersect a Cover with a populated PcodeOpSet. Faithful to
 /// `Cover::intersect(const PcodeOpSet &opSet, Varnode *rep)`
-/// (cover.cc:342-390): a merge-walk over the cover's blocks and the set's
+/// (cover.cc:342-382): a merge-walk over the cover's blocks and the set's
 /// block-starts; in a common block, an op strictly inside the covered
 /// range (`contain` but not on the `boundary`) that passes the set's
 /// `affectsTest` secondary test prevents the merge. Implemented as a free
