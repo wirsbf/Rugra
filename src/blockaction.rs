@@ -1910,7 +1910,32 @@ impl<'a> CollapseStructure<'a> {
             // self.collapse_cbranch_cascades();
             self.collapse_case_fallthru();
             self.collapse_sequences();
-            self.collapse_switches();
+            // R17 (2026-09-25): `collapse_switches` RETIRED
+            // (BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001). Ghidra has NO
+            // phase1 switch pre-installer — LoopBody has no collapseSwitches
+            // method and blockaction.hh:46 is the class declaration line;
+            // the ONLY BlockSwitch install point in the oracle is
+            // CollapseStructure::ruleBlockSwitch (blockaction.cc:1649-1723)
+            // → newBlockSwitch (cc:1904-1919) → grabCaseBasic, running at
+            // collapseInternal maturity where cc:1697-1708's invariant holds
+            // (each case sizeOut<=1; sizeOut==1 iff the edge is to the
+            // formal exitblock) — that invariant is what makes addCase's
+            // isexit=(bl->sizeOut()==1) (block.cc:3513-3514) sound. This
+            // phase1 pre-pass fired ~2 pipeline stages earlier, where the
+            // case bodies' out-edges still pointed at the next case/merge
+            // block, so the same capture over-fired: instrumented oracle
+            // run (stage_isexit_1204, locked e40ed130, httpd main
+            // entry=0x2b820) shows the final tree with isexit=1 on exactly
+            // 2/18 cases (0x2ba9f, 0x2bdcd), while this pre-installer's
+            // collection-loop capture produced 14/17 true (12 oracle-wrong
+            // bits; the hardcoded vec![false] it replaced was wrong on the
+            // same 2). try_rule_switch's capture at rule time is
+            // address-keyed oracle-exact 16/16 on the same fixture. After
+            // retirement the switch is installed by the rule chain
+            // (select_goto_loop → collapse_internal → try_rule_switch),
+            // which is Ghidra's own architecture. Default 5-step path never
+            // called this pre-pass. (Audit: COLLAPSEFIX R17.)
+            // self.collapse_switches();
             self.refresh_switch_cases();
 
             iterations += 1;
@@ -7410,6 +7435,22 @@ impl<'a> CollapseStructure<'a> {
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseSwitches
+    /// Phase1 switch pre-installer. DISABLED (2026-09-25, R17,
+    /// BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001): Ghidra has no such
+    /// pre-pass — the annotation target is the LoopBody class line, no
+    /// collapseSwitches method exists; the oracle's ONLY BlockSwitch
+    /// install point is CollapseStructure::ruleBlockSwitch
+    /// (blockaction.cc:1649-1723) at collapseInternal maturity, where
+    /// addCase's isexit=(bl->sizeOut()==1) (block.cc:3513-3514) is sound
+    /// because every case's remaining out-edge goes to the formal
+    /// exitblock. This pre-pass fired earlier, where the same read
+    /// over-fired (14/17 true vs the oracle tree's 2/18 on the httpd main
+    /// fixture, address-keyed; the previous hardcoded vec![false] was
+    /// wrong on the same 2). Switches now install only via
+    /// try_rule_switch (whose capture is oracle-exact 16/16 on the same
+    /// fixture). Kept for reference like the R15 cascade; do not
+    /// re-enable without re-validating against an instrumented oracle
+    /// run.
     fn collapse_switches(&mut self) {
         let size = self.graph.get_size();
         let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
@@ -7461,6 +7502,22 @@ impl<'a> CollapseStructure<'a> {
             let mut cases = Vec::new();
             let mut case_values = Vec::new();
             let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+            // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) for gt==0
+            // cases — captured at collection time in the same form as the
+            // rule path (try_rule_switch's loop). RETIRED-WITH-CAPTURE
+            // (BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001): oracle
+            // instrumentation (stage_isexit_1204, locked e40ed130) proved
+            // this capture is only sound at ruleBlockSwitch maturity,
+            // where cc:1697-1708's invariant (case sizeOut==1 iff its edge
+            // is to the formal exitblock) holds — at this pre-pass's
+            // earlier firing point the case bodies' out-edges still point
+            // at the next case/merge block, so the same read over-fired
+            // 14/17 true against the oracle tree's 2/18 (httpd main,
+            // address-keyed). The call site is disabled; see the R17 note
+            // there. The capture is kept so a re-enabled pre-pass cannot
+            // regress to the previous hardcoded vec![false].
+            let mut case_isexit: Vec<bool> = Vec::new();
+            let mut default_isexit = false;
             // cc:3515 (addCase): the installSwitchDefaults-marked out-edge is
             // the formal default — route to the separate default_case slot.
             let switch_basic_orig = crate::block::front_leaf(&block).and_then(|leaf| {
@@ -7471,14 +7528,17 @@ impl<'a> CollapseStructure<'a> {
             });
             for j in 0..size_out {
                 if let Some(edge) = b.get_out(j) {
+                    let isexit_flag = edge.point.read().unwrap().size_out() == 1;
                     let is_default_edge = switch_basic_orig
                         .as_ref()
                         .map(|sb| sb.read().unwrap().is_default_branch(j))
                         .unwrap_or(false);
                     if is_default_edge {
                         default_case = Some(edge.point.clone());
+                        default_isexit = isexit_flag;
                         continue;
                     }
+                    case_isexit.push(isexit_flag);
                     cases.push(edge.point.clone());
                     case_values.push(vec![j as u64]);
                 }
@@ -7501,8 +7561,10 @@ impl<'a> CollapseStructure<'a> {
                     // cc:3510-3511 addCase: regular cases carry gototype 0.
                     case_gototypes: vec![0; num_cases_here],
                     default_gototype: 0,
-                    case_isexit: vec![false; num_cases_here],
-                    default_isexit: false,
+                    // cc:3513-3514 addCase: isexit captured at collection
+                    // time (see the collection loop above).
+                    case_isexit,
+                    default_isexit,
                     jump,
                     case_order,
                 default_label: None,
