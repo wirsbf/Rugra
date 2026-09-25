@@ -2788,7 +2788,7 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 
 ## 2026-09-25 CR-FIELDOFF 复核登记（独立 reviewer，APPROVE）
 - **RULEACTION-ANNO-DRIFT-0001** | P3 | ruleaction.rs 三处 // Ghidra: 起始行漂移（6927→6909/7146→7128/6036→6018）| annotation 卫生;checker 只验行存在——择期批量纠 | owner: 待认领
-- **RULEACTION-RS0-RELGATE-0001** | P3 | RS0 isFormalPointerRel 臂缺口注释无 TODO ID 且陈述过时（rel 基础设施已落地）| 补登记+修注释 | owner: 待认领
+- **RULEACTION-RS0-RELGATE-0001** | P3 | **注释卫生半项 DONE(2026-09-26,wt/addrunit Lane ADDRUNIT——补登记+修陈述,commit 见本行);isFormalPointerRel 臂实现缺口保留本 ID 继续跟踪** | sb-addrunit@wt/addrunit(fixer) | 修法=两处过时陈述改正:①RuleStructOffset0 类 doc"Rugra has no TypePointerRel"→rel 基础设施已落地(ptr_rel_state/pointer_rel_evaluate_thru_parent),oracle 6695-6725 臂仍缺,引用本 TODO ID;②apply_op 内"branch is omitted (no TypePointerRel in Rugra)"块→同款准确陈述+臂实现要点(getByteOffset+getSubType+byteToAddress(newoff,ws)+PTRSUB(#-newoff)+INT_ADD 回补+inheritResolution+setStopTypePropagation);连带区域行号勘误 6678-6774→6660-6756/6693-6774→6675-6756/6713-6743→6695-6725/6744-6767→6726-6755 | **臂实现残项(owner 待认领,写域=src/ruleaction.rs)**:按 oracle 6695-6725 补 LOAD/STORE 相对指针臂,验收=触发位点差分归零+canon 不回退 | 2026-09-26
 - **UNIONRESOLVE-CONSUMER-SCOPE-0001** | P3 | 退化形残余消费者 ~70 处（printc 33/coreaction 12/ruleaction 11/typeop 7/subflow 5/cast 3）对 union 型读仍偏离——消费侧范围独立盘查;unionresolve.rs 头注过时 | owner: 待认领
 - **FIELDOFF-CR-F6** | P4 | wordsize.max(1) clamp ×3 vs oracle 裸值——形式性偏差记录 | 已记录
 ## 2026-09-25 Lane MSTRUCT 交付登记（wt/mstruct @ master 7595874a，结构族镜面分拣+边界判例+探针；真差修复域被并行车道锁定，分拣表+TODO+判定为本车道交付）

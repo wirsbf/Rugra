@@ -1955,3 +1955,17 @@ isDegenerate=false；clear 重播种 4；wordsize 1 恒等臂；HAS_STRIPPED
 同车道一并收口（各见独立 commit）：RULEACTION-RS0-RELGATE-0001（RS0 缺口
 注释补 TODO ID + 修过时陈述）、RULEACTION-ANNO-DRIFT-0001（`// Ghidra:`
 起始行批量纠偏 221 处，零行为变化）。
+
+## 2026-09-26：RuleStructOffset0 缺口注释补登记（RULEACTION-RS0-RELGATE-0001 注释卫生半项）
+
+`RuleStructOffset0` 两处缺口陈述过时（"Rugra has no TypePointerRel"——rel 基础
+设施已由 FIELDOFF/ADDRUNIT 车道落地：`AddTreeState::ptr_rel_state`、
+`pointer_rel_evaluate_thru_parent` 均在库内）且无 TODO ID。本次改为准确陈述：
+oracle ruleaction.cc:6695-6725 的 formal 相对指针臂（isFormalPointerRel &&
+evaluateThruParent(0) → parent PTRSUB walk：getByteOffset + getSubType +
+byteToAddress(newoff, wordsize) + PTRSUB(#-newoff) + INT_ADD 回补 +
+inheritResolution + setStopTypePropagation）**仍缺**，引用 TODO
+RULEACTION-RS0-RELGATE-0001（臂实现残项继续跟踪，owner 待认领）；plain
+STRUCT/ARRAY 路径（6726-6755）保持忠实。连带区域行号勘误：
+6678-6774→6660-6756、6693-6774→6675-6756、6713-6743→6695-6725、
+6744-6767→6726-6755。零行为变化（注释-only）。

@@ -19323,22 +19323,27 @@ impl<'a> AddTreeState<'a> {
 }
 
 // ============================================================================
-// RuleStructOffset0  (ruleaction.cc:6678-6774)
+// RuleStructOffset0  (ruleaction.cc:6660-6756)
 // ============================================================================
 
 /// Convert a LOAD/STORE to the first element of a structure into a PTRSUB.
 ///
-/// Faithful to Ghidra's `RuleStructOffset0` (ruleaction.cc:6678-6774).
+/// Faithful to Ghidra's `RuleStructOffset0` (ruleaction.cc:6660-6756).
 ///
 /// When type propagation says we have a pointer to a structure but we load/store
 /// too little data, we really need a pointer to the *first element*. This rule
-/// inserts a `PTRSUB(ptr, 0)` to drill down to that component. The
-/// TypePointerRel branch (6713-6743) is omitted (Rugra has no TypePointerRel);
-/// the plain STRUCT/ARRAY path is faithful.
+/// inserts a `PTRSUB(ptr, 0)` to drill down to that component. The formal
+/// relative-pointer branch (ruleaction.cc:6695-6725: `isFormalPointerRel() &&
+/// evaluateThruParent(0)` → parent PTRSUB walk via `getByteOffset` +
+/// `getSubType` + `byteToAddress(newoff, wordsize)`) is NOT yet wired — the
+/// rel infrastructure has landed (`AddTreeState::ptr_rel_state`,
+/// `pointer_rel_evaluate_thru_parent`), the branch itself is pending under
+/// TODO RULEACTION-RS0-RELGATE-0001; the plain STRUCT/ARRAY path
+/// (ruleaction.cc:6726-6755) is faithful.
 pub struct RuleStructOffset0;
 
 impl RuleStructOffset0 {
-    // Ghidra: ruleaction.cc:6678 RuleStructOffset0
+    // Ghidra: ruleaction.cc:6660 RuleStructOffset0
     pub fn new() -> Self { Self }
 }
 
@@ -19347,7 +19352,7 @@ impl Rule for RuleStructOffset0 {
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6693-6774).
+        // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6675-6756).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
         }
@@ -19386,9 +19391,15 @@ impl Rule for RuleStructOffset0 {
         };
         let base_type = tp.ptr_to.clone();
 
-        // The TypePointerRel `isFormalPointerRel` branch is omitted (no
-        // TypePointerRel in Rugra). Fall straight to the plain STRUCT/ARRAY
-        // path (ruleaction.cc:6744-6767).
+        // The formal relative-pointer branch (ruleaction.cc:6695-6725) is
+        // pending under TODO RULEACTION-RS0-RELGATE-0001: Rugra's rel
+        // infrastructure has landed (`AddTreeState::ptr_rel_state`,
+        // `pointer_rel_evaluate_thru_parent`), but this LOAD/STORE arm —
+        // parent PTRSUB via getByteOffset + getSubType +
+        // byteToAddress(newoff, wordsize), with an INT_ADD back-offset,
+        // inheritResolution and setStopTypePropagation — is not yet wired.
+        // Fall straight to the plain STRUCT/ARRAY path
+        // (ruleaction.cc:6726-6755).
         let mut offset: i64 = 0;
         match base_type.get_metatype() {
             TypeMetatype::Struct => {
@@ -26867,7 +26878,7 @@ mod tests {
     }
 
     // ========================================================================
-    // RuleStructOffset0 tests (ruleaction.cc:6678-6774)
+    // RuleStructOffset0 tests (ruleaction.cc:6660-6756)
     // ========================================================================
 
     /// Helper: make a `struct { int a; int b; }` (size 8) type.
