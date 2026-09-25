@@ -1719,6 +1719,12 @@ impl PrintC {
             // Both arms are total (like Ghidra's virtual dispatch) when the
             // destructured inputs exist, so mirror the binary-arm guard.
             OpCode::CPUI_PTRADD => has(0) && has(1),
+            // printc.cc:673 opCallother: every display arm emits (functional
+            // name + parens at minimum, cc:678-692; the literal/assignment/
+            // bare-operand arms cc:693-714 likewise), so an implied
+            // STRINGDATA output feeding a strncpy CALLOTHER slot inlines as
+            // the string literal instead of leaking its unique temp.
+            OpCode::CPUI_CALLOTHER => true,
             OpCode::CPUI_PIECE => has(0) && has(1),
             // printc.hh:292-294 opIntCarry/opIntScarry/opIntSborrow → opFunc
             // (printc.cc:424-441): binary functional syntax; the dispatch arm
@@ -3510,6 +3516,16 @@ impl PrintC {
                 );
                 self.rpn_push_atom(&field_atom);
             }
+            // printc.cc:673 PrintC::opCallother — user-defined p-code ops.
+            // Functional syntax `name(in1,in2,...)` (display==0,
+            // cc:678-692), annotation assignment `in1 = in2`
+            // (cc:693-697), bare operand (cc:698-700), or the string-data
+            // literal arm (cc:701-714). The LHS assignment for a live
+            // output is pushed by emit_expression_rpn (cc:2471-2476),
+            // never here — opCallother itself never touches the out.
+            OpCode::CPUI_CALLOTHER => {
+                self.rpn_op_callother(op_arc, op);
+            }
             // Everything else (BRANCH, MULTIEQUAL, INDIRECT, ...):
             // print nothing - control flow is rendered by the structurer and
             // internal ops are not user-visible. Keeps the RPN path compiling.
@@ -3752,6 +3768,125 @@ impl PrintC {
             // printc.cc:635-636: push empty token for void.
             let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
             self.rpn_push_atom(&blank);
+        }
+    }
+
+    // Ghidra: printc.cc:673 PrintC::opCallother
+    /// RPN-path port of `PrintC::opCallother(const PcodeOp*)`
+    /// (printc.cc:673-715). Resolves the UserPcodeOp by the CALLOTHER index
+    /// in in(0) (cc:676) and dispatches on its display flags
+    /// (userop.hh:51-53: 0=functional, 1=annotation_assignment,
+    /// 2=no_operator, 4=display_string):
+    /// - functional (cc:678-692): `pushOp(&function_call)` + the name atom
+    ///   (`nm = op->getOpcode()->getOperatorName(op)` — TypeOpCallother::
+    ///   getOperatorName typeop.cc:837-853 → UserPcodeOp::getOperatorName
+    ///   userop.hh:94 = the userop name, optoken/funcname_color), then
+    ///   numInput()-2 comma tokens and inputs in(1..) pushed in reverse
+    ///   for the LIFO nodepend drain (cc:683-689); numInput()==1 pushes
+    ///   the empty blank token (void, cc:690-691).
+    /// - annotation_assignment (cc:693-697): assignment token + in(2)
+    ///   then in(1) (RPN reverse: in(1) drains first → `in1 = in2`).
+    /// - no_operator (cc:698-700): bare pushVn(in(1)).
+    /// - display_string (cc:701-714): the output's raw type (cc:703
+    ///   `vn->getType()`, NOT the high/facing consult) must be TYPE_PTR;
+    ///   `ct = ptrTo`; `printCharacterConstant(str, op->getIn(1)->getAddr(),
+    ///   ct)` — in(1) is the STRINGDATA hash constant whose constant-space
+    ///   address is the string_manager read-back key (registerInternalString
+    ///   Data keys the entry at Address(hash), stringmanage.rs:817-818);
+    ///   failure (non-pointer out or empty manager data) falls to
+    ///   `"badstring"` (cc:707/713). The literal atom is vartoken/
+    ///   const_color (cc:715).
+    fn rpn_op_callother(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        use crate::userop::userop_flags;
+        // printc.cc:676: userop = glb->userops.getOp(op->getIn(0)->getOffset()).
+        let index = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_offset() as i32)
+            .unwrap_or(-1);
+        // Resolve the userop + its display flags, cloning out of the borrow
+        // before emitting (same lock protocol as the legacy op_callother).
+        let (display, name) = self
+            .userops
+            .as_ref()
+            .and_then(|uo| {
+                let guard = uo.read().unwrap();
+                guard
+                    .get_op(index)
+                    .map(|u| (u.get_display(), u.get_name().to_string()))
+            })
+            .unwrap_or((
+                0,
+                // Ghidra fallback (typeop.cc:848-852): "CALLOTHER[<index>]".
+                format!("CALLOTHER[{}]", index),
+            ));
+        if display == 0 {
+            // printc.cc:678-692: functional syntax nm(in1,in2,...).
+            // cc:679: nm = getOperatorName(op) = the userop name.
+            self.rpn_push_op(self.rpn_tok_function_call);
+            // cc:680: Atom(nm,optoken,funcname_color,op).
+            let name_atom =
+                Atom::with_op(&name, TagType::OpToken, SyntaxHighlight::FuncnameColor, -1);
+            self.rpn_push_atom(&name_atom);
+            let n = op.num_input();
+            if n > 1 {
+                // cc:683-684: numInput()-2 comma separators (slots 1..n-1).
+                for _ in 1..n.saturating_sub(1) {
+                    self.rpn_push_op(self.rpn_tok_comma);
+                }
+                // cc:687-689: inputs in(1..) pushed in reverse order for
+                // the LIFO nodepend drain.
+                for i in (1..n).rev() {
+                    self.rpn_push_in(op_arc, op, i, self.mods);
+                }
+            } else {
+                // cc:690-691: push empty token for void.
+                let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
+                self.rpn_push_atom(&blank);
+            }
+        } else if display == userop_flags::ANNOTATION_ASSIGNMENT {
+            // printc.cc:693-697: pushOp(&assignment); pushVn(in2);
+            // pushVn(in1) — reverse push so in(1) drains as the LHS.
+            self.rpn_push_op(self.rpn_tok_assignment);
+            self.rpn_push_in(op_arc, op, 2, self.mods);
+            self.rpn_push_in(op_arc, op, 1, self.mods);
+        } else if display == userop_flags::NO_OPERATOR {
+            // printc.cc:698-700: bare operand.
+            self.rpn_push_in(op_arc, op, 1, self.mods);
+        } else if display == userop_flags::DISPLAY_STRING {
+            // printc.cc:701-714: string-data literal arm.
+            let mut str = String::new();
+            // cc:703: ct = op->getOut()->getType() — the RAW varnode type.
+            let out_type = op.get_out().and_then(|o| o.read().unwrap().get_type());
+            let rendered = match out_type.as_deref() {
+                Some(crate::type_system::datatype::Datatype::Pointer(p)) => {
+                    // cc:705-706: ct = ptrTo; printCharacterConstant(str,
+                    //   op->getIn(1)->getAddr(), ct).
+                    let in1_addr = op
+                        .get_in(1)
+                        .map(|a| crate::address::Address::new(a.read().unwrap().get_offset()));
+                    match in1_addr {
+                        Some(addr) => {
+                            self.print_character_constant(&mut str, addr, p.ptr_to.as_ref())
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+            if !rendered {
+                // cc:707/713: failure fallback.
+                str.clear();
+                str.push_str("\"badstring\"");
+            }
+            // cc:715: Atom(str,vartoken,const_color,op,vn).
+            let literal_atom =
+                Atom::new(&str, TagType::VarToken, SyntaxHighlight::ConstColor);
+            self.rpn_push_atom(&literal_atom);
         }
     }
 
@@ -13163,10 +13298,32 @@ impl PrintC {
         } else if display == userop_flags::DISPLAY_STRING {
             // printc.cc:701-714: string-data rendering. Ghidra looks up the
             // output's pointed-to char type and emits the literal via
-            // printCharacterConstant; on failure it emits "\"badstring\"".
-            // Rugra's printCharacterConstant (audit P2-2) is not ported; we
-            // emit the faithful fallback "\"badstring\"" string literal token.
-            self.emit.print("\"badstring\"");
+            // printCharacterConstant (the STRINGDATA in(1) hash constant's
+            // constant-space address is the string_manager read-back key,
+            // stringmanage.rs register_internal_string_data); on failure
+            // (non-pointer out, missing in(1), or empty manager data) it
+            // emits the "\"badstring\"" fallback (cc:707/713).
+            let mut str = String::new();
+            let out_type = op.get_out().and_then(|o| o.read().unwrap().get_type());
+            let rendered = match out_type.as_deref() {
+                Some(crate::type_system::datatype::Datatype::Pointer(p)) => {
+                    let in1_addr = op
+                        .get_in(1)
+                        .map(|a| crate::address::Address::new(a.read().unwrap().get_offset()));
+                    match in1_addr {
+                        Some(addr) => {
+                            self.print_character_constant(&mut str, addr, p.ptr_to.as_ref())
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+            if !rendered {
+                str.clear();
+                str.push_str("\"badstring\"");
+            }
+            self.emit.print(&str);
         }
     }
 

@@ -3347,3 +3347,44 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
   声明（F-DECL 族）+2 行语句序差 + `break;` vs `goto code_r0x00004c20;`
   （switch-case 反向边 goto 类型分类，MSTRUCT-SWITCHGOTO-SELECTGOTO-0001
   族 block 侧残差，非 printc 域）。
+
+### 2026-09-26：STRNCPY-PRINT-CALLOTHER-0001 — CALLOTHER 印刷臂接通（printc 侧交付）
+
+**症状**（httpd 镜 ap_ht_time 亲证）：`builtin_strncpy(pcVar3,"+0000",5);`
+语句印成裸 `;`（dispatch_op_rpn 无 CPUI_CALLOTHER 臂，落 `_ => {}`
+no-op）；STRINGDATA 字面量臂硬编码 `"badstring"`。
+
+- **修法①（RPN 臂）**：`dispatch_op_rpn` 补 `OpCode::CPUI_CALLOTHER =>`
+  臂，新增 `rpn_op_callother`（printc.cc:673-715 的 RPN 运输层移植，
+  与 rpn_op_call 同构）：display==0 功能语法 `name(in1,...)`（cc:678-692：
+  function_call token + 名 atom（optoken/funcname_color，
+  getOperatorName=TypeOpCallother typeop.cc:837-853 → UserPcodeOp 名）+
+  numInput()-2 个 comma + in(1..) 逆序 push）；annotation_assignment
+  （cc:693-697：assignment + in(2) + in(1) 逆序）；no_operator
+  （cc:698-700：裸 in(1)）；display_string（cc:701-714：out 原始 v_type
+  为 TYPE_PTR 时经 in(1) hash 常量地址查 string_manager
+  （register_internal_string_data 键=Address(hash)，stringmanage.rs:817），
+  失败/非指针落 `"badstring"`）。`rpn_def_inline_reachable` 补
+  CALLOTHER=true（每个 display 臂都发射——STRINGDATA 输出内联为字面量
+  而非泄漏 unique 临时名）。LHS 赋值由 emit_expression_rpn（cc:2471-2476）
+  发，臂内不发——与 oracle 一致（opCallother 从不碰 out）。
+- **修法②（legacy 臂）**：`op_callother` 的 DISPLAY_STRING 臂把硬编码
+  `"badstring"` 换成同一 print_character_constant 读回链（双运输层同
+  语义；legacy 臂经 typeop.rs TypeOpCallother::push 路由在案）。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票①后）**：ap_ht_time
+  语句从裸 `;` 恢复为 `builtin_strncpy(pcVar3,(char *)"badstring",5);`
+  （canon 同形恢复，gcc 可编译）；vsh 镜 15→14；curl 镜 101/httpd 镜
+  265/curl canon 267/httpd canon 862 全部不变；defects=0/numbering=0
+  全档；bank 391/391；lib 1735P/1F（nonzeromask 预存）。
+- **验收残差（上游域，非 printc）**：golden 逐字节形
+  `builtin_strncpy(pcVar3,"+0000",5);` 差两点——`(char *)` 前缀与
+  `"badstring"` 字面量。根因=**castOutput 对 STRINGDATA 误发**：
+  Rugra 的 CALLOTHER 输出 token 落 output_metatype 的 `_ => Int`
+  兜底（int8），oracle 链=TypeOpCallother::getOutputLocal
+  （typeop.cc:866-872）→ userOp->getOutputLocal：InternalStringOp
+  返回 `op->getOut()->getType()`（userop.cc:361-364，即锁定 char*）→
+  tokenct==outHighType → cc:2544 短路不发 CAST；Rugra int8≠char* →
+  castOutput 插 CAST（偷走原 out 给 CAST、给 STRINGDATA 换 int8 新
+  out）→ 打印侧忠实读 int8 → "badstring" + `(char *)`。登记
+  `COREACTION-CALLOTHER-OUTTOKEN-0001`（coreaction.rs token 计算 +
+  userop.rs InternalStringOp 特化；修后本票验收即达）。
