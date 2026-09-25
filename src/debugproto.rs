@@ -1678,8 +1678,131 @@ fn base_metatype(entry: &DebuggingInformationEntry<DwarfReader>) -> Result<TypeM
     })
 }
 
+// Ghidra's isEncodingCompatible (DWARFDataTypeManager.java:359-369): only
+// the DW_ATE_signed / DW_ATE_unsigned requests constrain the alias-table
+// hit — a signed request rejects unsigned-integer canonicals, an unsigned
+// request rejects signed-integer canonicals. `bool` counts as an unsigned
+// integer (BooleanDataType extends AbstractUnsignedIntegerDataType), while
+// float/wchar_t/undefined1 canonicals are not AbstractIntegerDataType
+// instances and always pass; every other encoding passes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BaseAliasSign {
+    Signed,
+    Unsigned,
+    NonInteger,
+}
+
+// Ghidra: DWARFDataTypeManager.java:477-549 initBaseDataTypes
+// (Java-side DWARF analyzer; decompile/cpp has no DWARF parser, so Rugra's
+// debugproto is the native front-end adapter for that boundary).
+// The standard C base-type alias table the analyzer's getBaseType consults
+// FIRST (DWARFDataTypeManager.java:403 `dt = baseDataTypes.get(name)`): a
+// DW_AT_name spelling one of these aliases resolves to the Program DTM's
+// canonical type DIRECTLY — no typedef wrap — when the size gate and the
+// encoding gate pass, so the decompiler receives (and prints) the canonical
+// spelling: `long int` (8, DW_ATE_signed) IS the DTM `long` and casts print
+// `(long)` (golden corpus: `(long)` 55x curl / 1165x httpd, `long int` zero
+// occurrences). Canonical spellings match the C++ coretypes stream names
+// (typefactory.rs init_data_org_core_types doc): uchar/longlong/ulonglong
+// are Java-DTM-only names — the C++ stream's same-size longlong slot is
+// overwritten by long — so they intern as named non-core types exactly as
+// the database transport delivers them to TypeFactory::findAdd
+// (type.cc:3412-3437). The void/nullptr table entries serve Java-only
+// lookup paths (a DW_TAG_base_type never carries those names: DWARF
+// expresses void by an absent DW_AT_type, handled at the pointer arm).
+fn standard_base_alias(name: &str) -> Option<(&'static str, TypeMetatype, BaseAliasSign)> {
+    Some(match name {
+        // initBaseDataTypes :499-501
+        "char" | "signed char" => ("char", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned char" => ("uchar", TypeMetatype::Uint, BaseAliasSign::Unsigned),
+        // :516-520
+        "short" | "short int" | "signed short int" => ("short", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned short int" | "short unsigned int" => {
+            ("ushort", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :522-524
+        "int" | "signed int" => ("int", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned int" => ("uint", TypeMetatype::Uint, BaseAliasSign::Unsigned),
+        // :526-530
+        "long" | "long int" | "signed long int" => ("long", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned long int" | "long unsigned int" => {
+            ("ulong", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :532-536
+        "long long" | "long long int" | "signed long long int" => {
+            ("longlong", TypeMetatype::Int, BaseAliasSign::Signed)
+        }
+        "unsigned long long int" | "long long unsigned int" => {
+            ("ulonglong", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :538-543
+        "float" => ("float", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        "double" => ("double", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        "long double" => ("longdouble", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        // :545-548 (bool is an unsigned integer for the compatibility gate)
+        "bool" => ("bool", TypeMetatype::Bool, BaseAliasSign::Unsigned),
+        "wchar_t" => ("wchar_t", TypeMetatype::Int, BaseAliasSign::NonInteger),
+        "undefined1" => ("undefined1", TypeMetatype::Unknown, BaseAliasSign::NonInteger),
+        _ => return None,
+    })
+}
+
+// Ghidra: DWARFDataTypeManager.java:397 getBaseType
+// (the aligned-size gate at :404 `dt.getAlignedLength() == dwarfSize`: the
+// canonical type's dataOrganization size must equal the DIE's
+// DW_AT_byte_size or the alias hit is rejected, falling through to the
+// original-name arm). The shared TypeFactory's core table IS the x86-64
+// gcc dataOrganization mirror, so factory-present canonicals resolve their
+// size through it; the three Java-DTM-only names take the same
+// dataOrganization slots — uchar = charSize, longlong/ulonglong =
+// longLongSize (== longSize, 8, under the locked x86-64 gcc cspec;
+// AbstractIntegerDataType.java:549-566).
+fn canonical_base_size(canonical: &str) -> Option<usize> {
+    let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+    let guard = factory
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = guard.find_by_name(canonical) {
+        return Some(existing.get_size());
+    }
+    match canonical {
+        "uchar" => guard.find_by_name("char").map(|dt| dt.get_size()),
+        "longlong" | "ulonglong" => guard.find_by_name("long").map(|dt| dt.get_size()),
+        _ => None,
+    }
+}
+
+// Ghidra: DWARFDataTypeManager.java:359 isEncodingCompatible
+// (the DW_ATE_signed / DW_ATE_unsigned arms at :362-368)
+fn base_alias_encoding_compatible(
+    encoding: Option<gimli::DwAte>,
+    sign: BaseAliasSign,
+) -> bool {
+    match encoding {
+        Some(value) if value == gimli::DW_ATE_signed => {
+            sign != BaseAliasSign::Unsigned
+        }
+        Some(value) if value == gimli::DW_ATE_unsigned => {
+            sign != BaseAliasSign::Signed
+        }
+        _ => true,
+    }
+}
+
 // RUGRA-GLUE: materializes the Program database base type selected by the
 // locked Ghidra DWARF analyzer before the C++ decompiler receives it.
+// Resolution order mirrors DWARFDataTypeManager.getBaseType
+// (DWARFDataTypeManager.java:397-449, reached from the base-type DIE at
+// DWARFDataTypeImporter.java:373):
+//   1. alias-table hit (size + encoding gates pass) returns the canonical
+//      Program type directly (:403-407) — the type the decompiler's
+//      TypeFactory::findAdd then dedups onto its same-named core entry
+//      (type.cc:3412-3425), so DWARF `long int` and the cspec `long` are
+//      ONE object and identical-type casts disappear;
+//   2. DW_ATE_signed_char falls back to the char type (:426), keeping the
+//      DWARF spelling the way the typedef wrap (:441-447) renders it;
+//   3. every other name keeps its DWARF spelling (the typedef-wrap arm —
+//      Rugra materializes typedefs as the renamed underlying type).
 fn dwarf_base_type(
     name: String,
     size: usize,
@@ -1687,29 +1810,29 @@ fn dwarf_base_type(
 ) -> Result<Arc<Datatype>> {
     let encoding = entry.attr_value(gimli::DW_AT_encoding)?;
     let metatype = base_metatype(entry)?;
-    let is_signed_character_encoding = matches!(
-        encoding,
-        Some(AttributeValue::Encoding(value))
-            if value == gimli::DW_ATE_signed_char
-    );
+    let encoding_kind = match encoding {
+        Some(AttributeValue::Encoding(value)) => Some(value),
+        _ => None,
+    };
+    if let Some((canonical, canonical_metatype, sign)) = standard_base_alias(name.as_str()) {
+        if canonical_base_size(canonical) == Some(size)
+            && base_alias_encoding_compatible(encoding_kind, sign)
+        {
+            return Ok(base_type(canonical.to_string(), size, canonical_metatype));
+        }
+    }
     // DWARFDataTypeManager::getBaseType resolves the core names `char` and
     // `signed char` to CharDataType before its encoding fallback.  Its
     // DW_ATE_signed_char fallback is also CharDataType, whereas
     // DW_ATE_unsigned_char resolves to the ordinary unsigned `uchar` type.
-    let is_direct_character_name = size == 1 && matches!(name.as_str(), "char" | "signed char");
-    if is_direct_character_name || is_signed_character_encoding {
-        let resolved_name = if is_direct_character_name {
-            "char".to_string()
-        } else {
-            name
-        };
-        // GLIBC-PROTO-PARAMNAME-0001: interned by name so the DWARF char is
-        // the SAME type object the factory's signature/inference paths use
-        // (Ghidra resolves every `char` through its one TypeFactory,
-        // grammar.cc:2989); a fresh clone here fragmented same-type merge
-        // grouping.
+    // GLIBC-PROTO-PARAMNAME-0001: interned by name so the DWARF char is
+    // the SAME type object the factory's signature/inference paths use
+    // (Ghidra resolves every `char` through its one TypeFactory,
+    // grammar.cc:2989); a fresh clone here fragmented same-type merge
+    // grouping.
+    if encoding_kind == Some(gimli::DW_ATE_signed_char) {
         return Ok(intern_named(Arc::new(Datatype::Base(
-            TypeBase::new_char(resolved_name, TypeMetatype::Int),
+            TypeBase::new_char(name, TypeMetatype::Int),
         ))));
     }
     Ok(base_type(name, size, metatype))

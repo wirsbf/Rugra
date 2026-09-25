@@ -164,11 +164,33 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
 
 `resolve_type` materializes the DWARF type graph into `Datatype` objects:
 
-- base types map `DW_AT_encoding` onto the Rugra metatype (float/unsigned/
-  boolean/int). The locked analyzer's character distinction is also retained:
-  core `char`/`signed char` and the `DW_ATE_signed_char` fallback become a
-  `CHARTYPE`/`SUB_INT_CHAR` datatype, while `DW_ATE_unsigned_char` remains the
-  ordinary unsigned `uchar` type;
+- base types resolve in the locked analyzer's order
+  (DEBUGPROTO-DWARF-BASENAME-0001, 2026-09-26): a `DW_AT_name` spelling a
+  standard C alias (`long int`, `short int`, `unsigned int`, `long long
+  int`, …) first hits the alias table
+  (DWARFDataTypeManager.java:477-549 initBaseDataTypes, consulted at
+  :403 in getBaseType) — when the canonical type's dataOrganization size
+  equals `DW_AT_byte_size` and the encoding is compatible
+  (isEncodingCompatible :359-369: `DW_ATE_signed` rejects unsigned
+  canonicals, `DW_ATE_unsigned` rejects signed ones, everything else
+  passes), the canonical Program type is returned DIRECTLY with no typedef
+  wrap, so DWARF `long int` (8, signed) IS the cspec `long` and casts print
+  `(long)` (12.0.4 golden: `(long)` 55x curl / 1165x httpd, `long int` zero
+  occurrences). Factory-present canonicals (`char`/`short`/`ushort`/`int`/
+  `uint`/`long`/`ulong`/`float`/`double`/`longdouble`/`bool`/`wchar_t`/
+  `undefined1`) intern onto the factory's same-named core entry
+  (TypeFactory::findAdd, type.cc:3412-3425) — one object with the
+  signature-data `long`, so identical-type casts disappear;
+  `uchar`/`longlong`/`ulonglong` are Java-DTM-only names (the C++
+  coretypes stream's same-size longlong slot is overwritten by `long`),
+  interning as named non-core types exactly as the database transport
+  delivers them. The locked analyzer's character distinction is also
+  retained: the `DW_ATE_signed_char` fallback (for names outside the alias
+  table) becomes a `CHARTYPE`/`SUB_INT_CHAR` datatype, while
+  `DW_ATE_unsigned_char` resolves through the alias table to the ordinary
+  unsigned `uchar` type; every other name keeps its DWARF spelling (the
+  typedef-wrap arm — Rugra materializes typedefs as the renamed underlying
+  type);
 - pointers/references build `Datatype::Pointer` with the pointee's spelling
   (`URLGlob *`, and `URLGlob **` for pointer-to-pointer);
 - `DW_TAG_structure_type`/`DW_TAG_union_type` build fielded
