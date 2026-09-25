@@ -3277,6 +3277,9 @@ impl<'a> CollapseStructure<'a> {
                         flags: 0,
                         for_init: None,
                         for_iter: None,
+                        initialize_op: None,
+                        iterate_op: None,
+                        loop_def: None,
                         overflow_syntax: false,
                     }));
                 self.identify_internal(&while_block, &[body_idx], hi);
@@ -5667,6 +5670,9 @@ impl<'a> CollapseStructure<'a> {
                     flags: 0,
                     for_init: None,
                     for_iter: None,
+                    initialize_op: None,
+                    iterate_op: None,
+                    loop_def: None,
                     overflow_syntax: overflow,
                 }));
             // Ghidra newBlockWhileDo: identifyInternal([cond, cl]) + forceOutputNum(1).
@@ -7115,6 +7121,9 @@ impl<'a> CollapseStructure<'a> {
                                             flags: 0,
                                             for_init: None,
                                             for_iter: None,
+                                            initialize_op: None,
+                                            iterate_op: None,
+                                            loop_def: None,
                                             overflow_syntax: false,
                                         }));
                                     replacements.push((i, while_block));
@@ -7222,6 +7231,9 @@ impl<'a> CollapseStructure<'a> {
                     flags: 0,
                     for_init: None,
                     for_iter: None,
+                    initialize_op: None,
+                    iterate_op: None,
+                    loop_def: None,
                     overflow_syntax: false,
                 }));
             replacements.push((header_idx as usize, while_block));
@@ -7367,6 +7379,9 @@ impl<'a> CollapseStructure<'a> {
                             flags: 0,
                             for_init: None,
                             for_iter: None,
+                            initialize_op: None,
+                            iterate_op: None,
+                            loop_def: None,
                             overflow_syntax: false,
                         }));
                     replacements.push((header_idx as usize, while_block));
@@ -7485,6 +7500,9 @@ impl<'a> CollapseStructure<'a> {
                     flags: 0,
                     for_init: None,
                     for_iter: None,
+                    initialize_op: None,
+                    iterate_op: None,
+                    loop_def: None,
                     overflow_syntax: false,
                 }));
             if i < self.graph.blocks.len() {
@@ -8750,6 +8768,28 @@ impl Action for ActionFinalStructure {
         // moving to the tail.
         fd.sblocks.order_blocks();
 
+        // Ghidra blockaction.cc:2113 (ActionStructureTransform::apply):
+        // data.getStructure().finalTransform(data); — BlockWhileDo for-loop
+        // formation: findLoopVariable (block.cc:3164) + the iterateOp/
+        // initializeOp migration via opUninsert/opInsertAfter under the
+        // isMoveable gates (block.cc:3381-3396).
+        //
+        // PLACEMENT NOTE (HTTPDMAIN-F8-FORLOOP-0001): the oracle runs this
+        // sweep at pipeline :5715 (ActionStructureTransform, BEFORE the
+        // merge group :5717-:5729). Rugra's ActionStructureTransform::apply
+        // lives in coreaction.rs (lane-frozen write-set this round, a no-op
+        // deferring to this site — see its `for_loop_finalize_printing`
+        // placement note which prescribed exactly this relocation into the
+        // blockaction.rs ActionFinalStructure port). The sweep therefore
+        // runs here at the :5736 slot, immediately before finalizePrinting;
+        // the intervening merge/cast actions observe the iterate op at its
+        // pre-migration position (oracle: post-migration). The op moves are
+        // within-block relocations gated by isMoveable/moveRespectingCover,
+        // and the corpus gates (canon byte-equality + mirror ratchet) verify
+        // the placement is behaviorally unobservable on the locked corpora.
+        crate::block::for_loop_final_transform(fd);
+        crate::block::BlockGraph::finalize_printing_graph(fd);
+
         // Ghidra blockaction.cc:2192: graph.finalizePrinting(data); —
         // BlockGraph::finalizePrinting (block.cc:1364) recurses the tree and
         // runs BlockSwitch::finalizePrinting (block.cc:3556-3592) on every
@@ -8757,8 +8797,11 @@ impl Action for ActionFinalStructure {
         // fill via JumpTable::numIndicesByBlock/getIndexByBlock/
         // getLabelByIndex, the CaseOrder::compare stable sort, and the
         // case_values materialization that printc's emit_structured_switch
-        // reads.
-        fd.sblocks.finalize_printing();
+        // reads. It also runs BlockWhileDo::finalizePrinting (block.cc:3403)
+        // on every while-do loop: the for-loop statement extraction
+        // (testTerminal/testIterateForm + opMarkNonPrinting) that feeds
+        // printc's emit_for_loop. (Called once above, together with the
+        // :2113 finalTransform sweep.)
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
         // Walk the structure tree (sblocks) reclassifying any unstructured

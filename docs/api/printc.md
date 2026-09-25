@@ -3542,3 +3542,23 @@ this`）——union 分歧非潜伏（curl golden 含活 union
   （nonzeromask 预存）。语料中性=当前语料的打印站点无 map-hit 臂触发
   （union 分歧的消费面在 coreaction 已对齐站点）；快照通道为后续 union
   语料提供 oracle 等价语义。
+
+### 2026-09-26 — emit_for_loop 喂线：ops 通道 + RPN 表达式 + 条件虚分发（HTTPDMAIN-F8-FORLOOP-0001，Lane F8FOR）
+
+- `emit_structured_whiledo` 分发（printc.cc:3007-3009 口径）扩为双通道：
+  **主通道** `iterate_op`（block.rs 真端口设置）→ `emit_for_loop`；**legacy
+  通道** `for_init/for_iter` 文本对（coreaction.rs 过渡渲染器；两通道检测
+  互斥，理由见 block.md 同日节）。
+- `emit_for_loop` 喂线落位（emit 本体骨架保留）：
+  - init/iter 槽：ops 通道走 `emit_expression_rpn`（printc.cc:2468
+    emitExpression 的忠实端口——赋值 LHS token cc:2470-2472 + 虚 op 分发 +
+    recurse；CAST/PTRADD 通用形由此成文 `V = (t*)*V`）；legacy 通道保留文本
+    直印。
+  - 条件槽：`emit_block_condition` 直调改为 while 路同款虚分发
+    （insert-first + `emit_flow_block`，= oracle `condBlock->emit(this)`
+    cc:2983；基本块条件走语句级逗号串）。
+  - `open_paren`/`close_paren` 配对 id 修正（丢弃 id + `close(0)` 会破坏
+    EmitPrettyPrint 组栈）。
+- `emit_expression` 补 PTRADD 路由（typeop.hh:823 `TypeOpPtradd::push →
+  lng->opPtradd(op)`；typeop.rs 的 push 表缺该臂，落 `_ => op_binary` 印出
+  字面 `" op "` 占位——表缺口登记归 typeop.rs owner）。

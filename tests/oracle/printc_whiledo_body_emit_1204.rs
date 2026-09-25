@@ -108,6 +108,9 @@ fn build_whiledo() -> (BlockGraph, BlockArc) {
         flags: 0,
         for_init: None,
         for_iter: None,
+        initialize_op: None,
+        iterate_op: None,
+        loop_def: None,
         overflow_syntax: false,
     }));
 
