@@ -3351,3 +3351,45 @@ httpd 34 函数双零）；投影 bank 391/391 OK；cargo test --lib 1713P/1F
 （test_nonzeromask_pipeline_wiring 预存谱系同败，fspec NZMask 路径与本
 diff 零交集）；annotations/refs 全绿。coreaction 主管线域=机制 B 白名单
 （Differential 块见 commit）；机制 C 单点同构+五波先例声明，独立 CR 待 root。
+## 2026-09-25（CVRHOIST）：ActionMarkImplied::apply 后代先行 DFS（GETPARAM-CVAR1-HOIST-0001 收口）
+`ActionMarkImplied::apply`（coreaction.cc:3416-3455）此前用扁平
+loc_tree 循环逐 varnode 判定——丢掉了 oracle 的 `DescTreeElement`
+varstack DFS（cc:3422-3451）的**后代先行序**：Ghidra 对每个根先把
+未标记的后代输出压栈、帧的后代迭代器耗尽才 check+标记本体
+（cc:3430-3443），即任何 varnode 的判定发生在其全部（未标记）后代
+被标记**之后**。
+该顺序是**承载语义的**，不是风格：
+1. `Merge::markImplied` 会弄脏 def op 输入的 cover
+   （merge.cc:1600-1604 置 coverdirty）；
+2. `Varnode::getCover` 的惰性重建通过「重建时刻已 implied」的输出
+   **传递扩展 cover**（`Cover::rebuild` 的 path 遍历，cover.cc:492-493）；
+3. 消费者先被标 implied 后，生产者重建的 cover 经
+   `Cover::addRefPoint` 对非 MULTIEQUAL 读点的**全前驱递归**
+   （cover.cc:610-612）跨基本块延伸。
+**canon `cVar1 = *flag;` 入口物化判决链**（锁定 oracle e40ed130
+断点实测，/dev/shm/rugra-tests/cvrhoist/oracle_gp.err）：
+`cmpb $0x2d,(%rbp)` @0x3f49 的 LOAD 输出被子代 INT_EQUAL@3f49 读、
+INT_EQUAL 输出被 CBRANCH@3f55（`je`）读——rep movsq @0x3f52（aliases
+初始化循环）不碰 flags，比较值活跨整个循环。DFS 先标
+INT_EQUAL 输出 implied（弄脏 LOAD 输出 cover）→ LOAD 输出重建时
+经 implied 链到达 CBRANCH@blk3 → 前驱递归填 blk2/blk1 全覆盖、
+blk0 补到块尾 → cover interior 含 STORE@0x3f52/blk2 → 检 (1)
+spacebase 相等 → `isPossibleAlias(store_ptr, flag_ptr)`：两侧指针
+def 均为 CROSSBUILD（rep movs 循环 p-code 标记），归一 opcode 相等
+落入 default 臂 → 可能别名 → 拒绝 implied → **explicit**。扁平循环
+下生产者先于消费者处理，cover 永不延伸（仅 `[(0, def, IE)]`），
+跨 store 查不触发 → 误 implied 内联（Rugra `if (*flag == '-')`）。
+修复=按 cc:3416-3455 忠实移植 DFS：帧持有（varnode, 后代 op 快照
+vec, 游标），后代 op 快照等价于活 list 迭代器（checkImpliedCover/
+markImplied/setExplicit 均不变异读链）；op→getOut 链按 SSA 构造为
+DAG，无环不变量与 oracle 相同；`count += 1`（cc:3434）逐帧累加保持
+（菱形可达路径双计与 oracle 逐为一致）。
+管线级效应（A/B 双构建亲测，基=master fdeff691）：
+- curl getparameter **156→153**、全量 **577/0/0→546/0/0**
+  （glob_set 44→38、glob_range 38→29、main 120→107 同族收敛；
+  逐函数零回退）；`cVar1 = *flag;`+`if (cVar1 == '-')` = canon
+  getparameter:27/:41 逐字形态。
+- httpd 默认脸 compare 基线对拍见 LANE_REPORT（cVar1 族=同机制
+  跨 store 物化族）。
+- ALIASGATE 已恢复的内联族（plVar12[9]/[10] 等）不回退——DFS 只
+  影响 cover 延伸形态，可分辨指针对仍由 is_possible_alias 放行。

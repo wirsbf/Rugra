@@ -5474,38 +5474,100 @@ impl Action for ActionMarkImplied {
 
     // Ghidra: coreaction.cc:3416 ActionMarkImplied::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
-        // Iterates all Varnodes; for each non-explicit/non-implied candidate,
-        // checks whether its def expression can be safely inlined into its
-        // consumer (implied) via checkImpliedCover. If yes, mark implied;
-        // otherwise mark explicit (will be emitted as a named assignment).
+        // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416-3455).
+        // Iterates all Varnodes in location order; each unmarked root runs a
+        // depth-first traversal over its descendants (DescTreeElement
+        // varstack, cc:3422-3429), and a varnode is checked/marked only
+        // AFTER all of its unmarked descendants have completed
+        // (cc:3430-3443 pops frames whose desciter hit endDescend).
         //
-        // Ghidra uses a DFS over descendants to propagate cover inflation
-        // incrementally; Rugra approximates with static high.cover (built by
-        // Merge::update_high_covers). This is correct for the common case
-        // (single-consumer temporaries) and conservative for rare chained
-        // implications.
+        // The descendant-first order is load-bearing, not stylistic:
+        // Merge::markImplied dirties the def op's input covers
+        // (merge.cc:1600-1604), and Varnode::getCover's lazy rebuild
+        // extends the cover through outputs that are implied AT REBUILD
+        // TIME (Cover::rebuild's path traversal, cover.cc:492-493). When a
+        // consumer is marked implied before its producer is checked (e.g.
+        // the INT_EQUAL reading a LOAD's output), the producer's rebuilt
+        // cover reaches the consumer's own readers across basic blocks via
+        // Cover::addRefPoint's predecessor recursion (cover.cc:610-612) —
+        // that is exactly the oracle decision state that materializes the
+        // canon `cVar1 = *flag;` entry load (GETPARAM-CVAR1-HOIST-0001:
+        // the cover spans the rep-movs loop blocks and interior-contains
+        // the aliases-init STORE, so checkImpliedCover check (1) consults
+        // isPossibleAlias on the pointer pair and refuses the implied
+        // form). Rugra's previous flat loc-order loop processed producers
+        // before their consumers, so the cover never extended through
+        // them and store-crossing loads stayed wrongly implied.
         let mut change_count = 0;
 
         let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
 
         for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            // Skip free (neither input nor written), explicit, or already implied.
-            if !vn_rg.is_written() && !vn_rg.is_input() {
-                continue;
+            {
+                let vn_rg = vn_arc.read().unwrap();
+                // Ghidra cc:3426-3428: skip free (neither input nor
+                // written), explicit, or already-implied roots.
+                if !vn_rg.is_written() && !vn_rg.is_input() {
+                    continue;
+                }
+                if vn_rg.is_explicit() || vn_rg.is_implied() {
+                    continue;
+                }
             }
-            if vn_rg.is_explicit() || vn_rg.is_implied() {
-                continue;
+            // Ghidra cc:3429: varstack.push_back(vn). Each frame keeps the
+            // root varnode plus its collected descendant (reading) ops and
+            // the next index into them — a snapshot of the live
+            // list<PcodeOp*> iterator is sound because neither
+            // checkImpliedCover nor markImplied/setExplicit mutates read
+            // lists. The SSA output chain (op -> getOut) is a DAG by
+            // construction, so no cycle guard is needed (same invariant
+            // Ghidra's unbounded stack relies on).
+            let mut varstack: Vec<(
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
+                usize,
+            )> = Vec::new();
+            let root_descs = vn_arc.read().unwrap().descend_iter().collect();
+            varstack.push((vn_arc.clone(), root_descs, 0));
+            // Ghidra cc:3430-3451: do { ... } while(!varstack.empty());
+            while !varstack.is_empty() {
+                let next_op = {
+                    let frame = varstack.last().unwrap();
+                    frame.1.get(frame.2).cloned()
+                };
+                match next_op {
+                    Some(op_arc) => {
+                        varstack.last_mut().unwrap().2 += 1;
+                        // Ghidra cc:3445: outvn = (*desciter++)->getOut();
+                        let outvn = op_arc.read().unwrap().get_out().cloned();
+                        if let Some(outvn) = outvn {
+                            // Ghidra cc:3446-3448: push unmarked outputs so
+                            // they are traced (and marked) first.
+                            let unmarked = {
+                                let rg = outvn.read().unwrap();
+                                !rg.is_explicit() && !rg.is_implied()
+                            };
+                            if unmarked {
+                                let descs = outvn.read().unwrap().descend_iter().collect();
+                                varstack.push((outvn, descs, 0));
+                            }
+                        }
+                    }
+                    None => {
+                        // Ghidra cc:3432-3443: all descendants are traced
+                        // first — try to make vncur implied.
+                        let (cur, _, _) = varstack.pop().unwrap();
+                        // cc:3434: count += 1 — will be marked either
+                        // explicit or implied.
+                        change_count += 1;
+                        if self.check_implied_cover(fd, &cur) {
+                            crate::merge::Merge::mark_implied(&cur);
+                        } else {
+                            cur.write().unwrap().set_explicit();
+                        }
+                    }
+                }
             }
-            drop(vn_rg);
-
-            if self.check_implied_cover(fd, vn_arc) {
-                crate::merge::Merge::mark_implied(vn_arc);
-            } else {
-                vn_arc.write().unwrap().set_explicit();
-            }
-            change_count += 1;
         }
 
         // Ghidra coreaction.cc:3434: `count += 1` fires for every varnode
