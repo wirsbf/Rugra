@@ -4608,6 +4608,7 @@ impl<'a> CollapseStructure<'a> {
                     sw.index_varnode.clone(),
                     sw.jump.clone(),
                     sw.case_order.clone(),
+                    sw.default_order.clone(),
                 )
             };
             // Rebuild with updated references
@@ -4639,6 +4640,7 @@ impl<'a> CollapseStructure<'a> {
                     jump: sw_fields.10,
                     case_order: sw_fields.11,
                     default_label: None,
+                    default_order: sw_fields.12,
                     case_values: sw_fields.8,
                     index_varnode: sw_fields.9,
                     incoming: Vec::new(),
@@ -6448,7 +6450,8 @@ impl<'a> CollapseStructure<'a> {
         // (basicblock/outindex/casemap/chain) and the ctor jumptable
         // resolution, both running "before the identifyInternal" like the
         // oracle.
-        let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
+        let (jump, case_order, default_order) =
+            self.grab_case_order(&block, &cases, default_case.as_ref(), branchind_addr);
         let num_regular_cases = cases.len();
         // Ghidra newBlockSwitch (block.cc:1904-1919): identifyInternal(ret, cs)
         // consumes the dispatch block AND the case blocks into the component
@@ -6475,6 +6478,7 @@ impl<'a> CollapseStructure<'a> {
                 jump,
                 case_order,
                 default_label: None,
+                default_order,
                 case_values,
                 index_varnode,
                 incoming: Vec::new(),
@@ -6551,6 +6555,11 @@ impl<'a> CollapseStructure<'a> {
                 let mut sw = switch_block.write().unwrap();
                 let sw_ref = sw.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
                 sw_ref.case_gototypes = vec![0; sw_ref.cases.len()];
+                // CR-GLOBATTR F1: the grab-time virtual default index —
+                // `case_order.len()` BEFORE this arm pushes the re-added
+                // goto cases. Chains recorded by grab_case_order against
+                // the default point at THIS index.
+                let grab_order_len = sw_ref.case_order.len();
                 // case_isexit keeps its pre-consumption captures; only the
                 // appended goto-arm cases below set their own (cc:3512).
                 for target in gotoedges {
@@ -6588,6 +6597,53 @@ impl<'a> CollapseStructure<'a> {
                             basic,
                             outindex.map(|j| j as i32).unwrap_or(-1),
                         ));
+                    }
+                }
+                // CR-GLOBATTR F1 remap: the g pushed entries occupy indices
+                // [grab_order_len, grab_order_len+g) of case_order, so
+                // finalize_case_labels' extended view places the virtual
+                // default at index grab_order_len+g — one past the LAST
+                // re-added case (the oracle's layout: the multigoto append
+                // lands after every cs-collected member, default included,
+                // block.cc:3548-3553). Any chain recorded against the
+                // grab-time default index must shift by g or it silently
+                // retargets the FIRST re-added case. Correct-by-construction
+                // guards: (a) the re-added entries never enter grab's
+                // casemap (their placeholders keep chain=-1 and the arm
+                // registers no casemap slot), so chain==grab_order_len can
+                // only be a grab-time default link; (b) regular-to-regular
+                // links are < grab_order_len and stay; (c)
+                // default_order.chain targets regular indices only (<
+                // grab_order_len) or -1, never the default's own index.
+                let appended = sw_ref.case_order.len() - grab_order_len;
+                if appended > 0 {
+                    let remapped = Self::remap_default_chain_indices(
+                        &mut sw_ref.case_order,
+                        grab_order_len,
+                        appended,
+                    );
+                    // Post-condition invariant: after the shift, no chain
+                    // points at grab_order_len — that slot now holds the
+                    // first re-added case, which never participates in a
+                    // fall-thru chain (chain=-1 from its placeholder).
+                    debug_assert!(
+                        sw_ref
+                            .case_order
+                            .iter()
+                            .all(|co| co.chain != grab_order_len as i32),
+                        "default chain remap left a stale link at the re-added case slot"
+                    );
+                    if std::env::var("RUGRA_BS_DUMP")
+                        .map(|v| v == "1" || v == "2")
+                        .unwrap_or(false)
+                    {
+                        eprintln!(
+                            "[BLOCKSTRUCT] multigoto arm: case_order {} -> {} (+{} re-added), default chain links remapped k -> k+g: {}",
+                            grab_order_len,
+                            sw_ref.case_order.len(),
+                            appended,
+                            remapped
+                        );
                     }
                 }
                 let _ = numgoto;
@@ -6697,10 +6753,12 @@ impl<'a> CollapseStructure<'a> {
         &self,
         switch_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         cases: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        default_case: Option<&Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
         branchind_addr: Option<u64>,
     ) -> (
         Option<Arc<RwLock<crate::jumptable::JumpTable>>>,
         Vec<crate::block::CaseOrder>,
+        Option<crate::block::CaseOrder>,
     ) {
         // block.cc:3488 + block.cc:630-639: jump = ind->getJumptable().
         let jump = branchind_addr.and_then(|addr| {
@@ -6739,14 +6797,60 @@ impl<'a> CollapseStructure<'a> {
                 outindex.map(|r| r as i32).unwrap_or(-1),
             ));
         }
+        // cc:3529-3533's loop adds EVERY component in cs as an ordinary
+        // caseblocks member — including the formal default (only the
+        // isdefault flag from addCase cc:3515 distinguishes it). Rugra
+        // routes the default body to the separate default_case slot, so
+        // its CaseOrder lives as the VIRTUAL entry at index cases.len():
+        // registered in the same casemap so a regular case's fall-thru
+        // chain (cc:3544) can link to it, and carrying its own chain link
+        // for the exotic default-falls-into-another-case shape.
+        let mut default_order: Option<crate::block::CaseOrder> = default_case.and_then(|def| {
+            let (_, outindex, basic) = Self::switch_case_basic_coords(&switch_basic, def);
+            if outindex.is_none() && basic.is_none() {
+                // Coordinates unresolvable — no casemap entry, no chain
+                // target; finalize_case_labels' legacy fallback places
+                // this default (the oracle's addCase would have thrown
+                // LowlevelError, cc:3507-3508).
+                return None;
+            }
+            if let Some(rev) = outindex {
+                if rev < casemap.len() {
+                    casemap[rev] = cases.len() as i32;
+                }
+            }
+            Some(crate::block::CaseOrder::placeholder(
+                basic,
+                outindex.map(|r| r as i32).unwrap_or(-1),
+            ))
+        });
         // cc:3536-3546: fall-thru chaining — all fall-thru blocks are plain
         // gotos at this point; the goto target resolves to another case's
-        // basic block via its in-edge from the switch block.
-        for (i, case) in cases.iter().enumerate() {
-            let is_goto = case.read().unwrap().get_type() == crate::block::BlockType::Goto;
-            if !is_goto {
+        // basic block via its in-edge from the switch block. The walk
+        // covers the virtual default entry too: a default component that
+        // is itself a BlockGoto into another case links its chain the
+        // same way.
+        let mut chain_targets: Vec<(usize, crate::block::BlockType)> = cases
+            .iter()
+            .map(|c| c.read().unwrap().get_type())
+            .enumerate()
+            .collect();
+        if default_order.is_some() {
+            if let Some(def) = default_case {
+                chain_targets.push((cases.len(), def.read().unwrap().get_type()));
+            }
+        }
+        for (i, ty) in chain_targets {
+            if ty != crate::block::BlockType::Goto {
                 continue;
             }
+            let case = if i < cases.len() {
+                cases[i].clone()
+            } else if i == cases.len() {
+                default_case.map(|d| d.clone()).unwrap()
+            } else {
+                continue;
+            };
             // cc:3540: targetbl = ((BlockGoto *)casebl)->getGotoTarget();
             let target = {
                 let r = case.read().unwrap();
@@ -6791,10 +6895,44 @@ impl<'a> CollapseStructure<'a> {
             };
             if rev >= 0 && (rev as usize) < casemap.len() {
                 // cc:3544: curcase.chain = casemap[basicbl->getInRevIndex(inindex)];
-                order[i].chain = casemap[rev as usize];
+                let chain = casemap[rev as usize];
+                if i < cases.len() {
+                    order[i].chain = chain;
+                } else if let Some(def_order) = default_order.as_mut() {
+                    def_order.chain = chain;
+                }
             }
         }
-        (jump, order)
+        (jump, order, default_order)
+    }
+
+    // RUGRA-GLUE: index bookkeeping for Rugra's separate-default storage
+    // shape — no single Ghidra counterpart function. The oracle's
+    // grabCaseBasic appends the multigoto re-added cases AFTER every
+    // cs-collected member (block.cc:3548-3553 lands after the chain-fill
+    // loop cc:3536-3546, and the default IS a cs-collected member), so in
+    // the oracle's flat caseblocks vector the default simply keeps its
+    // grab-time index and chains stay valid. Rugra stores the default in
+    // its own slot and finalize_case_labels materializes it as the virtual
+    // entry at `case_order.len()` (after the re-added cases), so chains
+    // recorded against the grab-time virtual index k must shift by the
+    // appended count g once the multigoto arm has pushed. Shifts
+    // `chain == k` to `chain == k + g` and returns how many links moved.
+    fn remap_default_chain_indices(
+        case_order: &mut [crate::block::CaseOrder],
+        grab_order_len: usize,
+        appended: usize,
+    ) -> usize {
+        let old_default_index = grab_order_len as i32;
+        let new_default_index = (grab_order_len + appended) as i32;
+        let mut moved = 0;
+        for co in case_order.iter_mut() {
+            if co.chain == old_default_index {
+                co.chain = new_default_index;
+                moved += 1;
+            }
+        }
+        moved
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
@@ -7549,7 +7687,8 @@ impl<'a> CollapseStructure<'a> {
 
             // block.cc:3524 grabCaseBasic CaseOrder recording + block.cc:3488
             // ctor jumptable resolution for this installer path too.
-            let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
+            let (jump, case_order, default_order) =
+                self.grab_case_order(&block, &cases, default_case.as_ref(), branchind_addr);
             let num_cases_here = cases.len();
 
             let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -7568,6 +7707,7 @@ impl<'a> CollapseStructure<'a> {
                     jump,
                     case_order,
                 default_label: None,
+                    default_order,
                     case_values,
                     index_varnode,
                     incoming: Vec::new(),
@@ -7863,6 +8003,7 @@ impl<'a> CollapseStructure<'a> {
                     jump: None,
                     case_order: Vec::new(),
                     default_label: None,
+                    default_order: None,
                     case_values: case_vals,
                     index_varnode,
                     incoming: Vec::new(),
@@ -8045,6 +8186,7 @@ impl<'a> CollapseStructure<'a> {
                 let iv = sw.index_varnode.clone();
                 let jmpz = sw.jump.clone();
                 let jo = sw.case_order.clone();
+                let jdo = sw.default_order.clone();
                 drop(b);
 
                 let new_sw: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -8060,6 +8202,7 @@ impl<'a> CollapseStructure<'a> {
                         jump: jmpz,
                         case_order: jo,
                         default_label: None,
+                        default_order: jdo,
                         case_values: cv,
                         index_varnode: iv,
                         incoming: Vec::new(),
@@ -9208,5 +9351,50 @@ mod loopbody_tests {
             b0.read().unwrap().is_goto_out(1),
             "edge 1 is goto via block flag"
         );
+    }
+}
+
+#[cfg(test)]
+mod multigoto_defaultchain_tests {
+    use super::CollapseStructure;
+    use crate::block::CaseOrder;
+
+    fn co(chain: i32) -> CaseOrder {
+        CaseOrder { basicblock: None, label: 0, depth: 0, chain, outindex: -1 }
+    }
+
+    // CR-GLOBATTR F1: the multigoto arm's re-added cases occupy
+    // [k, k+g) after grab_case_order recorded the virtual default at k —
+    // chains against k must shift to k+g; everything else is untouched.
+    #[test]
+    fn remap_shifts_only_default_links() {
+        // k=3 regular entries, one chain link to the default (==3), one
+        // regular-to-regular link (==1), one -1; arm appends g=2.
+        let mut order = vec![co(3), co(1), co(-1)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 3, 2);
+        assert_eq!(moved, 1);
+        assert_eq!(order[0].chain, 5, "default link shifts k -> k+g");
+        assert_eq!(order[1].chain, 1, "regular-to-regular link untouched");
+        assert_eq!(order[2].chain, -1, "no-chain untouched");
+    }
+
+    #[test]
+    fn remap_moves_multiple_default_links() {
+        let mut order = vec![co(2), co(2), co(0), co(-1)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 2, 3);
+        assert_eq!(moved, 2);
+        assert_eq!(order[0].chain, 5);
+        assert_eq!(order[1].chain, 5);
+        assert_eq!(order[2].chain, 0, "chain 0 is a regular link, untouched");
+        assert_eq!(order[3].chain, -1);
+    }
+
+    #[test]
+    fn remap_no_links_is_noop() {
+        // Dormant shape: no case falls into the default (both corpora).
+        let mut order = vec![co(1), co(-1), co(0)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 3, 2);
+        assert_eq!(moved, 0);
+        assert_eq!((order[0].chain, order[1].chain, order[2].chain), (1, -1, 0));
     }
 }

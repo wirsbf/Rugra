@@ -7832,7 +7832,39 @@ pub struct BlockSwitch {
     /// oracle: a default that is a fall-thru chain non-root takes its chain
     /// root's label in Ghidra (cc:3577-3584); Rugra's default slot carries
     /// no chain link, so such a default places by its own first index.
+    /// — CLOSED (BLOCKACTION-SWITCH-DEFAULTCHAIN-0001): the virtual
+    /// `default_order` below restores the chain link.
+    ///
+    /// `default_label` is the RANK KEY for the separate default slot: the
+    /// scalar satisfying `count(case_order[i].label < default_label) == r`,
+    /// where r is the number of regular cases the oracle's cc:3591 stable
+    /// sort places before the default in the merged (cases + default)
+    /// order. Consumers (printc's def_pos, `next_flow_after`'s merged
+    /// order) count `label < default_label`; the key is strictly greater
+    /// than every counted case's label, so chain-root cases sharing the
+    /// inherited label still count before the default — the oracle's
+    /// (label, depth) position encoded in a single scalar. Residual known
+    /// corner: a fall-thru chain CONTINUING past the default (the default
+    /// chained into a later regular case sharing its label) has no exact
+    /// scalar rank; the key then places the default after that whole label
+    /// group (witnessed under RUGRA_BS_DUMP=1; unreachable in both
+    /// corpora — full-corpus byte comparison verified).
     pub default_label: Option<u64>,
+    /// Ghidra keeps the formal default as an ordinary `caseblocks` member
+    /// (`grabCaseBasic` cc:3529-3533 adds every component; only the
+    /// `isdefault` flag distinguishes it, cc:3515). Rugra stores the
+    /// default body in `default_case` outside the parallel `cases` arrays;
+    /// this virtual `CaseOrder` is the default's own record (`addCase`
+    /// cc:3498-3515 applied to the default edge), including its fall-thru
+    /// `chain` link (cc:3536-3544): a case component whose BlockGoto
+    /// target is the default's basic block links `chain = n` (the virtual
+    /// index `case_order.len()`), and the default's own fall-thru into
+    /// another case links its chain to that regular index.
+    /// `finalize_case_labels` runs the cc:3562-3591 passes over
+    /// `case_order + default_order` and derives `default_label` from the
+    /// merged sort. None when there is no default or its basic-graph
+    /// coordinates did not resolve (legacy placement).
+    pub default_order: Option<CaseOrder>,
     pub case_values: Vec<Vec<u64>>,
     pub index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>>,
     pub incoming: Vec<BlockEdge>,
@@ -8037,72 +8069,95 @@ impl BlockSwitch {
         let Some(jump) = &self.jump else {
             return;
         };
-        let jt = jump.read().unwrap();
         let n = self.case_order.len();
+        // cc:3556-3592 runs over the oracle's caseblocks vector, which
+        // INCLUDES the formal default as an ordinary member (grabCaseBasic
+        // cc:3529-3533 added every component; only the isdefault flag set
+        // by addCase cc:3515 distinguishes it). Rugra keeps the default
+        // body in its separate `default_case` slot with parallel `cases`
+        // arrays, so the passes below run over the EXTENDED view `ext`:
+        // the regular case_order entries plus the virtual default entry
+        // (index n) that grab_case_order recorded with its own chain link.
+        // Chain indices are grab-time indices and the passes walk them
+        // BEFORE the cc:3591 sort, exactly like the oracle.
+        let mut ext: Vec<CaseOrder> = self.case_order.clone();
+        if let Some(def) = self.default_order.clone() {
+            ext.push(def);
+        }
+        let has_virtual_default = ext.len() == n + 1;
+        let m = ext.len();
         // cc:3562-3570: mark non-roots of fall-thru chains.
-        for i in 0..n {
-            let mut j = self.case_order[i].chain;
+        for i in 0..m {
+            let mut j = ext[i].chain;
             while j != -1 {
                 let ju = j as usize;
-                if self.case_order[ju].depth != 0 {
+                if ju >= m {
+                    break; // Defensive: stale chain index (component churn)
+                }
+                if ext[ju].depth != 0 {
                     break; // Break any possible loops (already visited)
                 }
-                self.case_order[ju].depth = -1; // Mark non-roots of chains
-                j = self.case_order[ju].chain;
+                ext[ju].depth = -1; // Mark non-roots of chains
+                j = ext[ju].chain;
             }
         }
         // cc:3571-3589: populate label and depth.
-        for i in 0..n {
-            let Some(basic) = self.case_order[i].basicblock.clone() else {
-                continue;
-            };
-            if jt.num_indices_by_block(&basic) > 0 {
-                if self.case_order[i].depth == 0 {
-                    // Only set label on chain roots.
-                    if let Some(ind) = jt.get_index_by_block(&basic, 0) {
-                        let label = jt.get_label_by_index(ind);
-                        self.case_order[i].label = label;
-                        let mut j = self.case_order[i].chain;
-                        let mut depthcount: i32 = 1;
-                        while j != -1 {
-                            let ju = j as usize;
-                            if self.case_order[ju].depth > 0 {
-                                break; // Has this node had its depth set
+        {
+            let jt = jump.read().unwrap();
+            for i in 0..m {
+                let Some(basic) = ext[i].basicblock.clone() else {
+                    continue;
+                };
+                if jt.num_indices_by_block(&basic) > 0 {
+                    if ext[i].depth == 0 {
+                        // Only set label on chain roots.
+                        if let Some(ind) = jt.get_index_by_block(&basic, 0) {
+                            let label = jt.get_label_by_index(ind);
+                            ext[i].label = label;
+                            let mut j = ext[i].chain;
+                            let mut depthcount: i32 = 1;
+                            while j != -1 {
+                                let ju = j as usize;
+                                if ju >= m {
+                                    break; // Defensive: stale chain index
+                                }
+                                if ext[ju].depth > 0 {
+                                    break; // Has this node had its depth set
+                                }
+                                ext[ju].depth = depthcount;
+                                depthcount += 1;
+                                ext[ju].label = label;
+                                j = ext[ju].chain;
                             }
-                            self.case_order[ju].depth = depthcount;
-                            depthcount += 1;
-                            self.case_order[ju].label = label;
-                            j = self.case_order[ju].chain;
                         }
                     }
+                } else {
+                    ext[i].label = 0; // Should never happen
                 }
-            } else {
-                self.case_order[i].label = 0; // Should never happen
             }
         }
-        drop(jt);
         // cc:3591: stable_sort(caseblocks.begin(),caseblocks.end(),
         // CaseOrder::compare) — label, then depth (block.hh:903-909). Rust's
-        // sort_by is stable; permute the parallel arrays jointly.
-        let mut perm: Vec<usize> = (0..n).collect();
+        // sort_by is stable; the permutation is over the extended view so
+        // the virtual default lands at its merged-sort position.
+        let mut perm: Vec<usize> = (0..m).collect();
         perm.sort_by(|&a, &b| {
-            let (ca, cb) = (&self.case_order[a], &self.case_order[b]);
+            let (ca, cb) = (&ext[a], &ext[b]);
             if ca.label != cb.label {
                 ca.label.cmp(&cb.label)
             } else {
                 ca.depth.cmp(&cb.depth)
             }
         });
-        let new_cases: Vec<_> = perm.iter().map(|&i| self.cases[i].clone()).collect();
-        let new_gototypes: Vec<_> = perm.iter().map(|&i| self.case_gototypes[i]).collect();
-        let new_isexit: Vec<_> = perm.iter().map(|&i| self.case_isexit[i]).collect();
-        let new_values: Vec<_> = perm.iter().map(|&i| self.case_values[i].clone()).collect();
-        let new_order: Vec<_> = perm.iter().map(|&i| {
-            std::mem::replace(
-                &mut self.case_order[i],
-                CaseOrder::placeholder(None, -1),
-            )
-        }).collect();
+        // Split the merged sort back into Rugra's storage shape: the
+        // regular entries (perm slots holding indices < n) reorder the
+        // parallel arrays jointly, exactly as the pre-extension code did.
+        let regular_perm: Vec<usize> = perm.iter().copied().filter(|&x| x < n).collect();
+        let new_cases: Vec<_> = regular_perm.iter().map(|&i| self.cases[i].clone()).collect();
+        let new_gototypes: Vec<_> = regular_perm.iter().map(|&i| self.case_gototypes[i]).collect();
+        let new_isexit: Vec<_> = regular_perm.iter().map(|&i| self.case_isexit[i]).collect();
+        let new_values: Vec<_> = regular_perm.iter().map(|&i| self.case_values[i].clone()).collect();
+        let new_order: Vec<_> = regular_perm.iter().map(|&i| ext[i].clone()).collect();
         self.cases = new_cases;
         self.case_gototypes = new_gototypes;
         self.case_isexit = new_isexit;
@@ -8127,25 +8182,78 @@ impl BlockSwitch {
             }
             self.case_values[i] = group;
         }
-        // Default entry's label (block.cc:3573-3576 recipe applied to the
-        // default's own basic block): the oracle's caseblocks holds the
-        // default too, and finalizePrinting gives it the label of its first
-        // table index so the cc:3591 stable sort places it by rank —
-        // printc.cc:3140 then prints `default:` at that sorted position.
-        // Computed here (post-sort) because the rank consumer is printc's
-        // separate default slot.
-        if let Some(def) = &self.default_case {
-            // cc:3500: basicbl = bl->getFrontLeaf()->subBlock(0)
-            let def_basic = crate::block::front_leaf(def).and_then(|leaf| {
-                let r = leaf.read().unwrap();
-                r.as_any()
-                    .downcast_ref::<crate::block::BlockCopy>()
-                    .map(|c| c.original.clone())
-            });
-            if let Some(basic) = def_basic {
-                if jt.num_indices_by_block(&basic) > 0 {
-                    if let Some(ind) = jt.get_index_by_block(&basic, 0) {
-                        self.default_label = Some(jt.get_label_by_index(ind));
+        // Rank key for printc's separate default slot: r = the number of
+        // regular cases the oracle's merged (cases + default) cc:3591 sort
+        // places before the default. Encoded as the scalar `default_label`
+        // satisfying count(case_order[i].label < default_label) == r over
+        // the sorted regulars — the smallest such scalar is
+        // max(prefix labels) + 1 (0 when the default sorts first).
+        // Consumers (printc's def_pos, `next_flow_after`'s merged order)
+        // count `label < default_label` and insert the default at index r,
+        // which is exactly the oracle's merged print position: a chain root
+        // sharing the default's INHERITED label is inside the prefix and
+        // counts before it, matching the (label, depth) tie-break that
+        // orders depth-0 roots before the deeper default (block.hh:907).
+        if has_virtual_default {
+            let def_pos_merged = perm
+                .iter()
+                .position(|&x| x == n)
+                .expect("virtual default present in perm");
+            let prefix: Vec<usize> = perm[..def_pos_merged]
+                .iter()
+                .copied()
+                .filter(|&x| x < n)
+                .collect();
+            let r = prefix.len();
+            let rank_key = if r == 0 {
+                0
+            } else {
+                prefix
+                    .iter()
+                    .map(|&i| ext[i].label)
+                    .max()
+                    .unwrap()
+                    .saturating_add(1)
+            };
+            let achieved = self.case_order.iter().filter(|co| co.label < rank_key).count();
+            if achieved != r {
+                // Residual corner (see the default_label field doc): a
+                // fall-thru chain CONTINUING past the default shares its
+                // label with a regular sorting after it — no scalar can
+                // express the oracle's exact interleaving. Best effort:
+                // keep the key (default places after that label group).
+                if std::env::var("RUGRA_BS_DUMP")
+                    .map(|v| v == "1" || v == "2")
+                    .unwrap_or(false)
+                {
+                    eprintln!(
+                        "[BLOCKSTRUCT] finalizePrinting default rank-key inexact: r={} achieved={} key=0x{:x}",
+                        r, achieved, rank_key
+                    );
+                }
+            }
+            self.default_label = Some(rank_key);
+        }
+        // Legacy fallback when the virtual default record never resolved
+        // (default_order == None but a default body exists — a constructor
+        // path without grab_case_order coordinates): the block.cc:3573-3576
+        // own-first-index recipe as the rank key. Exact for a chain-root
+        // default (no case falls into it): no regular shares its label, so
+        // count(label < own) == r.
+        if !has_virtual_default {
+            if let Some(def) = &self.default_case {
+                // cc:3500: basicbl = bl->getFrontLeaf()->subBlock(0)
+                let def_basic = crate::block::front_leaf(def).and_then(|leaf| {
+                    let r = leaf.read().unwrap();
+                    r.as_any()
+                        .downcast_ref::<crate::block::BlockCopy>()
+                        .map(|c| c.original.clone())
+                });
+                if let Some(basic) = def_basic {
+                    if jt.num_indices_by_block(&basic) > 0 {
+                        if let Some(ind) = jt.get_index_by_block(&basic, 0) {
+                            self.default_label = Some(jt.get_label_by_index(ind));
+                        }
                     }
                 }
             }
@@ -8166,6 +8274,13 @@ impl BlockSwitch {
                     co.chain,
                     co.outindex,
                     self.case_values.get(i).map(|v| v.as_slice()).unwrap_or(&[])
+                );
+            }
+            if let Some(dl) = self.default_label {
+                eprintln!(
+                    "[BLOCKSTRUCT] finalizePrinting default rank_key=0x{:x} def_pos={}",
+                    dl,
+                    self.case_order.iter().filter(|co| co.label < dl).count()
                 );
             }
         }

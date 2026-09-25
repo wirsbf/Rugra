@@ -528,9 +528,16 @@ impl Graph {
             // and the goto_prints fixture): the oracle fixture's hollow
             // jumptable keeps jump null, and the observation is the case
             // order + gototypes — never the label pipeline state
-            // (JUMPTABLE-TABLEAPI-0001 domain).
+            // (JUMPTABLE-TABLEAPI-0001 domain). case_isexit/default_isexit/
+            // default_label/default_order are the post-CASEWRAP/
+            // post-DEFAULTCHAIN bystander transports (filled by the
+            // production grab path; hollow fixtures keep the defaults).
             jump: None,
             case_order: Vec::new(),
+            case_isexit: vec![false, false, false],
+            default_isexit: false,
+            default_label: None,
+            default_order: None,
             case_values: vec![vec![0], vec![1], vec![2]],
             index_varnode: None,
             incoming: Vec::new(),

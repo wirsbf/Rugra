@@ -1588,3 +1588,33 @@ main 在 block.rs:4826 预存 panic，与本改动无关，panic 位点/计数�
 numbering=0；gcc 审计 fail 名集逐名恒等（curl 104/20、httpd 14/15 与亲父一致）；
 投影银行 391/391 MATCH；cargo test --lib 1712P/1F（nonzeromask 预存）零回退；
 check_ghidra_annotations/refs 全绿。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-DEFAULTCHAIN-0001 — grab_case_order 注册 default 虚拟条目）
+
+`grab_case_order` 新增 `default_case` 参数与第三返回值 `default_order: Option<CaseOrder>`：
+default 组件经 `switch_case_basic_coords` 解析基本图坐标后，其 outindex 槽位在
+casemap 里登记为虚拟索引 `cases.len()`（cc:3527-3533 的全组件 addCase 语义），
+链环（cc:3536-3546）遍历 cases+虚拟 default——「case 的 BlockGoto 目标=default
+基本块」与「default 自身 fall-thru 入另一 case」两侧链边都能接上；坐标不可解析
+时返回 None（finalize 侧走 legacy 桶）。两调用点（try_rule_switch 与
+collapse_switches 安装器）与三处 BlockSwitch 重建/构造点同步传输新字段。
+机制 B 门禁：curl 474/0/0（glob_set −15）、httpd 908/0/0 字节恒等、bank 391/391、
+gcc fail 名集恒等、双跑 cmp 恒等；双侧 runner blockmultigoto/goto_prints 重钉后
+MATCH（printc_switch_emit 的 observation=UNTESTED 门为亲父预存断点，另行登记）。
+
+## 2026-09-25 追加（CR-GLOBATTR F1 — multigoto 臂后的 default 链索引重映射）
+
+`try_rule_switch` 的 multigoto 臂（cc:3548-3553 的 append 语义）在 `grab_case_order`
+**之后**向 `case_order` push g 个重加 goto-case——grab 期登记的虚拟 default 索引
+k=cases.len() 被 push 挤占：finalize 扩展视图里 `ext[k]` 变成首个重加 case 而非
+default，对 default 的链（`chain==k`）静默改接重加 case。修复 = 臂内 push 完成后
+`CollapseStructure::remap_default_chain_indices`（`chain==k → k+g`，返回搬移数）：
+
+- `<k` 的正则间链不动；重加 case 的 placeholder chain=-1 且不入 grab 的 casemap，
+  故 `==k` 无歧义只能是 grab 期 default 链；`default_order.chain` 目标恒为正则索引
+  或 -1，不可能为 k——三守卫使重映射 correct-by-construction；
+- `debug_assert` 后置不变量：重映射后无 `chain==k` 残留（k 槽现为不参与链的重加
+  case）；RUGRA_BS_DUMP=1 输出臂事件见证行（k、+g、remapped 数）；
+- 触发面亲测：curl 3 次臂事件（47→48）与 httpd 3 次（16→17）全部 remapped=0——
+  双语料休眠；3 个单测（`multigoto_defaultchain_tests`）钉死重映射数学；
+- 补丁前后 curl（474/0/0）与 httpd（908/0/0）输出字节恒等。

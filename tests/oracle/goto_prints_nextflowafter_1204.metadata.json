@@ -1,28 +1,28 @@
 {
  "analysis_options": {
   "entrypoint": "hand-built final-tree shapes per case, then the ActionFinalStructure tail scopeBreak(-1,-1) (Rugra: BlockGraph::scope_break + compute_goto_prints, the transport for the oracle's lazy gotoPrints), then per-(composite,component) nextFlowAfter observation via the production virtual call (Rugra: next_flow_after_successors / graph_sibling_successors)",
-  "observation": "per case: (a) one dispatch line per (composite, component) — parent type, component identity+type, the dispatched successor identity+type via parent->nextFlowAfter(component); (b) one goto line per tree-resident BlockGoto — identity+type, target identity+type, gototype after scopeBreak, gotoPrints (Rugra: prints_precomputed after compute_goto_prints). Switch slots use the ORACLE indexing (dispatch root = slot 0 with arm-① null; cases offset by one) so both sides emit identical text — Rugra keeps BlockSwitch::control outside the walked component list. Sorted output is the registered order normalization (factories append on the oracle side; per-block facts are order-free). Front leaves are non-null on both sides (BlockCopy leaves), so prints is discriminative — unlike the Vertex-leaf wrapped fixture whose prints null-degenerates.",
+  "observation": "per case: (a) one dispatch line per (composite, component) \u2014 parent type, component identity+type, the dispatched successor identity+type via parent->nextFlowAfter(component); (b) one goto line per tree-resident BlockGoto \u2014 identity+type, target identity+type, gototype after scopeBreak, gotoPrints (Rugra: prints_precomputed after compute_goto_prints). Switch slots use the ORACLE indexing (dispatch root = slot 0 with arm-\u2460 null; cases offset by one) so both sides emit identical text \u2014 Rugra keeps BlockSwitch::control outside the walked component list. Sorted output is the registered order normalization (factories append on the oracle side; per-block facts are order-free). Front leaves are non-null on both sides (BlockCopy leaves), so prints is discriminative \u2014 unlike the Vertex-leaf wrapped fixture whose prints null-degenerates.",
   "prestate": "per-case fresh BlockGraph; originals with explicit distinct indexes (drives scopeBreak's curloopexit threading); edges on originals so the copies mirror them via replaceUsingMap"
  },
  "architecture": "locked synthetic copy-level FlowBlock trees built through production BlockGraph APIs (newBlockCopy + copymap/replaceUsingMap exactly as BlockGraph::buildCopy block.cc:1925-1938, newBlockGoto/newBlockList/newBlockWhileDo/newBlockDoWhile/newBlockInfLoop, grabCaseBasic+identifyInternal+addBlock as newBlockSwitch block.cc:1904-1919); no AddrSpace, no Funcdata, no PcodeOps",
  "comparand_sha256": {
   "cpp_fixture_sha256": "e1e2a881590841da6fb4d9a25f14aa878709ebed13c918dfd751d0e0a1a528c7",
-  "rugra_block_sha256": "6feb58f2ba3dcfd4f7ae339dd8bc7a1016836573a888cef29610d9ba21508364",
-  "rugra_coreaction_sha256": "24605f887d05fbe5aed6770784456d576c18e89e495dfe0f5dc1eaaa5c9a022a",
-  "rust_fixture_sha256": "6e6c12907a0d7e61ba15699ab7ef770d1b0c9e9845a590145ee12320e2f3cddd"
+  "rugra_block_sha256": "f4481aefb8d2ba689d4f1f2161480d10d1a12a70a1f0d4c54027a696a1ef14bf",
+  "rugra_coreaction_sha256": "8c71cf399edfcc9b4604fd68d3d7ab69b2f382a423e78f6e1025c69b892c8adf",
+  "rust_fixture_sha256": "91282e2d0ddb51efdc4b2a7cd22fcbff31115e51978193d4c7f1b467b8424e5b"
  },
  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
  "fixture_id": "GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001",
  "input_manifest": {
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
   "cases": [
-   "while_tail_break_goto: WhileDo[cond=b0, body=List[b1, goto(b2→b3)]], roots [wd, b3] — WhileDo arm: body-tail goto gets front_leaf(cond)=b0 (loop head), NOT b3; prints=1; scopeBreak converts gototype to break(2)",
-   "infloop_backedge_goto: InfLoop[body=List[b0, goto(b1→b0)]] — InfLoop arm: goto gets front_leaf(body)=b0 == target → prints=0 (natural backedge)",
-   "switch_fallthru_goto: Switch components [head, goto(c0→c1), c1, c2] — arm① head (cs[0] dispatch root) → null; t_goto case → next caseblock front leaf (c1) == target → prints=0; non-t_goto cases c1/c2 → null; labels all 0 so the finalizePrinting stable_sort preserves grabCaseBasic order (real label sort tracked by JUMPTABLE-TABLEAPI-0001 on both sides)",
-   "goto_wrapping_goto: g_out wraps List[g_in(→b2)], both target b2 — Goto arm: inner goto gets front_leaf(b2) == target → prints=0 (subsumed)",
-   "if_else_tail_goto: If[b0, tc=List[b1, goto(b2→b4)], fc=b3], roots [if, b4] — If arm: slot0 null, tc/fc → parent arm b4 (never sibling fc); tc-tail goto target b4 → prints=0",
-   "dowhile_tail_goto: DoWhile[List[b0, goto(b1→b2)]], roots [dw, b2] — DoWhile arm: null → prints=1; scopeBreak converts gototype to break(2)",
-   "switch_multigoto_gotoedge: Switch cs[0] = BlockMultiGoto (production newBlockMultiGoto peel over the head copy, gotoedge = head's slot-2 target c3); regular cases cA (plain copy) and g0 (t_goto wrapping cB, own target `out` outside); grabCaseBasic's t_multigoto append arm (block.cc:3548-3553) adds c3 as the case AFTER g0 with gototype f_goto_goto — g0's nextFlowAfter falls through into the APPENDED case (front leaf c3, cc:3653-3657), not to g0's own target; multigoto dispatch (cc:2931-2936) null for the wrapped head; scopeBreak promotes the appended case to f_break_goto (cc:3620-3623, target c3 IS the switch exit = block after the switch root) while g0 stays f_goto_goto; g0 prints=1 (target out != next c3)"
+   "while_tail_break_goto: WhileDo[cond=b0, body=List[b1, goto(b2\u2192b3)]], roots [wd, b3] \u2014 WhileDo arm: body-tail goto gets front_leaf(cond)=b0 (loop head), NOT b3; prints=1; scopeBreak converts gototype to break(2)",
+   "infloop_backedge_goto: InfLoop[body=List[b0, goto(b1\u2192b0)]] \u2014 InfLoop arm: goto gets front_leaf(body)=b0 == target \u2192 prints=0 (natural backedge)",
+   "switch_fallthru_goto: Switch components [head, goto(c0\u2192c1), c1, c2] \u2014 arm\u2460 head (cs[0] dispatch root) \u2192 null; t_goto case \u2192 next caseblock front leaf (c1) == target \u2192 prints=0; non-t_goto cases c1/c2 \u2192 null; labels all 0 so the finalizePrinting stable_sort preserves grabCaseBasic order (real label sort tracked by JUMPTABLE-TABLEAPI-0001 on both sides)",
+   "goto_wrapping_goto: g_out wraps List[g_in(\u2192b2)], both target b2 \u2014 Goto arm: inner goto gets front_leaf(b2) == target \u2192 prints=0 (subsumed)",
+   "if_else_tail_goto: If[b0, tc=List[b1, goto(b2\u2192b4)], fc=b3], roots [if, b4] \u2014 If arm: slot0 null, tc/fc \u2192 parent arm b4 (never sibling fc); tc-tail goto target b4 \u2192 prints=0",
+   "dowhile_tail_goto: DoWhile[List[b0, goto(b1\u2192b2)]], roots [dw, b2] \u2014 DoWhile arm: null \u2192 prints=1; scopeBreak converts gototype to break(2)",
+   "switch_multigoto_gotoedge: Switch cs[0] = BlockMultiGoto (production newBlockMultiGoto peel over the head copy, gotoedge = head's slot-2 target c3); regular cases cA (plain copy) and g0 (t_goto wrapping cB, own target `out` outside); grabCaseBasic's t_multigoto append arm (block.cc:3548-3553) adds c3 as the case AFTER g0 with gototype f_goto_goto \u2014 g0's nextFlowAfter falls through into the APPENDED case (front leaf c3, cc:3653-3657), not to g0's own target; multigoto dispatch (cc:2931-2936) null for the wrapped head; scopeBreak promotes the appended case to f_break_goto (cc:3620-3623, target c3 IS the switch exit = block after the switch root) while g0 stays f_goto_goto; g0 prints=1 (target out != next c3)"
   ],
   "sha256": "f3a479f9212817fc8ba06ea1ce7e5846dca58d312c487816f4206e7095aea31c"
  },
