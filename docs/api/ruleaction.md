@@ -1918,3 +1918,93 @@ union_map 逐边解析落地后的消费者接线（oracle 的 `getTypeReadFacin
 前后（亲父 master 93195bca → 本车道,默认态）:curl 369→309（glob_set 16→3 /
 glob_range 19→1 / next_url 22→7 / match_url 19→5,字段偏移族全收敛,残差归
 字符串常量族+换行）;httpd 872 字节恒等;0 not-settling/0 超时。
+
+## 2026-09-26：AddTreeState 相对指针偏移单位换算（RULEACTION-ADDRUNIT-0001）
+
+`AddTreeState::ptr_rel_state`（`isFormalPointerRel()` 闸门 + `TypePointerRel`
+访问器的所有权镜像）此前把存储的**字节**偏移（`base.pointer_rel.offset` =
+`TypePointerRel::offset`，type.hh:652；`getByteOffset` type.hh:675）直接当
+`getAddressOffset()` 的返回值消费。oracle 的 `getAddressOffset()`
+（type.hh:670）是 `AddrSpace::byteToAddressInt(offset, wordsize)`
+（space.hh:541 `val/ws`）——**地址单位**；ruleaction.cc 四个消费位点全取
+地址单位：
+
+- ctor 6035-6036：`nonmultsum = pRelType->getAddressOffset(); nonmultsum &= ptrmask;`
+- `clear` 5981-5982：同款重播种；
+- `calcSubtype` STRUCT 臂 6314：`offset == pRelType->getAddressOffset()`；
+- `calcSubtype` 尾部 6333-6335：`offset`/`correct` 各减 `getAddressOffset()`。
+
+修复：`ptr_rel_state` 返回五元组 `(addr_off, byte_off, parent, ptr_to,
+wordsize)`——`addr_off = byte_to_address_int(rel.offset, wordsize)`
+（getAddressOffset 镜像），`byte_off` 透传原始字节偏移（getByteOffset 镜像），
+供 STRUCT 臂 `pointer_rel_evaluate_thru_parent` 的 `offset` 形参使用
+（type.cc:2593 `byteOff + offset` 在字节域折叠——该形参此前恰好拿的就是
+字节值，本次修复保持）。四个消费位点相应改读 `addr_off`；wordsize 沿用
+`.max(1)` 钳制（FIELDOFF-CR-F6 已记录的形式性偏差：oracle 裸
+`getWordSize()`，ws=0 在 C++ 是 UB、在 Rust 是除零 panic）。
+
+**可观测性**：wordsize==1 时 `byte_to_address_int(x,1)==x`，两单位恒等
+——x86 双语料（curl/httpd，1 字节寻址）构造性不可观测，A/B 亲测字节恒等；
+wordsize>1 架构 formal rel 的 nonmultsum 此前偏大 wordsize 倍，现按
+oracle 地址单位播种。单测 `test_add_tree_ptr_rel_state_address_unit_offset`
+钉死：wordsize 2、字节偏移 8 → addr_off 4 / byte_off 8；ctor nonmultsum
+播种 4（地址单位）、size=byteToAddressInt(32,2)=16、baseType=parent、
+isDegenerate=false；clear 重播种 4；wordsize 1 恒等臂；HAS_STRIPPED
+（ephemeral）闸门排除臂。
+
+同车道一并收口（各见独立 commit）：RULEACTION-RS0-RELGATE-0001（RS0 缺口
+注释补 TODO ID + 修过时陈述）、RULEACTION-ANNO-DRIFT-0001（`// Ghidra:`
+起始行批量纠偏 221 处，零行为变化）。
+
+## 2026-09-26：RuleStructOffset0 缺口注释补登记（RULEACTION-RS0-RELGATE-0001 注释卫生半项）
+
+`RuleStructOffset0` 两处缺口陈述过时（"Rugra has no TypePointerRel"——rel 基础
+设施已由 FIELDOFF/ADDRUNIT 车道落地：`AddTreeState::ptr_rel_state`、
+`pointer_rel_evaluate_thru_parent` 均在库内）且无 TODO ID。本次改为准确陈述：
+oracle ruleaction.cc:6695-6725 的 formal 相对指针臂（isFormalPointerRel &&
+evaluateThruParent(0) → parent PTRSUB walk：getByteOffset + getSubType +
+byteToAddress(newoff, wordsize) + PTRSUB(#-newoff) + INT_ADD 回补 +
+inheritResolution + setStopTypePropagation）**仍缺**，引用 TODO
+RULEACTION-RS0-RELGATE-0001（臂实现残项继续跟踪，owner 待认领）；plain
+STRUCT/ARRAY 路径（6726-6755）保持忠实。连带区域行号勘误：
+6678-6774→6660-6756、6693-6774→6675-6756、6713-6743→6695-6725、
+6744-6767→6726-6755。零行为变化（注释-only）。
+
+## 2026-09-26：`// Ghidra:` 起始行批量纠偏（RULEACTION-ANNO-DRIFT-0001）
+
+票面三处（6927→6909 / 7146→7128 / 6036→6018）经全文件扫描为两族系统性漂移
+（+18 族与 +20 族，旧 oracle 版本行差）的样本，另有 5 处错域引用
+（RulePullsubMulti minMaxUse/acceptableSize/replaceDescendants 引到调用点
+977/981/1017、RulePushPtr::duplicateNeed 引到 RuleExtensionPush 区 7469、
+RulePtrArith::evaluatePointerExpression 引到 6876）与 RuleDoubleShift +1
+两处。修法：对每个 `// Ghidra: ruleaction.cc:N FN` 解析 FN 在锁定 oracle
+e40ed130 的真实定义行替换 N（类名无 `::` 的代表性行引用不动），共 **221
+处**；修后复核脚本验证 584 个函数引用 0 漂移，`check_ghidra_refs --all
+--strict` 绿。注释-only：零行为变化。
+
+## 2026-09-26：ANNO 残留修正 + 验证声明勘误（RULEACTION-ANNO-DRIFT-RESIDUAL-0001）
+
+CR-ADDRUNIT 终判指出上一节的完整性声明不实：纠偏脚本的 oracle 定义行解析器
+只匹配标量返回类型（`Varnode \*\s+` 要求星号后空白，而 oracle 实际风格是
+`Varnode *Foo::bar(` 星号紧贴函数名），**13 处指针返回型方法注释漏网**，另
+**2 处错域**（RuleIgnoreNan::testForComparison 引 9722=applyOp 定义行、
+RulePullsubMulti::findSubpiece 引 1005=调用点）；"584 个函数引用 0 漂移"
+实为 584 = 339 函数级 + 245 类名级行次的总和，函数级验证本身带同一解析器
+缺口——声明作废。本 commit 修正 15 处（reviewer 亲验真值表，本车道逐行
+复核 oracle 定义起始行后替换）：
+
+getHiBit 5659→5641 / getBooleanResult 10335→10317 / detectThreeWay
+10035→10017 / checkSignExtraction 8776→8758 / findForm 8069→8051 /
+checkSignExtForm 8928→8910 / findSubshift 7928→7910 / determineDatatype
+7481→7463 / checkBoolean 9277→9259 / constructBool 9346→9328 /
+testForComparison 9696→9678 与 9722→9678 / buildMultiples 6374→6356 /
+buildExtra 6408→6390 / findSubpiece 1005→849。
+
+解析器缺口登记 TOOLS-REFS-DEFSTART-0001（定义行正则须接受
+`Type \*Class::fn(` 星号贴名形 + 裸构造函数形，且防贪婪回溯误配）；类名级
+（无 `::`）代表性行引用豁免维持 RULEACTION-ANNO-CLASSNAME-0001（reviewer
+计 174；本车道复计口径 245 行次/127 唯一 (行,名) 对，计数口径差登记于该
+票）。修正后复验（解析器已修）：函数级 339 处 0 漂移，唯一未解析=
+AddrSpace::byteToAddress（跨文件 space.hh 定义、引 ruleaction.cc:6294 调用
+点，既有风格，checker 有效）；`check_ghidra_refs --all --strict` 绿。
+注释-only 15 行，函数体零改动。
