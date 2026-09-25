@@ -1,5 +1,42 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-26：GEN4-SQ-DUPDECL-NUMBERING-0001 — mirror 面整体跳过声明注入臂
+
+`post_process_output_legacy` 的两个声明注入臂（`backfill_missing_locals` 的前缀猜型
+注入与 `flush_func_remove_unused` 的 `int uVarN;` 补注/未用删除半臂）在 **direct-runner
+（mirror）契约面整体早退**：新增 `EmitNoMarkup::mirror_face_active()`（`OnceLock` 惰性
+探测一次），env 集 = `RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`/`RUGRA_GEN_MIRROR`，单一来源
+`type_system::typefactory::direct_runner_tier_active`（MIRROR-ENVS-CANONICAL-0001）。
+两个入口在 mirror 面直接 `return text.to_string()` / `out.extend(func_lines)`，canon 面
+（无 env）行为逐字节不变。
+
+**根因（SQATTR 发射流取证，fwd680.log 28483 条 Emit 调用）**：printc 作用域通道只发
+一次且位置正确；sq GetOptimum（`--one 680`）函数体中部（do/if 块内）的 canon 档声明块
+全部来自注入臂——其 declared 探测与签名启发式**只解析 canon 拼写**
+（`int `/`long `/`char `/`undefinedN` 与 `legacy_never_type_evidence` 表），mirror 档的
+`int4`/`xunknownN`/`code` 声明行全部不被识别：
+
+- `backfill_missing_locals` 的 `sig_shape` 把携带 `(int8 *)` 强转型（内含 " *" 子串）、
+  无 `;`/`=`/比较符的**多行条件续行**误判为函数签名（GetOptimum 三处：cast 续行
+  `*(char *)(*(int8 *)…)+1))) {` 形），块内已声明符号全部读作 missing → 前缀猜型
+  canon 重声明注入块内（`int iVar16; … char *piVar33; long uVar14; …`，base 实测
+  761-776/841-863/1110-1112 三块 24 行，numbering=7 的全部来源）；
+- `flush_func_remove_unused` 的 `type_ok` 表同因不识 mirror 拼写 → 声明收集为空 →
+  body 内 uVarNNN 全部"missing"，`last_decl_idx` 回退 0（签名与 `{` 之间 K&R 位）。
+
+**oracle 对照（机制 E 亲读，e40ed130）**：`docFunction`（printc.cc:2641-2676）全序列 =
+beginFunction → 注释 → 签名 → openBraceIndent → `emitLocalVarDecls`（**唯一**声明点，
+:2260-2279 → `emitScopeVarDecls` :2518-2575，每符号恰一次 `emitVarDeclStatement`）→
+emitBlockGraph → closeBraceIndent → flush；`EmitPrettyPrint::flush`
+（prettyprint.cc:1194-1211）是纯 token 队列排空，**零文本扫描/零注入**。direct-runner
+goldens（`tests/golden/*_1204.direct-runner.c`）零注入声明行。两臂本是 canon 面
+self-containment 补偿（POSTFIX-RETIRE-0001 W0 域），在 mirror 面跳过 = 清除自创层
+误射方向（整层退役仍按 W1-WT 路线）。
+
+**验收**：`--one 680` numbering 7→0（defects=0，注入三块消失，输出 1280→1256 行，
+顶部 `char *pcVar34;` 与 golden:49904 同形）；sq 面官方 gate numbering=0 → 面转绿；
+canon curl/httpd A/B 字节恒等；镜面四面棘轮 65/150/16/7500 未重钉全 PASS。
+
 ## 2026-09-25：PRINTC-EMIT-TAGLINE-ABS-0001 — `tagLine(int4)` 绝对形独立成 `tag_line_indent`
 
 oracle 的 Emit 基类有两个**分离的**换行 virtual（prettyprint.hh:173/180）：无参

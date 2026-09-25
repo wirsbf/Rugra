@@ -2262,6 +2262,31 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // RUGRA-GLUE: lazy mirror-face probe gating the two declaration-injection
+    // arms below (GEN4-SQ-DUPDECL-NUMBERING-0001). Ghidra has no counterpart
+    // for the very question: the oracle print path declares every function
+    // local exactly once, from the top of the body, via emitLocalVarDecls
+    // (printc.cc:2260-2279 → emitScopeVarDecls :2518-2575, one
+    // emitVarDeclStatement per symbol) and never re-scans or re-declares
+    // anything afterwards (docFunction printc.cc:2641-2676 ends at flush;
+    // EmitPrettyPrint::flush prettyprint.cc:1194-1211 is a pure token-queue
+    // drain with zero text analysis). The injection arms are Rugra's canon-
+    // face self-containment compensation (POSTFIX-RETIRE-0001 W0), whose
+    // declared-name collectors and signature probes only recognize the canon
+    // type spellings (int/long/char */undefinedN) — on the direct-runner
+    // contract face (standalone core table: xunknownN/int4/uintN/code,
+    // sleigh_arch.cc:204-238) the probe misreads every symbol-driven
+    // declaration as "missing" and re-declares it mid-body with a prefix-
+    // guessed canon type (sq GetOptimum: `int4 iVar16;` at the top plus
+    // `int iVar16; … char *piVar23;` injected inside a do-loop). The
+    // direct-runner goldens carry zero injected declarations, so the arms
+    // are skipped wholesale on that face. Env set = MIRROR-ENVS-CANONICAL-
+    // 0001, single-sourced from typefactory::direct_runner_tier_active.
+    fn mirror_face_active() -> bool {
+        static MIRROR_FACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *MIRROR_FACE.get_or_init(crate::type_system::typefactory::direct_runner_tier_active)
+    }
+
     // RUGRA-GLUE: backfill_missing_locals (no Ghidra counterpart exists)
     /// For each function, find `local_XX` identifiers used in the body but not
     /// declared, and insert `int local_XX;` declarations before the first
@@ -2278,6 +2303,16 @@ impl EmitNoMarkup {
     /// same-name different-type double declaration (`long *plVar64;` from
     /// the scope emitter plus `long lVar64;` here).
     fn backfill_missing_locals(text: &str) -> String {
+        // GEN4-SQ-DUPDECL-NUMBERING-0001: skip the whole arm on the
+        // direct-runner (mirror) face — its declared-name walk and
+        // signature probe only parse canon spellings, so on the
+        // xunknownN/int4 face every symbol-driven declaration reads as
+        // "missing" and gets a prefix-guessed canon-type re-declaration
+        // (the sq GetOptimum mid-body block); the direct-runner goldens
+        // carry zero injected declarations. See mirror_face_active above.
+        if Self::mirror_face_active() {
+            return text.to_string();
+        }
         use std::collections::BTreeSet;
         let lines: Vec<&str> = text.split('\n').collect();
         let mut out: Vec<String> = Vec::with_capacity(lines.len());
@@ -3003,6 +3038,26 @@ impl EmitNoMarkup {
     /// Remove unused variable declarations from a function's lines
     /// AND add missing declarations for uVarNNN that appear in body but have no declaration
     fn flush_func_remove_unused(func_lines: &[String], out: &mut Vec<String>) {
+        // GEN4-SQ-DUPDECL-NUMBERING-0001: skip the whole pass on the
+        // direct-runner (mirror) face. Both halves misread the standalone
+        // core-table spellings: the type_ok collector accepts only canon
+        // int/long/bool/byte/short/undefinedN (and char/int/long/void/
+        // undefinedN with `*`), so mirror `int4`/`xunknown8`/`code`
+        // declarations are never collected — the unused-removal half
+        // cannot protect them and the missing-injection half re-declares
+        // every body uVarNNN as `  int uVarN;` after a last_decl_idx that
+        // falls back to 0 (K&R placement between signature and `{`) or onto
+        // a stray pseudo-declaration line mid-body. The symbol-driven
+        // bypass below cannot be widened instead: its evidence table
+        // (legacy_never_type_evidence) equally lacks the xunknownN/int4/
+        // code spellings, and printc.cc:2260-2279 emitLocalVarDecls emits
+        // every scope symbol exactly once regardless of body use — passing
+        // the chunk through untouched is exactly the oracle shape. Canon
+        // face keeps the pass (POSTFIX-RETIRE-0001 W0 compensation).
+        if Self::mirror_face_active() {
+            out.extend(func_lines.iter().cloned());
+            return;
+        }
         // PRINTC-LEGACY-DECL-DUP-0001 bypass: when the chunk already carries
         // symbol-driven declarations (emit_local_var_decls products), both
         // halves of this pass only corrupt them — the missing-injection half
