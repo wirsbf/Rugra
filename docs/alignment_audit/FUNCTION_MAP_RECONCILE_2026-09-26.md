@@ -3,7 +3,7 @@
 > **任务**: 关闭 AGENTS.md「~2055 与旧报告 ~5200+ 分母冲突 → 全局完成度未证明」的唯一阻塞项。
 > 本报告独立复现权威分母、逐项对账现行账本、裁决历史口径冲突，并给出账本生成器重建规格。
 > Oracle: `Ghidra_12.0.4_build` / `e40ed13014025f82488b1f8f7bca566894ac376b`（114 个 `.cc` + 114 个 `.hh`）。
-> 复现脚本: `/dev/shm/rugra-tests/fmaprecon/{enumerate_authoritative,reconcile_four_category,delta_characterize,adjudicate_historical}.py`。
+> 复现脚本: `/dev/shm/rugra-reports/fmaprecon/{enumerate_authoritative,reconcile_four_category,delta_characterize,adjudicate_historical}.py`。
 
 ## TL;DR（结论）
 
@@ -55,7 +55,7 @@ ctags --output-format=json --fields=+neKStz --extras=+F --kinds-C++=+p -o - \
 **环境指纹**（可复现性）:
 - oracle commit: `e40ed13014025f82488b1f8f7bca566894ac376b`（worktree `ghidra/` symlink → 主仓，HEAD 校验通过）
 - ctags: `Universal Ctags 6.2.0(d8622b793)`（账本生成时为 6.2.1(v6.2.1)——**两版本计数恒等**，仅版本串不同）
-- `.cc` 树 sha256 指纹: 见 `/dev/shm/rugra-tests/fmaprecon/authoritative_enumeration.json`
+- `.cc` 树 sha256 指纹: 见 `/dev/shm/rugra-reports/fmaprecon/authoritative_enumeration.json`
   （`oracle.cc_tree_sha256` / `oracle.hh_tree_sha256`，按文件名+单文件 sha256 链式累加）
 
 ### 1.2 定义形态分类（ctags 9494 条行为的结构拆分）
@@ -231,16 +231,16 @@ Rust 侧 `RG-F-*` 同理由 (module, owner_context, 规范化签名) 哈希。
 
 ```bash
 # 权威分母（本报告 §1.1 全表 + §1.2 形态分类 + 指纹）
-python3 /dev/shm/rugra-tests/fmaprecon/enumerate_authoritative.py
+python3 /dev/shm/rugra-reports/fmaprecon/enumerate_authoritative.py
 # 四分类对账（§2.1）
-python3 /dev/shm/rugra-tests/fmaprecon/reconcile_four_category.py
+python3 /dev/shm/rugra-reports/fmaprecon/reconcile_four_category.py
 # 解析器 vs ctags 差量刻画（§1.3/§3.4）
-python3 /dev/shm/rugra-tests/fmaprecon/delta_characterize.py
+python3 /dev/shm/rugra-reports/fmaprecon/delta_characterize.py
 # 历史口径裁决（§3.1/§3.2）
-python3 /dev/shm/rugra-tests/fmaprecon/adjudicate_historical.py
+python3 /dev/shm/rugra-reports/fmaprecon/adjudicate_historical.py
 # 生成器自检（§4.4; 非锚点环境 rc=1 属预期）
 python3 tools/generate_function_ledger.py --check
 ```
 
-产物 JSON（均含 oracle 指纹）: `/dev/shm/rugra-tests/fmaprecon/{authoritative_enumeration,
+产物 JSON（均含 oracle 指纹）: `/dev/shm/rugra-reports/fmaprecon/{authoritative_enumeration,
 reconcile_four_category,delta_characterization,historical_adjudication}.json`。
