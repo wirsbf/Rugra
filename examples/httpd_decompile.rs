@@ -3934,16 +3934,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // IMPORTSIG-DRIVER-0001: the import-signature channel's gate. The
-    // channel is analyzer transport: ON under the self-hosted Parameter ID
-    // mode (whose face this lane is judged on) or standalone via
-    // RUGRA_IMPORTSIG=1 (the measurement instrument); RUGRA_IMPORTSIG=0 is
-    // the A/B kill switch under either. The mirror gate keeps absolute
-    // precedence (projection purity — the bare-BFD oracle harness ships no
+    // IMPORTSIG-DRIVER-0001 (IMPORTFLIP promotion, HTTPDMAIN-F7-
+    // NAMERECOMMEND-0001 data half, 2026-09-26; opt-out polarity — the
+    // DFLIP/SEEDFLIP/V3FLIP precedent): the import-signature channel's
+    // gate. The channel is analyzer transport — the canon golden's own
+    // producer (analyzeHeadless) applies the generic_clib signature data
+    // to every recognized PLT import, so the locked import prototypes
+    // (types AND glibc reserved parameter names, NAME_LOCKED) are part of
+    // the canon input state, not an optional enrichment: the golden's
+    // `__s1`/`__dest`/`__n` local-name family (80 functions) is
+    // ActionNameVars::lookForFuncParamNames (coreaction.cc:2858) reading
+    // exactly these name-locked call-site parameters. The channel is
+    // therefore DEFAULT-ON: RUGRA_IMPORTSIG=0 is the single-channel A/B
+    // kill switch, RUGRA_IMPORTSIG=1 remains the explicit form (equivalent
+    // to the new default), the mirror gate keeps absolute precedence
+    // (projection purity — the bare-BFD oracle harness ships no
     // generic_clib data) and RUGRA_SEEDS=0 stays the global escape, exactly
-    // like the PARAMID/V3SIG gates above. The DEFAULT face (all gates
-    // closed) never builds the context: the arm is dead code and the
-    // historical computation is byte-identical.
+    // like the PARAMID/V3SIG gates above. Under RUGRA_PARAMID=1 the channel
+    // keeps running (the self-hosted mode's callee-siglock locks are the
+    // binary's own recovered prototypes; the import ledger is the same
+    // analyzer-transport layer as before the flip). Flip evidence: the
+    // IMPORTSIG lane's PARAMID-face measurement (753/0/0 from 999/0/0,
+    // 0 regressions, 11 improved functions — LANE_IMPORTSIG_2026-09-25.md)
+    // plus this lane's canon-face A/B (see the F7 lane report).
     let import_signatures: Option<std::sync::Arc<ImportSignatureContext>> =
         if mirror_flow_enabled() || std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
             if mirror_flow_enabled() {
@@ -3951,9 +3964,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             None
         } else {
-            let standalone = std::env::var("RUGRA_IMPORTSIG").ok().as_deref() == Some("1");
             let disabled = std::env::var("RUGRA_IMPORTSIG").ok().as_deref() == Some("0");
-            if (paramid_active || standalone) && !disabled {
+            if !disabled {
                 let ledger = build_import_signature_ledger();
                 eprintln!(
                     "[IMPORTSIG] generic_clib ledger: {} entries ({} from the library table, {} httpd extension; canon leaves 7 imports unlocked)",

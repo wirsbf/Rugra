@@ -3641,3 +3641,34 @@ walk φ → gatherOpen int8 点位 → 符号，oracle 同信道因符号层恒 
 对拍（oracle TYPEPROP_DEBUG 直跑 trace 已建，/dev/shm 证据目录）确认其余
 臂（MULTIEQUAL 重包、INT_EQUAL 横传、LOAD/STORE backedge、metain 表）逐行
 同构。
+
+## 2026-09-26（F7NAME lane）：ActionNameVars 恢复链接线 + ActionInferTypes 类型推荐（HTTPDMAIN-F7-NAMERECOMMEND-0001 机制半）
+
+三处接线（src 侧零算法新造，全部消费 varmap.rs 新落的存储层，详见
+docs/api/varmap.md 同日节）：
+
+- **`ActionNameVars::apply`**（coreaction.cc:2978）— cc:2984 的
+  `recoverNameRecommendationsForSymbols()` 调用落地（scope take/put-back 借用
+  seam），替换原 RUGRA-GAP 注释（"no name-recommendation store is ported
+  yet"）。顺序保持 oracle 逐字：linkSymbols → recover → lookForBadJumpTables →
+  lookForFuncParamNames → buildDefaultName 循环 → assignDefaultNames。
+  lookForFuncParamNames/makeRec（cc:2815-2897）此前已移植（锁定原型参数名→
+  喂参局部推荐），本票数据半（httpd 驱动 IMPORTFLIP）接通其输入。
+- **`ActionRestructureVarnode`** scope 构造块尾 — `collect_name_recs()` 调用
+  （varmap.cc:476 `ScopeLocal::decode` 尾调的边界镜像：committed-local seed
+  materialize 之后、restructure 之前）。TYPESEED 种子全部 name+type-locked，
+  故为 no-op——为未来 name-lock-only localdb 传输（oracle 的
+  ATTRIB_NAMELOCK-without-ATTRIB_TYPELOCK 形态）预留忠实边界。
+- **`ActionInferTypes::apply`**（coreaction.cc:5374）— cc:5398 的
+  `applyTypeRecommendations()` 调用落地（localcount 门之后、buildLocaltypes
+  之前，oracle 位置逐字）。存储恒空时 no-op。
+
+验收（fast-release 亲测，基=master 641994a6 亲测 590/0/0）：机制半+数据半
+（examples/httpd_decompile.rs IMPORTFLIP）联合 E2E httpd canon **590→439**
+/0/0（−151，9 函数改善 0 回退，main 232→196——`long *__s1` 声明+4 使用行与
+golden 逐字复现，含 oracle 的判别行为：喂 "crit" 的 (long*) cast 链局部得名
+`__s1`、直喂 "alert" 的 (char*) cast 局部保默认名）；curl canon 267/0/0 恒等；
+RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲证）；镜面三面
+110/258/15==基线（275/460/55 棘轮未重钉）；bank 391/391；cargo test --lib
+1744P/1F（nonzeromask 预存）。机制 C：coreaction/varmap 核心层白名单——CR
+已请求（见车道终报）。

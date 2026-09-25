@@ -477,3 +477,57 @@ varmap.cc:1124），变索引（open）引用走 gather_open 通道。
 下标发射消费，E2E httpd −160；包装偏移合计 wrapping_add/wrapping_mul 与 oracle
 uintb 模 2^64 算术一致。机制 C：本改动落在 varmap AliasChecker 域，commit 已请求
 独立 Cross-Review。
+
+## 2026-09-26（F7NAME lane）：NameRecommend 存储与恢复链（HTTPDMAIN-F7-NAMERECOMMEND-0001 机制半）
+
+`ScopeLocal` 补齐 varmap.cc 的名字推荐存储+恢复链（此前 coreaction.rs
+ActionNameVars::apply 的 cc:2984 调用点是 RUGRA-GAP 明文"no name-recommendation
+store is ported yet"）：
+
+- **`NameRecommend` / `DynamicRecommend` / `TypeRecommend`**（varmap.hh:36/56/74）
+  — 三个推荐载荷结构：静态（空间+偏移+usepoint+尺寸+名+symbolId）、动态
+  （usepoint+hash+名+id）、类型（空间+偏移+Datatype）。`ScopeLocal` 新增
+  `name_recommend` / `dyn_recommend` / `type_recommend` 三列表（varmap.hh:
+  214-216）。
+- **`collect_name_recs()`**（varmap.cc:357-381）— 把 name-locked 但非
+  type-locked 的符号降级为名字推荐并移除（category<0 者），nametree 序遍历；
+  "this"指针臂（指向 struct 的指针类型）在降级前经 `add_type_recommendation`
+  保留数据类型（cc:367-377）。Rust 索引稳定 seam：快照 nametree 序后按序重放
+  `add_recommend_name`（即时移除），每个快照索引按低于它的先前移除数校正——
+  追加序/移除时机/终态与 oracle 单循环一致。调用点=ActionRestructureVarnode
+  scope 构造块尾（localdb decode 边界，varmap.cc:476 `ScopeLocal::decode` 尾调
+  语义）。
+- **`add_recommend_name(sym_idx)`**（varmap.cc:1600-1618）— 静态映射入
+  name_recommend（addr+usepoint+size+name+id），动态映射入 dyn_recommend；
+  category<0 移除符号。LocalSymbol 新增 `symbol_id`（database.hh:184）与
+  `this_ptr`（database.hh:208 dispflags 位）两字段承载恢复契约。
+- **`recover_name_recommendations_for_symbols(fd)`**（varmap.cc:1507-1570）—
+  ActionNameVars::apply 在 lookForFuncParamNames 之前调用（coreaction.cc:2984，
+  RUGRA-GAP 关闭）：无效 usepoint 臂=findOverlap+地址相等+符号 addrtied+
+  findLinkedVarnode（**无尺寸门**，cc:1518-1527）；有效 usepoint 臂=
+  param_usepoint（fd 地址−1）走 findVarnodeInput、否则 findVarnodeWritten
+  （vbank.find_vn），符号非 addrtied+首整映射尺寸相等（cc:1540）；命中后
+  renameSymbol(makeNameUnique)+setSymbolId+namelock+remapVarnode。动态尾=
+  DynamicHash::findVarnode 逐条同链（cc:1553-1569）。
+- **`apply_type_recommendations(fd)`**（varmap.cc:1574-1584）— ActionInferTypes::
+  apply 头部调用（coreaction.cc:5398 位置）：输入 varnode 命中推荐地址即
+  `updateType(dt, true, false)`（锁入不覆写）。当前唯一生产者=collect_name_recs
+  的 this 指针臂；funcdata_varnode.cc:1725-1742 的第二生产者
+  （checkParamTypeRecommendations）属参数分析域未移植——登记
+  **VARMAP-PARAMTYPERECOMM-0001**（has_type_recommendations 访问器已备）。
+  **CR-F7NAME 复审修**（同 commit）：恢复链 invalid-usepoint 臂的 vn 解析按
+  entry 自身 uselimit 取 first-use 地址（database.cc:122-127：空 uselimit=invalid
+  Address → findLinkedVarnode 的 addr-tied 扫描臂 funcdata_varnode.cc:1233-1241；
+  有限 uselimit=首 range 首地址 → usepoint-in-range 扫描臂 :1242-1249——修前误传
+  存储偏移，恒走扫描臂）；remap 传参改用 rename 后的最终唯一名（oracle 传 Symbol
+  本体 funcdata_varnode.cc:1104-1126，修前传 pre-unique 推荐名，碰撞去重时
+  symbol_table 记录名≠符号名）；新增真 vbank 双侧 fixture（addr-tied 正/负 +
+  uselimit 有限正/负）覆盖修前 UNTESTED 分支。
+
+可观测性：TYPESEED committed locals 全部 name+type-locked、平台参数符号
+name+type-locked，故当前所有语料下三存储恒空、恢复链恒 no-op（与 oracle
+httpd canon 的空 localdb 推荐态一致——`__s1` 类局部名来自
+lookForFuncParamNames 的锁定原型参数名通道，非本存储）。9 个单元测试覆盖
+降级/移除/nametree 序/参数类目存活/恢复重命名/地址不匹配跳过/无效 usepoint
+臂无尺寸门（oracle 语义文档化）/类型推荐存储/this 指针臂。机制 C：varmap
+核心算法白名单——CR 已请求（见车道终报）。
