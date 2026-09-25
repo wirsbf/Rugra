@@ -1,5 +1,23 @@
 # `varmap.rs` API Reference
 
+## 2026-09-25：create_entry 数组壳改走 TypeFactory::get_type_array（GENSMOKE-T5，wt/vshfix）
+
+`create_entry`（varmap.cc:617-628）num>1 分支不再本地铸造**带名**数组壳
+（旧实现 `format!("{}[{}]", elem, num)`，TYPE-WIRING-0001 residual），改调
+`TypeFactory::get_type_array(num, ct)`（type.cc:3902-3909 的移植，见
+docs/api/type_system/typefactory.md）。oracle `glb->types->getTypeArray`
+经 `TypeArray(n,ao) : Datatype(n*ao->getAlignSize(), ao->getAlignment(),
+TYPE_ARRAY)`（type.hh:937）铸造**匿名**壳并 findAdd 去重；匿名名对打印是
+承重的——`buildTypeStack`（printc.cc:148-151）的 named-break 只对具名类型
+停钻，数组层被钻过时声明走 array_expr postsurround 形（printc.cc:76/
+294-295）：`char acStack_138 [8]`，括号永不烤进类型名（旧拼写
+`char[8] acStack_138`）。行为验证：vsh 镜脸 skeleton 549→55（T5 族 17 行
+归零）；curl canon 脸唯一文本变化 `undefined1[8] auStack_8;` →
+`undefined1 auStack_8 [8];`（==canon golden 1043 行逐字节），
+487→481/0/0。壳尺寸语义（num × 元素 alignSize、余数留洞，
+VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001）由 get_type_array 的 ctor 逐行镜像
+保持不变。
+
 ## 2026-09-24：数组壳尺寸 = num × 元素 alignSize（VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001，wt/p3batch）
 
 `create_entry`（varmap.cc:617-628）的 num>1 数组壳尺寸修正：Ghidra

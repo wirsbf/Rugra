@@ -1154,6 +1154,17 @@ printc.cc:2260/2518/2497）：
 
 - `doc_function()` 现在在每个函数前 emit Ghidra 风格的 typedef：`byte`、`undefined`、`undefined4`、`undefined8`、`_struct`。原因：`ActionInferParams`/`ActionTypeInfer` 的 size-based 推断会生成 `byte bVarN;` 声明，缺少 typedef 时无法通过 C 编译。`_struct` 是被解引用变量的泛型后备类型（配合 prettyprint 的 `->field` 重写）。
 
+**2026-09-25（GENSMOKE-T1 附注，wt/vshfix）**：typedef 前言在**所有档位**
+保持发射（含 direct-runner 镜脸进程）——不可按
+`typefactory::direct_runner_tier_active` 档位化：curl 驱动的多进程 worker
+协议在进程边界重建 PrintC 的进程级 latch，要求每个 worker 文档以
+TYPEDEF_PREAMBLE 精确开头（`normalize_worker_typedefs`，
+examples/curl_decompile.rs:5974-5990），档位化会使 76 个 worker 全部
+protocol-failure（车道实测）。前言无 oracle 对应物（direct-runner golden
+零 typedef 行），但 `compare_ghidra.py:109/141` 把 typedef 行从所有差分
+面归一化掉，四门口禁均不可见。核心类型拼写档位化本体在
+`typefactory.rs`（见 docs/api/type_system/typefactory.md GENSMOKE-T1 节）。
+
 ### 2026-06-23（续）：声明白名单覆盖双命名格式
 
 - `is_declarable` 现在同时匹配两种 HighVariable 命名：`bVar60`（merge.rs 生成的 prefix+digits）和 `bVar_60`（printc fallback 的 prefix+`_`+hex）。此前只匹配带下划线的，导致 `bVar60`/`lVar21` 等 Register 空间变量被声明过滤掉，在函数体里引用却未声明。

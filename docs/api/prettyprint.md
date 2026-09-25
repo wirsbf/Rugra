@@ -1,5 +1,21 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-25：P9 ` )` trim 豁免扩展到 BlockInfLoop 尾行（GENSMOKE-T6，wt/vshfix）
+
+第九遍结构清理（P9）的引号外 `" )"`→`")"` trim 与双空格折叠自
+MAIN-RC3-STRUCTURED-EMIT-0001 起豁免 `while(` 开头的行（紧凑 while-do 溢出
+头 `while( true )`，printc.cc:3023-3028）。本提交把豁免扩到
+`} while( true );` ——`PrintC::emitBlockInfLoop`（printc.cc:3111-3120）的
+do-while 无限循环尾行：closeBraceIndent + spaces(1) + KEYWORD_WHILE +
+openParen + spaces(1) + KEYWORD_TRUE + spaces(1) + closeParen + SEMICOLON，
+`tagLine`/`closeBrace` 强制行界，trim 后恒行首；这是 Ghidra 发射序列中
+**第二个也是仅剩的**字节含 ` )` 的形态。修复前 Rugra 尾行被 trim 成
+`} while( true);`（vsh 镜脸 7 行、curl canon 2 行）。行为验证：vsh 镜脸
+skeleton 549→55（T6 族归零）；curl canon 脸两行
+`} while( true);`→`} while( true );` ==canon golden 1049/2362 行逐字节，
+487→481/0/0。真实 do-while（`while (cond);`，printc.cc:3086-3093）不含
+` )` 字节、不受豁免影响。
+
 ## 2026-09-24：DRIVER-SWITCHD-LABEL-0001 — P9 goto→尾调用改写排除 `switchD_` 标号族
 
 驱动符号层（`examples/curl_decompile.rs`/`examples/httpd_decompile.rs` 的
