@@ -1711,6 +1711,20 @@ impl Action for ActionRestructureVarnode {
                     scope.symbols[idx].typelock = true;
                     scope.symbols[idx].namelock = true;
                 }
+                // Ghidra: varmap.cc:476 ScopeLocal::decode → collectNameRecs
+                // (HTTPDMAIN-F7-NAMERECOMMEND-0001): the localdb decode
+                // boundary's trailing call — every name-locked-but-not-
+                // type-locked symbol in the decoded local DB is downgraded
+                // to a name recommendation (varmap.cc:357-381) and removed,
+                // so the restructure below lays out the stack freely and
+                // ActionNameVars (coreaction.cc:2984) reattaches the names
+                // to the final symbols. The committed-local seeds above are
+                // name+type-locked (the manifest's typelock bit), so the
+                // store stays empty for them — the call is the faithful
+                // boundary wiring for any future name-lock-only transport
+                // (the oracle's ATTRIB_NAMELOCK-without-ATTRIB_TYPELOCK
+                // localdb form).
+                scope.collect_name_recs();
                 // Install the register-name lookup standing in for
                 // `glb->translate->getRegisterName` (translate.hh:380):
                 // Ghidra's ScopeInternal::buildVariableName register queries
@@ -9193,6 +9207,21 @@ impl Action for ActionInferTypes {
             return Ok(action_status::NO_CHANGE);
         }
 
+        // coreaction.cc:5398: data.getScopeLocal()->applyTypeRecommendations()
+        // — drain the type-recommendation store (varmap.cc:1574-1584) ahead
+        // of buildLocaltypes, exactly the oracle's position. The store's
+        // only current producer is collect_name_recs' "this"-pointer arm
+        // (varmap.cc:374); with no name-lock-only localdb symbols it is
+        // empty and this is a no-op (HTTPDMAIN-F7-NAMERECOMMEND-0001
+        // mechanism half).
+        {
+            let mut scope_taken = fd.scope.take();
+            if let Some(scope) = scope_taken.as_mut() {
+                scope.apply_type_recommendations(fd);
+            }
+            fd.scope = scope_taken;
+        }
+
         // Build the cached base types, preferring the architecture's
         // TypeFactory core types when available.
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
@@ -9713,8 +9742,22 @@ impl Action for ActionNameVars {
         Self::link_symbols(fd, &mut namerec);
 
         // cc:2984: data.getScopeLocal()->recoverNameRecommendationsForSymbols()
-        // — make sure recommended names hit before subfunc. RUGRA-GAP: no
-        // name-recommendation store is ported yet (no override framework).
+        // — make sure recommended names hit before subfunc. The store is
+        // ScopeLocal::name_recommend/dyn_recommend (varmap.hh:214-215),
+        // filled by collect_name_recs at the localdb-decode boundary
+        // (ActionRestructureVarnode's scope construction, the varmap.cc:476
+        // ScopeLocal::decode → collectNameRecs order) and drained here.
+        // HTTPDMAIN-F7-NAMERECOMMEND-0001: the former RUGRA-GAP ("no
+        // name-recommendation store is ported yet") is closed by the
+        // varmap.cc:1507-1618 port (recover_name_recommendations_for_symbols
+        // + add_recommend_name + collect_name_recs).
+        {
+            let mut scope_taken = fd.scope.take();
+            if let Some(scope) = scope_taken.as_mut() {
+                scope.recover_name_recommendations_for_symbols(fd);
+            }
+            fd.scope = scope_taken;
+        }
 
         // cc:2985: lookForBadJumpTables(data) — rename the putative switch
         // variable symbol of each bad jump-table call site to
