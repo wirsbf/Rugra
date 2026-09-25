@@ -825,3 +825,33 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 - **CALLSPEC-0001 ② 桶状态**：ap_vhost 站点（0x2da50 函数、0x2daeb 跳转）
   的 `void(*)()param_2` → canon `code *UNRECOVERED_JUMPTABLE` 改名链现在
   只差 coreaction 消费者（lookForBadJumpTables 读 `isBadJumpTable()`）。
+
+## 2026-09-25（BLOCKSTRUCT-TRUNC-SWITCHEMPTY-0001）：truncate 后重算残块 SWITCH_OUT —— 恢复 oracle 建序终态
+
+- **根因**：oracle 契约里 `truncateIndirectJump`（flow.cc:727-769，跑在
+  generateOps 内）**先于** `generateBlocks`，故 splitBasic 的
+  `BlockBasic::insert`（block.cc:2285-2288）看到的是截断后 opcode
+  （CALLIND/RETURN）——`f_switch_out` 从未置位。结构化期
+  `ruleBlockSwitch` 的 cc:1652 `isSwitchOut()` 门拒绝该块，
+  `ruleBlockIfNoExit`（cc:1481-1512，子句门 cc:1497 通过）把它吸收为
+  无出口 if 子句——canon 因此印 `if (c) { …; return; }` 而无 switch 骨架
+  （**机制=容器未建**，非建后清除）。线性注入路径（inject_raw_ops +
+  build_blocks_from_ops）先建块后恢复：`insert_op`（block.rs，镜像
+  block.cc:2258）在 op 仍为 BRANCHIND 时置位 SWITCH_OUT，truncate 的
+  `op_set_opcode`（与 oracle 的 changeOpcode 一样）不触块旗标——残旗标
+  存活到 build_copy，`try_rule_switch` 对 sizeout==0 的 Copy 块构造空
+  BlockSwitch，打印侧漏出 `switch() {\n}` 空残片（httpd 默认脸唯一站点
+  = ap_vhost_iterate_given_conn 0x2da50/0x2daeb，curl 0 触发）。
+- **接线形态**（src/flow.rs `recover_jump_tables_injected` truncate 臂后，
+  即 2026-09-24 节适配差异清单的新增一条）：truncate 返回后按块内**当前**
+  opcode 重算父块 SWITCH_OUT（块内仍有 BRANCHIND → 置位；否则清除）——
+  与 `split_block_at_case_dest` 的分裂后重算同形。oracle 语义锚点 =
+  block.cc:2285-2288 建序时点读数：mirror 路径（follow_flow_range）截断
+  先于建块，本重算不改变其终态（无父块=天然 no-op）；仅注入路径的顺序
+  倒置由该重算补偿。
+- **验收**（默认脸，基=master c18a4110 亲测）：残片行 `switch() {` 计数
+  1→**0**（ap_vhost 函数体 == canon 同形，`--func` 骨架 9→7，余 7 行全为
+  PRINTC-BADJT-PARAMSYM-0001 渲染族+while 花括号形态，零 switch 行）；
+  httpd **1141→1139**/0/0（−2=残片两行）；curl **577/0/0 字节恒等**（0
+  触发路径）；httpd/curl 双跑 stdout cmp 恒等；bank 391/391；cargo test
+  --lib 与预存基线同集；annotations/refs 绿。

@@ -3775,6 +3775,45 @@ pub fn recover_jump_tables_injected(fd: &mut Funcdata) -> crate::error::Result<u
                                 mode
                             );
                             flow.truncate_indirect_jump(&op, mode);
+                            // Adapter delta (BLOCKSTRUCT-TRUNC-SWITCHEMPTY-0001):
+                            // the oracle contract runs truncateIndirectJump
+                            // inside generateOps, BEFORE generateBlocks, so
+                            // splitBasic's BlockBasic::insert (block.cc:2285-
+                            // 2288) sees the post-truncation opcode
+                            // (CALLIND/RETURN) and never sets f_switch_out on
+                            // the truncated block — ruleBlockSwitch's cc:1652
+                            // isSwitchOut gate then rejects the block and
+                            // ruleBlockIfNoExit (cc:1481-1512, guard cc:1497)
+                            // absorbs it as the no-exit if-clause, which is
+                            // why canon prints `if (c) { ...; return; }` with
+                            // no switch skeleton. The linear inject path
+                            // builds blocks first (build_blocks_from_ops →
+                            // insert_op sets SWITCH_OUT while the op is still
+                            // BRANCHIND), so the flag is stale here after the
+                            // opcode rewrite. Recompute it from the block's
+                            // current opcodes to restore the oracle end-state
+                            // (same recompute form as the case-dest split,
+                            // see split_block_at_case_dest).
+                            let parent_block = {
+                                let o = op.0.read().unwrap();
+                                o.parent.as_ref().and_then(std::sync::Weak::upgrade)
+                            };
+                            if let Some(parent) = parent_block {
+                                let mut w = parent.write().unwrap();
+                                if let Some(bb) = w
+                                    .as_any_mut()
+                                    .downcast_mut::<crate::block::BlockBasic>()
+                                {
+                                    let still_switch_out = bb.ops.iter().any(|o| {
+                                        o.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND
+                                    });
+                                    if still_switch_out {
+                                        bb.flags |= crate::block::block_flags::SWITCH_OUT;
+                                    } else {
+                                        bb.flags &= !crate::block::block_flags::SWITCH_OUT;
+                                    }
+                                }
+                            }
                         }
                     }
                     Some(jt) => {
