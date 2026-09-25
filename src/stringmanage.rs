@@ -336,7 +336,39 @@ enum StringBackend {
     /// ghidra_arch.cc:780-810); the return is truncated at `maximumChars`
     /// characters with `isTruncated` set by `assignStringData`. Built by
     /// `Architecture::buildStringManager` (ghidra_arch.cc:368 equivalent).
-    GhidraJavaContract { loader: Arc<dyn LoadImage> },
+    ///
+    /// `client` is the environment-side query target of the
+    /// COMMAND_GETSTRINGDATA bridge (ghidra_arch.cc:786): when attached,
+    /// `getStringData` asks the client whether a **string Data object
+    /// exists at the exact address** (the Java `getDataAt` contract —
+    /// interior bytes of a Data return nothing) and never raw-reads the
+    /// image, exactly as `GhidraStringManager::getStringData`
+    /// (string_ghidra.cc:45) forwards to `ArchitectureGhidra::getStringData`
+    /// and reads nothing itself. `None` keeps the declared raw-read
+    /// contract (the pre-client stand-in used by faces without the
+    /// analysis-period environment layer).
+    GhidraJavaContract {
+        loader: Arc<dyn LoadImage>,
+        client: Option<Arc<dyn StringDataClient>>,
+    },
+}
+
+/// The environment half of the `GhidraStringManager` bridge
+/// (string_ghidra.cc:45 `glb->getStringData` ->
+/// `ArchitectureGhidra::getStringData`, ghidra_arch.cc:780-822
+/// COMMAND_GETSTRINGDATA): the attached environment answers whether a
+/// string Data object exists at the **exact** address — the Java
+/// `getDataAt` semantics, where interior bytes of a Data object return
+/// nothing — and hands back the UTF-8 bytes plus the truncation flag the
+/// Java side computes at `maxBytes`.
+pub trait StringDataClient: Send + Sync {
+    // Ghidra: ghidra_arch.cc:780 ArchitectureGhidra::getStringData
+    /// Answer the COMMAND_GETSTRINGDATA query for `addr`: `Some((utf8
+    /// bytes, is_truncated))` when the environment's string Data exists at
+    /// the exact address, `None` when it does not (the C++ leaves the
+    /// buffer empty — ghidra_arch.cc:817-819).
+    fn get_string_data(&self, addr: Address, charsize: i32, max_bytes: i32)
+        -> Option<(Vec<u8>, bool)>;
 }
 
 /// Storage for decoding and storing strings associated with an address.
@@ -403,7 +435,28 @@ impl StringManager {
         Self {
             string_map: RwLock::new(BTreeMap::new()),
             maximum_chars: max,
-            backend: Some(StringBackend::GhidraJavaContract { loader }),
+            backend: Some(StringBackend::GhidraJavaContract {
+                loader,
+                client: None,
+            }),
+        }
+    }
+
+    // RUGRA-GLUE: set_string_data_client (driver/environment injection
+    // point; the C++ counterpart is the sout/sin pipe itself —
+    // ArchitectureGhidra::getStringData writes COMMAND_GETSTRINGDATA to
+    // the Java process, ghidra_arch.cc:783-795, and the process is fixed
+    // at architecture construction; Rugra keeps the query target
+    // attachable so the analysis-period environment layer can install the
+    // string-Data registry without rebuilding the manager)
+    /// Attach the environment-side COMMAND_GETSTRINGDATA target (the
+    /// analysis-period string Data set). After this call the
+    /// GhidraJavaContract backend answers queries through the client only
+    /// — no raw image reads — mirroring GhidraStringManager's
+    /// forward-to-Java control flow (string_ghidra.cc:45).
+    pub fn set_string_data_client(&mut self, client: Arc<dyn StringDataClient>) {
+        if let Some(StringBackend::GhidraJavaContract { client: slot, .. }) = &mut self.backend {
+            *slot = Some(client);
         }
     }
 
@@ -540,20 +593,48 @@ impl StringManager {
                     None => Vec::new(),
                 }
             }
-            StringBackend::GhidraJavaContract { loader } => {
-                // Declared Java contract: same read/validate chain with the
-                // 2048-byte search clamp REMOVED (detection unbounded);
-                // assign_string_data performs the return truncation.
-                match self.read_terminated_unicode(loader, addr, charsize, false) {
-                    Some(data) => {
-                        *is_trunc = data.is_truncated;
-                        let bytes = data.byte_data.clone();
-                        map.insert(addr, data);
-                        bytes
+            StringBackend::GhidraJavaContract { loader, client } => match client {
+                // string_ghidra.cc:45: glb->getStringData(stringData.byteData,
+                // addr, charType, maximumChars, stringData.isTruncated) —
+                // the query forwards to the environment and the manager
+                // reads nothing itself. The client answers with the
+                // string Data bytes at the exact address (Java getDataAt:
+                // interior bytes of a Data return nothing) or with
+                // nothing, in which case the already-occupied map entry
+                // stays empty (ghidra_arch.cc:817-819 leaves the buffer
+                // empty for a no-string response).
+                Some(client) => match client.get_string_data(
+                    addr,
+                    charsize,
+                    self.maximum_chars,
+                ) {
+                    Some((bytes, truncated)) => {
+                        *is_trunc = truncated;
+                        let data = StringData {
+                            byte_data: bytes,
+                            is_truncated: truncated,
+                        };
+                        map.insert(addr, data.clone());
+                        data.byte_data
                     }
                     None => Vec::new(),
+                },
+                // Declared Java contract stand-in (no environment client
+                // attached): same read/validate chain with the 2048-byte
+                // search clamp REMOVED (detection unbounded);
+                // assign_string_data performs the return truncation.
+                None => {
+                    match self.read_terminated_unicode(loader, addr, charsize, false) {
+                        Some(data) => {
+                            *is_trunc = data.is_truncated;
+                            let bytes = data.byte_data.clone();
+                            map.insert(addr, data);
+                            bytes
+                        }
+                        None => Vec::new(),
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -1154,6 +1235,53 @@ mod tests {
         // A distinct Address value (offset differs) is a distinct entry.
         assert!(!sm.has_entry(Address::new(0x2001)));
         assert_eq!(sm.num_strings(), 1);
+    }
+
+    /// STRLIT-ENVDAT-0001: the attached StringDataClient takes over the
+    /// GhidraJavaContract backend entirely — GhidraStringManager never
+    /// raw-reads (string_ghidra.cc:45 forwards to the environment), and the
+    /// environment answers with the Java getDataAt contract: a string Data
+    /// at the EXACT address yields bytes, an interior byte yields nothing
+    /// even though the loader holds valid string bytes there.
+    struct FixedRegistryClient {
+        entries: std::collections::HashMap<u64, Vec<u8>>,
+    }
+
+    impl StringDataClient for FixedRegistryClient {
+        fn get_string_data(
+            &self,
+            addr: Address,
+            _charsize: i32,
+            _max_bytes: i32,
+        ) -> Option<(Vec<u8>, bool)> {
+            self.entries.get(&addr.as_u64()).map(|b| (b.clone(), false))
+        }
+    }
+
+    #[test]
+    fn test_client_channel_exact_start_semantics() {
+        // The loader holds "--\0" at 0x2000 — valid string bytes at the
+        // start AND at the interior byte 0x2001 ("-").
+        let loader = CountingLoader::with_regions(vec![(0x2000, b"--\0".to_vec())]);
+        let mut sm = StringManager::new_ghidra_contract(loader.clone(), 2048);
+        sm.set_string_data_client(Arc::new(FixedRegistryClient {
+            entries: [(0x2000u64, b"--".to_vec())].into_iter().collect(),
+        }));
+        // Exact start: the registry answers, the loader is never touched.
+        assert!(sm.is_string_typed(Address::new(0x2000), 1, false));
+        assert_eq!(loader.total_attempts(), 0);
+        let mut is_trunc = true;
+        let bytes = sm.get_string_data(Address::new(0x2000), 1, false, &mut is_trunc);
+        assert_eq!(bytes, b"--".to_vec());
+        assert!(!is_trunc);
+        // Interior byte: no Data of its own (Java getDataAt) — negative,
+        // and the raw reader never fires despite the valid bytes.
+        assert!(!sm.is_string_typed(Address::new(0x2001), 1, false));
+        assert!(sm.has_entry(Address::new(0x2001)));
+        assert_eq!(loader.total_attempts(), 0);
+        // An address the registry does not know at all: negative too.
+        assert!(!sm.is_string_typed(Address::new(0x9000), 1, false));
+        assert_eq!(loader.total_attempts(), 0);
     }
 
     /// registerInternalStringData: legal bytes return the CRC^offset hash and

@@ -33,6 +33,38 @@ Ghidra has two concrete managers, both `maximumChars=2048`:
 `Architecture::build_string_manager` 安装）按此契约实现并显式声明；native
 2048 界行为由 `new_unicode` 保留并由同一双侧 fixture 锁定。
 
+## 2026-09-26：StringDataClient 环境查询通道（STRLIT-ENVDAT-0001）
+
+`GhidraStringManager::getStringData`（string_ghidra.cc:33-48）**从不自读 image**：
+缓存未命中时把查询整体转发给环境（`glb->getStringData` ->
+`ArchitectureGhidra::getStringData`，ghidra_arch.cc:780-822 的
+`ELEM_COMMAND_GETSTRINGDATA` 管道协议），由 Java 侧按 **getDataAt 语义**回答——
+精确起始地址上有 string Data 才返回其 UTF-8 字节与截断标志，Data 内部字节
+（interior）一律空回答（ghidra_arch.cc:817-819 leave the buffer empty）。
+canon headless 的 `&DAT_<addr>` 符号形正是该语义的产物：interior 引用的
+PTRSUB 在 `RulePtrsubCharConstant` 的 `isString` 门（ruleaction.cc:7375）得到
+false 而存活，字符串起始引用则折叠为字面量。
+
+Rugra 侧新增（src/stringmanage.rs）：
+
+- `trait StringDataClient: Send + Sync` — 环境半边（Java 进程的替身）：
+  `get_string_data(addr, charsize, max_bytes) -> Option<(Vec<u8>, bool)>`，
+  `Some((utf8 字节, is_truncated))` = 精确起始有 string Data，`None` = 无。
+- `StringBackend::GhidraJavaContract { loader, client }` — `client: Some` 时
+  `get_string_data` **只**查询 client（零 image 读取，镜像
+  string_ghidra.cc:45 的转发控制流）；`None` 保持既有声明的 raw-read 契约
+  （无环境层的面：httpd 驱动、测试、bare/mirror 面）。
+- `set_string_data_client(&mut self, client)` — 驱动注入点（C++ 对应物是
+  sout/sin 管道本身，ghidra_arch.cc:783-795；进程在架构构造时固定，Rugra 保留
+  可后接的查询目标）。
+
+消费面不变：rule 侧 `RulePtrsubCharConstant`（ruleaction.cc:7375）与 print 侧
+`PrintC::printCharacterConstant`（printc.cc:1537/1541）共享同一 Architecture
+单例，正/负缓存一次成型。单测
+`test_client_channel_exact_start_semantics` 锁定：client 挂载后 loader 零读取、
+interior 负结果、未登记地址负结果。
+
+
 ## Structs
 
 ### `StringData`
@@ -50,7 +82,8 @@ query 先在 map 占坑（stringmanage.cc:437），opaque/DataUnavailError/无�
 - `new_ghidra_contract(loader, max)` — 生产 manager，声明的 GhidraStringManager/
   Java 契约（string_ghidra.cc:19；ghidra_arch.cc:368 安装形态）。
 - `clear()`, `get_maximum_chars()`, `num_strings()`, `has_entry(addr)`,
-  `insert_string_data(addr, data)`.
+  `insert_string_data(addr, data)`, `set_string_data_client(client)`
+  （GhidraJavaContract 后端的环境查询目标注入，见 2026-09-26 节）。
 - `is_string(addr)` — legacy 单参桥（stringmanage.cc:166），charType 投影为 1 字节
   非 opaque 字符；带 reader 时执行真实 image 读取（含负缓存）。
 - `is_string_typed(addr, charsize, opaque)` — typed 形态。
