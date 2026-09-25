@@ -15230,21 +15230,27 @@ impl Rule for RulePtraddUndo {
         //   ->getAlignSize()==size && ind!=0 return 0;
         // If the varnode has a pointer type whose pointed-to size matches the
         // PTRADD element size AND the index is non-zero, this is still a valid
-        // pointer arithmetic — leave it alone.
-        let is_correctly_typed_ptr = basevn
-            .read()
-            .unwrap()
-            .get_type()
-            .map(|dt| {
-                use crate::type_system::datatype::{Datatype, TypeMetatype};
-                if dt.get_metatype() != TypeMetatype::Pointer { return false; }
-                if let Datatype::Pointer(tp) = dt.as_ref() {
-                    tp.ptr_to.get_align_size() == size as usize
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false); // no type ⇒ not confirmed ⇒ proceed with undo
+        // pointer arithmetic — leave it alone. ruleaction.cc:6915 is the
+        // READ-FACING consult: a pointer-to-union base resolves to the field
+        // pointer before the alignSize comparison, so a PTRADD AddTree built
+        // from the resolved field is not undone.
+        let is_correctly_typed_ptr = {
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+                .or_else(|| basevn.read().unwrap().get_type())
+                .map(|dt| {
+                    use crate::type_system::datatype::{Datatype, TypeMetatype};
+                    if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+                    if let Datatype::Pointer(tp) = dt.as_ref() {
+                        let ws = tp.wordsize.max(1) as u64;
+                        tp.ptr_to.get_align_size() as u64
+                            == crate::space::AddrSpace::address_to_byte_int(size as i64, ws as u32) as u64
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false) // no type ⇒ not confirmed ⇒ proceed with undo
+        };
         if is_correctly_typed_ptr {
             let ind_is_zero = indvn.read().unwrap().is_constant()
                 && indvn.read().unwrap().get_offset() == 0;
@@ -15826,19 +15832,20 @@ impl Rule for RulePtrsubUndo {
         let mut multiplier: i64 = 0;
         let extra = Self::get_extra_offset(op_arc, &mut multiplier);
         // if (basevn->getTypeReadFacing(op)->isPtrsubMatching(val,extra,multiplier)) return 0;
-        // We approximate isPtrsubMatching (type.cc:1123-1162) for the core
-        // TypePointer cases. wordsize defaults to 1 (addressToByteInt is a no-op).
-        // testForArraySlack and TypePointerRel are not yet modelled.
-        let still_matching = basevn
-            .read()
-            .unwrap()
-            .get_type()
+        // ruleaction.cc:7138: the READ-FACING consult — a PTRSUB whose base
+        // still carries the whole pointer-to-union type resolves to the
+        // field pointer first; the inherited union_map edge (AddTree
+        // buildTree / RS0 rewrites) makes the resolved form match, which is
+        // what keeps RulePtrsubUndo from undoing the freshly built field
+        // PTRSUB (the AddTree↔PtrsubUndo rewrite ping-pong otherwise).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let still_matching = crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+            .or_else(|| basevn.read().unwrap().get_type())
             .map(|dt| Self::is_ptrsub_matching(&dt, val, extra, multiplier))
             .unwrap_or(false);
         if still_matching { return Ok(action_status::NO_CHANGE); }
 
         // data.opSetOpcode(op,CPUI_INT_ADD); op->clearStopTypePropagation();
-        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
         op_arc.write().unwrap().clear_stop_type_propagation();
         // removeLocalAdds(op->getOut(), data) — walk the PTRSUB output's
@@ -18176,8 +18183,14 @@ impl<'a> AddTreeState<'a> {
         );
         // Ghidra 6037-6038: ct = ptr->getTypeReadFacing(op); ptrsize/ptrmask.
         let (ct, ptrsize) = {
+            let ct = crate::unionresolve::vn_type_read_facing(
+                data,
+                &ptr,
+                &crate::op::PcodeOpRef(op.clone()),
+                slot as i32,
+            );
             let v = ptr.read().unwrap();
-            (v.get_type_read_facing(), v.get_size())
+            (ct, v.get_size())
         };
         let ptrmask = crate::address::calc_mask(ptrsize);
         // Ghidra 6029-6031: multsum = nonmultsum = 0; pRelType = null.
@@ -19153,7 +19166,12 @@ impl<'a> AddTreeState<'a> {
     fn assign_propagated_type(&mut self, newop: &crate::op::PcodeOpRef) {
         let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return ,
         };
-        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return ,
+        let in_type = match crate::unionresolve::vn_type_read_facing(
+            self.data,
+            &vn,
+            newop,
+            0,
+        ) { Some(t) => t, None => return ,
         };
         use crate::type_system::datatype::TypeMetatype;
         if in_type.get_metatype() != TypeMetatype::Pointer {
@@ -19197,6 +19215,19 @@ impl<'a> AddTreeState<'a> {
             self.data
                 .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // ruleaction.cc:6500-6501: if (ptr->getType()->needsResolution())
+            //   data.inheritResolution(ptr->getType(),newop, 0, baseOp, baseSlot);
+            if let Some(pt) = self.ptr.read().unwrap().get_type() {
+                if pt.needs_resolution() {
+                    self.data.inherit_resolution(
+                        pt.as_ref(),
+                        &newp,
+                        0,
+                        &crate::op::PcodeOpRef(self.base_op.clone()),
+                        self.base_slot as i32,
+                    );
+                }
+            }
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
                 self.assign_propagated_type(&newp);
@@ -19219,6 +19250,19 @@ impl<'a> AddTreeState<'a> {
             self.data
                 .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // ruleaction.cc:6512-6513: if (multNode->getType()->needsResolution())
+            //   data.inheritResolution(multNode->getType(),newop, 0, baseOp, baseSlot);
+            if let Some(pt) = mult_node.read().unwrap().get_type() {
+                if pt.needs_resolution() {
+                    self.data.inherit_resolution(
+                        pt.as_ref(),
+                        &newp,
+                        0,
+                        &crate::op::PcodeOpRef(self.base_op.clone()),
+                        self.base_slot as i32,
+                    );
+                }
+            }
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
                 self.assign_propagated_type(&newp);
@@ -19307,7 +19351,12 @@ impl Rule for RuleStructOffset0 {
         // ptrVn = op->getIn(1); ct = ptrVn->getTypeReadFacing(op);
         let ptr_vn = match op_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
         };
-        let ct = match ptr_vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+        let ct = match crate::unionresolve::vn_type_read_facing(
+            fd,
+            &ptr_vn,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            1,
+        ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
         };
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if ct.get_metatype() != TypeMetatype::Pointer {
@@ -19362,6 +19411,13 @@ impl Rule for RuleStructOffset0 {
         fd.op_set_input(&newop, ptr_vn.clone(), 0);
         fd.op_set_input(&newop, zero_const, 1);
         fd.op_insert_before(&newop, &op_ref);
+        // ruleaction.cc:6751-6752: if (ptrVn->getType()->needsResolution())
+        //   data.inheritResolution(ptrVn->getType(),newop, 0, op, 1);
+        if let Some(pt) = ptr_vn.read().unwrap().get_type() {
+            if pt.needs_resolution() {
+                fd.inherit_resolution(pt.as_ref(), &newop, 0, &op_ref, 1);
+            }
+        }
         // newop->setStopTypePropagation()
         newop.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
         // data.opSetInput(op, newop->getOut(), 1)

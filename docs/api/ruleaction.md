@@ -1887,3 +1887,34 @@ Vec 搬移为热点，投影卡 401+ stage 不终）。修复：`ptr_rel_state` 
 （`IS_PTRREL|HAS_STRIPPED` 组合等于 `IS_PTRREL` 才入记账），临时形落默认
 plain 臂。修复后 match_url 1.1s 收敛，投影终态 340 stage/172 ops ==
 oracle 投影终态（tests/fixtures/projections/curl_match_url 同数）。
+
+## 2026-09-26：AddTree/RS0/PtrsubUndo/PtraddUndo 联合体读面咨询（UNIONRES-FIELDOFF-PTRSUBNORM-0001，Lane FIELDOFF）
+
+union_map 逐边解析落地后的消费者接线（oracle 的 `getTypeReadFacing(op)` =
+`findResolve(op,slot)` 只读咨询,Rugra 镜像为 unionresolve.rs 自由函数）:
+
+- **AddTreeState 构造器 ct**（ruleaction.cc:6037 `ct = ptr->getTypeReadFacing(op)`）:
+  此前零参退化形。map 命中时 ct = 解析出的字段指针（如 `URLGlob.content` →
+  `.Set` struct16 指针）,baseType 走 STRUCT 臂 → 产出 canon 形
+  PTRSUB(#field-off)。
+- **assignPropagatedType inType**（ruleaction.cc:6346）:同上,isTypeRecoveryExceeded
+  态下的超界 stamping 也用解析形。
+- **buildTree 两处 inheritResolution**（ruleaction.cc:6500-6501/6512-6513）:
+  新建 PTRADD/PTRSUB 后把 baseOp 边的解析记录复制到新 op 的 slot 0 —— 此前
+  注释"Rugra 无逐边 union resolution"已过时。RS0 的 PTRSUB(#0) 重写同样补上
+  （ruleaction.cc:6751-6752）。
+- **RulePtrsubUndo applyOp**（ruleaction.cc:7138 `basevn->getTypeReadFacing(op)
+  ->isPtrsubMatching(val,extra,multiplier)`）:此前读裸 `get_type()` —— 这是
+  AddTree↔PtrsubUndo 无限重写环的第二半:AddTree 用解析形建 PTRSUB,PtrsubUndo
+  用 whole union 指针判 isPtrsubMatching(union)=false（type.cc:1167-1171 对
+  union 恒 false）→ 降级回 INT_ADD → 循环（探针:同址 build_tree 3720-11691 次,
+  PTRSUB→INT_ADD 67915 次,glob_set/glob_range/next_url/match_url 4 函数 >8s
+  超时）。咨询后解析形 `Set*`（struct pointee）走 Struct 臂 offset 匹配 → 不降级。
+- **RulePtraddUndo applyOp**（ruleaction.cc:6915/6918）:同型修复 +
+  alignSize 比较改 oracle 精确形
+  `addressToByteInt(size, wordsize)`（wordsize>1 时不再失配）。
+- **RuleStructOffset0 ct**（ruleaction.cc:6691）:LOAD/STORE 的 in(1) 读面咨询。
+
+前后（亲父 master 93195bca → 本车道,默认态）:curl 369→309（glob_set 16→3 /
+glob_range 19→1 / next_url 22→7 / match_url 19→5,字段偏移族全收敛,残差归
+字符串常量族+换行）;httpd 872 字节恒等;0 not-settling/0 超时。

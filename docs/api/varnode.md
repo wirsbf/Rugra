@@ -1277,3 +1277,20 @@ compute_varnode_covers 的显式传播简化为字面 setFlags 调用（merge.cc
 验证：curl/httpd 默认脸对亲父 a9475ecc cmp 逐字节恒等；cargo test --lib
 1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs --strict 绿。
 详见 docs/api/merge.md 同日节。
+
+## 2026-09-26：read/def-facing 四方法 Arc 共享（UNIONRES-FIELDOFF-PTRSUBNORM-0001，settle 契约）
+
+- `get_type_def_facing()` / `get_type_read_facing_op(op,slot)` /
+  `get_high_type_def_facing()` / `get_high_type_read_facing(op,slot)` 的
+  needs_resolution 臂此前 `Arc::new((*ct).clone())` 每调用产**新 Arc** —— 破坏
+  `Varnode::updateType` 的 `type == ct`（varnode.cc:481,Rust `Arc::ptr_eq`）
+  settle 契约:oracle 的 TypeFactory interning 保证 findResolve 结果指针稳定,
+  逐调用克隆是 `localcount >= 7` "not settling" 家族（coreaction.cc:5390-5392）
+  的身份翻转源之一。现在这些退化臂共享原 v_type/high Arc —— 即 oracle
+  findResolve map-miss 臂 `return this`（type.cc:586-590/1192-1202）在无
+  Funcdata 通道签名下的精确可达语义。
+- 零参 `get_type_read_facing()` 保留（无 Ghidra 零参对应;对非 resolution 类型
+  与 oracle `getTypeReadFacing` 等价）,注释更新指向 fd-aware 咨询孪生:
+  unionresolve.rs 的 `vn_type_read_facing` / `vn_type_def_facing` /
+  `vn_high_type_read_facing` / `vn_high_type_def_facing`（持 fd 的消费者使用,
+  map 命中时返回 interned 字段类型）。
