@@ -1601,3 +1601,20 @@ collapse_switches 安装器）与三处 BlockSwitch 重建/构造点同步传输
 机制 B 门禁：curl 474/0/0（glob_set −15）、httpd 908/0/0 字节恒等、bank 391/391、
 gcc fail 名集恒等、双跑 cmp 恒等；双侧 runner blockmultigoto/goto_prints 重钉后
 MATCH（printc_switch_emit 的 observation=UNTESTED 门为亲父预存断点，另行登记）。
+
+## 2026-09-25 追加（CR-GLOBATTR F1 — multigoto 臂后的 default 链索引重映射）
+
+`try_rule_switch` 的 multigoto 臂（cc:3548-3553 的 append 语义）在 `grab_case_order`
+**之后**向 `case_order` push g 个重加 goto-case——grab 期登记的虚拟 default 索引
+k=cases.len() 被 push 挤占：finalize 扩展视图里 `ext[k]` 变成首个重加 case 而非
+default，对 default 的链（`chain==k`）静默改接重加 case。修复 = 臂内 push 完成后
+`CollapseStructure::remap_default_chain_indices`（`chain==k → k+g`，返回搬移数）：
+
+- `<k` 的正则间链不动；重加 case 的 placeholder chain=-1 且不入 grab 的 casemap，
+  故 `==k` 无歧义只能是 grab 期 default 链；`default_order.chain` 目标恒为正则索引
+  或 -1，不可能为 k——三守卫使重映射 correct-by-construction；
+- `debug_assert` 后置不变量：重映射后无 `chain==k` 残留（k 槽现为不参与链的重加
+  case）；RUGRA_BS_DUMP=1 输出臂事件见证行（k、+g、remapped 数）；
+- 触发面亲测：curl 3 次臂事件（47→48）与 httpd 3 次（16→17）全部 remapped=0——
+  双语料休眠；3 个单测（`multigoto_defaultchain_tests`）钉死重映射数学；
+- 补丁前后 curl（474/0/0）与 httpd（908/0/0）输出字节恒等。
