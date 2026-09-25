@@ -886,6 +886,167 @@ fn tracked_context_architecture(
     }
 }
 
+// HEADLESS-BRIDGE-V3-SIGLOCK-0003: one harvested callee-prototype manifest
+// entry (tools/harvest_local_manifest.py --callee). `params` slots are
+// `Some(spelling)` only where the canon call-site evidence agreed on a
+// KNOWN_BASES type; `input_lock` is set only when every slot is evidenced
+// (partial entries keep active arity recovery); `ret` is the agreed
+// cast-free consumer type, if any.
+struct V3CalleeProto {
+    name: String,
+    params: Vec<Option<String>>,
+    ret: Option<String>,
+    input_lock: bool,
+}
+
+// HEADLESS-BRIDGE-V3-SIGLOCK-0003: install the harvested callee locked
+// prototypes on this Funcdata's call sites (the Program-database boundary
+// transport — see the gate comment in main). Mirrors the SHAPEFIX harness's
+// installPrototype chain (FuncProto::decode on the callee, then
+// ActionDefaultParams' copy onto the call site) through the library's
+// public surface: FuncProto::from_model_carrier + update_all_types_from_pieces
+// (SYSV storage assignment through the bound defaultfp model, fspec.cc:3843
+// setPieces' assignment path) + per-param TYPE_LOCKED + output lock + model
+// lock. Unlocks nothing: entries with partial evidence (input_lock=false)
+// carry no parameter pieces at all, so active arity recovery keeps running
+// exactly as before and only the return type locks. Returns the number of
+// call sites that received a locked prototype.
+fn install_v3sig_callee_protos(
+    fd: &mut Funcdata,
+    table: &HashMap<u64, V3CalleeProto>,
+    types: &std::sync::Arc<
+        std::sync::RwLock<rugra::type_system::typefactory::TypeFactory>,
+    >,
+) -> usize {
+    use rugra::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+
+    // Manifest spelling -> canonical factory type. findByName first (the
+    // same resolution FuncProto::decode performs through glb->types,
+    // grammar.cc:2989); the data-organization core table registers void /
+    // bool / char / int / long / undefined1..8, so every KNOWN_BASES
+    // spelling in the harvest resolves — plain "undefined" is the one
+    // data-org gap (only the Ghidra-fallback flavor registers it) and gets
+    // a direct 1-byte Unknown core construction (setCoreType table entry).
+    let resolve = |spelling: &str| -> Option<std::sync::Arc<Datatype>> {
+        let trimmed = spelling.trim();
+        let (base, is_pointer) = (
+            trimmed.trim_end_matches('*').trim(),
+            trimmed.ends_with('*'),
+        );
+        let base_type = if base == "undefined" {
+            std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "undefined".to_string(),
+                1,
+                TypeMetatype::Unknown,
+            )))
+        } else {
+            types.read().unwrap().find_by_name(base)?
+        };
+        if is_pointer {
+            Some(types.write().unwrap().get_type_pointer_default(base_type))
+        } else {
+            Some(base_type)
+        }
+    };
+
+    // The model carrier: the CALLER's own funcp already carries the bound
+    // defaultfp (set_arch's setScope tail, fspec.cc:3884) — the same model
+    // both Funcdata objects would share in the oracle.
+    let model_carrier = fd.funcp.clone();
+    let specs: Vec<_> = fd
+        .callspecs
+        .iter()
+        .filter_map(|owner| {
+            let spec = owner.read().unwrap();
+            spec.entry_addr
+                .map(|entry| (owner.clone(), entry.as_u64()))
+        })
+        .collect();
+    let mut installed = 0usize;
+    for (owner, entry) in specs {
+        let Some(entry_proto) = table.get(&(entry + ANALYZE_HEADLESS_IMAGE_BASE)) else {
+            continue;
+        };
+        if !entry_proto.input_lock && entry_proto.ret.is_none() {
+            continue; // evidence-free entry: nothing to lock
+        }
+        // Parameter pieces: only the fully-evidenced shape installs
+        // parameters (arity + types); partial entries install the return
+        // alone and keep active input recovery.
+        let mut in_types = Vec::new();
+        if entry_proto.input_lock {
+            for spelling in &entry_proto.params {
+                let Some(spelling) = spelling else { continue };
+                match resolve(spelling) {
+                    Some(resolved) => in_types.push(resolved),
+                    None => {
+                        eprintln!(
+                            "[V3SIG] {} proto for {}: cannot resolve param type {:?} (skipping entry)",
+                            fd.name, entry_proto.name, spelling
+                        );
+                        in_types.clear();
+                        break;
+                    }
+                }
+            }
+            if in_types.len() != entry_proto.params.len() {
+                continue;
+            }
+        }
+        let return_type = match &entry_proto.ret {
+            Some(spelling) => match resolve(spelling) {
+                Some(resolved) => Some(resolved),
+                None => {
+                    eprintln!(
+                        "[V3SIG] {} proto for {}: cannot resolve return type {:?} (skipping entry)",
+                        fd.name, entry_proto.name, spelling
+                    );
+                    continue;
+                }
+            },
+            None => None,
+        };
+        // from_model_carrier requires a return type; an entry with no
+        // return evidence never reaches here with input_lock=false, so the
+        // void stand-in only serves the unlocked-output input-lock case.
+        let void_type = types.read().unwrap().get_type_void();
+        let out_type = return_type.clone().unwrap_or_else(|| void_type.clone());
+        let mut proto = rugra::fspec::FuncProto::from_model_carrier(
+            &model_carrier,
+            entry_proto.name.clone(),
+            out_type,
+        );
+        proto.name = entry_proto.name.clone();
+        let pieces = rugra::grammar::PrototypePieces {
+            model: None,
+            name: entry_proto.name.clone(),
+            out_type: return_type.clone().or(Some(void_type)),
+            in_types,
+            in_names: Vec::new(),
+            first_var_arg_slot: -1,
+        };
+        proto.update_all_types_from_pieces(&pieces);
+        if proto.has_input_errors() {
+            eprintln!(
+                "[V3SIG] {} proto for {}: model cannot assign parameter storage (skipping entry)",
+                fd.name, entry_proto.name
+            );
+            continue;
+        }
+        if entry_proto.input_lock {
+            proto.set_input_lock(true);
+        }
+        if return_type.is_some() {
+            proto.set_output_lock(true);
+        }
+        proto.set_model_lock(true);
+        let mut spec = owner.write().unwrap();
+        spec.prototype = proto;
+        installed += 1;
+    }
+    installed
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Rugra Decompilation: httpd ===\n");
 
@@ -1143,6 +1304,117 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Opted out (RUGRA_SEEDS=0 global / RUGRA_TYPESEED=0 per-gate) or
         // mirror-suppressed above: the exact historical bare load.
+        None
+    };
+
+    // HEADLESS-BRIDGE-V3-SIGLOCK-0003 (opt-in RUGRA_V3SIG=1): the callee
+    // locked-prototype manifest channel — the SHAPEFIX verdict's transport.
+    // The canon golden's producer (analyzeHeadless) runs the Decompiler
+    // Parameter ID analyzer, which decompiles CALLED functions and commits
+    // recovered prototypes to the Program database; every later decompilation
+    // then decompiles with those callee signatures present (FlowInfo::
+    // queryCall -> FuncCallSpecs::setFuncdata -> ActionDefaultParams'
+    // fc->copy(otherfunc->getFuncProto()), coreaction.cc:2322-2330). Rugra's
+    // httpd corpus has no such channel: call sites run with unlocked,
+    // actively-recovered prototypes, and the missing callee type anchors are
+    // exactly the httpd shape family (locked-oracle flip evidence:
+    // /dev/shm/rugra-reports/LANE_SHAPEFIX_2026-09-25.md — installing ONE
+    // callee prototype, ap_setup_prelinked_modules (long*)->long, flipped
+    // the locked oracle's main output to the canon `long *` subscript /
+    // 8-byte-load family, env-flip census 154/156 lines). This gate loads
+    // the harvested manifest (tools/harvest_local_manifest.py --callee over
+    // the canon golden; call-site printed forms, NOT the callees' own golden
+    // headers, which drift with Parameter ID iteration) and installs each
+    // entry as a locked FuncProto on the matching call site BEFORE the
+    // action pipeline: param typelocks anchor call inputs through
+    // TypeOpCall::getInputLocal (typeop.cc:687-718) + ActionInferTypes, the
+    // output lock types the return through the locked-output arm
+    // (coreaction.cc:4637-4649 / TypeOpCall::getOutputLocal typeop.cc:731-
+    // 735), and the model lock mirrors the committed-signature decode
+    // (proto_setup.xml modellock="true", the SHAPEFIX harness form). No
+    // parameter names: canon's caller vars keep plVar/puVar spellings, so
+    // unlike the harness's namelock experiment the manifests never carry
+    // namelock. Entries with partial evidence keep active arity recovery
+    // and lock only the return. The mirror gate stays clean (no installs,
+    // the five projections remain byte-identical); RUGRA_SEEDS=0 is the
+    // global escape; opt-in polarity pending the V3 verification pass.
+    let v3sig_active = if mirror_flow_enabled() {
+        eprintln!("[V3SIG] callee-siglock gate ignored under the mirror gate (projection purity)");
+        false
+    } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        false
+    } else {
+        std::env::var("RUGRA_V3SIG").is_ok()
+    };
+    // The manifest table: canon address (base-0 vaddr + 0x100000) ->
+    // (callee name, params Vec<Option<type spelling>>, return spelling,
+    // input_lock). Defensive JSON decode, same shape as the TYPESEED gate.
+    let v3sig_table: Option<
+        std::sync::Arc<HashMap<u64, V3CalleeProto>>,
+    > = if v3sig_active {
+        let path = std::env::var("RUGRA_V3SIG_MANIFEST")
+            .unwrap_or_else(|_| "tests/golden/manifests/callee_siglock_httpd_1204.json".to_string());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(raw) => {
+                    let mut table = HashMap::new();
+                    if let Some(serde_json::Value::Object(callees)) = raw.get("callees") {
+                        for (addr, entry) in callees {
+                            let Some(key) = addr.strip_prefix("0x").and_then(|digits| u64::from_str_radix(digits, 16).ok()) else {
+                                continue;
+                            };
+                            let Some(serde_json::Value::String(name)) = entry.get("name") else {
+                                continue;
+                            };
+                            let mut params = Vec::new();
+                            if let Some(serde_json::Value::Array(slots)) = entry.get("params") {
+                                for slot in slots {
+                                    let spelling = match slot.get("type") {
+                                        Some(serde_json::Value::String(t)) if slot.get("locked") == Some(&serde_json::Value::Bool(true)) => Some(t.clone()),
+                                        _ => None,
+                                    };
+                                    params.push(spelling);
+                                }
+                            }
+                            let ret = match entry.get("return") {
+                                Some(serde_json::Value::String(t)) => Some(t.clone()),
+                                _ => None,
+                            };
+                            let input_lock = entry.get("input_lock")
+                                == Some(&serde_json::Value::Bool(true))
+                                && !params.is_empty()
+                                && params.iter().all(|slot| slot.is_some());
+                            table.insert(
+                                key,
+                                V3CalleeProto {
+                                    name: name.clone(),
+                                    params,
+                                    ret,
+                                    input_lock,
+                                },
+                            );
+                        }
+                    }
+                    eprintln!(
+                        "[V3SIG] loaded {}: {} callee prototypes ({} input-locked, {} return-locked)",
+                        path,
+                        table.len(),
+                        table.values().filter(|c| c.input_lock).count(),
+                        table.values().filter(|c| c.ret.is_some()).count()
+                    );
+                    Some(std::sync::Arc::new(table))
+                }
+                Err(err) => {
+                    eprintln!("[V3SIG] manifest {} is not valid JSON: {} (gate disabled)", path, err);
+                    None
+                }
+            },
+            Err(err) => {
+                eprintln!("[V3SIG] cannot read manifest {}: {} (gate disabled)", path, err);
+                None
+            }
+        }
+    } else {
         None
     };
 
@@ -1735,6 +2007,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // HEADLESS-BRIDGE-V1-TYPESEED: per-thread manifest handle (Arc clone
         // only behind the gate; None keeps the historical path untouched).
         let typeseed_locals = typeseed_manifest.clone();
+        // HEADLESS-BRIDGE-V3-SIGLOCK-0003: per-thread callee-proto manifest
+        // handle (Arc clone only behind the gate).
+        let v3sig_protos = v3sig_table.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
@@ -1997,6 +2272,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // followFlow — the function cannot decompile.
                     eprintln!("[THREAD] {} jumptable recovery failed: {}", func_name, error);
                     return None;
+                }
+            }
+            // HEADLESS-BRIDGE-V3-SIGLOCK-0003: install the callee locked
+            // prototypes on this function's call sites AFTER injection
+            // (callspecs exist — the model-bound funcp registers them —
+            // and the CALL ops still carry only their target inputs) and
+            // BEFORE the action pipeline (ActionPrototypeTypes' locked
+            // arms, ActionFuncLink's inputlocked attach, and
+            // ActionInferTypes' typeprop anchoring all run inside
+            // perform_action). The install position mirrors the oracle
+            // harness's pre-action callee installs (stage_shape_diag.cc
+            // STAGE_CALLEE_PROTOS, "before the target's action pass, so
+            // ActionDefaultParams copies each callee proto onto its call
+            // sites exactly like the Program database boundary").
+            if let Some(table) = v3sig_protos {
+                if let Some(types) = fd.arch.as_ref().and_then(|arch| arch.types.clone()) {
+                    let locked = install_v3sig_callee_protos(&mut fd, &table, &types);
+                    if locked > 0 {
+                        eprintln!("[THREAD] {} v3sig: {} callee protos locked", func_name, locked);
+                    }
                 }
             }
             }
@@ -2355,6 +2650,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sym_table = symbol_table.clone();
             let default_effects = default_effects.clone();
             let thread_arch = tracked_arch.clone();
+            // HEADLESS-BRIDGE-V3-SIGLOCK-0003: per-thread manifest handle
+            // for the switchD emission loop (same gate as the main loop).
+            let v3sig_protos = v3sig_table.clone();
             let handle = std::thread::spawn(move || -> Option<String> {
                 let mut fd = Funcdata::new(
                     &format!("switchD_{:08x}::{}", ANALYZE_HEADLESS_IMAGE_BASE + dispatch, tag),
@@ -2398,6 +2696,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 fd.inject_raw_ops(&raw_ops);
+                // HEADLESS-BRIDGE-V3-SIGLOCK-0003: same callee-prototype
+                // install position as the main loop — the switchD caseD
+                // handlers' tail-call targets (strcasecmp, the shared
+                // FUN_ chunks) are canon-mode callees too (golden
+                // 0x154470 prints `strcasecmp(unaff_R12, ...)` with the
+                // locked 2-param shape).
+                if let Some(table) = v3sig_protos.as_ref() {
+                    if let Some(types) =
+                        fd.arch.as_ref().and_then(|arch| arch.types.clone())
+                    {
+                        let locked = install_v3sig_callee_protos(&mut fd, table, &types);
+                        if locked > 0 {
+                            eprintln!(
+                                "[THREAD] {} v3sig: {} callee protos locked",
+                                qualified_name, locked
+                            );
+                        }
+                    }
+                }
 
                 let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
                 fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));

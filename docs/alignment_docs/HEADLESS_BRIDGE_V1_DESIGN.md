@@ -849,3 +849,105 @@ emit_line_comment **链路活着**——my_get_line 注入后位置/块形正确
   probe1-6（census/loclist/slot/scope/firstbegins）、stage_cmt_diag.cc +
   build_cmt_diag.sh + 二进制、oracle_mygetline_cmt.c / oracle_getparam_cmt.c、
   curl_{default,cmtprobe,final}.c、cmt_*.txt。
+
+---
+
+## §16 V3SIG 交付记录（Lane V3SIG，2026-09-25，基=亲父 cf2e138f=master SHAPEFIX 后）
+
+> HEADLESS-BRIDGE-V3-SIGLOCK-0003 的 httpd 形状族收口面：被调函数锁定原型通道
+> （RUGRA_V3SIG=1 opt-in）。commit 与验收矩阵见 TODO_BOARD 行；证据
+> /dev/shm/rugra-tests/v3sig/（保留至 root 集成）。
+
+### 16.1 通道（SHAPEFIX 判决的运输层）
+
+canon golden 的 `long *` 下标/8 字节 load/canary 槽下标族来自 analyzeHeadless
+**Decompiler Parameter ID** 分析器提交到 Program DB 的被调函数锁定原型（双向实验：
+单条 ap_setup_prelinked_modules (long*)→long 即把锁定 oracle 的 main 翻成 canon 形，
+env-flip 154/156——/dev/shm/rugra-reports/LANE_SHAPEFIX_2026-09-25.md）。Rugra 的
+httpd 语料此前没有该通道：调用点全走 active recovery。本 lane 落地：
+
+1. **harvest**（`tools/harvest_local_manifest.py --callee GOLDEN.c CORPUS
+   ORACLE_COMMIT OUT.json`）：从 canon golden 的 main/ap_fini_vhost_config/
+   ap_vhost_iterate_given_conn 调用点形态反推被调原型。**以调用点实参形态为准，
+   不用被调自身 header**（Parameter ID 迭代漂移：canon 的
+   ap_setup_prelinked_modules 自印 `char * f(undefined8 *)` 而调用点显形
+   `(long*)→long`）。证据规则（全部 canon 文本可观察）：元数=各调用点实参计数
+   （不一致=varargs 弃收）；参数槽类型证据=裸局部（decl 类型，数组衰减指针）/
+   `x[k]`（元素型）/`x+k`/`*x`/`&x`/字符串字面量（char *）/cast 目标
+   （ActionSetCasts 恰把实参 cast 到调用点参数的 local type——`(char *)x` 即
+   char* 证据）/常量与其他表达式（无证据，永不冲突）；两处拼写冲突杀槽
+   （canon 以 long* 与 undefined8* 双型无 cast 传 apr_pool_create_ex param1 ⇒
+   canon 未锁该槽）；**全槽证据齐才锁输入**（部分证据条目保持 active 元数恢复，
+   仅锁返回）；返回锁=所有消费点无 cast 且消费变量类型一致（cast 存在或全未用
+   ⇒不锁；未用≠void）；无参数名（canon 调用方变量保持 plVar/puVar 拼写——与
+   SHAPEFIX harness 的 namelock 实验相反，namelock 会把 main 的变量改名 mod）。
+   TYPEFIX 规矩沿用：KNOWN_BASES 之外的基名槽即死。
+2. **manifest**（`tests/golden/manifests/callee_siglock_httpd_1204.json`，
+   oracle_commit + golden sha256 指纹齐备）：60 被调（27 全输入锁，26 返回锁），
+   3 drops（__printf_chk/ap_log_error/ap_run_post_config=元数冲突的 varargs/派生
+   被调——canon 自身未锁，弃收即对齐方向）。
+3. **装载**（`examples/httpd_decompile.rs`，RUGRA_V3SIG=1 opt-in +
+   RUGRA_V3SIG_MANIFEST 路径覆盖）：inject 后、action 管线前，按 canon 地址键
+   （entry+0x100000）把每条 manifest 原型装成锁定 FuncProto 挂到 fd.callspecs 的
+   callspec 上——全部走库内既有公开面：`FuncProto::from_model_carrier`（defaultfp
+   模型，set_arch 的 setScope 尾已绑）+ `update_all_types_from_pieces`（SYSV 存储
+   分配，fspec.cc:3843 setPieces 同路）+ `set_input_lock/set_output_lock/
+   set_model_lock`（镜像 SHAPEFIX proto_setup.xml 的 modellock/typelock 形态）。
+   类型经 arch TypeFactory `find_by_name` 解析（FuncProto::decode 同源，
+   grammar.cc:2989；"undefined" 是 data-org 唯一缺口，直接 1 字节 Unknown 核心
+   构造）。消费链全在库内：TypeOpCall::getInputLocal（typeop.cc:687-718）锚定
+   实参 typeprop、锁定输出臂（coreaction.cc:4637-4649）定型返回、ActionFuncLink
+   inputlocked 臂挂参数、ActionDefaultParams 因 has_model 跳过 setInternal。
+   **库侧无缺口——无需 src 改动、无移交**。switchD caseD 发射循环同位接线
+   （canon 0x154470 `strcasecmp(unaff_R12,...)` 双参形）。
+   门禁语义：mirror 恒拒（投影纯度，显式日志）；RUGRA_SEEDS=0 全局逃生；opt-in
+   极性待 V3 验证轮后再评估转正。
+
+### 16.2 验收（opt-in 态 vs 基线 1141/0/0）
+
+| 门 | 基线 | RUGRA_V3SIG=1 | 判定 |
+|---|---|---|---|
+| httpd 总量 | 1141/0/0 | **951/0/0**（−190） | defects/numbering 双零 |
+| main | 613 | **505**（−108） | 形状族+返回消费族翻转 |
+| ap_fini_vhost_config | 159 | **90**（−69） | void* __s1/undefined1* 族对齐 |
+| ap_update_vhost_from_headers | 56 | **51**（−5） | |
+| ap_matches_request_vhost | 6 | **2**（−4） | |
+| caseD_0（0x154470） | 4 | **0** | canon 逐字节（strcasecmp 双参 unaff 形） |
+| 其余 29 函数 | — | 恒等 | **零回退**（无任何函数 diff 上升） |
+| 默认脸（env 全空） | — | cmp 基线字节恒等 | ✓（caseD 接线后复证） |
+| mirror（含 RUGRA_V3SIG=1） | — | 恒拒 + 输出恒等 | ✓ |
+| 投影银行 | 391/391 | 391/391 MATCH | ✓ |
+| curl 默认 | 577/0/0 | 577/0/0（驱动未触） | ✓ |
+| gcc 审计 | 14 OK/15 FAIL | 同基线同名集 | ✓ |
+| 双跑 cmp | — | 恒等×2 | ✓ |
+
+翻转普查（原始行）：main 738 + ap_fini 191 = 929 行（含编号级联放大；SHAPEFIX
+oracle env-flip 154/156 为其子集——本通道额外收返回消费形 int 族与 (char*) cast
+实参族）。
+
+### 16.3 残差归因（951 的主族，均既有登记域）
+
+1. **cf 结构**：canon 把 apr_app_initialize 失败分支重构进 `if (iVar3 == 0) {`
+   嵌套，Rugra 保持 goto/while 形——该分支内消费变量 pcVar4 仍 char*（canon
+   iVar3 int）。返回锁已到位（cast 存在即证调用输出≠char*），消费侧类型归属
+   未重构 IR 的 typeprop 行为（GETPARAM-CVAR1-HOIST 同判域）。
+2. **编号级联**：pcVar4 残留使 uVar/pcVar 序列整体偏移（~几十行）。
+3. **undefined224* 伪影**：`&ap_prelinked_modules` 循环——ap_register_hooks
+   (undefined*,long) 锁让实参流变 undefined*（canon ✓ 三处贴齐：裸 &、
+   `(undefined *)0x0`、undefined* 实参），但 typeOrder 让 DB 符号的
+   undefined224*（dynsym st_size=224）压过使用流，增量步进印成
+   `(undefined224 *)((long)puVar15 + 8)`（canon `ppuVar14 + 1`）——
+   typeprop/SYMDB 优先级域残差，登记 `V3SIG-UND224-TYPEORDER-0001`。
+4. **varargs 3 drops** 与 **ap_run_post_config 元数冲突**：canon 未锁（站点
+   元数不一致即证），弃收即对齐方向。
+5. 间接调用拼写（`void(*V)()` vs `code *V`）、canary 物化（local_40 拆分）、
+   &DAT vs 字符串字面量：既有他域登记，维持。
+
+### 16.4 机制声明
+
+- 机制 C：examples/tools 写域豁免（src 零触碰，git diff 亲父=examples/
+  httpd_decompile.rs + tools/harvest_local_manifest.py + manifest + docs）。
+- 机制 B：examples 非白名单模块，Differential 块按车道要求随 commit 提交
+  （逐函数归因见 16.2/16.3）。
+- curl 侧（SIG 418+PARAM-NAME 146 hunk、C7 NAME-NORM）与转正评估（opt-in →
+  默认）维持 TODO 行排队，依赖本验证轮结论。

@@ -22,6 +22,8 @@ Usage (C2 DWARF-name mode):
   harvest_local_manifest.py --dwarf BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--dwarf-raw-types]
 Usage (C4 DWARF-struct mode):
   harvest_local_manifest.py --struct BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json
+Usage (V3 callee-siglock mode):
+  harvest_local_manifest.py --callee GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--targets main,ap_fini]
 """
 import hashlib
 import json
@@ -226,6 +228,336 @@ STRUCT_HARVEST_RULE = (
 # (uStack_150 / iStack_160 / pcStack_218 / ...); in_stack_ (positive
 # full-width hex) and local_ (W1B C1 domain) are deliberately not matched.
 STACK_NAME = re.compile(r"^[A-Za-z]*[Ss]tack_([0-9a-f]{1,6})$")
+
+
+# ---------------------------------------------------------------------------
+# V3 callee-siglock mode (HEADLESS-BRIDGE-V3-SIGLOCK-0003; the SHAPEFIX
+# verdict's transport: canon's `long *` subscript family in httpd main /
+# ap_fini / ap_vhost comes from the analyzeHeadless Decompiler Parameter ID
+# analyzer committing locked prototypes to CALLED functions — oracle-flip
+# evidence /dev/shm/rugra-reports/LANE_SHAPEFIX_2026-09-25.md, harness
+# /dev/shm/rugra-tests/shapefix/stage_shape_diag.cc). The golden's own
+# callee headers are NOT the harvest source: Parameter ID's final committed
+# self-signature can disagree with the call-site state main was decompiled
+# against (canon prints ap_setup_prelinked_modules's own header as
+# `char * f(undefined8 *)` while main's call site shows `(long*)->long`);
+# the call-site printed forms are the observable truth (task rule:
+# "以 canon 印出的调用点实参形态为准反推").
+#
+# Evidence rules, each observable in the canon text:
+#   - arity: the number of printed top-level arguments at each call site;
+#     any disagreement across sites = varargs/derived callee -> dropped.
+#   - param type evidence per slot, conflict-sensitive:
+#       bare local x          -> x's declared type (arrays decay to elem*)
+#       x[k]                  -> element type of x's array/pointer decl
+#       x + k / x + -k        -> x's declared type
+#       *x                    -> pointee of x's declared type
+#       &x                    -> pointer to x's declared type
+#       "literal"             -> char * (string constant)
+#       (T *)expr / (int)x    -> T * / int (ActionSetCasts casts a call
+#                                 argument exactly to the callsite param's
+#                                 local type, so the cast target IS the
+#                                 canon callsite param type)
+#       numeric / other exprs -> no evidence (never a conflict)
+#     two disagreeing spellings kill the slot (canon passed long* AND
+#     undefined8* vars to apr_pool_create_ex's param1 with no cast ->
+#     that slot was not type-locked in canon).
+#   - input lock only when EVERY slot has agreeing KNOWN_BASES evidence
+#     (TYPEFIX rule: an unknown base spelling is a dead slot); otherwise
+#     the callee keeps active arity recovery and only the return locks.
+#   - return type evidence: every CONSUMING site assigns without a cast
+#     and the consumer declared types agree; any cast on the call result
+#     (canon `plVar6 = (long *)apr_palloc(...)`) or all-unused -> no
+#     output lock (unused != void).
+#   - no parameter names: canon's caller vars keep plVar/puVar spellings,
+#     so unlike the SHAPEFIX harness XML (namelock="true" renamed main's
+#     var to `mod`) the manifests never carry namelock.
+# ---------------------------------------------------------------------------
+
+CALLEE_SIGLOCK_RULE = (
+    "canon call-site form harvest over the target functions: per callee, "
+    "arity = printed argument count (conflict = varargs drop), param slot "
+    "types from bare-local/element/addr-of/deref/literal/cast-target "
+    "evidence with conflict-sensitivity, input lock only on full "
+    "KNOWN_BASES evidence, return lock only on cast-free agreeing "
+    "consumers, no param names; call-site forms are authoritative over "
+    "the callee's own golden header (Parameter ID iteration drift)"
+)
+
+# A statement-level call match: optional `lvalue = `, optional pointer cast
+# on the call result, callee identifier, then the balanced argument list.
+CALLEE_CALL = re.compile(
+    r"(?P<lhs>[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
+    r"(?P<cast>\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?"
+    r"(?P<callee>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+# Simple value casts on arguments: (int)x, (int)x, (char *)x, (long *)x ...
+CALLEE_ARG_CAST = re.compile(r"^\(\s*(?P<t>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<ptr>\*?)\s*\)\s*")
+IDENT_EXPR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+NUMERIC = re.compile(r"^(?:0x[0-9a-fA-F]+|\d+)$")
+
+
+def _norm_type(spelling):
+    """Collapse whitespace around '*' into Ghidra's `T *` spelling."""
+    stars = spelling.count("*")
+    base = " ".join(spelling.replace("*", " ").split())
+    dims = "".join("[%d]" % int(d) for d in re.findall(r"\[(\d+)\]", base))
+    base = base.split("[")[0].strip()
+    return base + (" *" * stars) + dims
+
+
+def _elem_type(spelling):
+    """Element type of an array/pointer decl (strip one [N] / one *)."""
+    spelling = _norm_type(spelling)
+    if "[" in spelling:
+        return spelling.split("[")[0].strip()
+    if spelling.endswith(" *"):
+        return spelling[:-2].strip()
+    return spelling
+
+
+def _ptr_type(spelling):
+    return _norm_type(spelling) + " *"
+
+
+def _pointee_type(spelling):
+    spelling = _norm_type(spelling)
+    if not spelling.endswith(" *"):
+        return None
+    return spelling[:-2].strip()
+
+
+def _in_string(body, pos):
+    """Is column `pos` inside a double-quoted string literal?"""
+    return body.count('"', 0, pos) % 2 == 1
+
+
+def _parse_signature_params(sig_line):
+    """`f(type1 n1, type2 n2)` -> {n1: type1, ...} (name = last ident)."""
+    open_paren = sig_line.find("(")
+    close_paren = sig_line.rfind(")")
+    if open_paren < 0 or close_paren < open_paren:
+        return {}
+    inner = sig_line[open_paren + 1 : close_paren]
+    params = {}
+    depth = 0
+    cur = ""
+    parts = []
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    for part in parts:
+        ids = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", part)
+        if not ids:
+            continue
+        name = ids[-1]
+        type_text = part[: part.rfind(name)].strip()
+        if type_text.endswith("*"):
+            type_text = _norm_type(type_text)
+        if type_text:
+            params[name] = _norm_type(type_text)
+    return params
+
+
+def _arg_evidence(arg, decls):
+    """(spelling|None) — the canon call-site param type this arg exhibits."""
+    arg = arg.strip()
+    if arg.startswith('"'):
+        return "char *"
+    if NUMERIC.match(arg):
+        return None
+    cast = CALLEE_ARG_CAST.match(arg)
+    if cast is not None:
+        base = cast.group("t")
+        if base not in KNOWN_BASES:
+            return None
+        if cast.group("ptr"):
+            return _ptr_type(base)
+        return base
+    # ident[k] element access
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*\d+\s*\]$", arg)
+    if m is not None and m.group(1) in decls:
+        return _elem_type(decls[m.group(1)])
+    # ident + k / ident + -k pointer arithmetic keeps the pointer type
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\+\s*-?(?:0x[0-9a-fA-F]+|\d+)$", arg)
+    if m is not None and m.group(1) in decls:
+        return _norm_type(decls[m.group(1)])
+    # bare ident: arrays decay to element pointers
+    if IDENT_EXPR.match(arg) is not None:
+        if arg in decls:
+            spelling = _norm_type(decls[arg])
+            if "[" in spelling:
+                return _elem_type(spelling) + " *"
+            return spelling
+        return None
+    # &ident
+    m = re.match(r"^&\s*([A-Za-z_][A-Za-z0-9_]*)$", arg)
+    if m is not None and m.group(1) in decls:
+        return _ptr_type(decls[m.group(1)])
+    # *ident
+    m = re.match(r"^\*\s*([A-Za-z_][A-Za-z0-9_]*)$", arg)
+    if m is not None and m.group(1) in decls:
+        return _pointee_type(decls[m.group(1)])
+    return None
+
+
+def harvest_callee(path, target_names):
+    """V3 callee-siglock table: per callee (canon-address keyed) the
+    call-site-derived prototype evidence. Returns (callees, drops,
+    function_addresses)."""
+    text = open(path, "r", encoding="utf-8").read()
+    # function name -> canon address (first occurrence: thunks precede the
+    # EXTERNAL-space pseudo entries in the address-ordered golden).
+    function_addresses = {}
+    for addr, name, _lines in split_functions(text):
+        function_addresses.setdefault(name, addr)
+    callees = {}
+    drops = []
+    for addr, name, lines in split_functions(text):
+        if name not in target_names:
+            continue
+        # declared local types: decl block + the signature's own formals
+        decls = {}
+        started = False
+        for line in lines:
+            stripped = line.strip()
+            if not started:
+                if stripped == "{":
+                    started = True
+                continue
+            if not stripped:
+                continue
+            dm = DECL.match(line)
+            if dm is None:
+                break
+            decls[dm.group("name")] = parse_type_expr(
+                dm.group("type"), dm.group("stars"), dm.group("arr")
+            )
+        body = "\n".join(lines)
+        # The signature line (before the body's opening brace) also matches
+        # the call pattern (`void f(long param_1, ...)`); harvest calls only
+        # from the statement region, and read the formals from the sig.
+        sig_params = _parse_signature_params(body.split("{", 1)[0])
+        decls.update(sig_params)
+        body = body[body.find("{") + 1 :]
+        for m in CALLEE_CALL.finditer(body):
+            callee = m.group("callee")
+            if callee in ("if", "while", "for", "switch", "sizeof", "return"):
+                continue
+            if _in_string(body, m.start()):
+                continue
+            # balanced argument extraction
+            start = body.find("(", m.start())
+            depth = 0
+            end = start
+            for i in range(start, len(body)):
+                if body[i] == "(":
+                    depth += 1
+                elif body[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            argstr = body[start + 1 : end]
+            args = []
+            depth = 0
+            cur = ""
+            for ch in argstr:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                if ch == "," and depth == 0:
+                    args.append(cur.strip())
+                    cur = ""
+                else:
+                    cur += ch
+            if cur.strip():
+                args.append(cur.strip())
+            lhs = (m.group("lhs") or "").strip().rstrip("=").strip()
+            cast = (m.group("cast") or "").strip()
+            entry = callees.setdefault(
+                callee,
+                {
+                    "name": callee,
+                    "addr": function_addresses.get(callee),
+                    "sites": 0,
+                    "arity": None,
+                    "slot_evidence": {},
+                    "slot_conflict": set(),
+                    "return_evidence": {},
+                    "return_cast": False,
+                },
+            )
+            entry["sites"] += 1
+            if entry["arity"] is None:
+                entry["arity"] = len(args)
+            elif entry["arity"] != len(args):
+                entry["arity"] = -1  # varargs / derived conflict marker
+            for slot, arg in enumerate(args):
+                ev = _arg_evidence(arg, decls)
+                if ev is None:
+                    continue
+                if base_of(ev) not in KNOWN_BASES:
+                    entry["slot_conflict"].add(slot)
+                    continue
+                prior = entry["slot_evidence"].get(slot)
+                if prior is None:
+                    entry["slot_evidence"][slot] = _norm_type(ev)
+                elif prior != _norm_type(ev):
+                    entry["slot_conflict"].add(slot)
+            if cast:
+                entry["return_cast"] = True
+            elif lhs and lhs in decls:
+                rt = _norm_type(decls[lhs])
+                if base_of(rt) in KNOWN_BASES:
+                    prior = entry["return_evidence"].get(rt)
+                    entry["return_evidence"][rt] = prior + 1 if prior else 1
+    # finalize
+    out = {}
+    for callee, entry in sorted(callees.items()):
+        if entry["addr"] is None:
+            drops.append({"callee": callee, "reason": "no golden header address"})
+            continue
+        if entry["arity"] < 0:
+            drops.append(
+                {
+                    "callee": callee,
+                    "reason": "arity conflict across sites (varargs/derived)",
+                }
+            )
+            continue
+        arity = entry["arity"]
+        params = []
+        full = arity > 0
+        for slot in range(arity):
+            if slot in entry["slot_conflict"] or slot not in entry["slot_evidence"]:
+                params.append({"type": None, "locked": False})
+                full = False
+            else:
+                params.append({"type": entry["slot_evidence"][slot], "locked": True})
+        ret = None
+        if not entry["return_cast"] and entry["return_evidence"]:
+            if len(entry["return_evidence"]) == 1:
+                ret = next(iter(entry["return_evidence"]))
+        out[entry["addr"]] = {
+            "name": callee,
+            "sites": entry["sites"],
+            "arity": arity,
+            "input_lock": full,
+            "params": params,
+            "return": ret,
+        }
+    return out, drops, function_addresses
 
 BASE_SIZES = {
     "void": 0, "char": 1, "byte": 1,
@@ -871,6 +1203,44 @@ def harvest_dwarf(binary, golden_path=None, canon_types=True):
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--callee":
+        if len(sys.argv) < 6:
+            print(__doc__)
+            return 2
+        golden, corpus, oracle_commit, out = sys.argv[2:6]
+        argv_rest = sys.argv[6:]
+        target_names = None
+        for arg in argv_rest:
+            if arg.startswith("--targets="):
+                target_names = set(
+                    name for name in arg[len("--targets=") :].split(",") if name
+                )
+        if target_names is None:
+            target_names = {
+                "main",
+                "ap_fini_vhost_config",
+                "ap_vhost_iterate_given_conn",
+            }
+        funcs, drops, _addresses = harvest_callee(golden, target_names)
+        manifest = {
+            "oracle_commit": oracle_commit,
+            "corpus": corpus,
+            "source": "callee-siglock",
+            "golden_sha256": hashlib.sha256(open(golden, "rb").read()).hexdigest(),
+            "harvest_rule": CALLEE_SIGLOCK_RULE,
+            "targets": sorted(target_names),
+            "callees": funcs,
+            "harvest_drops": drops,
+        }
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=1)
+        n_input = sum(1 for c in funcs.values() if c["input_lock"])
+        n_ret = sum(1 for c in funcs.values() if c["return"])
+        print(
+            "harvested %d callees (%d input-locked, %d return-locked, %d drops) -> %s"
+            % (len(funcs), n_input, n_ret, len(drops), out)
+        )
+        return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--struct":
         if len(sys.argv) < 6:
             print(__doc__)
