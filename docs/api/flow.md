@@ -638,7 +638,8 @@ curl 小范围 A/B 的生产收益是：`hugehelp` callspec/puts `5 -> 6`，
   `fc.set_no_return(true)`（flow.cc:747）+ "Does not return" warning
   （flow.cc:748）；三条 warning 从 eprintln! 改 `fd.warning`（commentdb，与
   Ghidra data.warning 同通道）。残差：noParams 臂 setInternal/defaultfp
-  （flow.cc:757-762）与 setBadJumpTable（flow.cc:754）仍归 CALLSPEC-0001。
+  （flow.cc:757-762）仍归 CALLSPEC-0001；setBadJumpTable（flow.cc:754）已由
+  FLOWSET 车道接线（见 2026-09-25 节），输出消费者归 coreaction 车道。
 - **恒 false stub 清理**：扩展 trait `is_inline`/`is_no_return` 删除（fspec.rs
   继承面已提供同名 inherent 委托，原实现已被遮蔽为死代码），过时 RUGRA-GLUE
   注释一并修正；`test_hard_inline_restrictions` 的
@@ -795,3 +796,32 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 - 修订注记:本节初版提交的 doc 恢复脚本曾引入 follow_flow_range 尾部的
   重复片段(纯注释性死码,同 commit 内已清除;可执行语义零变化——双语料
   输出 cmp 恒等复证)。
+
+## 2026-09-25（FLOWSET / CALLSPEC-0001 移交项 (b)）：truncate `_` 臂 setBadJumpTable 接线
+
+- **Ghidra 锚点**：`FlowInfo::truncateIndirectJump`（flow.cc:727-769）`else`
+  默认臂（捕获 `fail_normal`，jumptable.hh:545）在 warning 前执行
+  `fc->setBadJumpTable(true)`（flow.cc:754）——"Consider using special name
+  for switch variable"。`fc` 来自 flow.cc:736-737 的
+  `setupCallindSpecs(op,0)` + `getCallSpecs(op)`，与本函数 Rust 形既有的
+  `setup_callind_specs(op, None)` + `find_callspec_for_op` 链同源。
+- **接线形态**（src/flow.rs `truncate_indirect_jump` `_` 臂）：`fc_owner`
+  解析 `Some` 时 `fc.write().set_bad_jump_table(true)`，随后照 Ghidra
+  754→755 顺序发 warning；`None` 守卫沿用 fail_callother 臂先例（Rugra
+  Option owner 形态的等价守卫，oracle 侧 fc 经 736 行必然存在）。字段/
+  访问器/ctor 初值/clone 携带四件 = CALLSPEC 车道 fspec 数据面
+  （fspec.hh:1660/1701-1702、fspec.cc:4945/4974，commit deb2b09b）。
+- **触发实证**（httpd 默认脸 MAX_FUNCS=30，基 2008b8e0）：`[JUMPTABLE]
+  recovery failed at 0x2daeb mode=FailNormal → truncate`（ap_vhost_
+  iterate_given_conn 内 BRANCHIND）→ 临时探针亲证 callspec 解析 `Some`
+  且 flag 置位成功后移除；stdout 恰 1 条 "Treating indirect jump as call"
+  warning。curl 语料 0 次触发（`Lowlevel` 失败族缺席）。
+- **行为面**：`isbadjumptable` 在主管线暂无读者——唯一消费者
+  `ActionNameVars::lookForBadJumpTables`（coreaction.cc:2779-2803，
+  UNRECOVERED_JUMPTABLE 命名）归 coreaction 域并行车道。故本接线为
+  数据流打通件：httpd/curl E2E cmp 亲基线字节恒等（1141/0/0 与
+  577/0/0 保持，双跑确定性）、投影银行 391/391、cargo test 1712P/1F
+  预存同败、annotations/refs 绿、gcc 审计 104OK/20FAIL=基线。
+- **CALLSPEC-0001 ② 桶状态**：ap_vhost 站点（0x2da50 函数、0x2daeb 跳转）
+  的 `void(*)()param_2` → canon `code *UNRECOVERED_JUMPTABLE` 改名链现在
+  只差 coreaction 消费者（lookForBadJumpTables 读 `isBadJumpTable()`）。
