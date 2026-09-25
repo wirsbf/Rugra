@@ -3968,112 +3968,219 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2119 Heritage::splitJoinRead
-    /// Split a free join-space Varnode into PIECE expressions.
-    /// Faithful to `splitJoinRead` (heritage.cc:2119-2163).
-    /// Requires JoinRecord (join offset → piece mapping).
-    /// Rugra lacks JoinRecord infrastructure; documented stub.
+    /// Construct pieces for a \e join-space Varnode read by an operation:
+    /// build a concatenation expression (PIECE ops) that constructs the
+    /// Varnode out of the JoinRecord's pieces, one split level at a time.
+    /// Faithful to `splitJoinRead` (heritage.cc:2119-2163). The joinrec
+    /// comes from the caller (`processJoins`), exactly like the oracle.
     pub fn split_join_read(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>) {
-        // cc:2122: vn is free, loneDescend must be non-null
-        let read_op = match vn.read().unwrap().lone_descend() {
-            Some(op) => op, None => return,
+        vn: &Arc<RwLock<Varnode>>,
+        joinrec: &crate::space::JoinRecord,
+    ) {
+        // cc:2121: op = vn->loneDescend(); // vn isFree, so loneDescend
+        // must be non-null — the oracle dereferences unconditionally.
+        // Rust mirrors with an early return (oracle would crash).
+        let mut op = match vn.read().unwrap().lone_descend() {
+            Some(op) => PcodeOpRef(op),
+            None => return,
         };
-        let vn_offset = vn.read().unwrap().loc.as_u64();
-        // Look up JoinRecord from Architecture before mutable borrow.
-        let join_rec = match fd.get_arch() {
-            Some(a) => a.join_db.find_join(vn_offset).cloned(),
-            None => None,
-        };
-        let join_rec = match join_rec { Some(r) => r, None => return ,
+        // cc:2122-2125: isPrimitive defaults true; a typelocked vn only
+        // stays primitive when its type isPrimitiveWhole.
+        let is_primitive = {
+            let vnr = vn.read().unwrap();
+            if vnr.is_type_lock() {
+                vnr.get_type()
+                    .map(|t| t.is_primitive_whole())
+                    .unwrap_or(false)
+            } else {
+                true
+            }
         };
 
-        // cc:2128-2162: iterative PIECE chain creation
-        // Simplified: for 2-piece joins, create a single PIECE.
-        if join_rec.num_pieces() == 2 {
-            let p0 = &join_rec.pieces[0];
-            let p1 = &join_rec.pieces[1];
-            let mosthalf = fd.vbank.create_with_space(p0.size, p0.space, p0.offset);
-            let leasthalf = fd.vbank.create_with_space(p1.size, p1.space, p1.offset);
-            // heritage.cc:2095/2100 route through Funcdata::newVarnode's
-            // explicit-space overload, whose symbol tail (usepoint =
-            // invalid Address of cc:162) runs on each piece before the
-            // PIECE wiring (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
-            fd.set_varnode_properties(&mosthalf);
-            fd.set_varnode_properties(&leasthalf);
-            let op_addr = read_op.read().unwrap().get_addr();
-            let concat = fd.new_op(2, op_addr);
-            fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
-            concat.0.write().unwrap().output = Some(vn.clone());
-            fd.op_set_input(&concat, mosthalf.clone(), 0);
-            fd.op_set_input(&concat, leasthalf.clone(), 1);
-            let read_ref = PcodeOpRef(read_op.clone());
-            fd.op_insert_before(&concat, &read_ref);
-            mosthalf.write().unwrap().set_active_heritage();
-            leasthalf.write().unwrap().set_active_heritage();
+        // cc:2127-2161: iterative PIECE-chain construction via split levels.
+        let mut lastcombo: Vec<Arc<RwLock<Varnode>>> = vec![vn.clone()];
+        let mut nextlev: Vec<Option<Arc<RwLock<Varnode>>>> = Vec::new();
+        while lastcombo.len() < joinrec.num_pieces() {
+            nextlev.clear();
+            self.split_join_level(fd, &lastcombo, &mut nextlev, joinrec);
+
+            for i in 0..lastcombo.len() {
+                let curvn = lastcombo[i].clone();
+                let mosthalf = match nextlev.get(2 * i) {
+                    Some(Some(v)) => v.clone(),
+                    _ => continue,
+                };
+                let leasthalf = match nextlev.get(2 * i + 1) {
+                    // cc:2138: leasthalf == null → Varnode didn't get split
+                    // this level.
+                    Some(Some(v)) => v.clone(),
+                    _ => continue,
+                };
+                // cc:2139-2144: concat = newOp(2,op->getAddr()); PIECE;
+                // output=curvn; inputs most/least; insertBefore(op).
+                let op_addr = op.0.read().unwrap().get_addr();
+                let concat = fd.new_op(2, op_addr);
+                fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+                // Must go through Funcdata::op_set_output (funcdata_op.cc:70):
+                // the full def/descend wiring, matching opSetOutput.
+                fd.op_set_output(&concat, curvn.clone());
+                fd.op_set_input(&concat, mosthalf.clone(), 0);
+                fd.op_set_input(&concat, leasthalf.clone(), 1);
+                fd.op_insert_before(&concat, &op);
+                if is_primitive {
+                    // cc:2146-2147: precision flags trigger the
+                    // "double precision" rules on the halves.
+                    mosthalf.write().unwrap().set_precis_hi();
+                    leasthalf.write().unwrap().set_precis_lo();
+                } else {
+                    // cc:2150: opMarkNoCollapse(concat)
+                    fd.op_mark_no_collapse(&concat);
+                }
+                // cc:2152: op = concat — keep -op- as the earliest op in
+                // the concatenation construction.
+                op = concat;
+            }
+
+            lastcombo.clear();
+            for curvn in nextlev.drain(..) {
+                if let Some(v) = curvn {
+                    lastcombo.push(v);
+                }
+            }
         }
     }
 
     // Ghidra: heritage.cc:2172 Heritage::splitJoinWrite
-    /// Split a written join-space Varnode into SUBPIECE expressions.
-    /// Faithful to `splitJoinWrite` (heritage.cc:2172-2227).
-    /// Requires JoinRecord infrastructure.
+    /// Split a written \e join-space Varnode into specified pieces: build
+    /// SUBPIECE expressions that construct the JoinRecord's pieces from
+    /// the Varnode. Faithful to `splitJoinWrite` (heritage.cc:2172-2227).
+    /// The joinrec comes from the caller (`processJoins`).
     pub fn split_join_write(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>) {
-        let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-            Some(op) => op, None => return,
-        };
-        let vn_offset = vn.read().unwrap().loc.as_u64();
-        // Look up JoinRecord from Architecture before mutable borrow.
-        let join_rec = match fd.get_arch() {
-            Some(a) => a.join_db.find_join(vn_offset).cloned(),
-            None => None,
-        };
-        let join_rec = match join_rec { Some(r) => r, None => return ,
+        vn: &Arc<RwLock<Varnode>>,
+        joinrec: &crate::space::JoinRecord,
+    ) {
+        // cc:2174: op = vn->getDef(); // vn cannot be free, either it has
+        // def, or it is input — None mirrors the null-def input case.
+        let mut op: Option<PcodeOpRef> = vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(PcodeOpRef);
+        // cc:2175: bb = fd->getBasicBlocks().getBlock(0)
+        let bb0 = fd.bblocks.get_block(0);
+        let is_input = vn.read().unwrap().is_input();
+        // cc:2176-2178: isPrimitive defaults true; typelocked vns only
+        // stay primitive when their type isPrimitiveWhole.
+        let is_primitive = {
+            let vnr = vn.read().unwrap();
+            if vnr.is_type_lock() {
+                vnr.get_type()
+                    .map(|t| t.is_primitive_whole())
+                    .unwrap_or(false)
+            } else {
+                true
+            }
         };
 
-        // cc:2187-2226: create SUBPIECE ops for each piece
-        if join_rec.num_pieces() == 2 {
-            let p0 = &join_rec.pieces[0];
-            let p1 = &join_rec.pieces[1];
-            let op_addr = def_op.read().unwrap().get_addr();
-            // SUBPIECE for most significant piece (offset = p1.size)
-            let split0 = fd.new_op(2, op_addr);
-            fd.op_set_opcode(&split0, OpCode::CPUI_SUBPIECE);
-            let split0_out = fd.vbank.create_with_space(p0.size, p0.space, p0.offset);
-            // heritage.cc:2095 (via splitJoinLevel, reused as SUBPIECE output
-            // by splitJoinWrite cc:2197): newVarnode's symbol tail runs on
-            // the piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
-            fd.set_varnode_properties(&split0_out);
-            split0.0.write().unwrap().output = Some(split0_out);
-            fd.op_set_input(&split0, vn.clone(), 0);
-            let off_const0 = fd.new_constant(4, p1.size as u64);
-            fd.op_set_input(&split0, off_const0, 1);
-            let def_ref = PcodeOpRef(def_op.clone());
-            fd.op_insert_after(&split0, &def_ref);
-            // SUBPIECE for least significant piece (offset = 0)
-            let split1 = fd.new_op(2, op_addr);
-            fd.op_set_opcode(&split1, OpCode::CPUI_SUBPIECE);
-            let split1_out = fd.vbank.create_with_space(p1.size, p1.space, p1.offset);
-            // heritage.cc:2100 (via splitJoinLevel, reused as SUBPIECE output
-            // by splitJoinWrite cc:2208): newVarnode's symbol tail runs on
-            // the piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
-            fd.set_varnode_properties(&split1_out);
-            split1.0.write().unwrap().output = Some(split1_out);
-            fd.op_set_input(&split1, vn.clone(), 0);
-            let off_const1 = fd.new_constant(4, 0u64);
-            fd.op_set_input(&split1, off_const1, 1);
-            fd.op_insert_after(&split1, &split0);
+        // cc:2180-2225: iterative SUBPIECE construction via split levels.
+        let mut lastcombo: Vec<Arc<RwLock<Varnode>>> = vec![vn.clone()];
+        let mut nextlev: Vec<Option<Arc<RwLock<Varnode>>>> = Vec::new();
+        while lastcombo.len() < joinrec.num_pieces() {
+            nextlev.clear();
+            self.split_join_level(fd, &lastcombo, &mut nextlev, joinrec);
+            for i in 0..lastcombo.len() {
+                let curvn = lastcombo[i].clone();
+                let mosthalf = match nextlev.get(2 * i) {
+                    Some(Some(v)) => v.clone(),
+                    _ => continue,
+                };
+                let leasthalf = match nextlev.get(2 * i + 1) {
+                    // cc:2190: leasthalf == null → didn't split this level.
+                    Some(Some(v)) => v.clone(),
+                    _ => continue,
+                };
+                // cc:2192-2195: input bases anchor the SUBPIECE at block
+                // 0's start; written bases at the definer's address.
+                let leasthalf_size = leasthalf.read().unwrap().get_size() as u64;
+                let split_addr = if is_input {
+                    match bb0.as_ref() {
+                        Some(bb) => bb.read().unwrap().get_start_addr(),
+                        None => crate::address::Address::new(0),
+                    }
+                } else {
+                    match op.as_ref() {
+                        Some(o) => o.0.read().unwrap().get_addr(),
+                        None => crate::address::Address::new(0),
+                    }
+                };
+                // cc:2196-2199: SUBPIECE for mosthalf; the shift constant
+                // is leasthalf's size (least significant run below most).
+                let split = fd.new_op(2, split_addr);
+                fd.op_set_opcode(&split, OpCode::CPUI_SUBPIECE);
+                // opSetOutput(split,mosthalf) — full def wiring.
+                fd.op_set_output(&split, mosthalf.clone());
+                fd.op_set_input(&split, curvn.clone(), 0);
+                let off_const = fd.new_constant(4, leasthalf_size);
+                fd.op_set_input(&split, off_const, 1);
+                // cc:2200-2203: null def (input) inserts at the head of
+                // block 0; otherwise right after the running op.
+                match op.as_ref() {
+                    None => {
+                        if let Some(bb) = bb0.as_ref() {
+                            fd.op_insert_begin(&split, bb);
+                        }
+                    }
+                    Some(o) => fd.op_insert_after(&split, o),
+                }
+                // cc:2204: op = split — keep -op- as the latest op in the
+                // split construction.
+                op = Some(split);
+
+                // cc:2206-2211: SUBPIECE for leasthalf at shift 0,
+                // inserted after the mosthalf SUBPIECE.
+                let split2_addr = op
+                    .as_ref()
+                    .map(|o| o.0.read().unwrap().get_addr())
+                    .unwrap_or_else(|| crate::address::Address::new(0));
+                let split2 = fd.new_op(2, split2_addr);
+                fd.op_set_opcode(&split2, OpCode::CPUI_SUBPIECE);
+                fd.op_set_output(&split2, leasthalf.clone());
+                fd.op_set_input(&split2, curvn.clone(), 0);
+                let zero_const = fd.new_constant(4, 0u64);
+                fd.op_set_input(&split2, zero_const, 1);
+                if let Some(o) = op.as_ref() {
+                    fd.op_insert_after(&split2, o);
+                }
+                if is_primitive {
+                    // cc:2212-2214: precision flags trigger the
+                    // "double precision" rules on the halves.
+                    mosthalf.write().unwrap().set_precis_hi();
+                    leasthalf.write().unwrap().set_precis_lo();
+                }
+                // cc:2216: op = split — latest op.
+                op = Some(split2);
+            }
+
+            lastcombo.clear();
+            for curvn in nextlev.drain(..) {
+                if let Some(v) = curvn {
+                    lastcombo.push(v);
+                }
+            }
         }
     }
 
     // Ghidra: heritage.cc:2068 Heritage::splitJoinLevel
-    /// One level of Varnode splitting to match a JoinRecord.
-    /// Faithful to `splitJoinLevel` (heritage.cc:2068-2118).
-    /// TODO: requires JoinRecord piece specifications.
+    /// One level of Varnode splitting to match a JoinRecord: split all
+    /// the pieces in \p lastcombo into \p nextlev (2 entries per input,
+    /// pass-throughs get a null second entry to maintain the 2-1
+    /// mapping). Faithful to `splitJoinLevel` (heritage.cc:2067-2109).
     pub fn split_join_level(
         &mut self,
         fd: &mut Funcdata,
@@ -4081,18 +4188,24 @@ impl Heritage {
         nextlev: &mut Vec<Option<Arc<RwLock<Varnode>>>>,
         joinrec: &crate::space::JoinRecord,
     ) {
-        use crate::space::VarnodeData;
         let numpieces = joinrec.num_pieces();
         let mut recnum = 0;
         for curvn_arc in lastcombo {
             let curvn_size = curvn_arc.read().unwrap().get_size();
-            // cc:2075: if size matches a single piece, pass through
+            // cc:2074-2078: a size exactly matching the current piece
+            // passes through (null leasthalf). recnum < numpieces is an
+            // invariant of the caller's while condition (each curvn
+            // consumes at least one piece); the bound is panic-safety.
             if recnum < numpieces && curvn_size == joinrec.get_piece(recnum).size {
                 nextlev.push(Some(curvn_arc.clone()));
                 nextlev.push(None);
                 recnum += 1;
             } else {
-                // cc:2081-2089: accumulate piece sizes to find j
+                // cc:2080-2089: accumulate piece sizes from recnum until
+                // they sum to curvn's size; j ends one past the last
+                // consumed piece (or numpieces when the record's tail is
+                // consumed without an exact match — excluded by the
+                // JoinRecord/unified size invariant).
                 let mut sizeaccum = 0;
                 let mut j = recnum;
                 while j < numpieces {
@@ -4103,15 +4216,24 @@ impl Heritage {
                     }
                     j += 1;
                 }
-                // cc:2090: numinhalf = (j-recnum) / 2
+                // cc:2090: numinhalf = (j-recnum) / 2 — "Will be at least
+                // 1" (oracle comment): the else arm means piece(recnum)
+                // alone cannot equal curvn_size, so j moves at least one
+                // full piece past recnum. The guard below is panic-safety
+                // for the invariant-violating tail case only.
                 let numinhalf = (j - recnum) / 2;
-                if numinhalf == 0 { continue; }
-                // cc:2091-2093: accumulate mosthalf size
+                if numinhalf == 0 {
+                    nextlev.push(None);
+                    nextlev.push(None);
+                    continue;
+                }
+                // cc:2091-2093: accumulate the mosthalf size.
                 let mut mh_size = 0;
                 for k in 0..numinhalf {
                     mh_size += joinrec.get_piece(recnum + k).size;
                 }
-                // cc:2095-2104: create mosthalf and leasthalf
+                // cc:2094-2097: a single-piece mosthalf takes the piece's
+                // real storage; a multi-piece mosthalf is a fresh unique.
                 let mosthalf = if numinhalf == 1 {
                     let p = joinrec.get_piece(recnum);
                     let vn = fd.vbank.create_with_space(p.size, p.space, p.offset);
@@ -4122,6 +4244,8 @@ impl Heritage {
                 } else {
                     fd.new_unique(mh_size)
                 };
+                // cc:2098-2103: an exactly-two-piece remainder takes the
+                // piece's real storage; otherwise a fresh unique.
                 let lh_size = curvn_size - mh_size;
                 let leasthalf = if j - recnum == 2 {
                     let p = joinrec.get_piece(recnum + 1);
@@ -4141,30 +4265,31 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2236 Heritage::floatExtensionRead
-    /// Create float extension from a free join-space Varnode.
-    /// Faithful to `floatExtensionRead` (heritage.cc:2236-2255).
+    /// Create float truncation into a free lower precision \e join-space
+    /// Varnode: define the lower precision Varnode as a FLOAT2FLOAT
+    /// truncation of the record's full-precision piece. Faithful to
+    /// `floatExtensionRead` (heritage.cc:2235-2246). The joinrec comes
+    /// from the caller (`processJoins`); the isFloatExtension dispatch
+    /// happens there (cc:2299), not here.
     pub fn float_extension_read(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>) {
-        // cc:2239: op = vn->loneDescend()
+        vn: &Arc<RwLock<Varnode>>,
+        joinrec: &crate::space::JoinRecord,
+    ) {
+        // cc:2239: op = vn->loneDescend(); // vn isFree, so loneDescend
+        // must be non-null — the oracle dereferences unconditionally.
         let read_op = match vn.read().unwrap().lone_descend() {
-            Some(op) => op, None => return,
+            Some(op) => op,
+            None => return,
         };
-        let vn_offset = vn.read().unwrap().loc.as_u64();
-        let join_rec = match fd.get_arch() {
-            Some(a) => a.join_db.find_join(vn_offset).cloned(),
-            None => None,
-        };
-        let join_rec = match join_rec { Some(r) => r, None => return ,
-        };
-        if !join_rec.is_float_extension() { return; }
-        // cc:2241: vdata = joinrec->getPiece(0)
-        let vdata = join_rec.get_piece(0);
+        // cc:2240: vdata = joinrec->getPiece(0) — float extensions have
+        // exactly 1 piece.
+        let vdata = joinrec.get_piece(0);
         // cc:2240: trunc = newOp(1, op->getAddr())
         let op_addr = read_op.read().unwrap().get_addr();
         let trunc = fd.new_op(1, op_addr);
-        // cc:2242: bigvn = newVarnode(vdata.size, vdata.space, vdata.offset)
+        // cc:2241: bigvn = newVarnode(vdata.size,vdata.space,vdata.offset)
         let bigvn = fd
             .vbank
             .create_with_space(vdata.size, vdata.space, vdata.offset);
@@ -4172,40 +4297,50 @@ impl Heritage {
         // explicit-space overload, whose symbol tail runs on the piece
         // before the FLOAT2FLOAT wiring (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
         fd.set_varnode_properties(&bigvn);
-        // cc:2243: opSetOpcode(FLOAT_FLOAT2FLOAT)
+        // cc:2242: opSetOpcode(FLOAT_FLOAT2FLOAT)
         fd.op_set_opcode(&trunc, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
-        // cc:2244: opSetOutput(trunc, vn)
-        trunc.0.write().unwrap().output = Some(vn.clone());
-        // cc:2245: opSetInput(trunc, bigvn, 0)
+        // cc:2243: opSetOutput(trunc, vn) — full def wiring.
+        fd.op_set_output(&trunc, vn.clone());
+        // cc:2244: opSetInput(trunc, bigvn, 0)
         fd.op_set_input(&trunc, bigvn, 0);
-        // cc:2246: opInsertBefore(trunc, op)
+        // cc:2245: opInsertBefore(trunc, op)
         fd.op_insert_before(&trunc, &PcodeOpRef(read_op));
     }
 
     // Ghidra: heritage.cc:2256 Heritage::floatExtensionWrite
-    /// Create float extension from a lower precision join-space Varnode.
+    /// Create float extension from a lower precision \e join-space
+    /// Varnode: define the record's full-precision piece via a FLOAT2FLOAT
+    /// extension of the Varnode. Faithful to `floatExtensionWrite`
+    /// (heritage.cc:2255-2273). The joinrec comes from the caller
+    /// (`processJoins`); the isFloatExtension dispatch happens there
+    /// (cc:2308), not here.
     pub fn float_extension_write(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>) {
-        let vn_offset = vn.read().unwrap().loc.as_u64();
-        let join_rec = match fd.get_arch() {
-            Some(a) => a.join_db.find_join(vn_offset).cloned(),
-            None => None,
-        };
-        let join_rec = match join_rec { Some(r) => r, None => return ,
-        };
-        if !join_rec.is_float_extension() { return; }
-        // cc:2259: op = vn->getDef()
+        vn: &Arc<RwLock<Varnode>>,
+        joinrec: &crate::space::JoinRecord,
+    ) {
+        // cc:2258: op = vn->getDef() (null for input varnodes).
         let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-        let vdata = join_rec.get_piece(0);
-        // cc:2261-2265: create ext op
-        let ext_addr = match &def_op {
-            Some(op) => op.read().unwrap().get_addr(),
-            None => Address::new(0),
+        // cc:2259: bb = fd->getBasicBlocks().getBlock(0)
+        let bb0 = fd.bblocks.get_block(0);
+        let is_input = vn.read().unwrap().is_input();
+        let vdata = joinrec.get_piece(0);
+        // cc:2261-2264: input bases anchor at block 0's start; written
+        // bases at the definer's address.
+        let ext_addr = if is_input {
+            match bb0.as_ref() {
+                Some(bb) => bb.read().unwrap().get_start_addr(),
+                None => Address::new(0),
+            }
+        } else {
+            match &def_op {
+                Some(op) => op.read().unwrap().get_addr(),
+                None => Address::new(0),
+            }
         };
         let ext = fd.new_op(1, ext_addr);
-        // cc:2267: opSetOpcode(FLOAT_FLOAT2FLOAT)
+        // cc:2266: opSetOpcode(FLOAT_FLOAT2FLOAT)
         fd.op_set_opcode(&ext, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
         // cc:2267: newVarnodeOut(vdata.size, vdata.getAddr(), ext) — the
         // piece's own full storage address (space + offset, register space
@@ -4218,13 +4353,17 @@ impl Heritage {
             crate::address::Address::new(vdata.offset),
             &ext,
         );
-        // cc:2269: opSetInput(ext, vn, 0)
+        // cc:2268: opSetInput(ext, vn, 0)
         fd.op_set_input(&ext, vn.clone(), 0);
-        // cc:2270-2273: insert
-        if let Some(def_op) = def_op {
-            fd.op_insert_after(&ext, &PcodeOpRef(def_op));
-        } else {
-            fd.obank.alivelist.insert(0, ext);
+        // cc:2269-2272: null def (input) inserts at the head of block 0
+        // (opInsertBegin); otherwise right after the definer.
+        match def_op {
+            Some(op) => fd.op_insert_after(&ext, &PcodeOpRef(op)),
+            None => {
+                if let Some(bb) = bb0.as_ref() {
+                    fd.op_insert_begin(&ext, bb);
+                }
+            }
         }
     }
 
@@ -5540,8 +5679,34 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2282 Heritage::processJoins
-    pub fn process_joins(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Scan vbank for Join-space varnodes.
+    /// Split \e join-space Varnodes up into their real components.
+    /// Faithful to `processJoins` (heritage.cc:2281-2313): for every
+    /// Varnode in the join space, look up its JoinRecord and split it
+    /// into the specified real components (PIECE chains for free reads,
+    /// SUBPIECE pairs for writes at the piece space's heritage delay) so
+    /// join-space addresses play no role in heritage.
+    ///
+    /// Iteration semantics: the oracle walks `beginLoc(joinspace)` to
+    /// `endLoc(joinspace)` and breaks when a varnode outside the join
+    /// space appears (mid-iteration insertions can land before enditer).
+    /// None of the splits insert join-space varnodes (pieces live in
+    /// their real spaces, constants in the const space), so the join
+    /// subrange never grows — a loc-order snapshot of the join-space
+    /// varnodes is observably equivalent to the oracle's guarded walk.
+    ///
+    /// Unlinked-join degradation (documented deviation, see
+    /// HERITAGE-PJOINS-UNLINKED-0001): the oracle's findJoin
+    /// (translate.cc:746-762) throws LowlevelError("Unlinked join
+    /// address") when no JoinRecord covers the offset. Rugra's producer
+    /// (coreaction.rs `return_join_address`, SPACEFIX lane) mints
+    /// join-space offsets from a stateless hash with no findAddJoin
+    /// registration, so a faithful throw would abort every function
+    /// carrying those varnodes (httpd ap_init_vhost_config). Until the
+    /// producer registers records (or stops minting unlinked joins —
+    /// probe evidence shows the oracle creates no joins at all on this
+    /// corpus), the miss is logged loudly and the varnode skipped.
+    pub fn process_joins(&mut self, fd: &mut Funcdata) {
+        // cc:2284-2288: iter = beginLoc(joinspace), enditer = endLoc.
         let join_vns: Vec<_> = fd
             .vbank
             .loc_tree
@@ -5549,18 +5714,70 @@ impl Heritage {
             .filter(|v| v.0.read().unwrap().address_space == AddressSpace::Join)
             .map(|v| v.0.clone())
             .collect();
-        if join_vns.is_empty() { return; }
-        // For each join varnode:
-        // - If free: splitJoinRead (creates piece reads in real space)
-        // - If written and delay matches: splitJoinWrite (creates SUBPIECE ops)
-        //
-        // Rugra lacks JoinRecord (the mapping from join offset to piece
-        // spaces+offsets). Without JoinRecord, we cannot split.
-        // TODO: port JoinRecord infrastructure (architecture.cc / space.cc).
-        eprintln!(
-            "[HERITAGE] process_joins: {} join-space varnodes found (JoinRecord infra TODO)",
-            join_vns.len()
-        );
+        if join_vns.is_empty() {
+            return;
+        }
+        for vn in join_vns {
+            let vn_offset = vn.read().unwrap().loc.as_u64();
+            let vn_size = vn.read().unwrap().get_size();
+            // cc:2293: JoinRecord *joinrec = fd->getArch()->findJoin(...)
+            // (throws "Unlinked join address" on a miss — degraded here,
+            // see the function-level note above).
+            let join_rec = match fd.get_arch() {
+                Some(a) => a.join_db.find_join(vn_offset).cloned(),
+                None => None,
+            };
+            let join_rec = match join_rec {
+                Some(r) => r,
+                None => {
+                    eprintln!(
+                        "[HERITAGE] process_joins: unlinked join address join:0x{:x} \
+                         (translate.cc:761 LowlevelError arm degraded; \
+                         HERITAGE-PJOINS-UNLINKED-0001)",
+                        vn_offset
+                    );
+                    continue;
+                }
+            };
+            // cc:2294: piecespace = joinrec->getPiece(0).space
+            let piecespace = join_rec.get_piece(0).space;
+            // cc:2296-2297: unified size must match (oracle throws
+            // "Joined varnode does not match size of record").
+            if join_rec.get_unified().size != vn_size {
+                eprintln!(
+                    "[HERITAGE] process_joins: joined varnode does not match size \
+                     of record join:0x{:x} vn_sz={} record_sz={} \
+                     (heritage.cc:2297 LowlevelError arm degraded)",
+                    vn_offset,
+                    vn_size,
+                    join_rec.get_unified().size
+                );
+                continue;
+            }
+            // cc:2298-2303: free varnodes split into PIECE reads now.
+            if vn.read().unwrap().is_free() {
+                if join_rec.is_float_extension() {
+                    self.float_extension_read(fd, &vn, &join_rec);
+                } else {
+                    self.split_join_read(fd, &vn, &join_rec);
+                }
+            }
+
+            // cc:2305-2306: HeritageInfo *info = getInfo(piecespace);
+            // if (pass != info->delay) continue — the write split happens
+            // exactly once, on the pass equal to the piece space's delay.
+            let delay = self.get_info(piecespace).delay;
+            if self.pass != delay {
+                continue;
+            }
+
+            // cc:2308-2311: float extension or write split.
+            if join_rec.is_float_extension() {
+                self.float_extension_write(fd, &vn, &join_rec);
+            } else {
+                self.split_join_write(fd, &vn, &join_rec);
+            }
+        }
     }
 
     // Ghidra: heritage.cc:2663 Heritage::heritage
@@ -7767,6 +7984,193 @@ mod tests {
         // The call op is untouched: no output creation, no SUBPIECE.
         assert!(call.0.read().unwrap().output.is_none());
         assert_eq!(block.read().unwrap().get_ops().len(), 1);
+    }
+
+    // ---- processJoins regression tests (heritage.cc:2281-2313) ----
+    // Rugra-side regression coverage only (mechanism B2: these do NOT
+    // upgrade the oracle fixture status of processJoins — the producer
+    // side still mints unlinked joins, see HERITAGE-PJOINS-UNLINKED-0001).
+
+    fn pjoins_fixture_fd(
+        with_record: bool,
+    ) -> (Funcdata, Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+        use crate::block::BlockBasic;
+        use crate::space::{JoinDatabase, JoinRecord, VarnodeData};
+        let mut arch = crate::arch::Architecture::new();
+        if with_record {
+            let mut join_db = JoinDatabase::new();
+            // Mirror the oracle probe form for an RDX:RAX return pair:
+            // pieces most-significant first, unified at join:0 size 16.
+            join_db.records.push(JoinRecord {
+                pieces: vec![
+                    VarnodeData { space: AddressSpace::Register, offset: 0x10, size: 8 },
+                    VarnodeData { space: AddressSpace::Register, offset: 0x0, size: 8 },
+                ],
+                unified: VarnodeData { space: AddressSpace::Join, offset: 0, size: 16 },
+            });
+            arch.join_db = join_db;
+        }
+        let arch_arc = Arc::new(arch);
+        let mut fd = Funcdata::new("pjoins", Address::new(0x5000), 0x20);
+        fd.arch = Some(arch_arc);
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x5000))));
+        fd.bblocks.add_block(block.clone());
+        (fd, block)
+    }
+
+    #[test]
+    fn test_process_joins_write_split_two_register_pieces() {
+        let (mut fd, block) = pjoins_fixture_fd(true);
+        // Written join varnode (PIECE output) reading like a return pair.
+        let join_vn = fd.vbank.create_with_space(16, AddressSpace::Join, 0);
+        let piece_def = fd.new_op(2, Address::new(0x5004));
+        fd.op_set_opcode(&piece_def, OpCode::CPUI_PIECE);
+        fd.op_set_output(&piece_def, join_vn.clone());
+        let hi = fd.new_unique(8);
+        let lo = fd.new_unique(8);
+        fd.op_set_input(&piece_def, hi, 0);
+        fd.op_set_input(&piece_def, lo, 1);
+        fd.op_insert_end(&piece_def, &block);
+
+        let mut heritage = Heritage::new();
+        // Register-space delay is 0 and Heritage starts at pass 0, so the
+        // write split must fire (heritage.cc:2305-2311).
+        heritage.process_joins(&mut fd);
+
+        let subpieces: Vec<_> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|op| op.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE)
+            .cloned()
+            .collect();
+        assert_eq!(subpieces.len(), 2, "expected SUBPIECE pair");
+        for sub in &subpieces {
+            let op = sub.0.read().unwrap();
+            assert!(
+                Arc::ptr_eq(&op.get_in(0).unwrap(), &join_vn),
+                "SUBPIECE reads the join varnode"
+            );
+        }
+        // mosthalf SUBPIECE: shift = leasthalf size (8) -> Register:0x10
+        // with precis_hi; leasthalf SUBPIECE: shift 0 -> Register:0x0 with
+        // precis_lo (heritage.cc:2196-2214).
+        let by_shift = |shift: u64| {
+            subpieces
+                .iter()
+                .find(|op| {
+                    op.0.read().unwrap().get_in(1).map(|c| {
+                        c.read().unwrap().get_offset() == shift
+                    }) == Some(true)
+                })
+                .map(|op| op.0.read().unwrap().output.clone().unwrap())
+        };
+        let most = by_shift(8).expect("shift-8 SUBPIECE");
+        let least = by_shift(0).expect("shift-0 SUBPIECE");
+        {
+            let m = most.read().unwrap();
+            assert_eq!((m.get_space(), m.get_offset(), m.get_size()), (AddressSpace::Register, 0x10, 8));
+            assert!(m.is_precis_hi() && !m.is_precis_lo());
+        }
+        {
+            let l = least.read().unwrap();
+            assert_eq!((l.get_space(), l.get_offset(), l.get_size()), (AddressSpace::Register, 0x0, 8));
+            assert!(l.is_precis_lo() && !l.is_precis_hi());
+        }
+    }
+
+    #[test]
+    fn test_process_joins_delay_guard_skips_write_split() {
+        let (mut fd, block) = pjoins_fixture_fd(true);
+        let join_vn = fd.vbank.create_with_space(16, AddressSpace::Join, 0);
+        let piece_def = fd.new_op(2, Address::new(0x5004));
+        fd.op_set_opcode(&piece_def, OpCode::CPUI_PIECE);
+        fd.op_set_output(&piece_def, join_vn.clone());
+        let hi = fd.new_unique(8);
+        let lo = fd.new_unique(8);
+        fd.op_set_input(&piece_def, hi, 0);
+        fd.op_set_input(&piece_def, lo, 1);
+        fd.op_insert_end(&piece_def, &block);
+
+        let mut heritage = Heritage::new();
+        heritage.pass = 2; // != register delay 0 -> skip (cc:2305-2306)
+        heritage.process_joins(&mut fd);
+        let subpieces = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|op| op.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE)
+            .count();
+        assert_eq!(subpieces, 0, "pass != delay must skip the write split");
+    }
+
+    #[test]
+    fn test_process_joins_unlinked_join_skips_without_record() {
+        let (mut fd, block) = pjoins_fixture_fd(false);
+        let join_vn = fd.vbank.create_with_space(16, AddressSpace::Join, 0);
+        let piece_def = fd.new_op(2, Address::new(0x5004));
+        fd.op_set_opcode(&piece_def, OpCode::CPUI_PIECE);
+        fd.op_set_output(&piece_def, join_vn.clone());
+        let hi = fd.new_unique(8);
+        let lo = fd.new_unique(8);
+        fd.op_set_input(&piece_def, hi, 0);
+        fd.op_set_input(&piece_def, lo, 1);
+        fd.op_insert_end(&piece_def, &block);
+
+        let mut heritage = Heritage::new();
+        // No JoinRecord: the oracle throws "Unlinked join address"
+        // (translate.cc:761); the documented degradation skips the
+        // varnode instead of aborting the run.
+        heritage.process_joins(&mut fd);
+        let subpieces = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|op| op.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE)
+            .count();
+        assert_eq!(subpieces, 0);
+    }
+
+    #[test]
+    fn test_process_joins_read_split_free_join_varnode() {
+        let (mut fd, block) = pjoins_fixture_fd(true);
+        // Free join varnode with a single reader: splitJoinRead builds
+        // the PIECE chain defining it (heritage.cc:2119-2163).
+        let join_vn = fd.vbank.create_with_space(16, AddressSpace::Join, 0);
+        let reader = fd.new_op(1, Address::new(0x5008));
+        fd.op_set_opcode(&reader, OpCode::CPUI_RETURN);
+        fd.op_set_input(&reader, join_vn.clone(), 0);
+        fd.op_insert_end(&reader, &block);
+
+        let mut heritage = Heritage::new();
+        heritage.process_joins(&mut fd);
+
+        // Free read split happens before the delay guard, so both the
+        // PIECE chain (this test) and later SUBPIECEs (write split, pass
+        // 0 == delay) may exist. The join varnode must now be written by
+        // a PIECE op.
+        assert!(join_vn.read().unwrap().is_written());
+        let def = join_vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .expect("def after splitJoinRead");
+        assert_eq!(def.read().unwrap().opcode, OpCode::CPUI_PIECE);
+        let most = def.read().unwrap().get_in(0).cloned().unwrap();
+        let least = def.read().unwrap().get_in(1).cloned().unwrap();
+        {
+            let m = most.read().unwrap();
+            assert_eq!((m.get_space(), m.get_offset(), m.get_size()), (AddressSpace::Register, 0x10, 8));
+            assert!(m.is_precis_hi());
+        }
+        {
+            let l = least.read().unwrap();
+            assert_eq!((l.get_space(), l.get_offset(), l.get_size()), (AddressSpace::Register, 0x0, 8));
+            assert!(l.is_precis_lo());
+        }
     }
 }
 

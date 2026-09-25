@@ -1854,3 +1854,18 @@ httpd 0 次；位点 1/2/4 双语料休眠。双语料默认态输出与亲父 c
 （=触发位点等价性实证，非休眠）+ 双跑确定性；curl/httpd canon golden 双零；
 三门禁+bank 391/391+cargo test --lib 亲父谱系同败——见 lane 终报
 （/dev/shm/rugra-reports/LANE_RUFOUR_2026-09-25.md）。
+
+## 2026-09-25：`buildSubpiece` join 臂 usetmp 结构镜像（Lane PJOINS，SPACEFIX-CR-F6 收口）
+
+`RulePullsubMulti::build_subpiece`（ruleaction.cc:776-839）join 臂重构为
+oracle 的 `usetmp` 决策形态（cc:791-830）：join 基底进入即 `usetmp=true`，
+`numPieces()>1` 时倒序扫描 piece 表，仅当请求范围完整落于单片才取该片
+端序地址并 `usetmp=false`；**join 空间 offset 本身不再走
+`base_addr.offset(shift)` 的普通偏移算术**（旧 None 回退虽经 `else if
+is_join` 臂最终落到 unique、hash 偏移计算为死值，但结构性违背 cc:793-815
+——F6 登记项）。`findJoin` miss（translate.cc:746-762 LowlevelError）按
+HERITAGE-PJOINS-UNLINKED-0001 降级：响亮 log + 保持 unique 输出（=oracle
+无覆盖片行为 cc:825-826）。非 join 基底 `plain_addr` 计算保持 cc:816-821
+端序分支不变。行为验收：httpd/curl 与亲父 cmp 字节恒等（join 臂两语料
+零触发——Rugra 生产者仅 httpd ap_init_vhost_config 铸 join 且不流经
+MULTIEQUAL→SUBPIECE）。
