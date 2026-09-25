@@ -6273,9 +6273,21 @@ fn order_of(op: &OpArc) -> u32 {
     op.read().unwrap().get_seq_num().get_order()
 }
 
-// RUGRA-GLUE: combines Funcdata::opSetOpcode + opSetInput (funcdata.hh); Rugra lacks op_set_all_input
-/// Set opcode and all inputs of an op (Funcdata has op_set_all_input missing;
-/// emulate by clearing inrefs and pushing in order).
+// RUGRA-GLUE: combines Funcdata::opSetOpcode + opSetAllInput (double.cc arms
+// always issue this pair back to back: :598-599/:607-608/:613-614/:636-637/
+// :645-646/:651-652)
+/// Set opcode and all inputs of an op. Delegates the input replacement to
+/// `Funcdata::op_set_all_input` (funcdata_op.cc:267-284), whose per-slot
+/// `op_unset_input` loop erases this op from every old input's descend list
+/// before the new list is installed. The previous raw `inrefs.clear()` severed
+/// the inrefs side only: each replaced input varnode kept a stale descend
+/// entry pointing at this op, so an unwritten, symbol-less varnode whose only
+/// readers were rewritten here still looked "has descendants" to
+/// `ActionInferTypes::buildLocaltypes` (coreaction.cc:5019 skip never fired),
+/// reached `Varnode::getLocalType`, and — with no def and no resolvable
+/// descendant slot — threw the LowlevelError("NULL local type") that Ghidra
+/// cannot throw on this path (sq LzmaEnc_CodeOneBlock.part.0,
+/// GEN4-SQ-NULLLOCALTYPE-0001).
 fn set_opcode_and_inputs(
     data: &mut Funcdata,
     op: &PcodeOpRef,
@@ -6283,11 +6295,7 @@ fn set_opcode_and_inputs(
     inlist: Vec<VnArc>,
 ) {
     data.op_set_opcode(op, opc);
-    // Clear existing inrefs.
-    op.0.write().unwrap().inrefs.clear();
-    for (slot, vn) in inlist.into_iter().enumerate() {
-        data.op_set_input(op, vn, slot);
-    }
+    data.op_set_all_input(op, &inlist);
 }
 
 /// Convenience trait to convert Option<Weak-upgraded> cleanly.

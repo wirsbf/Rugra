@@ -41,6 +41,21 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
     RuleDoubleIn 后暴露此前被掩盖的下游缺陷（merge 强制合并交集 panic ×2、
     NULL local type ×1），已登记 GEN4-SQ-MERGE-FORCEDINTERSECT-0001 /
     GEN4-SQ-NULLLOCALTYPE-0001。
+  - **2026-09-26（GEN4-SQ-NULLLOCALTYPE-0001）**：两个 build_*_from_whole 共用的
+    `set_opcode_and_inputs` 胶水（所有 MULTIEQUAL/INDIRECT/else 臂的
+    `opSetOpcode+opSetAllInput` 对，double.cc:598-599/:607-608/:613-614/:636-637/
+    :645-646/:651-652）此前用裸 `inrefs.clear()` 换输入，漏掉
+    `Funcdata::opSetAllInput`（funcdata_op.cc:276-278）的逐槽 `opUnsetInput` 循环
+    ——每个被换掉的旧输入 varnode 的 descend 表残留指向该 op 的陈旧条目。
+    后果：一个无 def、无符号的输入 varnode（sq LzmaEnc 的 `stack:-0xd8:2`）在
+    6 个 SUBPIECE 读者被改写后仍"看似有后代"，逃过
+    `ActionInferTypes::buildLocaltypes` 的 `(!isWritten)&&(hasNoDescend)` 跳过
+    （coreaction.cc:5019），进入 `Varnode::getLocalType`，无类型可取而抛
+    LowlevelError("NULL local type")——oracle 同路径靠 opUnsetInput 维护的不变量
+    保证该 varnode 早已零后代、被跳过、永不触发 cc:934。修复 = 胶水改调
+    `Funcdata::op_set_all_input`（funcdata.rs，funcdata_op.cc:267-284 的既有忠实
+    移植）；varnode.rs `get_local_type` 本身与 varnode.cc:900-936 逐行一致、
+    零改动（域判定：根因在 double_precis 胶水层，不在 varnode 层）。
 - `adjacent_offsets` — 指针相邻判断
 - `test_contiguous_pointers` — **核心**：成对 LOAD 指针连续性检测 (double.cc)
 - `is_addr_tied_contiguous` / `is_addr_tied_contiguous_result`
