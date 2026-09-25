@@ -1536,65 +1536,94 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
-    /// Get the type as seen by a reading op. Faithful to
-    /// `Varnode::getTypeReadFacing` (varnode.cc:639-645). For union types this
-    /// resolves the field; Rugra has no union varnodes in Rule paths, so this
-    /// is the degenerate form returning v_type directly.
+    /// Get the type as seen by a reading op. The zero-op convenience form:
+    /// for a type that does not need resolution this equals the oracle's
+    /// `getTypeReadFacing` (varnode.cc:639-645), which returns `type`
+    /// unchanged. A resolving (union) type would need the
+    /// `findResolve(op, slot)` consult, which requires a Funcdata channel —
+    /// consumers holding the fd use
+    /// [`crate::unionresolve::vn_type_read_facing`]; this form returns the
+    /// v_type Arc as-is (the findResolve map-miss arm), never a clone.
     pub fn get_type_read_facing(&self) -> Option<Arc<Datatype>> {
         self.v_type.clone()
     }
 
     // Ghidra: varnode.cc:626 Varnode::getTypeDefFacing
     /// Return the resolved data-type for this Varnode based on its def op.
-    /// Faithful to `getTypeDefFacing` (varnode.cc:626-632). If the type
-    /// needs resolution (union), resolves via findResolve(def, -1).
+    /// Faithful to `getTypeDefFacing` (varnode.cc:626-632): a type that does
+    /// not need resolution is returned as-is; a union/pointer-to-union type
+    /// resolves via `type->findResolve(def, -1)` (type.cc:586/1192). The
+    /// method form has no Funcdata channel, so the consult reduces to
+    /// findResolve's map-miss arm — `return this` — sharing the SAME Arc
+    /// instead of cloning. Arc identity is load-bearing here: the oracle's
+    /// TypeFactory interning makes every findResolve result pointer-stable,
+    /// and `Varnode::updateType`'s `type == ct` settle test (varnode.cc:481,
+    /// Rust `Arc::ptr_eq`) would churn on per-call fresh clones — the
+    /// `localcount >= 7` "not settling" family (coreaction.cc:5390-5392).
+    /// The fd-aware consult twin (reads `Funcdata::union_map`) is
+    /// [`crate::unionresolve::vn_type_def_facing`].
     pub fn get_type_def_facing(&self) -> Option<Arc<Datatype>> {
         let ct = self.v_type.clone()?;
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        // cc:631: type->findResolve(def, -1)
-        // Rugra's findResolve is currently identity (returns self).
-        // Full union resolution TODO (needs unionresolve.cc).
-        Some(Arc::new((*ct).clone()))
+        // cc:631: type->findResolve(def, -1) — without a Funcdata channel
+        // the consult is exactly the map-miss arm `return this` (type.cc:589).
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
     /// Return the resolved data-type for this Varnode when read by `op`
-    /// at the given slot. Faithful to `getTypeReadFacing` (varnode.cc:639-645).
+    /// at the given slot. Faithful to `getTypeReadFacing` (varnode.cc:639-645):
+    /// a type that does not need resolution is returned as-is; a resolving
+    /// type consults `type->findResolve(op, op->getSlot(this))` — here the
+    /// no-Funcdata map-miss arm `return this` (type.cc:589), sharing the
+    /// SAME Arc (Arc identity is the settle contract, see
+    /// [`Self::get_type_def_facing`]). The fd-aware consult twin is
+    /// [`crate::unionresolve::vn_type_read_facing`].
     pub fn get_type_read_facing_op(&self, _op: &PcodeOp, slot: i32) -> Option<Arc<Datatype>> {
         let ct = self.v_type.clone()?;
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        // cc:644: type->findResolve(op, op->getSlot(this))
-        // Rugra's findResolve is currently identity.
+        // cc:644: type->findResolve(op, op->getSlot(this)) — map-miss arm.
         let _ = slot;
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing
     /// Return the resolved HighVariable type for this Varnode based on def.
-    /// Faithful to `getHighTypeDefFacing` (varnode.cc:651-658).
+    /// Faithful to `getHighTypeDefFacing` (varnode.cc:651-658): the high
+    /// type that does not need resolution is returned as-is; a resolving
+    /// high type consults `ct->findResolve(def, -1)` — here the no-Funcdata
+    /// map-miss arm `return this`, sharing the SAME Arc (settle contract,
+    /// [`Self::get_type_def_facing`]). The fd-aware consult twin is
+    /// [`crate::unionresolve::vn_high_type_def_facing`].
     pub fn get_high_type_def_facing(&self) -> Option<Arc<Datatype>> {
         let high = self.high.as_ref()?;
         let ct = high.read().unwrap().get_type();
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing
     /// Return the resolved HighVariable type when read by `op`.
-    /// Faithful to `getHighTypeReadFacing` (varnode.cc:665-672).
+    /// Faithful to `getHighTypeReadFacing` (varnode.cc:665-672): the high
+    /// type that does not need resolution is returned as-is; a resolving
+    /// high type consults `ct->findResolve(op, op->getSlot(this))` — here
+    /// the no-Funcdata map-miss arm `return this`, sharing the SAME Arc
+    /// (settle contract, [`Self::get_type_def_facing`]). The fd-aware
+    /// consult twin is
+    /// [`crate::unionresolve::vn_high_type_read_facing`].
     pub fn get_high_type_read_facing(&self, _op: &PcodeOp, _slot: i32) -> Option<Arc<Datatype>> {
         let high = self.high.as_ref()?;
         let ct = high.read().unwrap().get_type();
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:493 Varnode::copySymbol
