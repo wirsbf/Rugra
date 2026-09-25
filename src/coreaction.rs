@@ -9805,6 +9805,113 @@ impl ActionNameVars {
             }
         }
     }
+
+    // Ghidra: coreaction.cc:2779 ActionNameVars::lookForBadJumpTables
+    /// Name the Varnode which seems to be the putative switch variable for
+    /// an unrecovered jump-table with a special name. Faithful to
+    /// `lookForBadJumpTables` (coreaction.cc:2779-2803): scan the call specs
+    /// in registration order; for each bad-jump-table call take the in(0)
+    /// target varnode, unwrap one CAST level (implied && written only), and
+    /// — gated on the varnode being non-free, its high carrying a symbol
+    /// that is not name-locked and lives in the local scope — rename that
+    /// symbol to `makeNameUnique("UNRECOVERED_JUMPTABLE")`.
+    fn look_for_bad_jump_tables(fd: &mut Funcdata) {
+        // cc:2782: int4 numfunc = data.numCalls() — registration order.
+        let mut rename_targets: Vec<usize> = Vec::new();
+        for i in 0..fd.num_calls() {
+            // cc:2786: if (fc->isBadJumpTable()) — the flag is produced by
+            // FlowInfo::truncateIndirectJump's default failure arm
+            // (flow.cc:754) when a BRANCHIND turns into a CALLIND.
+            let is_bad = fd
+                .get_call_specs(i)
+                .map(|fc| fc.bad_jump_table())
+                .unwrap_or(false);
+            if !is_bad {
+                continue;
+            }
+            // cc:2787: PcodeOp *op = fc->getOp();
+            let Some(call_op) = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd))
+            else {
+                continue;
+            };
+            // cc:2788: Varnode *vn = op->getIn(0);
+            let Some(mut vn) = call_op.0.read().unwrap().get_in(0).cloned() else {
+                continue;
+            };
+            // cc:2789-2793: if (vn->isImplied() && vn->isWritten()) —
+            // skip any cast into the function; single level only (the
+            // makeRec cc:2822-2828 idiom).
+            let unwrapped = {
+                let vn_r = vn.read().unwrap();
+                if vn_r.is_implied() && vn_r.is_written() {
+                    if let Some(def) = vn_r.get_def() {
+                        let def_r = def.read().unwrap();
+                        if def_r.opcode == OpCode::CPUI_CAST {
+                            def_r.get_in(0).cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(in0) = unwrapped {
+                vn = in0;
+            }
+            // cc:2794: if (vn->isFree()) continue;
+            if vn.read().unwrap().is_free() {
+                continue;
+            }
+            // cc:2795-2796: Symbol *sym = vn->getHigh()->getSymbol();
+            // if (sym == (Symbol *)0) continue; — Rugra's local-scope
+            // symbol channel is fd.high_symbols (populated by linkSymbol's
+            // attach bridge); an absent entry models BOTH the null-symbol
+            // gate and the cc:2798 getScope() != localmap gate (global
+            // database symbols attach through the high.symbol Arc channel
+            // and are never in ScopeLocal).
+            let Some(high) = vn.read().unwrap().high.clone() else {
+                continue;
+            };
+            let high_ptr = Arc::as_ptr(&high) as usize;
+            let Some(&sym_idx) = fd.high_symbols.get(&high_ptr) else {
+                continue;
+            };
+            // cc:2797: if (sym->isNameLocked()) continue; — override any
+            // unlocked name only.
+            let name_locked = fd
+                .scope
+                .as_ref()
+                .and_then(|s| s.symbols.get(sym_idx))
+                .map(|s| s.namelock)
+                .unwrap_or(true);
+            if name_locked {
+                continue;
+            }
+            rename_targets.push(sym_idx);
+        }
+        // cc:2799-2800: sym->getScope()->renameSymbol(sym,
+        //   localmap->makeNameUnique("UNRECOVERED_JUMPTABLE")). The
+        //   renames run in call-registration order so later makeNameUnique
+        //   calls see earlier renames, exactly like Ghidra's single
+        //   in-loop rename (the read-phase gates above observe no name
+        //   state, so the two-phase split is observationally identical).
+        // make_name_unique returning None is Ghidra's LowlevelError
+        // ("Unable to uniquify name"); like lookForFuncParamNames'
+        //   consumer it is unreachable below 100000 same-named symbols.
+        if rename_targets.is_empty() {
+            return;
+        }
+        if let Some(scope) = fd.scope.as_mut() {
+            for sym_idx in rename_targets {
+                if let Some(unique) = scope.make_name_unique("UNRECOVERED_JUMPTABLE") {
+                    scope.rename_symbol(sym_idx, &unique);
+                }
+            }
+        }
+    }
 }
 impl Action for ActionNameVars {
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:482
@@ -9826,11 +9933,11 @@ impl Action for ActionNameVars {
         // — make sure recommended names hit before subfunc. RUGRA-GAP: no
         // name-recommendation store is ported yet (no override framework).
 
-        // cc:2985: lookForBadJumpTables — scan calls for bad jump tables and
-        // rename the associated symbol to "UNRECOVERED_JUMPTABLE".
-        // Rugra: implemented conservatively (no isBadJumpTable flag on
-        // FuncCallSpecs yet, so this is a no-op that matches Ghidra's
-        // behavior when no bad jump tables are detected).
+        // cc:2985: lookForBadJumpTables(data) — rename the putative switch
+        // variable symbol of each bad jump-table call site to
+        // UNRECOVERED_JUMPTABLE (coreaction.cc:2779-2803; the flag is set
+        // by truncateIndirectJump's default failure arm, flow.cc:754).
+        Self::look_for_bad_jump_tables(fd);
 
         // cc:2986: lookForFuncParamNames(data, namerec) — propagate locked
         // prototype parameter names onto the namerec symbols
@@ -17918,6 +18025,83 @@ mod tests {
             fd.funcp.return_type.as_ref(),
             crate::type_system::datatype::Datatype::Void(_)
         ));
+    }
+
+    // Ghidra: coreaction.cc:2779-2803 ActionNameVars::lookForBadJumpTables
+    /// Trigger proof for the bad-jump-table consumer (CALLSPEC-0001 (c)):
+    /// a CALLIND whose FuncCallSpecs carries `isbadjumptable=true` (set by
+    /// truncateIndirectJump's default failure arm, flow.cc:754) renames the
+    /// ScopeLocal symbol of the in(0) switch-variable high to
+    /// UNRECOVERED_JUMPTABLE via makeNameUnique; with the flag false —
+    /// the production default until the flow setter lands — the symbol is
+    /// untouched (the E2E corpora show the same 0-trigger dormancy).
+    #[test]
+    fn test_namevars_look_for_bad_jump_tables_rename_fires_on_flag() {
+        use crate::fspec::FuncCallSpecs;
+
+        // CALLIND with output RAX and in(0)=RSI (the putative switch
+        // variable the truncation leaves as the call target).
+        let mut raw = crate::pcoderaw::PcodeOpRaw::new(
+            crate::opcodes::OpCode::CPUI_CALLIND as i32);
+        raw.set_output(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Register,
+            0x0,
+            8,
+        ));
+        raw.add_input(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Register,
+            0x30,
+            8,
+        ));
+        let mut fd = Funcdata::new("badjt", crate::address::Address::new(0x2000), 0x10);
+        fd.scope = Some(crate::varmap::ScopeLocal::new());
+        fd.inject_raw_ops(&[raw]);
+        fd.set_high_level();
+
+        // Attach the callspec the way the truncate boundary does
+        // (new_for_op + add_call_specs_owner; the CALLIND spec takes no
+        // in(0) swap — flow.cc:708/736).
+        let call_op = fd
+            .obank
+            .optree
+            .iter()
+            .find(|op| op.0.read().unwrap().opcode == OpCode::CPUI_CALLIND)
+            .cloned()
+            .expect("injected CALLIND present");
+        let fc = FuncCallSpecs::new_for_op(
+            &call_op,
+            crate::flow::default_call_spec_proto(),
+        );
+        fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+
+        // Link a ScopeLocal symbol onto the in(0) high (the linkSymbols
+        // cc:2963 path that precedes lookForBadJumpTables in apply).
+        let in0 = call_op.0.read().unwrap().get_in(0).cloned().expect("in(0)");
+        let sym_idx = fd.link_symbol(&in0).expect("local symbol created");
+        let before = fd.scope.as_ref().unwrap().symbols[sym_idx].name.clone();
+
+        // (1) Dormant state — flag false (production default: the flow
+        // setter handover is pending) — no rename.
+        ActionNameVars::look_for_bad_jump_tables(&mut fd);
+        assert_eq!(fd.scope.as_ref().unwrap().symbols[sym_idx].name, before);
+
+        // (2) Triggered state — setBadJumpTable(true) (flow.cc:754) —
+        // rename to makeNameUnique("UNRECOVERED_JUMPTABLE").
+        fd.callspecs[0].write().unwrap().set_bad_jump_table(true);
+        ActionNameVars::look_for_bad_jump_tables(&mut fd);
+        assert_eq!(
+            fd.scope.as_ref().unwrap().symbols[sym_idx].name,
+            "UNRECOVERED_JUMPTABLE"
+        );
+        // The rename is visible through the local-scope channel that
+        // ActionNameVars' write-back bridge publishes to the high.
+        let high = in0.read().unwrap().high.clone().expect("high assigned");
+        let high_ptr = std::sync::Arc::as_ptr(&high) as usize;
+        assert_eq!(
+            fd.high_symbols.get(&high_ptr),
+            Some(&sym_idx),
+            "local-scope symbol channel intact after rename"
+        );
     }
 
     // Ghidra: coreaction.cc:4901-4909 ActionPrototypeWarnings::apply (isModelUnknown arm)
