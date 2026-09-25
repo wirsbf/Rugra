@@ -859,3 +859,10 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   httpd **1141→1139**/0/0（−2=残片两行）；curl **577/0/0 字节恒等**（0
   触发路径）；httpd/curl 双跑 stdout cmp 恒等；bank 391/391；cargo test
   --lib 与预存基线同集；annotations/refs 绿。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

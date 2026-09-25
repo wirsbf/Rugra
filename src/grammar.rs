@@ -202,7 +202,7 @@ impl GrammarToken {
     }
 }
 
-// Ghidra: grammar.cc:1985 GrammarToken::set (charconstant escapes)
+// Ghidra: grammar.cc:1966 GrammarToken::set (charconstant escapes)
 /// Decode a C character constant (the text between the quotes, already
 /// stripped) into its integer value. Faithful to the `case charconstant:`
 /// branch of `GrammarToken::set` (grammar.cc:1985-2014): a single char maps to

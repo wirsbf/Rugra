@@ -1131,7 +1131,7 @@ block.cc:884-963）补齐三个外部半边语义：
 2. **外部 dedup**（`dedup_edges_all_types`，cc:930 selfIdentify 末尾的
    dedup()）：多个被消费组件（或 install 块+组件）各有边指向同一外部块时，
    Ghidra 的成对半边删除顺带收敛外部重复边；Rugra 单侧边模型需在全部改写
-   完成后对 touched 外部块显式 dedup（labels OR 合并，block.cc:447-501）。
+   完成后对 touched 外部块显式 dedup（labels OR 合并，block.cc:446-501）。
 3. **组件外边剥离**（strip_external）：Ghidra 的 replace*Edge 半删除把组件
    的外部边移交给复合块，组件只保留组件间内部边；Rugra 之前对被消费块
    blanket clear_edges，现改为按 is_component 谓词 retain（内部边如
@@ -1666,3 +1666,10 @@ httpd 镜面 265==基线逐函数恒等（本基无活位点，零回退）；ca
 301/0/0、862/0/0==基线；银行 391/391（glob_set 投影 op 级流对结构级修复不变，
 MATCH 366 stages/141943 ops 免重钉）；cargo test --lib 1733P/1F（nonzeromask
 预存）；镜面门禁三面 PASS（110/275、265/460、41/55，棘轮上限未重钉）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

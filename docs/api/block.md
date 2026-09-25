@@ -381,7 +381,7 @@ cover 才是合法状态）。
   的块后，`getStart()` 返回那个更低的地址（正是 heritage MULTIEQUAL
   创建 `fd->newOp(sizein, bl->getStart())` 所取的地址；Ghidra oracle
   next_url block28 实测 cover={[0x2534..],[0x50e7..]}→getStart=0x2534）。
-- 新增 `get_entry_addr()`（block.cc:2291 `getEntryAddr`）：单范围=范围首
+- 新增 `get_entry_addr()`（block.cc:2302 `getEntryAddr`）：单范围=范围首
   地址；多范围=**包含首条 op 的那个范围**的首地址。printc emitLabel
   （printc.cc:3170）用它而不是 getStart——label 与 getStart 在拼接块上
   可以不同（首 op 是 heritage 插在块头的 MULTIEQUAL，其地址=getStart）。
@@ -1234,7 +1234,7 @@ blockaction.rs 的私有 `find_spanning_tree`（位置索引域、HashMap 局部
     LowlevelError 等价的 anyhow 错误，cc:1110-1111）。
 
 **支撑原语（均为 trait 默认实现或自由函数）：**
-- `set_in_edge_flag(slot, flag)` — setOutEdgeFlag 的镜像入边半边（block.cc:245）。
+- `set_in_edge_flag(slot, flag)` — setOutEdgeFlag 的镜像入边半边（block.cc:240）。
 - `set_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整 Ghidra
   setOutEdgeFlag（block.cc:240-246）：出边 + 目标块镜像入边；自环边（目标即
   本块）在单一把锁内同时写两侧，避免对调用方已持有的写锁重入死锁。
@@ -1322,7 +1322,7 @@ findIrreducible 标的 f_irreducible 也清掉——重建遍的收敛依赖 cc:
   `is_irreducible_in(i)`（block.hh:333）— 入边半边谓词（get_in 读 flags，
   与既有 `is_loop_in`/`is_irreducible_out` 同模式）。
 - `clear_in_edge_flag(slot, flag)` — clearOutEdgeFlag 的镜像入边半边
-  （block.cc:254）。
+  （block.cc:250）。
 - `clear_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整
   Ghidra clearOutEdgeFlag（block.cc:250-256）：自环边单锁双写，与
   `set_out_edge_flag_mirrored` 对称。
@@ -1437,7 +1437,7 @@ max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）
   生效；原 BlockBasic 专属实现对结构块（BlockIf/BlockGoto/BlockList/…）静默
   跳过，留下过期 reverse_index → 后续 OOB panic。
 - `FlowBlock::dedup/eliminate_in_dups/eliminate_out_dups/find_dups`
-  （block.cc:447-523）完整移植：消除重复边用**成对** half-delete
+  （block.cc:446-523）完整移植：消除重复边用**成对** half-delete
   （cc:461-462/490-491），两侧 reverse_index 同步维护；`find_dups` 的
   f_mark/f_mark2 标记协议照搬（自环经 self_arc 报告）。
 - `FlowBlock::remove_in_edge_from`（Rugra 排除表形式的 removeInEdge
@@ -1526,7 +1526,7 @@ oracle：`BlockGoto : BlockGraph`（block.hh:547），`newBlockGoto(bl)`（block
   身份；printc 发射侧切 target_dyn+get_start_addr() 属 PRINTC-GOTOPRINTS-0001，
   另一 agent 协调）。
 - `impl FlowBlock for BlockGoto`：`get_ops` 委托 wrapped（getBlock(0) 虚链的
-  flatten 投影）；`sub_block(0)` 返回 wrapped；`first_op`（block.cc:1330
+  flatten 投影）；`sub_block(0)` 返回 wrapped；`first_op`（block.cc:1327
   BlockGraph::firstOp）与 `get_exit_leaf_trait`（block.hh:561）委托 wrapped。
 - `BlockGoto::mark_unstructured_target`（block.cc:2856-2864）：先递归
   wrapped（cc:2859 BlockGraph::markUnstructured），再在 gototype==f_goto_goto
@@ -1845,3 +1845,10 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
    （`case '\\':` 直落 `default:` 无 goto、`case ']'` 居 default 后）；httpd
    908 逐字节恒等；glob_word 等 label-rank 消费者 def_pos 数学等价（root-default
    的 count 不变量，A/B 零差亲证）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 10 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

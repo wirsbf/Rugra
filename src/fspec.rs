@@ -2861,7 +2861,7 @@ impl FuncCallSpecs {
         }
     }
 
-    // Ghidra: fspec.cc:5668 FuncCallSpecs::buildInputFromTrials
+    // Ghidra: fspec.cc:5685 FuncCallSpecs::buildInputFromTrials
     /// Set the final input Varnodes to the CALL based on ParamActive analysis.
     /// Faithful 1:1 port of `buildInputFromTrials` (fspec.cc:5668-5741).
     ///
@@ -8641,7 +8641,7 @@ impl ProtoModelFull {
         &self.likelytrash
     }
 
-    // Ghidra: fspec.cc:2993 ProtoModelMerged::intersectEffects
+    // Ghidra: fspec.cc:2780 ProtoModelMerged::intersectEffects
     /// Intersect this model's effect list with another list, in place.
     /// Faithful 1:1 port of `ProtoModelMerged::intersectEffects`
     /// (fspec.cc:2780-2803). Both lists must be sorted by address. Only
@@ -9290,7 +9290,7 @@ mod tests {
         assert_eq!(fc.entry_addr.map(|a| a.as_u64()), Some(0x2530));
     }
 
-    // Ghidra: fspec.cc:4934 FuncCallSpecs::FuncCallSpecs
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
     /// The entry-address record point stores in(0)'s full address — the
     /// offset AND the varnode's space (fspec.cc:4934 `getIn(0)->getAddr()`,
     /// read before the FSPEC annotation swap). PRINTC-OPCALL-ENTRYSPACE-0001

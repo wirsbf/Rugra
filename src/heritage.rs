@@ -41,7 +41,7 @@ impl LocationMap {
         }
     }
 
-    // Ghidra: heritage.cc:34 LocationMap::add
+    // Ghidra: heritage.cc:33 LocationMap::add
     /// Add a range to the disjoint cover, merging overlapping entries.
     /// Faithful to `LocationMap::add` (heritage.cc:34-71). Candidate entries
     /// are restricted to `space`'s contiguous sub-range, exactly mirroring
@@ -139,7 +139,7 @@ impl LocationMap {
         intersect
     }
 
-    // Ghidra: heritage.cc:91 LocationMap::findPass
+    // Ghidra: heritage.cc:90 LocationMap::findPass
     /// Return the pass number when the given address was heritaged, or -1
     /// if it was not heritaged. Faithful to `findPass` (heritage.cc:91-100):
     /// upper_bound(addr), back up one, check overlap.
@@ -185,7 +185,7 @@ impl LocationMap {
         }
     }
 
-    // Ghidra: heritage.cc:34 LocationMap::add
+    // Ghidra: heritage.cc:33 LocationMap::add
     // RUGRA-GLUE: adapter for the iterator returned by LocationMap::add.
     /// Locate the map entry containing `addr`. Ghidra's `LocationMap::add`
     /// returns an iterator to the (possibly merged) entry covering the added
@@ -284,7 +284,7 @@ impl TaskList {
         }
     }
 
-    // Ghidra: heritage.cc:109 TaskList::add
+    // Ghidra: heritage.cc:108 TaskList::add
     /// Add a range to the list. If it overlaps the last range, extend it.
     /// Faithful to `add` (heritage.cc:109-124). The explicit space parameter
     /// mirrors Ghidra's space-carrying Address key.
@@ -343,14 +343,14 @@ impl PriorityQueue {
         }
     }
 
-    // Ghidra: heritage.cc:142 PriorityQueue::reset
+    // Ghidra: heritage.cc:141 PriorityQueue::reset
     pub fn reset(&mut self, maxdepth: i32) {
         self.queue.clear();
         self.queue.resize_with((maxdepth + 1) as usize, Vec::new);
         self.curdepth = -1;
     }
 
-    // Ghidra: heritage.cc:154 PriorityQueue::insert
+    // Ghidra: heritage.cc:153 PriorityQueue::insert
     pub fn insert(&mut self, bl_idx: i32, depth: i32) {
         if depth > self.curdepth {
             self.curdepth = depth;
@@ -360,7 +360,7 @@ impl PriorityQueue {
         }
     }
 
-    // Ghidra: heritage.cc:166 PriorityQueue::extract
+    // Ghidra: heritage.cc:165 PriorityQueue::extract
     pub fn extract(&mut self) -> i32 {
         while self.curdepth >= 0 {
             if let Some(bl) = self.queue[self.curdepth as usize].pop() {
@@ -391,7 +391,7 @@ pub struct HeritageInfo {
 }
 
 impl HeritageInfo {
-    // Ghidra: heritage.cc:180 HeritageInfo::HeritageInfo
+    // Ghidra: heritage.cc:179 HeritageInfo::HeritageInfo
     /// Construct per-space heritage info. Faithful to the Ghidra ctor
     /// (heritage.cc:180-204):
     ///   - delay/deadcodedelay from AddrSpace::getDelay()/getDeadcodeDelay()
@@ -452,7 +452,7 @@ pub struct LoadGuard {
 }
 
 impl LoadGuard {
-    // Ghidra: heritage.cc:819 LoadGuard::isGuarded
+    // Ghidra: heritage.cc:818 LoadGuard::isGuarded
     /// Does this guard apply to the given address (space + offset range)?
     /// Faithful to `LoadGuard::isGuarded` (heritage.cc:819-826).
     pub fn is_guarded(&self, space: &crate::space::AddressSpace, offset: u64) -> bool {
@@ -1676,7 +1676,7 @@ impl Heritage {
     /// conservative superset and never under-protects. The full-range
     /// INDIRECTs are produced by `discover_and_guard_stack_stores_fd`; here we
     /// only ensure each such STORE has a guard record.
-    // Ghidra: heritage.cc:1539 Heritage::guardStores
+    // Ghidra: heritage.cc:1538 Heritage::guardStores
     pub fn guard_stores(&mut self, fd: &mut Funcdata) {
         // Snapshot of (op_arc, store_space, spc) for STOREs that need a guard
         // record. We collect under a read borrow so we can later mutate the
@@ -1764,7 +1764,7 @@ impl Heritage {
     /// (conservative superset) and defers the COPY insertion to a future
     /// per-range driver. Value-set analysis is not run yet, so each guard
     /// initially protects the whole stack space.
-    // Ghidra: heritage.cc:1571 Heritage::guardLoads
+    // Ghidra: heritage.cc:1570 Heritage::guardLoads
     pub fn guard_loads(&mut self, fd: &mut Funcdata) {
         // Prune stale load_guard records (heritage.cc:1581-1586 isValid check).
         self.load_guard.retain(|g| {
@@ -2329,7 +2329,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:383 Heritage::normalizeReadSize
+    // Ghidra: heritage.cc:382 Heritage::normalizeReadSize
     /// Normalize a read varnode whose size is < range size: create a SUBPIECE
     /// that extracts the full-size varnode, leaving the original as output.
     /// Faithful to `normalizeReadSize` (heritage.cc:383-401).
@@ -2388,7 +2388,7 @@ impl Heritage {
         vn1
     }
 
-    // Ghidra: heritage.cc:417 Heritage::normalizeWriteSize
+    // Ghidra: heritage.cc:416 Heritage::normalizeWriteSize
     /// Normalize a write varnode whose size < range size. Faithful 1:1 port
     /// of `normalizeWriteSize` (heritage.cc:416-494):
     ///   (1) mostsigsize piece (cc:428-448): if the defining op is a CALL
@@ -2631,7 +2631,7 @@ impl Heritage {
         bigout
     }
 
-    // Ghidra: heritage.cc:1157 Heritage::guard
+    // Ghidra: heritage.cc:1156 Heritage::guard
     /// Guard a specific address range for heritage. Faithful to
     /// `Heritage::guard` (heritage.cc:1156-1199):
     ///   (1) For each read varnode: verify single descendent, normalizeReadSize,
@@ -2961,7 +2961,7 @@ impl Heritage {
     /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
     /// Ghidra architecture. This method is a documented stub that scans
     /// Join-space varnodes and logs them.
-    // Ghidra: heritage.cc:619 Heritage::findAddressForces
+    // Ghidra: heritage.cc:618 Heritage::findAddressForces
     /// Mark the boundary of artificial ops from copy sinks. Faithful to
     /// `findAddressForces` (heritage.cc:619-667). Back-reachable COPY/
     /// MULTIEQUAL/INDIRECT-store ops with same address are "artificial";
@@ -3070,7 +3070,7 @@ impl Heritage {
         fd.op_destroy(op);
     }
 
-    // Ghidra: heritage.cc:696 Heritage::handleNewLoadCopies
+    // Ghidra: heritage.cc:695 Heritage::handleNewLoadCopies
     /// Mark load guard COPY boundaries and eliminate artificial COPYs.
     /// Faithful to `handleNewLoadCopies` (heritage.cc:696-731).
     pub fn handle_new_load_copies(&mut self, fd: &mut Funcdata) {
@@ -4367,7 +4367,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1323 Heritage::guardOutputOverlapStack
+    // Ghidra: heritage.cc:1322 Heritage::guardOutputOverlapStack
     /// Guard a stack range that contains the return value storage.
     /// Faithful to `guardOutputOverlapStack` (heritage.cc:1323-1376).
     /// Creates INDIRECT pieces for front/back + PIECE concat. The SUBPIECE
@@ -4756,7 +4756,7 @@ impl Heritage {
         fd.set_restart_pending(true);
     }
 
-    // Ghidra: heritage.cc:2048 Heritage::clearStackPlaceholders
+    // Ghidra: heritage.cc:2047 Heritage::clearStackPlaceholders
     /// Clear spacebase-relative placeholder info for all call specs.
     /// Faithful to `clearStackPlaceholders` (heritage.cc:2048-2056).
     pub fn clear_stack_placeholders(&mut self, fd: &mut Funcdata, info_space: AddressSpace) {
@@ -4788,7 +4788,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:508 Heritage::concatPieces
+    // Ghidra: heritage.cc:507 Heritage::concatPieces
     /// Concatenate Varnode pieces into a PIECE chain. Faithful to
     /// `concatPieces` (heritage.cc:508-551). Returns the final output.
     pub fn concat_pieces(
@@ -4888,7 +4888,7 @@ impl Heritage {
         preexist
     }
 
-    // Ghidra: heritage.cc:564 Heritage::splitPieces
+    // Ghidra: heritage.cc:563 Heritage::splitPieces
     /// Build SUBPIECE ops to define piece Varnodes from a whole-range Varnode.
     /// Faithful to `splitPieces` (heritage.cc:564-605).
     pub fn split_pieces(
@@ -5296,7 +5296,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1705 Heritage::buildRefinement
+    // Ghidra: heritage.cc:1704 Heritage::buildRefinement
     /// Build refinement array from varnode list. Faithful to
     /// `buildRefinement` (heritage.cc:1705-1715). Marks byte boundaries
     /// where varnodes start/end within the range [addr, addr+size).
@@ -5319,7 +5319,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1734 Heritage::splitByRefinement
+    // Ghidra: heritage.cc:1733 Heritage::splitByRefinement
     /// Split a Varnode by the refinement array. Faithful to
     /// `splitByRefinement` (heritage.cc:1734-1754). Returns new
     /// Varnode pieces in `split` if the varnode crosses a refinement
@@ -5640,7 +5640,7 @@ impl Heritage {
         Some(memidx)
     }
 
-    // Ghidra: heritage.cc:1891 Heritage::refinement
+    // Ghidra: heritage.cc:1890 Heritage::refinement
     /// Run refinement on the given range. Faithful to `refinement`
     /// (heritage.cc:1891-1951). Builds refinement from collected
     /// varnodes, removes 1/3 patterns, and applies to read/write/input.
@@ -7043,7 +7043,7 @@ impl Heritage {
         self.pass
     }
 
-    // Ghidra: heritage.cc:2793 Heritage::numHeritagePasses
+    // Ghidra: heritage.cc:2779 Heritage::numHeritagePasses
     /// Get the number of heritage passes performed for a space.
     /// Faithful to `numHeritagePasses` (heritage.cc:2793-2801):
     ///   `return pass - info->delay;`
@@ -7165,7 +7165,7 @@ impl Heritage {
         self.pass = 0;
     }
 
-    // Ghidra: heritage.cc:2776 Heritage::getStoreGuard
+    // Ghidra: heritage.cc:2762 Heritage::getStoreGuard
     /// Find the STORE guard matching `op`. Faithful to
     /// `Heritage::getStoreGuard` (heritage.hh:338). Linear scan of store_guard.
     pub fn get_store_guard(

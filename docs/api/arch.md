@@ -154,7 +154,7 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 `reset_defaults()` (architecture.cc:1438 — now forwards to
 `allacts.reset_defaults()` when the database exists, mirroring
 architecture.cc:1442; the printlist arm stays deferred),
-`build_action()` (architecture.cc:582 — `universal_action()` +
+`build_action()` (architecture.cc:585 — `universal_action()` +
 `reset_defaults()` on the embedded database; `parseExtraRules` is a
 registered residual ARCH-PARSEEXTRARULES-0001), `get_model(name)`, `has_model(name)`,
 `set_default_model(name)` (architecture.cc:323), `get_default_model()`,
@@ -363,7 +363,7 @@ translator —— sleigh_arch.cc:181/185，Sleigh 构造器持它做反汇编 co
   早返回、"No address space indicated in range tag"/"Illegal range tag"
   逐字）+ `last_addr_open`（address.cc:265-281：last==highest → 下一空间
   基址 0，Rugra 以 `(space_id+1, 0)` 表达）+ `decode_tracked`
-  （globalcontext.cc:85：clear + 文档序 append）+
+  （globalcontext.cc:91：clear + 文档序 append）+
   `decode_tracked_context`（globalcontext.cc:56：`Expecting <set> but got
   <X>` 逐字）+ `varnode_data_from_attributes`（pcoderaw.cc:33-53：space
   分支 rewind 重扫 offset/size、`Address is missing offset`；name 分支
@@ -499,3 +499,10 @@ wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
 `parseProcessorConfig` 一致）→ lane_records → `Funcdata::min_laned_size`
 （funcdata_varnode.cc:148 家族的 `s >= minLanedSize` 门）→ laned_map →
 `ActionLaneDivide::apply` 的 beginLaneAccess 迭代。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

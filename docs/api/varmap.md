@@ -477,3 +477,10 @@ varmap.cc:1124），变索引（open）引用走 gather_open 通道。
 下标发射消费，E2E httpd −160；包装偏移合计 wrapping_add/wrapping_mul 与 oracle
 uintb 模 2^64 算术一致。机制 C：本改动落在 varmap AliasChecker 域，commit 已请求
 独立 Cross-Review。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 4 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

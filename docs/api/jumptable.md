@@ -303,7 +303,7 @@ All paths from a putative switch variable to the BRANCHIND (jumptable.hh:72).
 | `set_path(&[PcodeOpNode])` | Initialise to a single path. |
 | `set_single(op, vn)` | Initialise to a single-node path. |
 | `append(&PathMeld)` | Append a new set of paths. |
-| `meld(&mut Vec<PcodeOpNode>)` | Meld a new path in (jumptable.cc:970). |
+| `meld(&mut Vec<PcodeOpNode>)` | Meld a new path in (jumptable.cc:968). |
 | `mark_paths(val, start_varnode)` | Mark/unmark ops from a start varnode. |
 | `clear()` | Empty the container. |
 
@@ -375,7 +375,7 @@ The basic switch model (jumptable.hh:374). Notable methods:
 - `new(jt)`, `get_path_meld()`, `get_value_range()`.
 - `is_prune(Varnode)`, `is_point(Varnode)`, `get_stride(Varnode)`,
   `get_max_value(Varnode)`, `duplicate_varnodes(&[Varnode])`.
-- `find_determining_varnodes(op, slot)` (jumptable.cc:556).
+- `find_determining_varnodes(op, slot)` (jumptable.cc:554).
 - `calc_range(vn, &mut CircleRange)` (jumptable.cc:1120). **2026-08-23 修正
   (JUMPTABLE-CALCRANGE-0001)**：初始 range 按 oracle 三分支派发——constant 取
   single(offset,size) 且**不再提前 return**（继续走守卫交集与 positive 截断）；
@@ -469,7 +469,7 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 
 **JumpBasic 新增/升级方法**：
 - `analyze_guards`：现执行完整 pullBack 扩展循环（jumptable.cc:1119），从布尔 varnode 反向最多 2 步，每步创建新 GuardRecord。
-- `backup2_switch(output, outvn, invn) -> Option<u64>`（jumptable.cc:474）：从规范化值反向模拟到未规范化值，使用 opbehavior::recover_input_unary/binary。
+- `backup2_switch(output, outvn, invn) -> Option<u64>`（jumptable.cc:472）：从规范化值反向模拟到未规范化值，使用 opbehavior::recover_input_unary/binary。
 - `find_unnormalized`：现执行完整 ADD/SUB/ZEXT/SEXT 链遍历（jumptable.cc:1484），计数 addsub/ext 限制。
 - `flows_only_to_model(vn, trail_op) -> bool`（jumptable.cc:1293）：检查 varnode 是否仅流向模型。
 - `build_labels`：现使用 backup2_switch 恢复 case 标签（jumptable.cc:1528），不再全部发 NO_LABEL。
@@ -682,3 +682,10 @@ docs/api/block.md / blockaction.md。
   （oracle 对 `opaddress` 流式输出走 `Address::printRaw`，space.cc:206），
   携带 `display_image_base` 的 canon 基址差；行为语义（LowlevelError 通道、
   触发条件、table size 判零）零改动。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 61 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

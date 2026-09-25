@@ -488,7 +488,7 @@ impl MergeTypeIntersectCache {
                 }
             }
         }
-        // Ghidra: cover.cc:56 PcodeOpSet::finalize
+        // Ghidra: cover.cc:627 PcodeOpSet::finalize
         self.stack_affecting_ops
             .sort_by(|a, b| Self::compare_by_block(a, b));
         self.stack_affecting_block_start.clear();
@@ -511,7 +511,7 @@ impl MergeTypeIntersectCache {
         self.stack_affecting_populated = true;
     }
 
-    // Ghidra: cover.cc:49 PcodeOpSet::compareByBlock
+    // Ghidra: cover.cc:646 PcodeOpSet::compareByBlock
     /// Order ops by parent block index, then SeqNum order. Faithful to
     /// `PcodeOpSet::compareByBlock` (cover.cc:49-54).
     fn compare_by_block(
@@ -1292,7 +1292,7 @@ impl Merge {
         }
     }
 
-    // Ghidra: merge.cc:1594 Merge::markImplied
+    // Ghidra: merge.cc:1595 Merge::markImplied
     /// Mark a Varnode as implied. Faithful to Merge::markImplied
     /// (merge.cc:1594-1605): after setImplied, the def op's cover-having
     /// inputs are marked coverdirty because their covers traverse the

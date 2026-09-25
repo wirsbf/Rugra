@@ -662,7 +662,7 @@ impl Symbol {
         (self.flags & symbol_flags::NAMELOCK) != 0
     }
 
-    // Ghidra: database.cc:249 Symbol::isNameUndefined
+    // Ghidra: database.cc:246 Symbol::isNameUndefined
     /// Return true if this symbol's name is the auto-generated "$$undef"
     /// placeholder. Faithful to `isNameUndefined` (database.cc:249).
     pub fn is_name_undefined(&self) -> bool {
@@ -4157,7 +4157,7 @@ impl Database {
         self.fill_resolve(scope_id);
     }
 
-    // Ghidra: database.cc:2871 Database::clearResolve
+    // Ghidra: database.cc:2870 Database::clearResolve
     /// Erase this namespace Scope's ranges from the resolvemap. Faithful to
     /// `clearResolve` (database.cc:2871-2890): for each owned range, find
     /// the resolvemap partition starting at its first address and erase it
@@ -4179,7 +4179,7 @@ impl Database {
         }
     }
 
-    // Ghidra: database.cc:2897 Database::fillResolve
+    // Ghidra: database.cc:2908 Database::fillResolve
     /// Insert every range this namespace Scope owns into the resolvemap.
     /// Faithful to `fillResolve` (database.cc:2897-2908) — each insert goes
     /// through the rangemap `ScopeResolve::insert` overlap-split semantics

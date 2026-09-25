@@ -19135,7 +19135,7 @@ impl<'a> AddTreeState<'a> {
     /// `Funcdata` itself) because the only primitives it needs —
     /// `new_constant` and `op_set_input` — are already public on `Funcdata`.
     /// The op-mutation logic is a 1:1 port of Ghidra's funcdata_op.cc:1132-1153.
-    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
+    // Ghidra: funcdata_op.cc:1130 Funcdata::collapseIntMultMult
     fn collapse_int_mult_mult(
         data: &mut Funcdata,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,

@@ -359,19 +359,19 @@ the formal behavior status is `NO_ORACLE`.
 - 语义与错误消息与 Ghidra LowlevelError 逐字一致；oracle 证据见
   `tests/oracle/space_registry_1204.*` 与 `tools/run_space_registry_oracle.sh`。
 
-### 2026-08-15：EXTERNAL-STUB-SUPPORT-0001 构造期 decode 注册（Ghidra translate.cc:254/281）
+### 2026-08-15：EXTERNAL-STUB-SUPPORT-0001 构造期 decode 注册（Ghidra translate.cc:257/285）
 
 - 新增 marshal 常量 `ATTRIB_NAME`("name",14, marshal.cc:1241)、`ATTRIB_INDEX`("index",10,
   marshal.cc:1237)、`ATTRIB_BASE`("base",89, space.cc:21)（与既有
   `ATTRIB_DEFAULTSPACE`("defaultspace",45) 配套）。
 - `impl crate::space::SpaceRegistry`（在本模块，因 ELEM/ATTRIB 常量居此、space.rs 引入本模块
   会成环）：
-  - `decode_space(&mut self, decoder)`（translate.cc:254-275 AddrSpaceManager::decodeSpace）：
+  - `decode_space(&mut self, decoder)`（translate.cc:257-275 AddrSpaceManager::decodeSpace）：
     peek element id → `space_base`/`space_unique`/`space_other`/`space_overlay`/plain
     `AddrSpace(m,t,IPTR_PROCESSOR)` 分派；space_base 的 `contain` 与 space_overlay 的
     `base` 属性按 `Decoder::readSpace`（marshal.cc:400-409）经本 manager 名字解析，缺失
     返回 `Err("Unknown address space name: X")`（Ghidra DecoderError）。
-  - `decode_spaces(&mut self, decoder)`（translate.cc:281-303 AddrSpaceManager::decodeSpaces）：
+  - `decode_spaces(&mut self, decoder)`（translate.cc:285-303 AddrSpaceManager::decodeSpaces）：
     先 `insert_space(new ConstantSpace)`；`<spaces defaultspace=...>` 属性逐子 decode+insert；
     末尾按名字查 default space（缺失 `Err("Bad 'defaultspace' attribute: X")`）并
     `set_default_code_space(index)`。insert/setDefault 的 LowlevelError 原样向外传。
@@ -382,3 +382,10 @@ the formal behavior status is `NO_ORACLE`.
   Java AddressSpace.java:80 + ElfProgramBuilder.java:1532 人工 EXTERNAL 内存块 + 
   DecompileCallback.java:417 拒绝反汇编 → flow.cc:446 BadDataError → halt_baddata）记录于
   `docs/api/space.md` 同日小节。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

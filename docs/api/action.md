@@ -1339,3 +1339,10 @@ action.cc:316-322 与 :839-845;pool 自身的 flush 因 active 位被 rule 对
 复位而自然 no-op,与 oracle 相同)。env 门控 `RUGRA_STAGE_DRILL`;
 env-off 字节一致性验证:05c8314 基线 vs 本分支,examples/
 rugra_decompile_func 对 examples/curl 的 next_url 输出逐字节相同。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

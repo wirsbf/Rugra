@@ -119,7 +119,7 @@ INT_2COMP。超范围返回 `None`（Ghidra 抛 `EvaluationError`）。
 | `OpBehaviorLzcount` | OpBehaviorLzcount | 534 | 788 |
 
 #### `pub struct OpBehaviorFactory`
-对应 `opbehavior.cc:38 OpBehavior::registerInstructions`。`OpBehaviorFactory::new()`
+对应 `opbehavior.cc:24 OpBehavior::registerInstructions`。`OpBehaviorFactory::new()`
 按 Ghidra 注册顺序填充 `table[1..CPUI_MAX]`：9 个 control-flow special +
 2 个 merge special + 29 个 int/bool 行为 + 1 个 CAST special + PTRADD/PTRSUB
 + 18 个 float 行为 + SEGMENTOP/CPOOLREF/NEW special + INSERT/EXTRACT +
@@ -181,3 +181,10 @@ POPCOUNT/LZCOUNT。`get(opc)` 查表，`len()` 返回已注册条目数。
 - 为 expanded scanner 识别出的 42 个 `const fn new` 补齐直属 marker：40 个具体 behavior constructor 映射到锁定 oracle 的内联 constructor 起始行。
 - 其余 2 个 float 宏模板使用具体 `RUGRA-GLUE`，因为一个 Rust 源级函数模板会分别生成多种类型，不能绑定到单一 Ghidra constructor。三个显式 Rust float unit constructor仍映射真实 Ghidra constructor；它们省略了 Ghidra 必需并保存的 `Translate *`，属于已知行为缺口，而不是“无对应物”的胶水。
 - 此轮仅补注释，不改变对象构造或求值行为；未生成函数级 oracle fixture，因此不声明 `MATCH` 或提升模块等级。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 79 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

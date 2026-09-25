@@ -118,7 +118,7 @@ coverage 登记；S-3（clear 等价注释）与 S-5（categorize 冗余臂合�
 `TypeFactory::get_exact_piece`（type.cc:4090-4117，与四个生产调用点同一
 Architecture 工厂）——再过 STRUCT/ARRAY/PARTIALSTRUCT 元类型门。
 分解走 `categorize_datatype` + `test_datatype_compatibility`
-（subflow.cc:2237-2274 / 2285-2367，新增）:类别门（load/store 的
+（subflow.cc:2244-2274 / 2296-2367，新增）:类别门（load/store 的
 array/primitive 组合、整结构同 Arc 非常量拒绝）、hole 填充与
 initial-hole/two-piece-padding 拒绝、numDepend>1 整结构门。构造器从
 Architecture 读取 `split_datatype_config`（subflow.cc:2701-2709）。
@@ -191,7 +191,7 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - `RuleSplitCopy` / `RuleSplitLoad` / `RuleSplitStore` (2941/2964/2985) + `SplitDatatype`
 - `SplitDatatype::new` — 从 Architecture 读取 `split_datatype_config` 与工厂 (subflow.cc:2701-2709)
 - `SplitDatatype::get_value_datatype(fd, op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938);fd 通道=cc:2914 read-facing consult（2026-09-26 UNIONRESOLVE-PKG-E-0001）
-- `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
+- `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2215-2234/2244-2274/2296-2367)
 - `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
 - `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)。`split_copy` 按 cc:2730-2744 分派到四个 builder:
   `generate_constants`(cc:2409-2465, ZEXT/PIECE 扩展精度常量折叠为分片常量并销毁 def op;
@@ -474,3 +474,10 @@ fixture 引出 `src/op.rs PcodeOp::get_repeat_slot` 缺 op.cc:101 的
 他人 write-set 未越界修复）。subflow 调用点改为内联完整迭代器重载语义的
 `subfloat_get_repeat_slot`（op.cc:93-111），同时修正 count 前缀为
 [0..current)（不含当前 descend 条目，对齐 `--ourIter` 后的 Ghidra 区间）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 6 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

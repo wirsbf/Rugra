@@ -112,3 +112,10 @@ CALLOTHER 路径）、add（const 掩码/操作数替换）、label（label 相�
 输入/输出 varnode token）双侧逐字节一致，含 moveSequenceDead 落位与
 被替换 CALLOTHER 的销毁。模块 L2（CALLFIXUP 触发与 dynamic payload 残差
 见 metadata）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

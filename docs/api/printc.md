@@ -16,7 +16,7 @@
 
 ## 2026-09-25：无名被调者两兜底的拼写/space 通道（PRINTC-FUN-PAD-0001 / PRINTC-OPCALL-ENTRYSPACE-0001 / Lane NAMFIX）
 
-RPN `opCall`（Ghidra: printc.cc:596）的无名被调者兜底两处正确化，均为**未触发兜底**（现语料 golden 全有符号名或 driver 预拼 `FUN_{:08x}` 数据库名——curl_cur 0 处、httpd_cur 全 8 位，均不经此臂），双差分预期字节恒等：
+RPN `opCall`（Ghidra: printc.cc:593）的无名被调者兜底两处正确化，均为**未触发兜底**（现语料 golden 全有符号名或 driver 预拼 `FUN_{:08x}` 数据库名——curl_cur 0 处、httpd_cur 全 8 位，均不经此臂），双差分预期字节恒等：
 
 1. **FUN_ 零填充**（PRINTC-FUN-PAD-0001，P3）：canon 兜底此前 `format!("FUN_{:x}", off)` 无填充，golden 拼写为 `FUN_00102020`（8 位）。CR-MIRROR2 核定 digit 规则 = oracle `AddrSpace::printRaw`（space.cc:206-222）的 `setw(2*sz)` 契约（`sz>4` 时 `offset>>32==0` 收缩 4、else `offset>>48==0` 收缩 6；`byteToAddress` 除 wordsize）。新 helper `PrintC::print_raw_zero_pad_digits(addr_size, word_size, offset)`（`// Ghidra: space.cc:206`，digit 核心——无 `0x` 前缀无 `+cut`，即 headless 数据库名 `FUN_<digits>` 的面）；与 `func_0x` 兜底同则不同前缀。单测钉拼写：`FUN_00102020`/`FUN_0012c520` 收缩宽 8、`0x123456789ab` 宽 12、wordsize 4 除法 + 传输面 `+cut`。
 2. **opCall entry space 通道**（PRINTC-OPCALL-ENTRYSPACE-0001，P4）：`func_` 面此前硬编码 `AddressSpace::Ram`。oracle 链 = printc.cc:602 `fc->getEntryAddress()`（fspec.hh:1686）自带 space（fspec.cc:4934 ctor：CALL 注解化**前**的 in(0) varnode 完整地址）。Rugra 的 Iop 注解只镜像 offset（`new_varnode_call_specs` compatibility_offset），space 走 callspec 通道：`get_call_spec() → entry_addr`；锁序按 fspec.rs:2470-2477 快照式（varnode 守卫先释再锁 callspec）。新 helper `PrintC::entry_addr_dims(entry)`（`// Ghidra: fspec.hh:1686`）从 `Address::get_space()` registry 句柄取 `(addrsize, wordsize)`，spaceless legacy 形（`FuncCallSpecs::new_for_op` 现产 `Address::new(offset)`）回退 flat Ram 默认 (8,1)——当前语料全部路径等价。`addr_space_print_raw` base 臂重构为委托新 `addr_space_print_raw_dims`（同规则单一来源）。fspec 侧 space 填充为 fspec 车道工作（见 TODO_BOARD 该 ID 的 fspec 半项）。
@@ -259,7 +259,7 @@ oracle 语义修复三件：
   的命中名等于符号名判定（动态 entry 直接判局部；栈地址查询必 miss）。
 - **③push_partial_symbol walk 抽取**：`partial_symbol_walk(&self, off, sz, ct,
   outtype, bigend, allow_cast) -> (Option<String>, Vec<String>)`（`// Ghidra:
-  printc.cc:1954`）——原 `push_partial_symbol` 内联的 PartialSymbolEntry 类型树下钻
+  printc.cc:1947`）——原 `push_partial_symbol` 内联的 PartialSymbolEntry 类型树下钻
   （STRUCT/UNION findTruncation 字段 `.f`、ARRAY getSubEntry `[N]`、allowCast 的
   SUBPIECE-cast 臂、synthetic `._off_sz_`）抽为纯函数，emit 入口与新
   `partial_symbol_text`（单 atom 文本形态，`(<finalcast>)name.entries`）共用，
@@ -504,7 +504,7 @@ fixture；全量 `defects=0`、`numbering=0`，`progressbarinit` 目标常量 `0
 
 ## 2026-08-26：RPN opCall 接通 + pretty-printer 挂接（PRINTC-LINEWRAP-0001）
 
-- `rpn_op_call`（Ghidra: printc.cc:596 PrintC::opCall）：RPN 路径的
+- `rpn_op_call`（Ghidra: printc.cc:593 PrintC::opCall）：RPN 路径的
   CALL/CALLIND 渲染替换直写拼串——`pushOp(&function_call)`、fspec 名
   atom（functoken/funcname_color）、`count-1` 个 comma token、参数
   varnode 逆序 `pushVnImplied`（LIFO 排空正序出），count==0 推空
@@ -2981,7 +2981,7 @@ clean if-block（向 direct-runner 纯库真值收敛 −9 行）。
 
 ## 2026-09-25（Lane PDOTFORM 三合一）：isValueFlexible 移植 + 未名位置空间名/rep 全址（PRINTC-C3FLEX-DOTFORM-0001 / PRINTC-C3-UNNAMED-SPACE-NAME-0001 / PRINTC-AFINI-UNIQUELOC-0001）
 
-- **`is_value_flexible`**（`// Ghidra: printc.cc:894`，静态 helper）：implied+written
+- **`is_value_flexible`**（`// Ghidra: printc.cc:895`，静态 helper）：implied+written
   varnode 的 def 为 PTRSUB/PTRADD（可经一层 implied+written 的 COPY 透传，
   cc:898-904 守卫序忠实——`!isWritten` 先 return 否则 `invn->getDef()` 空解引用）
   → flex=true。`dispatch_op_rpn` CPUI_PTRSUB 臂据此（cc:958）：
@@ -3007,7 +3007,7 @@ clean if-block（向 direct-runner 纯库真值收敛 −9 行）。
   （space.cc:206-222 零填充）：`stack0xfffffffffffffc78` / `ram0x00023e00`。
   legacy 路径已走 `push_unnamed_location`（无需改）。
 - **未名回退 rep 全址**（PRINTC-AFINI-UNIQUELOC-0001）：新增
-  `unnamed_location_space_offset(vn)`（`// Ghidra: printlanguage.cc:244`）返回
+  `unnamed_location_space_offset(vn)`（`// Ghidra: printlanguage.cc:238`）返回
   名字代表的（空间, 偏移）二元组；`make_atom_for_vn` 回退、RPN/legacy 两路
   display-name 阶梯的 Register/Stack/Unique/Ram/other 臂、RPN unknown-def
   兜底全部改取 rep 全址（canon `pushUnnamedLocation(rep->getAddr())`——空间
@@ -3212,7 +3212,7 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
 ## 2026-09-25（Lane MIRROR2）：直接运行档被调名 `func_0x%.8x`（MIRROR2-S3-CALLEE-0001）
 
 - **根因（GENSMOKE-S3 收口）**：oracle `PrintC::opCall` 未名被调臂
-  （printc.cc:596-605）走 `genericFunctionName(fc->getEntryAddress())`
+  （printc.cc:593-605）走 `genericFunctionName(fc->getEntryAddress())`
   （cc:3359-3366）= `"func_" + addr.printRaw()`——`AddrSpace::printRaw`
   （space.cc:206-222）零填充到 `2*addrsize`（offset<2^32 时 sz 缩 4），
   即直接运行档 golden 的 `func_0x00003190`。`FUN_%x` 是 headless
@@ -3302,3 +3302,10 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
   httpd 镜 412、httpd canon 872、vsh 镜 51 全部不变；defects=0/numbering=0
   五档全零；bank 391/391 MATCH；cargo test --lib 1730P/1F（唯一失败=
   test_nonzeromask_pipeline_wiring，VHOST 在案基线预存）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 16 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

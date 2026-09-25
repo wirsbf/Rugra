@@ -1803,7 +1803,7 @@ impl GraphSigManager {
 
     /// Initialize BlockSignatureEntry overlays for the current function.
     /// Faithful to `initializeBlocks` (signature.cc:899-911).
-    // Ghidra: signature.cc:899 GraphSigManager::initializeBlocks
+    // Ghidra: signature.cc:901 GraphSigManager::initializeBlocks
     pub fn initialize_blocks(&mut self, fd: &Arc<RwLock<Funcdata>>) {
         let n = fd.read().unwrap().bblocks.get_size();
         for i in 0..n {

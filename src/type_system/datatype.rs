@@ -394,7 +394,7 @@ impl TypeBase {
         base
     }
 
-    // Ghidra: type.cc:861 TypeUnicode::TypeUnicode
+    // Ghidra: type.cc:862 TypeUnicode::TypeUnicode
     /// Construct a Unicode base type, preserving the Unicode sub-metatype even
     /// for the 1-byte form whose only display flag is `chartype`.
     pub fn new_unicode(name: String, size: usize, metatype: TypeMetatype) -> Self {
@@ -4465,7 +4465,7 @@ impl TypeSpacebase {
         }
     }
 
-    // Ghidra: type.cc:2961 TypeSpacebase::getSubType (queryContainer leg)
+    // Ghidra: type.cc:2947 TypeSpacebase::getSubType (queryContainer leg)
     /// `scope->queryContainer(addr, 1, nullPoint)` against the resolved
     /// [`SpacebaseMap`] (the live getMap projection). The Global leg queries
     /// the construction-time global-scope view; the Local leg queries the
@@ -4584,7 +4584,7 @@ impl TypeSpacebase {
         self.forward_second_query(map, addr, next_addr)
     }
 
-    // Ghidra: type.cc:3002 TypeSpacebase::nearestArrayedComponentForward
+    // Ghidra: type.cc:2971 TypeSpacebase::nearestArrayedComponentForward
     /// The shared tail of the forward walk (type.cc:3002-3017): the second
     /// `queryContainer(nextAddr, 1, null)` must hit a whole symbol
     /// (`getOffset() == 0`) whose type is an array, or a struct whose own

@@ -79,7 +79,7 @@ fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
 /// canonical interned base type. Ghidra converts larger requests to an
 /// unknown-byte array (type.cc:3652-3656); Rugra's remaining large-base
 /// caller closure is tracked by `TYPEFACTORY-LOCALTYPE-CACHE-0001`.
-// Ghidra: typeop.cc:264 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
+// Ghidra: typeop.cc:261 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
 fn base_local_type(
     type_factory: &Arc<RwLock<TypeFactory>>,
     size: usize,
@@ -88,7 +88,7 @@ fn base_local_type(
     type_factory.read().unwrap().get_base(size, metatype)
 }
 
-// Ghidra: typeop.cc:2320 TypeOp::getInputCast (base fallback)
+// Ghidra: typeop.cc:295 TypeOp::getInputCast (base fallback)
 fn default_input_cast(_op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
     None
 }
@@ -1321,7 +1321,7 @@ impl TypeOp for TypeOpIntLeft {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Int)
     }
-    // Ghidra: typeop.cc:1509 TypeOpIntLeft::getInputLocal
+    // Ghidra: typeop.cc:1510 TypeOpIntLeft::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         if slot == 1 {
@@ -1394,7 +1394,7 @@ impl TypeOp for TypeOpIntRight {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Uint)
     }
-    // Ghidra: typeop.cc:1536 TypeOpIntRight::getInputLocal
+    // Ghidra: typeop.cc:1535 TypeOpIntRight::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         if slot == 1 {
@@ -1435,7 +1435,7 @@ impl TypeOp for TypeOpIntSright {
     fn get_flags(&self) -> u32 {
         typeop_flags::SHIFT_OP
     }
-    // Ghidra: typeop.cc:1572 TypeOpIntSright::printRaw
+    // Ghidra: typeop.cc:1575 TypeOpIntSright::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -2339,13 +2339,13 @@ impl TypeOp for TypeOpPtradd {
         format!("{} = ptradd({}, {}, {})", out, in0, in1, in2)
     }
 
-    // Ghidra: typeop.cc:2235 TypeOpPtradd::getInputLocal
+    // Ghidra: typeop.cc:2232 TypeOpPtradd::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
     }
 
-    // Ghidra: typeop.cc:2240 TypeOpPtradd::getOutputLocal
+    // Ghidra: typeop.cc:2238 TypeOpPtradd::getOutputLocal
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)

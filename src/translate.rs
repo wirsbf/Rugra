@@ -1955,7 +1955,7 @@ impl crate::space::SpaceRegistry {
         }
     }
 
-    // Ghidra: translate.cc:254 AddrSpaceManager::decodeSpace
+    // Ghidra: translate.cc:257 AddrSpaceManager::decodeSpace
     /// Initialize a single address space from a decoder element. Faithful
     /// to `decodeSpace` (translate.cc:254-275): the element id selects the
     /// partial constructor — `<space_base>` → SpacebaseSpace
@@ -2029,7 +2029,7 @@ impl crate::space::SpaceRegistry {
         }
     }
 
-    // Ghidra: translate.cc:281 AddrSpaceManager::decodeSpaces
+    // Ghidra: translate.cc:285 AddrSpaceManager::decodeSpaces
     /// Initialize (almost) all address spaces for a processor from a
     /// `<spaces>` element. Faithful to `decodeSpaces`
     /// (translate.cc:281-303): the constant space is inserted first, the

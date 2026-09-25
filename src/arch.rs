@@ -745,7 +745,7 @@ impl Architecture {
         }
     }
 
-    // Ghidra: architecture.cc:582 Architecture::buildAction
+    // Ghidra: architecture.cc:585 Architecture::buildAction
     /// Build the universal Action for function transformation and
     /// instantiate the "decompile" root Action. Faithful to `buildAction`
     /// (architecture.cc:582-591). `parseExtraRules(store)` is deferred
@@ -1507,7 +1507,7 @@ impl Architecture {
         }
     }
 
-    // Ghidra: globalcontext.cc:85 ContextDatabase::decodeTracked
+    // Ghidra: globalcontext.cc:91 ContextDatabase::decodeTracked
     /// Restore a sequence of tracked register values from the `<set>`
     /// children of one `<tracked_set>`.  Faithful to
     /// `ContextDatabase::decodeTracked` (globalcontext.cc:85-93): the
@@ -2701,7 +2701,7 @@ impl Architecture {
         self.lane_records = merged.into_iter().map(std::sync::Arc::new).collect();
     }
 
-    // Ghidra: architecture.cc:291 Architecture::getLanedRegister
+    // Ghidra: architecture.cc:290 Architecture::getLanedRegister
     /// Look up the shared laned-register record for a storage size. As in the
     /// locked oracle, the address is currently ignored and the ordered vector
     /// is searched by whole-register size.

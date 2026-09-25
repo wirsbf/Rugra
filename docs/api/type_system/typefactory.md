@@ -131,7 +131,7 @@ Find a type by name
 
 Resolve a DWARF typedef whose NAME is a conventional boolean spelling
 (`bool`/`_Bool`) to this factory's registered core boolean type
-(`setCoreType("bool",1,TYPE_BOOL,false)` shape — sleigh_arch.cc:216,
+(`setCoreType("bool",1,TYPE_BOOL,false)` shape — sleigh_arch.cc:204,
 type.cc:3178-3195). Returns `None` for any other name, or when the
 factory's `bool` entry is not the exact core shape (metatype BOOL, size 1),
 in which case callers fall back to their alias materialization.
@@ -1161,3 +1161,10 @@ extra 恒 0）就此消灭；构造签名与去重键不变。
   规范对象上决策。
 - **效果**：curl 镜/httpd 镜 unkbyte 0 残留；canon 466 不回退、零超时；
   vsh 镜（gen 驱动）维持全函数健康。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

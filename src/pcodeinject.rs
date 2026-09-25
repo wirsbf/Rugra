@@ -646,7 +646,7 @@ impl InjectPayload {
     /// Verify the context storage matches this payload's parameter
     /// restrictions. Faithful to `InjectPayloadSleigh::checkParameterRestrictions`
     /// (inject_sleigh.cc:105-131), messages verbatim.
-    // Ghidra: inject_sleigh.cc:105 InjectPayloadSleigh::checkParameterRestrictions
+    // Ghidra: inject_sleigh.cc:109 InjectPayloadSleigh::checkParameterRestrictions
     fn check_parameter_restrictions(&self, con: &InjectContext) -> Result<(), String> {
         if self.input_list.len() != con.input_list.len() {
             return Err(format!(
@@ -794,7 +794,7 @@ impl<'c> InjectBuilder<'c> {
     /// `ConstTpl::fixSpace`, size via `fix`; a constant-space offset is
     /// masked to the varnode size, a unique-space offset is ORed with the
     /// (zero) injection unique offset, anything else wraps into the space.
-    // Ghidra: sleigh.cc:160 SleighBuilder::generateLocation
+    // Ghidra: sleigh.cc:152 SleighBuilder::generateLocation
     fn generate_location(&self, vn_tpl: &VarnodeTpl) -> Result<VarnodeRaw, String> {
         let space = self.fix_space(&vn_tpl.space)?;
         let size = self.fix(&vn_tpl.size)? as usize;

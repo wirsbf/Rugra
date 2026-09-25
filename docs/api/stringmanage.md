@@ -104,7 +104,7 @@ query 先在 map 占坑（stringmanage.cc:437），opaque/DataUnavailError/无�
 - `new_unicode(loader, max)` — 1:1 native `StringManagerUnicode` reader
   （stringmanage.cc:414；sleigh_arch.cc:250 安装形态；2048 字节搜索界）。
 - `new_ghidra_contract(loader, max)` — 生产 manager，声明的 GhidraStringManager/
-  Java 契约（string_ghidra.cc:19；ghidra_arch.cc:368 安装形态）。
+  Java 契约（string_ghidra.cc:20；ghidra_arch.cc:368 安装形态）。
 - `clear()`, `get_maximum_chars()`, `num_strings()`, `has_entry(addr)`,
   `insert_string_data(addr, data)`, `set_string_data_client(client)`
   （GhidraJavaContract 后端的环境查询目标注入，见 2026-09-26 节）。
@@ -148,3 +148,10 @@ query 先在 map 占坑（stringmanage.cc:437），opaque/DataUnavailError/无�
 - XML encode/decode 的 space-name 恢复（当前 encode 记录 offset+tag id，decode
   恢复为 spaceless 形态；Ghidra 用 `<addr space=...>`）。
 <!-- annotation-pass: 2026-08-24 -->
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

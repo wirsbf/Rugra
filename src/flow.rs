@@ -2542,7 +2542,7 @@ impl<'a> FlowInfo<'a> {
     /// Reorder a graph so `block` is first and transfer the official entry
     /// flag from the previous first block. This is the exact list/flag
     /// mutation performed by Ghidra's `BlockGraph::setStartBlock`.
-    // Ghidra: block.cc:1627 BlockGraph::setStartBlock
+    // Ghidra: block.cc:1625 BlockGraph::setStartBlock
     fn set_start_block(graph: &mut BlockGraph, block: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         if graph.blocks.is_empty() {
             return;
@@ -3283,7 +3283,7 @@ impl<'a> FlowInfo<'a> {
     /// start and updates `maxtime`; a relative branch to the end of the
     /// instruction sets `isfallthru`; a non-Const input(0) is a machine
     /// address queued through `newAddress`.
-    // Ghidra: flow.cc:277 FlowInfo::xrefControlFlow (CBRANCH/BRANCH cases)
+    // Ghidra: flow.cc:264 FlowInfo::xrefControlFlow (CBRANCH/BRANCH cases)
     fn xref_conditional_branch(
         &mut self,
         op_ref: &crate::op::PcodeOpRef,

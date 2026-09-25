@@ -270,7 +270,7 @@ impl ArchOption for OptionInPlaceOps {
     fn name(&self) -> &str {
         "inplaceops"
     }
-    // Ghidra: options.cc:411 OptionInPlaceOps::apply
+    // Ghidra: options.cc:408 OptionInPlaceOps::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         // RUGRA-GLUE: print reset isInPlaceOps() not wired.
@@ -290,7 +290,7 @@ impl ArchOption for OptionConventionPrinting {
     fn name(&self) -> &str {
         "conventionprinting"
     }
-    // Ghidra: options.cc:428 OptionConventionPrinting::apply
+    // Ghidra: options.cc:423 OptionConventionPrinting::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         let prop = if val { "on" } else { "off" };
@@ -307,7 +307,7 @@ impl ArchOption for OptionNoCastPrinting {
     fn name(&self) -> &str {
         "nocastprinting"
     }
-    // Ghidra: options.cc:445 OptionNoCastPrinting::apply
+    // Ghidra: options.cc:438 OptionNoCastPrinting::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         let prop = if val { "on" } else { "off" };
@@ -324,7 +324,7 @@ impl ArchOption for OptionHideExtensions {
     fn name(&self) -> &str {
         "hideextensions"
     }
-    // Ghidra: options.cc:462 OptionHideExtensions::apply
+    // Ghidra: options.cc:453 OptionHideExtensions::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         let prop = if val { "on" } else { "off" };
@@ -341,7 +341,7 @@ impl ArchOption for OptionMaxLineWidth {
     fn name(&self) -> &str {
         "maxlinewidth"
     }
-    // Ghidra: options.cc:530 OptionMaxLineWidth::apply
+    // Ghidra: options.cc:471 OptionMaxLineWidth::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         if p1.is_empty() {
             return "Must specify max line width".to_string();
@@ -361,7 +361,7 @@ impl ArchOption for OptionIndentIncrement {
     fn name(&self) -> &str {
         "indentincrement"
     }
-    // Ghidra: options.cc:543 OptionIndentIncrement::apply
+    // Ghidra: options.cc:488 OptionIndentIncrement::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         if p1.is_empty() {
             return "Must specify indent increment".to_string();
@@ -379,7 +379,7 @@ impl ArchOption for OptionCommentIndent {
     fn name(&self) -> &str {
         "commentindent"
     }
-    // Ghidra: options.cc:556 OptionCommentIndent::apply
+    // Ghidra: options.cc:506 OptionCommentIndent::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         if p1.is_empty() {
             return "Must specify comment indent".to_string();
@@ -397,7 +397,7 @@ impl ArchOption for OptionCommentStyle {
     fn name(&self) -> &str {
         "commentstyle"
     }
-    // Ghidra: options.cc:564 OptionCommentStyle::apply
+    // Ghidra: options.cc:523 OptionCommentStyle::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         // Ghidra accepts "/* */" (C), "// " (C++/shell), "/* **/" (header),
         // "/** */" (JavaDoc) - validated by printlanguage.
@@ -414,7 +414,7 @@ impl ArchOption for OptionCommentHeader {
     fn name(&self) -> &str {
         "commentheader"
     }
-    // Ghidra: options.cc:574 OptionCommentHeader::apply
+    // Ghidra: options.cc:535 OptionCommentHeader::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         format!("Comment header (type={p1}) flag set")
     }
@@ -429,7 +429,7 @@ impl ArchOption for OptionCommentInstruction {
     fn name(&self) -> &str {
         "commentinstruction"
     }
-    // Ghidra: options.cc:585 OptionCommentInstruction::apply
+    // Ghidra: options.cc:556 OptionCommentInstruction::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         format!("Comment instruction (type={p1}) flag set")
     }
@@ -448,7 +448,7 @@ impl ArchOption for OptionIntegerFormat {
     fn name(&self) -> &str {
         "integerformat"
     }
-    // Ghidra: options.cc:505 OptionIntegerFormat::apply
+    // Ghidra: options.cc:576 OptionIntegerFormat::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, p2: &str, _p3: &str) -> String {
         // p1 is one of: "hex", "dec", "best"
         // p2 == "force" forces the format even when it makes the output worse.
@@ -572,7 +572,7 @@ impl ArchOption for OptionErrorUnimplemented {
     fn name(&self) -> &str {
         "errorunimplemented"
     }
-    // Ghidra: options.cc:715 OptionErrorUnimplemented::apply
+    // Ghidra: options.cc:721 OptionErrorUnimplemented::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         if val {
@@ -596,7 +596,7 @@ impl ArchOption for OptionErrorReinterpreted {
     fn name(&self) -> &str {
         "errorreinterpreted"
     }
-    // Ghidra: options.cc:731 OptionErrorReinterpreted::apply
+    // Ghidra: options.cc:744 OptionErrorReinterpreted::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         if val {
@@ -620,7 +620,7 @@ impl ArchOption for OptionErrorTooManyInstructions {
     fn name(&self) -> &str {
         "errortoomanyinstructions"
     }
-    // Ghidra: options.cc:747 OptionErrorTooManyInstructions::apply
+    // Ghidra: options.cc:767 OptionErrorTooManyInstructions::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         if val {
@@ -669,7 +669,7 @@ impl ArchOption for OptionSetLanguage {
     fn name(&self) -> &str {
         "setlanguage"
     }
-    // Ghidra: options.cc:824 OptionSetLanguage::apply
+    // Ghidra: options.cc:816 OptionSetLanguage::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         // RUGRA-GLUE: PrintLanguage registry not wired into Architecture.
         format!("Setting printing language: {p1}")

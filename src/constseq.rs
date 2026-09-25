@@ -243,7 +243,7 @@ impl ArraySequence {
     /// canonical `Arc`s so `Arc::ptr_eq` is the direct analogue; types that
     /// flowed through cloned records fall back to (name, size, char-print
     /// flags) equality.
-    // Ghidra: constseq.cc:165 ArraySequence::selectStringCopyFunction (charType == types->getTypeChar identity test)
+    // Ghidra: constseq.cc:161 ArraySequence::selectStringCopyFunction (charType == types->getTypeChar identity test)
     fn matches_factory_char(
         candidate: Option<&Arc<Datatype>>,
         factory: &crate::type_system::typefactory::TypeFactory,

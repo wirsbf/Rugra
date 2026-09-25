@@ -2231,7 +2231,7 @@ impl PrintC {
         code == OpCode::CPUI_PTRSUB || code == OpCode::CPUI_PTRADD
     }
 
-    // Ghidra: printc.cc:894 isValueFlexible
+    // Ghidra: printc.cc:895 isValueFlexible
     /// Whether an (implied, written) Varnode's defining op is a PTRSUB or
     /// PTRADD — possibly through one COPY whose input is itself implied and
     /// written — so `PrintC::opPtrsub` can flip its member syntax from `->`
@@ -3710,7 +3710,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:596 PrintC::opCall
+    // Ghidra: printc.cc:593 PrintC::opCall
     /// RPN-path port of `PrintC::opCall(const PcodeOp*)` (printc.cc:596-636):
     /// pushOp(&function_call,op), the fspec name atom (functoken /
     /// funcname_color), then count-1 comma tokens and the parameter
@@ -7076,7 +7076,7 @@ impl PrintC {
         notempty
     }
 
-    // Ghidra: printc.cc:2656 PrintC::docFunction (emitLocalVarDecls scope source)
+    // Ghidra: printc.cc:2641 PrintC::docFunction (emitLocalVarDecls scope source)
     /// Snapshot the Action-phase local-variable scope (cloned, since the
     /// printer borrows the Funcdata read-only). Ghidra's printer is a pure
     /// consumer of the persistent ScopeLocal built by
@@ -7240,7 +7240,7 @@ impl PrintC {
         vn.get_offset()
     }
 
-    // Ghidra: printlanguage.cc:244 PrintLanguage::pushSymbolDetail
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
     /// The FULL address (space AND offset) of the high name representative —
     /// what `pushUnnamedLocation(high->getNameRepresentative()->getAddr(),
     /// vn, op)` passes at the sym==null fallback. PRINTC-AFINI-UNIQUELOC-
@@ -7946,7 +7946,7 @@ impl PrintC {
     /// `Merge::assign_names` (merge.rs:560-574); stripping it recovers the
     /// underlying register name, matching Ghidra's one-name-per-HighVariable
     /// model (the SSA instance count is irrelevant to the printed name).
-    // Ghidra: database.cc:2501 ScopeInternal::buildVariableName (local-var branch: ct->printNameBase; "Var" << index++)
+    // Ghidra: database.cc:2434 ScopeInternal::buildVariableName (local-var branch: ct->printNameBase; "Var" << index++)
     fn is_raw_register_name(name: &str) -> bool {
         // Strip a trailing `_<digits>` SSA disambiguation suffix, so `RAX_7`
         // is recognised the same as `RAX`. A suffix is only `_<digits>`; names
@@ -8768,7 +8768,7 @@ impl PrintC {
                 self.emit.print(")");
                 return;
             }
-            // Ghidra: printc.cc:596 PrintC::opCall
+            // Ghidra: printc.cc:593 PrintC::opCall
             OpCode::CPUI_CALL => {
                 if let Some(in0) = def_op.get_in(0) {
                     let target_vn = in0.read().unwrap();
@@ -11107,7 +11107,7 @@ impl PrintLanguage for PrintC {
         // position (last line before the declaration) is unchanged.
         self.emit.tag_line(0);
 
-        // Ghidra: printc.cc:2661 PrintC::docFunction delegates the complete
+        // Ghidra: printc.cc:2641 PrintC::docFunction delegates the complete
         // declaration to emitFunctionDeclaration. Parameter recovery and
         // return-type decisions are finalized in FuncProto before printing;
         // the print phase must not invent a main signature, infer return type
@@ -14008,18 +14008,18 @@ impl PrintC {
         else { self.emit.print(&format!("{}", val)); }
     }
 
-    // Ghidra: printc.cc:820 PrintC::pushCharConstant
+    // Ghidra: printc.cc:1606 PrintC::pushCharConstant
     pub fn push_char_constant(&mut self, val: u64, _vn: &Varnode) {
         if (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else { self.emit.print(&format!("0x{:x}", val)); }
     }
 
-    // Ghidra: printc.cc:850 PrintC::pushEnumConstant
+    // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
     pub fn push_enum_constant(&mut self, val: u64, _vn: &Varnode) {
         self.emit.print(&format!("0x{:x}", val));
     }
 
-    // Ghidra: printc.cc:880 PrintC::pushBoolConstant
+    // Ghidra: printc.cc:1488 PrintC::pushBoolConstant
     pub fn push_bool_constant(&mut self, val: u64, _vn: &Varnode) {
         self.emit.print(if val != 0 { "true" } else { "false" });
     }
@@ -14342,7 +14342,7 @@ impl PrintC {
             .unwrap_or(false)
     }
 
-    // Ghidra: printc.cc:920 PrintC::pushEquate
+    // Ghidra: printc.cc:1818 PrintC::pushEquate
     pub fn push_equate(&mut self, val: u64, sz: usize, vn: &Varnode) {
         self.push_constant(val, sz, vn);
     }
@@ -14401,7 +14401,7 @@ impl PrintC {
         self.emit.print(&format!("{}:", self.code_label(addr)));
     }
 
-    // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement
+    // Ghidra: printc.cc:3219 PrintC::emitAnyLabelStatement
     pub fn emit_any_label_statement(
         &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
@@ -15069,7 +15069,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:2650 PrintC::docFunction comment setup
+    // Ghidra: printc.cc:2641 PrintC::docFunction comment setup
     /// Load the function's comments into the sorter. Faithful to the
     /// `commsorter.setupFunctionList(instr_comment_type|head_comment_type,
     /// fd, *fd->getArch()->commentdb, option_unplaced)` step of
@@ -15097,7 +15097,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:2684 PrintC::emitBlockBasic setupBlockList
+    // Ghidra: printc.cc:2678 PrintC::emitBlockBasic setupBlockList
     /// Open a basic block's comment window (`commsorter.setupBlockList(bl)`,
     /// printc.cc:2684 / comment.cc:379-390). Exposed for the
     /// printc_warning oracle fixture, which drives the emitBlockBasic
@@ -17146,7 +17146,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:1954 PrintC::pushPartialSymbol (type-tree walk)
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol (type-tree walk)
     /// The pure type-tree walk of `PrintC::pushPartialSymbol`
     /// (printc.cc:1954-2042), shared by the emitting entry point above
     /// and the leaf-atom text builder [`Self::partial_symbol_text`]:
@@ -17475,7 +17475,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:754 PrintC::opHiddenFunc  (referenced by opIntZext/Sext)
+    // Ghidra: printc.cc:474 PrintC::opHiddenFunc  (referenced by opIntZext/Sext)
     /// Suppress this op entirely - its output is rendered inline by the
     /// consumer. Faithful to `PrintC::opHiddenFunc` (printc.cc:754-760):
     /// Ghidra pushes nothing (the op is implied). Rugra marks the op as
