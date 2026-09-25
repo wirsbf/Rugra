@@ -1,5 +1,35 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-25（LOCKFIX）：三处 op 读守卫跨"被调方再锁同一 op"窗口收紧（CURLWIRE-CR-F1）
+
+- **形态**：外层 `PcodeOp` 读守卫（binding 形）存活期间，被调函数经自身路径再取
+  同一 op 的读锁（`std::sync::RwLock` 读读递归在写者排队时死锁——单线程 Action 段
+  无害，eu-stack 类并发入口为真风险；MIRROR2 车道 down_chain_pointer 已实证同形
+  真死锁）。修法 = 先在临时守卫内读 opcode（或先 `drop`），释放后再调；各臂按需
+  重取局部守卫。行为恒等证明 = 双语料与亲父 5e6aad2b 输出 cmp 字节恒等。
+- **`call_input_cast`**（`// Ghidra: typeop.cc:295 TypeOp::getInputCast`）：
+  CALLIND 臂 `get_input_local_in_fd → Funcdata::get_call_specs_of_op`
+  （funcdata.rs `op.0.read()` 再锁）在原外层守卫内——现 opcode 提升为临时守卫读
+  后释放再分派；CALL 臂自取新守卫传 `&PcodeOp` 视图。oracle 型虚分派读一次稳定
+  opcode、全程无锁、同序。
+- **`cast_output`**（`// Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput`）：
+  tokenct 分发的 `op_rg` 守卫横跨 CALL/CALLIND 臂的 `fd.get_call_specs_of_op(op)`
+  再锁——现 opcode 临时读 + 各 token 臂（PTRSUB/PTRADD/算术族/LOAD/移位族/
+  SUBPIECE）重取局部 `op_rg`，CALL/CALLIND 臂无守卫化。臂内读序与字段逐行保持。
+- **`propagate_constant`**（`// Ghidra: coreaction.cc:4383 ActionConditionalConst::propagateConstant`）：
+  MULTIEQUAL 臂 `op_r` 守卫横跨 `Self::test_alternate_path`（cc:4349 形,自身
+  `op.read()` 再锁）——现 `drop(op_r)` 后再调（非 MULTIEQUAL 路径既有同款
+  drop 位点先例）；守卫窗口内 oracle 只记录 `phiNodeEdges`（cc:4414），重接在
+  handle_phi_nodes 之后，零突变窗口。
+- **顺手项**：castInput 注释 `(typeop.cc:295)` → `:299`（isAnnotation null 返回行，
+  CURLWIRE-CR-F2）。
+- **域外移交**：flow.rs `FlowInfoSnapshot::snapshot`（`operation` 守卫横跨
+  `find_rel_target` 再锁）同形位点登记 CURLWIRE-CR-F1-A1，不在本 lane 写域。
+- **验证**：curl/httpd 双语料 ×2 跑 md5 全等（curl=3095b16e…, httpd=0ee08247…）；
+  golden 差分 defects=0/numbering=0；bank 391/391；`cargo test --lib` 1725P+1 预存
+  败（funcdata::tests::test_nonzeromask_pipeline_wiring,亲父 5e6aad2b 干树同名同败,
+  非本改动）；死锁探针旧形 timeout/新形 exit 0（/dev/shm/rugra-tests/lockfix）。
+
 ## 2026-09-25：castInput 的 CALL/CALLIND 分派臂（CURLWIRE-SIGLOCK-WIRING-0001）
 
 - **缺口**：`cast_input` 的 opcode 分发（原 :5432 区）没有 CPUI_CALL/CALLIND 臂——
