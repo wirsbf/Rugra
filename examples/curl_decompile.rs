@@ -393,6 +393,10 @@ static CALLEE_SIGLOCK_PROTOS: std::sync::OnceLock<Option<HashMap<u64, CalleeSigl
 // (None = unlocked slot), return spelling, and whether every slot is
 // locked (full input lock installs parameter pieces; partial entries
 // lock only the return). Same shape as the httpd driver's V3CalleeProto.
+// CURLPARAM-DRIVER-0001: Clone + serde so the iteration loop can ship the
+// self-produced table through the worker request channel (bincode) and
+// compare it against the manifest decode walk.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct CalleeSiglockProto {
     name: String,
     params: Vec<Option<String>>,
@@ -418,7 +422,15 @@ fn load_callee_siglock_manifest() -> Option<HashMap<u64, CalleeSiglockProto>> {
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "tests/golden/manifests/callee_siglock_curl_1204.json".to_string());
-    let table = match fs::read_to_string(&path) {
+    load_callee_siglock_from_path(&path)
+}
+
+// RUGRA-GLUE: the manifest JSON decode walk (extracted verbatim from the
+// gated loader above so the CURLPARAM comparison instrument loads the
+// identical table shape with no gate side effects — the httpd driver's
+// load_v3sig_manifest split for the same reason).
+fn load_callee_siglock_from_path(path: &str) -> Option<HashMap<u64, CalleeSiglockProto>> {
+    let table = match fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
             Err(err) => {
                 eprintln!("[V3SIG] manifest {} is not valid JSON: {} (gate disabled)", path, err);
@@ -486,6 +498,436 @@ fn load_callee_siglock_manifest() -> Option<HashMap<u64, CalleeSiglockProto>> {
         }
     };
     table
+}
+
+// ============================================================================
+// CURLPARAM-DRIVER-0001: the curl port of the httpd driver's self-hosted
+// Parameter ID iteration (HEADLESS-BRIDGE-PARAMID-0001 / PARAMID2).
+// ----------------------------------------------------------------------------
+// Ghidra's Decompiler Parameter ID analyzer (the Java-side
+// DecompilerParameterIdAnalyzer; the decompile-cpp library exposes only the
+// transport — FlowInfo::queryCall -> FuncCallSpecs::setFuncdata ->
+// ActionDefaultParams' fc->copy(otherfunc->getFuncProto()),
+// coreaction.cc:2322-2330) repeatedly decompiles every function, extracts
+// recovered prototype forms, commits them as locked signatures, and
+// iterates to a fixed point; every later decompilation then sees those
+// callee signatures at its call sites. curl's V3SIG channel already proved
+// the locked side end to end with the harvested manifest (55 entries);
+// this port swaps the channel's INPUT for the binary's own runtime
+// output, exactly like the httpd lane did.
+//
+// The commit payload is CALL-SITE evidence read from the pipeline's final
+// state (never from printed text): for every direct call, the callee
+// entry, the machine arity (CALL op argument count), each argument slot's
+// recovered type (the arg varnode's post-pipeline type), and the live
+// call output's consumer type. An untyped varnode (undefined-family
+// scalar) is the "no evidence" form; a pointer-typed varnode is the
+// "x[k] / &x / (T *)" form; the merge applies the harvest's rules (arity
+// conflict drops the entry, slot conflicts kill the slot, undefined-family
+// scalars carry no evidence under the strict tier, full-evidence arity ->
+// input lock, agreeing live consumers -> return lock).
+//
+// The curl driver's process model is preserved verbatim: every round runs
+// the SAME isolated-worker computation the printing pass runs (same
+// request payload, same worker binary, same timeout isolation) — the
+// harvest requests only add the round's lock table and the evidence flag,
+// so the iteration's decompile is byte-identical in inputs to a normal
+// face pass with those locks installed. The worker extracts the evidence
+// after its print completes (the same final-state position the httpd
+// lane's decompile_one_function harvests) and returns it through the
+// worker protocol.
+//
+// The four PARAMID2 guards ride along (each measured on the httpd corpus,
+// all ON by default):
+// 1. STICKY CONFLICT MEMORY — a slot/return/arity that conflicted in ANY
+//    round stays dead: a locked site's arg varnodes echo the installed
+//    lock, so a later round can show spurious agreement on a spelling an
+//    earlier round's independent evidence contradicted.
+// 2. NARROW-INT POINTER DEMOTION — int */uint */short */ushort * carry no
+//    evidence (the oracle's lock tables never exhibit that call-site form;
+//    Rugra's typeprop types canon's wide-scalar chains as narrow-int
+//    pointers — the recovery residual is the root).
+// 3. DEGENERATE-SITE FILTER — a zero-arity site against positive-arity
+//    consensus is a lost-register-arg lift artifact, not varargs evidence;
+//    REAL varargs still conflicts across positive arities and drops.
+// 4. SILENT-SITE VETO (sticky) — a caller site contributing NO evidence
+//    at all leaves the callee's observation incomplete; no commit, and a
+//    later round's lock echo at the silent site is not the missing
+//    evidence.
+// PLT-slot evidence stays DROPPED by default (RUGRA_PARAMID_PLT=1 admits
+// it as the experiment): curl's link_call_specs already installs the libc
+// ABI prototypes and DWARF callee signatures on those callspecs
+// (CURLPREP verdict — the import-signature channel's data is already on
+// the callspecs, so the iteration gains nothing by re-locking them), and
+// the install arm's has_model() gap-fill rule would skip the covered
+// entries anyway.
+//
+// Iteration window: the full corpus window the main loop itself
+// decompiles (the 124 golden-corpus ledger entries — curl's window IS the
+// full corpus; under RUGRA_DISCOV=1 the discovery universe — minus the
+// EXTERNAL-block stub-projection entries, which never produce a body).
+// Rounds are monotone (locked sites keep contributing evidence — their
+// arg varnodes echo the lock after typeprop) and stop at a fixed point or
+// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). Opt-in only
+// (RUGRA_PARAMID=1, DriverMode::All); the mirror gates keep absolute
+// precedence (projection purity) and RUGRA_SEEDS=0 stays the global
+// escape, exactly like the manifest channel. The DEFAULT face is
+// untouched: with the env unset every request carries
+// `paramid_table: None` and the worker's manifest path is byte-identical.
+//
+// Evidence tier (PARAMID2 §17.6): the DEFAULT admits undefined-family
+// scalars (the oracle's own lock tables contain undefined8 /
+// undefined8 * slots) guarded by the four refinements above;
+// RUGRA_PARAMID_EVIDENCE=strict selects the conservative tier. The tier
+// and demotion knobs are read from the environment in BOTH the parent
+// (merge policy) and the workers (evidence spelling) — the workers
+// inherit the parent's env, so one knob moves both sides coherently.
+// Ablation instruments: RUGRA_PARAMID_EVICT=0xADDR,... drops entries from
+// the final table; RUGRA_PARAMID_SITES=1 dumps per-site evidence records;
+// RUGRA_PARAMID_DEBUG=1 dumps the final table; RUGRA_PARAMID_ROUND1=strict
+// stages a conservative round 1 (kept as the documented negative-result
+// instrument from the httpd measurements).
+// ============================================================================
+
+// RUGRA-GLUE: the wire form of one harvested call-site record (the httpd
+// CallSiteEvidence — serde because it crosses the worker protocol).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CallSiteEvidenceWire {
+    entry: u64,
+    arity: usize,
+    /// Slot spellings for input-unlocked sites; None for sites whose
+    /// callee input is already locked (a locked site prints the lock
+    /// echo, never fresh evidence).
+    slots: Option<Vec<Option<String>>>,
+    ret: Option<String>,
+    /// Diagnostic owner (the decompiled function the call site lives
+    /// in; display-only, never part of the merge).
+    caller: String,
+}
+
+// The harvest's KNOWN_BASES gate (tools/harvest_local_manifest.py): a
+// slot whose recovered base spelling the lock channel cannot install
+// faithfully is dead evidence, never a conflict (httpd known_evidence_base
+// verbatim).
+fn known_evidence_base(base: &str) -> bool {
+    matches!(
+        base,
+        "void" | "char" | "byte" | "undefined" | "undefined1" | "undefined2" | "undefined4"
+            | "undefined8" | "short" | "ushort" | "int" | "uint" | "long" | "ulong" | "size_t"
+            | "time_t" | "__pid_t" | "float" | "double" | "bool"
+    )
+}
+
+// One varnode type -> one evidence spelling (httpd evidence_spelling
+// verbatim). Pointers are always informative (the "x[k] / &x / (T *)"
+// family); an undefined-family SCALAR carries evidence under the default
+// tier (the oracle's own tables lock undefined8 slots) and none under
+// strict; NARROW-INT pointers (int */uint */short */ushort *) are demoted
+// in either tier (the corpus oracle never exhibits that call-site form
+// among its committed evidence — Rugra's typeprop types those wide-scalar
+// chains as narrow-int pointers where the oracle recovers long).
+fn evidence_spelling(
+    dt: &std::sync::Arc<rugra::type_system::datatype::Datatype>,
+    loose: bool,
+    demote_narrow_int_ptr: bool,
+) -> Option<String> {
+    let spelling = dt.print_raw();
+    let base = spelling.trim_end_matches('*').trim();
+    if !known_evidence_base(base) {
+        return None;
+    }
+    if spelling.contains('*') {
+        if demote_narrow_int_ptr
+            && matches!(base, "int" | "uint" | "short" | "ushort")
+        {
+            return None;
+        }
+        return Some(spelling);
+    }
+    if loose {
+        return Some(spelling);
+    }
+    match base {
+        "undefined" | "undefined1" | "undefined2" | "undefined4" | "undefined8" => None,
+        _ => Some(spelling),
+    }
+}
+
+// The harvest itself (httpd extract_callsite_evidence verbatim): evidence
+// comes from every direct-call site regardless of lock state — a locked
+// site's arg varnodes carry the lock's types after typeprop, so its
+// evidence echoes the installed lock (the commit persists because
+// rederivation agrees); this keeps the iteration monotone instead of
+// oscillating.
+fn extract_callsite_evidence(
+    fd: &rugra::funcdata::Funcdata,
+    loose: bool,
+    demote_narrow_int_ptr: bool,
+) -> Vec<CallSiteEvidenceWire> {
+    let mut out = Vec::new();
+    for owner in &fd.callspecs {
+        let spec = owner.read().unwrap();
+        let Some(entry_addr) = spec.entry_addr else { continue };
+        let Some(op_ref) = spec.find_call_op(fd) else { continue };
+        let op = op_ref.0.read().unwrap();
+        if op.num_input() < 1 {
+            continue;
+        }
+        let mut slots = Vec::new();
+        for i in 1..op.num_input() {
+            let spelling = op
+                .get_in(i)
+                .and_then(|vn| vn.read().unwrap().get_type())
+                .and_then(|dt| evidence_spelling(&dt, loose, demote_narrow_int_ptr));
+            slots.push(spelling);
+        }
+        // A live CALL output is a consumed return: its varnode type is the
+        // consumer-side form (dead outputs are removed before the print,
+        // so get_out() itself is the "used" test).
+        let ret = op
+            .get_out()
+            .and_then(|vn| vn.read().unwrap().get_type())
+            .and_then(|dt| evidence_spelling(&dt, loose, demote_narrow_int_ptr));
+        out.push(CallSiteEvidenceWire {
+            entry: entry_addr.as_u64(),
+            arity: op.num_input() - 1,
+            slots: Some(slots),
+            ret,
+            caller: fd.name.clone(),
+        });
+    }
+    out
+}
+
+// The harvest's merge rules over one round's site records for a single
+// callee (httpd merge_callsite_evidence verbatim, four guards included):
+// arity conflict across sites drops the whole entry (varargs); per slot,
+// distinct informative spellings kill the slot (unevidenced sites never
+// conflict); input locks only on a full evidenced arity; the return locks
+// only when every live consumer type agrees. Cross-round conflict memory
+// is sticky (see StickyDeadEvidence); the silent-site veto is sticky too.
+#[derive(Default)]
+struct StickyDeadEvidence {
+    arity_dead: std::collections::HashSet<u64>,
+    slots_dead: std::collections::HashMap<u64, std::collections::HashSet<usize>>,
+    ret_dead: std::collections::HashSet<u64>,
+    veto_dead: std::collections::HashSet<u64>,
+}
+
+fn merge_callsite_evidence(
+    entry: u64,
+    name: &str,
+    sites: &[CallSiteEvidenceWire],
+    dead: &mut StickyDeadEvidence,
+) -> Option<CalleeSiglockProto> {
+    if dead.arity_dead.contains(&entry) {
+        return None;
+    }
+    // Degenerate-site filter (guard 3): a zero-arity site against a
+    // positive-arity consensus is a lift artifact, not varargs evidence
+    // (the SysV machine ABI always materializes register args; a REAL
+    // varargs callee conflicts across POSITIVE arities and still drops).
+    // Unanimous zero-arity sites are genuine void-parameter evidence.
+    let positive_arity = sites.iter().any(|site| site.slots.is_some() && site.arity > 0);
+    let sites: Vec<&CallSiteEvidenceWire> = if positive_arity {
+        sites.iter().filter(|site| site.arity > 0).collect()
+    } else {
+        sites.iter().collect()
+    };
+    let sites: &[&CallSiteEvidenceWire] = &sites;
+    // Observation-completeness veto (guard 4): a site that yielded no
+    // evidence at all leaves the observation incomplete; the conservative
+    // commit behavior never commits on partial observation. Sticky.
+    if dead.veto_dead.contains(&entry) {
+        return None;
+    }
+    if sites.len() > 1
+        && sites
+            .iter()
+            .any(|site| site.ret.is_none() && site.slots.as_ref().is_some_and(|s| s.iter().all(|slot| slot.is_none())))
+    {
+        dead.veto_dead.insert(entry);
+        return None;
+    }
+    let mut arity: Option<usize> = None;
+    for site in sites {
+        if site.slots.is_none() {
+            continue;
+        }
+        match arity {
+            None => arity = Some(site.arity),
+            Some(prev) if prev != site.arity => {
+                dead.arity_dead.insert(entry);
+                return None; // varargs drop
+            }
+            Some(_) => {}
+        }
+    }
+    let arity = arity?;
+    let mut slots: Vec<Option<String>> = vec![None; arity];
+    let mut conflicted: Vec<bool> = vec![false; arity];
+    let sticky_slots = dead.slots_dead.entry(entry).or_default();
+    if arity > 0 {
+        for site in sites {
+            let Some(site_slots) = site.slots.as_ref() else { continue };
+            for (i, spelling) in site_slots.iter().enumerate() {
+                let Some(spelling) = spelling else { continue };
+                if conflicted[i] {
+                    continue;
+                }
+                match &slots[i] {
+                    Some(prev) if prev != spelling => conflicted[i] = true,
+                    Some(_) => {}
+                    None => slots[i] = Some(spelling.clone()),
+                }
+            }
+        }
+        // Prior-round conflicts stay dead (guard 1).
+        for (i, killed) in conflicted.iter_mut().enumerate() {
+            if sticky_slots.contains(&i) {
+                *killed = true;
+            }
+            if *killed {
+                sticky_slots.insert(i);
+                slots[i] = None;
+            }
+        }
+    }
+    let mut ret: Option<String> = None;
+    let mut ret_conflict = false;
+    for site in sites {
+        let Some(spelling) = site.ret.as_ref() else { continue };
+        if ret_conflict {
+            continue;
+        }
+        match &ret {
+            Some(prev) if prev != spelling => ret_conflict = true,
+            Some(_) => {}
+            None => ret = Some(spelling.clone()),
+        }
+    }
+    if ret_conflict || dead.ret_dead.contains(&entry) {
+        ret = None;
+        if ret_conflict {
+            dead.ret_dead.insert(entry);
+        }
+    }
+    let input_lock = arity > 0 && slots.iter().all(|slot| slot.is_some());
+    if !input_lock && ret.is_none() {
+        return None; // nothing to lock (the manifest's inert entries)
+    }
+    Some(CalleeSiglockProto {
+        name: name.to_string(),
+        params: if input_lock { slots } else { vec![None; arity] },
+        ret,
+        input_lock,
+    })
+}
+
+// The lane's acceptance instrument (httpd compare_paramid_table_vs_
+// manifest verbatim): the self-produced table against the harvested
+// manifest's 55 canon call-site locks, per entry and per slot. Names are
+// display-only; shapes compare (params, ret, input_lock) exactly.
+// Diagnostics only — stderr, never the C output stream.
+fn compare_paramid_table_vs_manifest(
+    self_table: &HashMap<u64, CalleeSiglockProto>,
+    manifest: &HashMap<u64, CalleeSiglockProto>,
+) {
+    let shape_equal = |a: &CalleeSiglockProto, b: &CalleeSiglockProto| -> bool {
+        a.params == b.params && a.ret == b.ret && a.input_lock == b.input_lock
+    };
+    let mut all_addrs: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    all_addrs.extend(manifest.keys().copied());
+    all_addrs.extend(self_table.keys().copied());
+    let (mut exact, mut shape_diff, mut manifest_only, mut self_only) = (0u32, 0u32, 0u32, 0u32);
+    let (mut slots_eq, mut slots_ne, mut slots_m_only, mut slots_s_only) = (0u32, 0u32, 0u32, 0u32);
+    let (mut ret_eq, mut ret_ne, mut ret_m_only, mut ret_s_only) = (0u32, 0u32, 0u32, 0u32);
+    for addr in &all_addrs {
+        match (manifest.get(addr), self_table.get(addr)) {
+            (Some(m), Some(s)) => {
+                if shape_equal(s, m) {
+                    exact += 1;
+                } else {
+                    shape_diff += 1;
+                    let first = if s.input_lock != m.input_lock {
+                        "lock-flag"
+                    } else if s.params.len() != m.params.len() {
+                        "arity"
+                    } else if s.ret != m.ret {
+                        "return-type"
+                    } else {
+                        "param-type"
+                    };
+                    eprintln!(
+                        "[PARAMID-CMP] 0x{:x} SHAPE-DIFF({}): manifest {} il={} params={:?} ret={:?} | self {} il={} params={:?} ret={:?}",
+                        addr, first, m.name, m.input_lock, m.params, m.ret, s.name, s.input_lock, s.params, s.ret
+                    );
+                }
+                let longer = m.params.len().max(s.params.len());
+                for i in 0..longer {
+                    match (m.params.get(i), s.params.get(i)) {
+                        (Some(Some(_)), Some(Some(_))) => {
+                            if m.params.get(i) == s.params.get(i) {
+                                slots_eq += 1;
+                            } else {
+                                slots_ne += 1;
+                            }
+                        }
+                        (Some(Some(_)), _) => slots_m_only += 1,
+                        (_, Some(Some(_))) => slots_s_only += 1,
+                        _ => {}
+                    }
+                }
+                match (&m.ret, &s.ret) {
+                    (Some(_), Some(_)) => {
+                        if m.ret == s.ret {
+                            ret_eq += 1;
+                        } else {
+                            ret_ne += 1;
+                        }
+                    }
+                    (Some(_), None) => ret_m_only += 1,
+                    (None, Some(_)) => ret_s_only += 1,
+                    (None, None) => {}
+                }
+            }
+            (Some(m), None) => {
+                manifest_only += 1;
+                eprintln!(
+                    "[PARAMID-CMP] 0x{:x} MANIFEST-ONLY: {} il={} params={:?} ret={:?} (import/coverage domain — outside the iteration window or libc/DWARF already covers the site)",
+                    addr, m.name, m.input_lock, m.params, m.ret
+                );
+            }
+            (None, Some(s)) => {
+                self_only += 1;
+                eprintln!(
+                    "[PARAMID-CMP] 0x{:x} SELF-ONLY: {} il={} params={:?} ret={:?} (no manifest counterpart)",
+                    addr, s.name, s.input_lock, s.params, s.ret
+                );
+            }
+            (None, None) => unreachable!("address union has no owner"),
+        }
+    }
+    let overlap = exact + shape_diff;
+    let entry_precision = if overlap > 0 { exact as f64 / overlap as f64 } else { 0.0 };
+    let entry_recall = if !manifest.is_empty() { exact as f64 / manifest.len() as f64 } else { 0.0 };
+    eprintln!("[PARAMID-CMP] ===== self-produced table vs manifest =====");
+    eprintln!(
+        "[PARAMID-CMP] entries: manifest={} self={} overlap={} | exact={} shape-diff={} manifest-only={} self-only={}",
+        manifest.len(), self_table.len(), overlap, exact, shape_diff, manifest_only, self_only
+    );
+    eprintln!(
+        "[PARAMID-CMP] entry-level: precision(exact/overlap)={:.1}% recall(exact/manifest)={:.1}%",
+        entry_precision * 100.0, entry_recall * 100.0
+    );
+    eprintln!(
+        "[PARAMID-CMP] param slots (overlap): equal={} different={} manifest-locked-only={} self-locked-only={}",
+        slots_eq, slots_ne, slots_m_only, slots_s_only
+    );
+    eprintln!(
+        "[PARAMID-CMP] return locks (overlap): equal={} different={} manifest-only={} self-only={}",
+        ret_eq, ret_ne, ret_m_only, ret_s_only
+    );
 }
 
 // RUGRA-GLUE: cached accessor for the callee-siglock manifest (see
@@ -1201,6 +1643,33 @@ struct DecompileRequest {
     /// readLoaderSymbols registers each LoadImageFunc record via
     /// scope->addFunction with no data/function distinction).
     fn_symbol_entries: Vec<(u64, String)>,
+    /// CURLPARAM-DRIVER-0001 (self-hosted Parameter ID iteration): the
+    /// round's self-produced callee-lock table. `Some(table)` means the
+    /// iteration OWNS the callee-siglock channel for this run — the
+    /// worker skips the manifest/env-gated read entirely, so round 1
+    /// (`Some(vec![])`) decompiles bare and later rounds install exactly
+    /// the merged evidence (canon-keyed: entry + ANALYZE_HEADLESS_IMAGE_
+    /// BASE, same key space the manifest and install arm use). `None`
+    /// (the default face and every non-PARAMID mode) keeps the historical
+    /// manifest channel byte-for-byte.
+    #[serde(default)]
+    paramid_table: Option<Vec<(u64, CalleeSiglockProto)>>,
+    /// CURLPARAM-DRIVER-0001: ask the worker to harvest call-site
+    /// evidence from the pipeline's final varnode state (the Parameter ID
+    /// commit payload: callee entry, machine arity, per-slot recovered
+    /// types, live call-output consumer type) after the print completes.
+    /// The parent merges the returned records into the next round's
+    /// table; the text itself is discarded in harvest rounds.
+    #[serde(default)]
+    harvest_callsite_evidence: bool,
+    /// CURLPARAM-DRIVER-0001: the harvest run's evidence policy
+    /// (loose tier, narrow-int-pointer demotion) as the parent computed
+    /// it — the request is the single source of truth for the round (no
+    /// parent/worker env drift; the staged round-1 instrument would
+    /// otherwise be unable to differ from later rounds). The env
+    /// fallback in the worker only serves hand-crafted requests.
+    #[serde(default)]
+    paramid_evidence_policy: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1238,6 +1707,14 @@ enum WorkerJob {
 enum WorkerPayload {
     Prototype(usize),
     Decompile(Option<String>),
+    /// CURLPARAM-DRIVER-0001: a harvest round's products — the printed C
+    /// text (kept for protocol symmetry; the parent discards it) plus the
+    /// call-site evidence records extracted from the final state. Only
+    /// produced when the request set `harvest_callsite_evidence`.
+    DecompileHarvest {
+        text: Option<String>,
+        sites: Vec<CallSiteEvidenceWire>,
+    },
     ProbeSuccess(String),
 }
 
@@ -2750,7 +3227,16 @@ fn run_worker_job(job: &WorkerJob) -> Result<WorkerPayload, WorkerFailure> {
                 )));
             }
             decompile_request(request)
-                .map(WorkerPayload::Decompile)
+                .map(|(text, sites)| {
+                    // CURLPARAM-DRIVER-0001: harvest rounds ride the
+                    // evidence-bearing payload; every other run keeps the
+                    // historical Decompile shape byte-for-byte.
+                    if request.harvest_callsite_evidence {
+                        WorkerPayload::DecompileHarvest { text, sites }
+                    } else {
+                        WorkerPayload::Decompile(text)
+                    }
+                })
                 .map_err(WorkerFailure::Job)
         }
         WorkerJob::Probe {
@@ -4454,7 +4940,13 @@ fn emit_stage_drill(
 }
 
 // RUGRA-GLUE: reconstructs the former thread closure from a complete immutable request snapshot.
-fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, String> {
+// RUGRA-GLUE: one function's decompile products — the printed C text
+// (None = empty output) plus the call-site evidence when the request
+// asked for the harvest (CURLPARAM-DRIVER-0001); the payload wrapper
+// picks the protocol shape.
+fn decompile_request(
+    request: &DecompileRequest,
+) -> Result<(Option<String>, Vec<CallSiteEvidenceWire>), String> {
     let obj = Object::parse(&request.binary_image)
         .map_err(|error| format!("unable to parse worker ELF image: {error}"))?;
     let elf = match &obj {
@@ -5588,8 +6080,21 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // form mirrors the httpd V3SIG install position (post-inject,
     // pre-pipeline) and rides the same callspec channel switch so
     // RUGRA_DISABLE_CALLSPEC_LINK stays the full channel kill-switch.
+    // CURLPARAM-DRIVER-0001: a request-carried `paramid_table` OWNS the
+    // channel for this run — the manifest/env-gated read is skipped
+    // entirely (round 1's empty table = the bare round; the final pass
+    // installs the self-produced locks). `None` keeps the historical
+    // manifest channel byte-for-byte.
     if callspec_link_enabled {
-        if let Some(table) = callee_siglock_table() {
+        let paramid_owned: Option<HashMap<u64, CalleeSiglockProto>> = request
+            .paramid_table
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect());
+        let table_ref: Option<&HashMap<u64, CalleeSiglockProto>> = match &paramid_owned {
+            Some(owned) => Some(owned),
+            None => callee_siglock_table(),
+        };
+        if let Some(table) = table_ref {
             if let Some(types) = fd.arch.as_ref().and_then(|arch| arch.types.clone()) {
                 let locked = install_callee_siglock_protos(&mut fd, table, &types);
                 if locked > 0 {
@@ -5944,6 +6449,26 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .read()
         .map_err(|_| "Funcdata read lock poisoned during printing".to_string())?;
     printer.doc_function(&fd_read);
+    // CURLPARAM-DRIVER-0001: the harvest runs at the exact position the
+    // httpd lane's decompile_one_function harvests — after the print, on
+    // the pipeline's final varnode state (evidence is read from fd, never
+    // from the printed text). The env knobs (evidence tier, narrow-int
+    // demotion) are inherited from the parent so one knob moves both the
+    // worker's spelling policy and the parent's merge policy coherently.
+    let sites = if request.harvest_callsite_evidence {
+        let (loose, demote_narrow_int_ptr) = request.paramid_evidence_policy.unwrap_or_else(|| {
+            let loose = std::env::var("RUGRA_PARAMID_EVIDENCE")
+                .ok()
+                .as_deref()
+                .map(|value| value != "strict")
+                .unwrap_or(true);
+            let demote = std::env::var("RUGRA_PARAMID_NOINTPTR").ok().as_deref() != Some("0");
+            (loose, demote)
+        });
+        extract_callsite_evidence(&fd_read, loose, demote_narrow_int_ptr)
+    } else {
+        Vec::new()
+    };
     drop(fd_read);
     eprintln!("[STEP] {} print done {:?}", target.name, t0.elapsed());
 
@@ -5953,7 +6478,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .downcast::<EmitPrettyPrint>()
         .map_err(|_| "PrintC returned an unexpected emitter type".to_string())?;
     let c_code = output_buffer.get_output();
-    Ok((!c_code.trim().is_empty()).then_some(c_code))
+    Ok(((!c_code.trim().is_empty()).then_some(c_code), sites))
 }
 
 // RUGRA-GLUE: bounded pipe drains prevent a verbose worker from blocking its controller.
@@ -7507,6 +8032,323 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             .collect()
     };
 
+    // CURLPARAM-DRIVER-0001: the single DecompileRequest construction site
+    // — the main loop and every PARAMID harvest round build byte-identical
+    // payloads (same symbols/strings/prototypes/flow overrides/data
+    // layers), differing only in the iteration channels (the round's lock
+    // table + the harvest switch). Extracted so the iteration's decompile
+    // is input-identical to a face pass with those locks installed.
+    let build_decompile_request = |func: &FuncInfo,
+                                   paramid_table: Option<Vec<(u64, CalleeSiglockProto)>>,
+                                   harvest_callsite_evidence: bool,
+                                   paramid_evidence_policy: Option<(bool, bool)>| {
+        DecompileRequest {
+            binary_image: buffer.clone(),
+            target: worker_target(func),
+            symbol_entries: symbol_entries.clone(),
+            string_entries: string_entries.clone(),
+            prototype_entries: prototype_entries.clone(),
+            flow_override_entries: flow_override_entries
+                .iter()
+                .filter(|record| record.function_address == func.vaddr)
+                .copied()
+                .collect(),
+            rodata_dat_entries: rodata_dat_entries
+                .iter()
+                .map(|(&address, name)| (address, name.clone()))
+                .collect(),
+            rodata_span,
+            got_span,
+            db_symbol_entries: db_symbol_entries.clone(),
+            fn_symbol_entries: fn_symbol_entries.clone(),
+            paramid_table,
+            harvest_callsite_evidence,
+            paramid_evidence_policy,
+        }
+    };
+
+    // CURLPARAM-DRIVER-0001: the self-hosted Parameter ID mode gate (the
+    // httpd driver's RUGRA_PARAMID form). Opt-in only
+    // (RUGRA_PARAMID=1, DriverMode::All — the iteration window is the
+    // full corpus); every mirror component keeps absolute precedence
+    // (five-projection bank purity) and RUGRA_SEEDS=0 stays the global
+    // escape, exactly like the manifest channel. With the gate closed
+    // every request below carries `paramid_table: None` and the worker's
+    // manifest path is byte-identical — the default face is untouched.
+    let paramid_active = if std::env::var("RUGRA_PARAMID").ok().as_deref() != Some("1") {
+        false
+    } else if mirror_bundle_enabled()
+        || mirror_flow_enabled()
+        || mirror_bare_load_enabled()
+        || mirror_fixture_data_enabled()
+    {
+        eprintln!("[PARAMID] self-hosted Parameter ID mode ignored under the mirror gate (projection purity)");
+        false
+    } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        false // the global escape silently owns every seed channel
+    } else if !matches!(mode, DriverMode::All) {
+        eprintln!("[PARAMID] self-hosted Parameter ID mode requires the full-corpus run (All mode)");
+        false
+    } else {
+        true
+    };
+
+    // CURLPARAM-DRIVER-0001: the iteration itself. Round 1 runs bare (the
+    // empty table means NO callee-siglock installs at all — the manifest
+    // read is skipped); each round harvests call-site evidence from the
+    // pipeline's final state through the worker protocol, merges it into a
+    // manifest-shaped lock table with the four PARAMID2 guards, and the
+    // next round installs that table through the identical install arm.
+    // Monotone to a fixed point or RUGRA_PARAMID_ROUNDS (default 3).
+    let mut paramid_override: Option<Vec<(u64, CalleeSiglockProto)>> = None;
+    if paramid_active {
+        let rounds = std::env::var("RUGRA_PARAMID_ROUNDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(1, 3))
+            .unwrap_or(3);
+        // Policy knobs (PARAMID2 §17.6, measured on the httpd corpus):
+        // the default evidence tier admits undefined-family scalars
+        // (guarded); sticky conflict memory and narrow-int-pointer
+        // demotion are ON (=0 disables either for A/B); PLT-slot
+        // evidence stays DROPPED (RUGRA_PARAMID_PLT=1 admits it as the
+        // experiment — curl's link_call_specs already installs the libc
+        // ABI + DWARF signatures on those callspecs, and the install
+        // arm's has_model() gap-fill rule would skip the covered
+        // entries anyway).
+        let loose_evidence = std::env::var("RUGRA_PARAMID_EVIDENCE")
+            .ok()
+            .as_deref()
+            .map(|value| value != "strict")
+            .unwrap_or(true);
+        let sticky_conflicts =
+            std::env::var("RUGRA_PARAMID_STICKY").ok().as_deref() != Some("0");
+        let demote_narrow_int_ptr =
+            std::env::var("RUGRA_PARAMID_NOINTPTR").ok().as_deref() != Some("0");
+        let admit_plt_slots =
+            std::env::var("RUGRA_PARAMID_PLT").ok().as_deref() == Some("1");
+        eprintln!(
+            "[PARAMID] self-hosted Parameter ID mode: {} iteration round(s) over the corpus window (evidence={}, sticky={}, nointptr={}, plt={})",
+            rounds,
+            if loose_evidence { "full" } else { "strict" },
+            sticky_conflicts,
+            demote_narrow_int_ptr,
+            admit_plt_slots
+        );
+        // The iteration window: every corpus function the main loop itself
+        // decompiles with a real worker — the EXTERNAL-block stub
+        // projections never produce a body (same skip the main loop's
+        // stub arm applies), so they cannot contribute evidence and are
+        // not spawned at all.
+        let iteration_targets: Vec<&FuncInfo> = functions
+            .iter()
+            .filter(|func| {
+                !matches!(external_import_slots.get(&func.vaddr),
+                          Some(import) if import.name == func.name)
+            })
+            .collect();
+        let plt_set: std::collections::HashSet<u64> = plt_symbols.keys().copied().collect();
+        eprintln!(
+            "[PARAMID] iteration window: {} functions ({} corpus entries, {} EXTERNAL stub projections skipped)",
+            iteration_targets.len(),
+            functions.len(),
+            functions.len() - iteration_targets.len()
+        );
+
+        let mut table: HashMap<u64, CalleeSiglockProto> = HashMap::new();
+        // Cross-round conflict memory (sticky variant — see
+        // StickyDeadEvidence); reset per round when the policy is off,
+        // identical to the fresh-merge semantics.
+        let mut dead = StickyDeadEvidence::default();
+        for round in 1..=rounds {
+            if !sticky_conflicts {
+                dead = StickyDeadEvidence::default();
+            }
+            // Staged round-1 instrument (RUGRA_PARAMID_ROUND1=strict):
+            // round 1 harvests under the conservative tier — the httpd
+            // measurement was net-negative (the guards must run under the
+            // SAME tier that feeds them); kept as the documented
+            // negative-result instrument.
+            let round_loose = if round == 1
+                && std::env::var("RUGRA_PARAMID_ROUND1").ok().as_deref() == Some("strict")
+            {
+                false
+            } else {
+                loose_evidence
+            };
+            let round_table: Vec<(u64, CalleeSiglockProto)> = {
+                let mut entries: Vec<(u64, CalleeSiglockProto)> =
+                    table.iter().map(|(k, v)| (*k, v.clone())).collect();
+                entries.sort_by_key(|(k, _)| *k);
+                entries
+            };
+            let mut records: HashMap<u64, Vec<CallSiteEvidenceWire>> = HashMap::new();
+            let mut decompiled = 0usize;
+            for func in &iteration_targets {
+                let request = build_decompile_request(
+                    func,
+                    Some(round_table.clone()),
+                    true,
+                    Some((round_loose, demote_narrow_int_ptr)),
+                );
+                let job = WorkerJob::Decompile {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    request,
+                };
+                let worker_run = run_isolated_worker(
+                    &job,
+                    function_timeout(),
+                    MonitorMode::Deadline,
+                    RequestMode::Valid,
+                    None,
+                );
+                match worker_run.outcome {
+                    WorkerOutcome::Success(WorkerPayload::DecompileHarvest { sites, .. }) => {
+                        decompiled += 1;
+                        for site in sites {
+                            records.entry(site.entry).or_default().push(site);
+                        }
+                    }
+                    // A hung or failed function contributes no evidence
+                    // this round (Parameter ID skips functions the
+                    // decompiler cannot process); replay the diagnostics
+                    // so the gap stays attributable.
+                    WorkerOutcome::Success(_) => {
+                        eprintln!(
+                            "[PARAMID] {}: unexpected payload (no evidence this round)",
+                            func.name
+                        );
+                    }
+                    WorkerOutcome::Timeout => {
+                        replay_worker_stderr(&worker_run.stderr)?;
+                        eprintln!(
+                            "[PARAMID] {} exceeded {:?} (no evidence this round)",
+                            func.name,
+                            function_timeout()
+                        );
+                    }
+                    outcome => {
+                        replay_worker_stderr(&worker_run.stderr)?;
+                        eprintln!("[PARAMID] {}: {:?} (no evidence this round)", func.name, outcome);
+                    }
+                }
+            }
+            // RUGRA_PARAMID_SITES=1: per-callee site dump (the gap-triage
+            // instrument — which caller contributed which slot spelling).
+            if std::env::var("RUGRA_PARAMID_SITES").ok().as_deref() == Some("1") {
+                let mut sorted: Vec<&u64> = records.keys().collect();
+                sorted.sort_unstable();
+                for entry in sorted {
+                    let sites = &records[entry];
+                    let name = symbol_table
+                        .get(entry)
+                        .cloned()
+                        .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                    for site in sites {
+                        eprintln!(
+                            "[PARAMID-SITE] r{} 0x{:x} {} <- {}: arity={} slots={:?} ret={:?}",
+                            round,
+                            entry + ANALYZE_HEADLESS_IMAGE_BASE,
+                            name,
+                            site.caller,
+                            site.arity,
+                            site.slots.as_ref().map(|s| s.iter().map(|x| x.clone().unwrap_or_else(|| "-".into())).collect::<Vec<_>>()).unwrap_or_default(),
+                            site.ret
+                        );
+                    }
+                }
+            }
+            // The commit step: merge this round's call-site forms into
+            // lock entries (arity consensus, slot evidence, return
+            // agreement — the harvest rules; four guards, see
+            // merge_callsite_evidence). PLT-slot entries are dropped
+            // wholesale unless the admission experiment is on.
+            let mut next: HashMap<u64, CalleeSiglockProto> = HashMap::new();
+            let mut merged_keys: Vec<&u64> = records.keys().collect();
+            merged_keys.sort_unstable();
+            for entry in merged_keys {
+                if plt_set.contains(entry) && !admit_plt_slots {
+                    continue;
+                }
+                let sites = &records[entry];
+                let name = symbol_table
+                    .get(entry)
+                    .cloned()
+                    .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                if let Some(proto) = merge_callsite_evidence(*entry, &name, sites, &mut dead) {
+                    // Canon address key (base-0 entry + image base) — the
+                    // same key space the manifest and install arm use.
+                    next.insert(entry + ANALYZE_HEADLESS_IMAGE_BASE, proto);
+                }
+            }
+            eprintln!(
+                "[PARAMID] round {}/{} ({}): {} decompiled, {} site records -> {} callee locks (prev {})",
+                round,
+                rounds,
+                if table.is_empty() { "bare" } else { "locked" },
+                decompiled,
+                records.len(),
+                next.len(),
+                table.len()
+            );
+            if next == table {
+                eprintln!("[PARAMID] fixed point reached at round {}", round);
+                table = next;
+                break;
+            }
+            table = next;
+        }
+        // RUGRA_PARAMID_EVICT=0xADDR,0xADDR...: the single-entry ablation
+        // instrument (drop entries from the final table before the
+        // printing pass installs them — used to attribute face lines to
+        // lock entries; never a default behavior).
+        if let Ok(list) = std::env::var("RUGRA_PARAMID_EVICT") {
+            for token in list.split(',') {
+                if let Ok(addr) = u64::from_str_radix(token.trim().trim_start_matches("0x"), 16) {
+                    if table.remove(&addr).is_some() {
+                        eprintln!("[PARAMID] evicted 0x{:x} from the final table (ablation)", addr);
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "[PARAMID] final self-produced table: {} callee prototypes ({} input-locked, {} return-locked)",
+            table.len(),
+            table.values().filter(|c| c.input_lock).count(),
+            table.values().filter(|c| c.ret.is_some()).count()
+        );
+        if std::env::var("RUGRA_PARAMID_DEBUG").ok().as_deref() == Some("1") {
+            let mut keys = table.keys().copied().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for key in keys {
+                let entry = &table[&key];
+                eprintln!(
+                    "[PARAMID] 0x{:x} {} il={} params={:?} ret={:?}",
+                    key, entry.name, entry.input_lock, entry.params, entry.ret
+                );
+            }
+        }
+        // The lane's acceptance instrument: exact-match table against the
+        // harvested manifest (canon call-site locks). Diagnostics only —
+        // stderr, never the C output stream.
+        if std::env::var("RUGRA_PARAMID_COMPARE").ok().as_deref() != Some("0") {
+            let path = std::env::var("RUGRA_V3SIG_MANIFEST")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "tests/golden/manifests/callee_siglock_curl_1204.json".to_string());
+            if let Some(manifest) = load_callee_siglock_from_path(&path) {
+                compare_paramid_table_vs_manifest(&table, &manifest);
+            }
+        }
+        // The final face pass installs the self-produced table through
+        // the same three-lock callspec transport the manifest channel
+        // uses (the request field replaces the manifest input).
+        let mut entries: Vec<(u64, CalleeSiglockProto)> =
+            table.iter().map(|(k, v)| (*k, v.clone())).collect();
+        entries.sort_by_key(|(k, _)| *k);
+        paramid_override = Some(entries);
+    }
+
     for func in &functions {
         if let Some(names) = selected_functions {
             // RUGRA-GLUE: stage-projection selectors may name a function or
@@ -7579,31 +8421,13 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
 
         let job = WorkerJob::Decompile {
             protocol_version: WORKER_PROTOCOL_VERSION,
-            request: DecompileRequest {
-                binary_image: buffer.clone(),
-                target: worker_target(func),
-                symbol_entries: symbol_entries.clone(),
-                string_entries: string_entries.clone(),
-                prototype_entries: prototype_entries.clone(),
-                flow_override_entries: flow_override_entries
-                    .iter()
-                    .filter(|record| record.function_address == func.vaddr)
-                    .copied()
-                    .collect(),
-                // B3-COREACTION-CONSTANTPTR-0001 (b): the a0 DAT layer rides
-                // the request so the worker can install the Database symbol
-                // graph ActionConstantPtr queries.
-                rodata_dat_entries: rodata_dat_entries
-                    .iter()
-                    .map(|(&address, name)| (address, name.clone()))
-                    .collect(),
-                rodata_span,
-                got_span,
-                db_symbol_entries: db_symbol_entries.clone(),
-                // CURL-CODEREF-SYMBOLIZE-0001: the print-side function
-                // registry (see the build site above).
-                fn_symbol_entries: fn_symbol_entries.clone(),
-            },
+            // CURLPARAM-DRIVER-0001: the printing pass carries the
+            // iteration's final self-produced table when the mode is on
+            // (Some(table) owns the callee-siglock channel, manifest
+            // skipped); None keeps the historical manifest face
+            // byte-for-byte. The harvest switch is off — the face pass
+            // only prints.
+            request: build_decompile_request(func, paramid_override.clone(), false, None),
         };
         let direct_output = if matches!(mode, DriverMode::CompareFunctions(_)) {
             match run_worker_job(&job).map_err(|error| {
@@ -7613,6 +8437,17 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 io::Error::new(io::ErrorKind::Other, message)
             })? {
                 WorkerPayload::Decompile(output) => Some(output),
+                // CURLPARAM-DRIVER-0001: compare runs never request the
+                // harvest (the evidence channel is iteration-only), so the
+                // variant here would be a protocol defect — surface it
+                // loudly instead of silently dropping the evidence.
+                WorkerPayload::DecompileHarvest { .. } => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "direct comparison received an unexpected harvest payload",
+                    )
+                    .into())
+                }
                 WorkerPayload::Prototype(_) | WorkerPayload::ProbeSuccess(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -7710,6 +8545,21 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     "/* ---- 0x{:x}: {} WORKER PROTOCOL ERROR: unexpected probe payload ---- */",
                     func.vaddr, func.name
                 );
+                stats.protocol_failures += 1;
+            }
+            // CURLPARAM-DRIVER-0001: the face pass never requests the
+            // harvest (harvest_callsite_evidence=false on every request
+            // below), so this arm is a defensive protocol invariant.
+            WorkerOutcome::Success(WorkerPayload::DecompileHarvest { text, .. }) => {
+                println!(
+                    "/* ---- 0x{:x}: {} WORKER PROTOCOL ERROR: unexpected harvest payload ---- */",
+                    func.vaddr, func.name
+                );
+                // The text is still a complete decompilation — surface it
+                // rather than dropping the function from the corpus.
+                if let Some(c_code) = text {
+                    println!("{}", c_code);
+                }
                 stats.protocol_failures += 1;
             }
             WorkerOutcome::Timeout => {
