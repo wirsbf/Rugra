@@ -1165,13 +1165,14 @@ fn install_v3sig_callee_protos(
 // httpd imports and every one agrees with the canon thunk headers
 // verbatim) + the httpd extension below carrying the remaining 47
 // canon-locked imports in the golden's exact spelling (glibc reserved
-// `__`-parameter names included). Entries whose glibc struct bases
-// (FILE/rlimit/sigaction/sigset_t/tms/group/passwd/__compar_fn_t) have no
-// counterpart in the driver's TypeFactory resolve-fail per-entry and are
-// skipped with a log — none of them is called inside the driver's print
-// window, and fabricating an anonymous struct the oracle never shipped
-// would invent type identities Ghidra's signature loader also draws from
-// the platform's type manager.
+// `__`-parameter names included). The entries whose glibc bases are
+// struct-spelled (FILE/rlimit/sigaction/sigset_t/tms/group/passwd, plus
+// the __compar_fn_t/__rlimit_resource_t typedefs) resolve through the
+// canon-census struct interner (IMPORTSIG-STRUCTBASES-0001, see the
+// census block below resolve_import_type): the locked golden's own
+// printed forms are the data source — thunk-header spellings, value-local
+// extents, and field-access paths — so no entry is skipped for a missing
+// struct base anymore (a genuine total miss stays a per-entry skip).
 //
 // GATING: the channel is part of the analyzer transport, not the bare
 // front-end: ON under the self-hosted Parameter ID mode (RUGRA_PARAMID=1,
@@ -1384,6 +1385,225 @@ fn resolve_import_type(
         resolved = factory.get_type_pointer_default(resolved);
     }
     Some(resolved)
+}
+
+// ===========================================================================
+// IMPORTSIG-STRUCTBASES-0001: the canon-census glibc struct bases for the
+// import ledger's struct-spelled entries. The locked golden IS the census:
+// every datum below is either printed by the locked oracle's own output
+// (spelling source) or is the glibc x86-64 archive form of a member the
+// golden provably fields (the oracle's generic_clib transport derives from
+// the same glibc headers), recorded as hard ledger data because the
+// stripped httpd binary carries no DWARF to read layouts from.
+//
+// CENSUS (tests/golden/ghidra_httpd_1204.c, oracle e40ed130):
+// - sigset_t: ap_mpm_run declares `sigset_t local_c0;` with the next local
+//   0x80 bytes away (local_c0 @-0xc0, local_40 @-0x40) -> size 128; the
+//   only uses are whole-object & (sigemptyset/sigaddset) -> no member is
+//   canon-printed -> the canon form is the opaque 128-byte struct.
+// - sigaction: ap_fatal_signal_setup declares `sigaction local_b8;` with
+//   the next local 0x98 bytes away (local_b8 @-0xb8, local_20 @-0x20) ->
+//   size 152; canon-printed member paths are `.sa_mask` (whole-object &
+//   into sigemptyset -> the sigset_t value member), `.sa_flags` (assigned
+//   -0x80000000 -> 4-byte int) and `.__sigaction_handler.sa_handler`
+//   (assigned FUN_00148890 -> pointer-to-code; the two-level path proves
+//   the union member). glibc x86-64 places the handler union at 0 (8),
+//   sa_mask at 8 (128), sa_flags at 136 (4); sa_restorer at 144 is never
+//   canon-printed and stays unrecorded (size 152 kept explicit).
+// - group: canon prints `pgVar1->gr_gid` (ap_gname2id) -> the oracle's
+//   type is a fielded archive struct; members = glibc grp.h x86-64 form
+//   (gr_name@0, gr_passwd@8, gr_gid@16 uint, gr_mem@24, size 32).
+// - passwd: canon prints `->pw_name`/`->pw_uid` -> fielded archive form;
+//   members = glibc pwd.h x86-64 (pw_name@0 .. pw_shell@40, size 48).
+// - FILE / rlimit / tms: canon prints ONLY the thunk-header spelling
+//   (`FILE *`, `rlimit *`, `tms *`) — six FILE pointer declarations, no
+//   field path, no value local, no extent anywhere in the golden -> the
+//   canon form is the name-only incomplete struct (constructing a sized
+//   fielded form would invent data no canon surface shows).
+// - __compar_fn_t (qsort): canon spelling only; the glibc archive form is
+//   a typedef of pointer-to-code (8 bytes on x86-64).
+// - __rlimit_resource_t (getrlimit): canon spelling only; glibc archive
+//   form is an enum (4-byte uint metatype).
+//
+// CONSTRUCTION: everything goes through the library's public face
+// (create_struct / set_fields_sized / get_type_union /
+// set_union_fields_sized / get_type_code / get_type_pointer_default /
+// get_typedef / get_base). Interning happens ONCE, single-threaded, in
+// main before any decompile thread exists (the shared TypeFactory is one
+// Arc<RwLock> across all threads — interning lazily inside the per-call
+// resolution could hand one round a pointer-to-incomplete variant and a
+// later round the completed form, a run-to-run nondeterminism). A name
+// already committed by another channel (e.g. a future type seed) wins
+// untouched: the census skips it.
+// ===========================================================================
+
+/// One canon-census struct member: (byte offset, type spelling in the
+/// `resolve_import_type` grammar — or the special `"code *"` arm — field
+/// name).
+type CanonStructMember = (usize, &'static str, &'static str);
+
+/// One canon-census datum: (base name, size, alignment, members). A size
+/// of `None` is the canon name-only form (incomplete struct).
+type CanonStructDatum = (
+    &'static str,
+    Option<(usize, usize)>,
+    &'static [CanonStructMember],
+);
+
+const CANON_GLIBC_STRUCT_BASES: &[CanonStructDatum] = &[
+    // sigset_t first: sigaction's sa_mask member resolves through it.
+    ("sigset_t", Some((128, 8)), &[]),
+    (
+        "sigaction",
+        Some((152, 8)),
+        &[
+            (0, "__sigaction_handler", "__sigaction_handler"),
+            (8, "sigset_t", "sa_mask"),
+            (136, "int", "sa_flags"),
+        ],
+    ),
+    (
+        "group",
+        Some((32, 8)),
+        &[
+            (0, "char *", "gr_name"),
+            (8, "char *", "gr_passwd"),
+            (16, "uint", "gr_gid"),
+            (24, "char **", "gr_mem"),
+        ],
+    ),
+    (
+        "passwd",
+        Some((48, 8)),
+        &[
+            (0, "char *", "pw_name"),
+            (8, "char *", "pw_passwd"),
+            (16, "uint", "pw_uid"),
+            (20, "uint", "pw_gid"),
+            (24, "char *", "pw_gecos"),
+            (32, "char *", "pw_dir"),
+            (40, "char *", "pw_shell"),
+        ],
+    ),
+    ("FILE", None, &[]),
+    ("rlimit", None, &[]),
+    ("tms", None, &[]),
+];
+
+/// The canon-census union: `__sigaction_handler` (the two-level golden
+/// path `.__sigaction_handler.sa_handler` proves the union member).
+const CANON_GLIBC_UNIONS: &[(&'static str, usize, usize, &[CanonStructMember])] =
+    &[("__sigaction_handler", 8, 8, &[(0, "code *", "sa_handler")])];
+
+/// The canon-census glibc typedefs the ledger's signatures spell.
+/// (name, underlying form) — resolved through the public face.
+const CANON_GLIBC_TYPEDEFS: &[(&'static str, &'static str)] = &[
+    ("__compar_fn_t", "code *"),
+    ("__rlimit_resource_t", "uint"),
+];
+
+/// Resolve one census member spelling: the pointer-to-code arm the shared
+/// grammar does not carry (the factory's code type is anonymous), then the
+/// ordinary `resolve_import_type` grammar.
+fn resolve_canon_member_type(
+    spelling: &str,
+    types: &std::sync::Arc<
+        std::sync::RwLock<rugra::type_system::typefactory::TypeFactory>,
+    >,
+) -> Option<std::sync::Arc<rugra::type_system::datatype::Datatype>> {
+    if spelling == "code *" {
+        return Some(types.write().unwrap().get_type_code());
+    }
+    resolve_import_type(spelling, types)
+}
+
+/// Build the TypeField list for one census datum, logging (not silently
+/// dropping) any member whose spelling fails to resolve — the census is
+/// static data, so a miss is a driver bug to surface, not filter away.
+fn canon_member_fields(
+    members: &[CanonStructMember],
+    types: &std::sync::Arc<
+        std::sync::RwLock<rugra::type_system::typefactory::TypeFactory>,
+    >,
+) -> Vec<rugra::type_system::datatype::TypeField> {
+    members
+        .iter()
+        .filter_map(|&(offset, spelling, field_name)| {
+            match resolve_canon_member_type(spelling, types) {
+                Some(type_ptr) => Some(rugra::type_system::datatype::TypeField {
+                    name: field_name.to_string(),
+                    offset,
+                    type_ptr,
+                }),
+                None => {
+                    eprintln!(
+                        "[IMPORTSIG] canon census: member `{}` type `{}` unresolved (member dropped)",
+                        field_name, spelling
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// Intern the canon-census glibc struct bases into the shared factory.
+/// Single-threaded by contract (called from main before the decompile
+/// threads exist). Returns (interned, preexisting) counts for the census
+/// log line. A name another channel already committed is left untouched.
+fn intern_canon_glibc_struct_bases(
+    types: &std::sync::Arc<
+        std::sync::RwLock<rugra::type_system::typefactory::TypeFactory>,
+    >,
+) -> (usize, usize) {
+    let mut interned = 0usize;
+    let mut preexisting = 0usize;
+    // Unions first: sigaction's handler member resolves through the union.
+    for &(name, size, align, members) in CANON_GLIBC_UNIONS {
+        if types.read().unwrap().find_by_name(name).is_some() {
+            preexisting += 1;
+            continue;
+        }
+        {
+            let mut factory = types.write().unwrap();
+            factory.get_type_union(name);
+        }
+        let fields = canon_member_fields(members, types);
+        types
+            .write()
+            .unwrap()
+            .set_union_fields_sized(name, fields, size, align);
+        interned += 1;
+    }
+    for &(name, sized, members) in CANON_GLIBC_STRUCT_BASES {
+        if types.read().unwrap().find_by_name(name).is_some() {
+            preexisting += 1;
+            continue;
+        }
+        {
+            let mut factory = types.write().unwrap();
+            factory.create_struct(name);
+        }
+        if let Some((size, align)) = sized {
+            let fields = canon_member_fields(members, types);
+            types
+                .write()
+                .unwrap()
+                .set_fields_sized(name, fields, size, align);
+        }
+        interned += 1;
+    }
+    for &(name, underlying) in CANON_GLIBC_TYPEDEFS {
+        if types.read().unwrap().find_by_name(name).is_some() {
+            preexisting += 1;
+            continue;
+        }
+        if let Some(target) = resolve_canon_member_type(underlying, types) {
+            types.write().unwrap().get_typedef(name, target);
+            interned += 1;
+        }
+    }
+    (interned, preexisting)
 }
 
 /// Install the locked generic_clib signatures on this Funcdata's import
@@ -3669,6 +3889,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone and the clone keeps the existing per-thread mutation isolation
     // while carrying the DF=0 tracked partition ActionConstbase reads.
     let (tracked_arch, default_effects) = tracked_context_architecture()?;
+
+    // IMPORTSIG-STRUCTBASES-0001: intern the canon-census glibc struct
+    // bases into the SHARED factory once, here, before any decompile
+    // thread exists (the factory is a single Arc<RwLock> shared by every
+    // thread's arch clone — see the census block above for why lazy
+    // interning inside the per-call resolution would be a run-to-run
+    // nondeterminism). Gated exactly like the channel itself: the census
+    // only exists when the import-signature ledger was built, so the
+    // default face never even reaches this call.
+    if import_signatures.is_some() {
+        if let Some(types) = tracked_arch.types.as_ref() {
+            let (interned, preexisting) = intern_canon_glibc_struct_bases(types);
+            eprintln!(
+                "[IMPORTSIG] canon glibc struct bases interned: {} new, {} preexisting (census: sigset_t=128 opaque, sigaction=152 3-member, group=32, passwd=48, FILE/rlimit/tms name-only, 2 typedefs)",
+                interned, preexisting
+            );
+        }
+    }
 
     let mut total_success = 0;
     let mut total_fail = 0;

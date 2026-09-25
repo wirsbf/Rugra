@@ -1508,3 +1508,74 @@ getpwnam/getpwuid/getrlimit——canon 锁、Rugra 工厂无名、窗口外零�
 
 证据=/dev/shm/rugra-tests/importsig/（含改前后 A/B 双二进制与全部门禁
 输出）；target /dev/shm/rugra-targets/sb-importsig 留 root 集成后回收。
+
+### 17.7.1 IMPORTSIG-STRUCTBASES-0001 收口（Lane STRUCTB，2026-09-25，判例）
+
+**结论：补齐落地 + 实测收益 0 行（<5 行阈值）→ 判例收口。**
+数据准则（canon 锁定普查）与脸收益不匹配时的诚实处理：census 数据
+真实存在且补齐后通道行为与 canon 一致（11 个跳过点全部转正），
+但打印窗口内零可观测——登记关闭，不宣称脸改善。
+
+**盘点勘误**：原登记"9 条结构基类型条目"实列 **10 个名字**
+（freopen/qsort/sigaction/sigaddset/sigemptyset/times/getgrnam/
+getpwnam/getpwuid/getrlimit）；按基类型口径=9 条 struct 条目
+（FILE/rlimit/sigaction/sigset_t/tms/group/passwd 分布于 9 个函数条目）
++qsort 的 `__compar_fn_t` 函数指针 typedef（+getrlimit 首参
+`__rlimit_resource_t` enum typedef 同跳）。运行期唯一触发面=
+**ap_mpm_run**（迭代宇宙成员、非打印窗口）：每次反编译 21 锁+11 跳
+（sigaction×8/sigaddset×2/sigemptyset×1 首错位点）。
+
+**census 数据源（锁定 golden tests/golden/ghidra_httpd_1204.c，oracle
+e40ed130；stripped 无 DWARF → 硬数据入账本）**：
+- `sigset_t`：ap_mpm_run `sigset_t local_c0;`（@-0xc0，下个 local
+  @-0x40）→ **128 字节**；仅整体 `&` 使用（sigemptyset/sigaddset），
+  无成员路径 → canon 形=不透明 128 字节。
+- `sigaction`：ap_fatal_signal_setup `sigaction local_b8;`（@-0xb8，
+  下个 @-0x20）→ **152 字节**；canon 成员路径 `.sa_mask`（整体 & 进
+  sigemptyset→sigset_t 值成员）、`.sa_flags`（赋 -0x80000000→4 字节
+  int）、`.__sigaction_handler.sa_handler`（赋 FUN_→code*；两级路径
+  证明 union 成员）。glibc x86-64 位置：union@0(8)/sa_mask@8(128)/
+  sa_flags@136(4)；sa_restorer@144 canon 未印不录，152 尺寸显式保留。
+- `group`：canon 印 `->gr_gid`（ap_gname2id）→ oracle 侧为带字段的
+  archive 形；成员=glibc grp.h x86-64（gr_name@0/gr_passwd@8/
+  gr_gid@16 uint/gr_mem@24，size 32）。
+- `passwd`：canon 印 `->pw_name`/`->pw_uid` → glibc pwd.h x86-64
+  全形（pw_name@0..pw_shell@40，size 48）。
+- `FILE`/`rlimit`/`tms`：canon **仅** thunk 头拼写（`FILE *` 等；六个
+  FILE 指针声明、零字段路径、零值本地、零 extent）→ canon 形=仅名
+  incomplete struct（构造带尺寸字段形=发明 canon 无数据）。
+- `__compar_fn_t`=code* 的 typedef（8 字节）；`__rlimit_resource_t`
+  =4 字节 uint 形 typedef（glibc enum）。
+
+**实现**（examples/httpd_decompile.rs，库公开面 create_struct/
+set_fields_sized/get_type_union/set_union_fields_sized/get_type_code/
+get_typedef）：census 表 `CANON_GLIBC_STRUCT_BASES`（7 struct+1 union+
+2 typedef）+ `intern_canon_glibc_struct_bases` 在 main 内
+tracked_context_architecture 之后**单线程预注册**进共享工厂（工厂是
+全线程共享的单一 Arc<RwLock>——若在每次调用的解析里惰性注册，竞态
+窗口可能让某轮拿到 pointer-to-incomplete、后轮拿到完成形=跑跑不确定
+性；预注册后 `resolve_import_type` 的 `other` 臂 find_by_name 直接命中，
+解析路径零改动）。已有同名类型（未来 TYPESEED 等）优先保留、census
+跳过并计数。
+
+**验证（fast-release 亲测，A/B=HEAD 596fcd5f 双二进制 cmp 逐字节）**：
+- 八脸全部**字节恒等**：默认 898/0/0、PARAMID 753/0/0（双跑恒等）、
+  IMPORTSIG 独立 753、mirror、V3SIG=0、SEEDS=0、PARAMID+IMPORTSIG=0。
+- bank 391/391 exit 0（mirror 脸字节恒等→银行捕获不变传递证明）。
+- ap_mpm_run 装载 21+11 跳 → **32 锁 0 跳**；33 条跳过日志清零。
+- **收益=0 行**：三重结构性原因——①打印窗口 34 函数对 10 个 struct
+  导入的调用位点=0（golden 中 struct 使用者 ap_open_logs/ap_gname2id/
+  ap_fatal_signal_setup/ap_mpm_run 全部在窗口与迭代宇宙外或仅宇宙内
+  非打印）；②PARAMID 证据收割弃收 PLT 槽（struct 锁不进自产表）；
+  ③**本树上整个导入通道已脸中性**：RUGRA_IMPORTSIG=0 与开=753 字节
+  相同（IMPORTSIG 车道裁决树 7090eb8c 上 −246 的收益已被 TAGLINE
+  printc 提交（2e2997f4/cdd66875）吸收同一残差族——通道开关在本树
+  不再改变脸）。
+
+**判例**：canon 数据普查驱动补齐的通道完整性工作，若其唯一消费者在
+窗口外且证据通道弃收其位点，脸收益为结构性零——登记为判例收口
+（补齐保留：canon 一致性成立、零脸风险、跳过日志清零；不宣称
+PARAMID 态改善）。后续若打印窗口扩容到 ap_mpm_run/ap_fatal_signal_
+setup（struct 使用函数），本 census 直接承重。
+
+证据=/dev/shm/rugra-tests/structb/（A/B 双二进制+八脸输出+全门禁日志）。
