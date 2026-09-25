@@ -16,8 +16,15 @@ Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`。项
 - 所有 golden、函数 fixture、差分报告和 Alignment Evidence 必须记录 oracle commit、架构、
   compiler spec、analysis options 与输入指纹。任一项缺失即为 `NO_ORACLE`。
 - `docs/alignment_audit/FUNCTION_MAP.md` 是逐函数账本入口；每个 Ghidra `.cc/.hh` 函数必须有
-  稳定 ID、完整签名、Rugra 对应物、状态和行为证据。当前账本的 `~2055` 与旧报告
-  `~5200+` 分母冲突，在生成器重建并核对前，**全局完成度一律视为未证明**。
+  稳定 ID、完整签名、Rugra 对应物、状态和行为证据。分母冲突已裁决并关闭（FMAPRECON 车道,
+  `docs/alignment_audit/FUNCTION_MAP_RECONCILE_2026-09-26.md`）: `~2055` = 手写计划子集估算、
+  `~5200+` = 归档手审部分文件集计数、`5549` = 解析器唯一名粒度——均非全量分母。**唯一权威
+  完成分母 = 9494**（5691 `.cc` + 3803 `.hh` inline，机器账本 15811 条 raw 记录 1:1 全等，
+  缺失 0/多余 0）。REGEN 车道（2026-09-26）已在 master 锚点重生成四件套并通过 `--check`
+  （checkpoint `80ffb7d1`，Rust 侧 11007 条，解析器旁证 `--cross-check` 5549/5530 恒等）:
+  注解映射 4538 / 未映射 4956——映射只证明来源指向，未映射含真缺失、SLEIGH 替代层与未链接
+  三类，待后续分解；**完成度判定以逐函数 oracle 行为门禁为准**（全部 9494 默认 `UNTESTED`，
+  仅锁定 oracle fixture 完整同输入/同输出可升 `MATCH`）。
 - “替代实现”或“战略排除”不会自动算对齐。除纯 UI/控制台桥接外，必须证明同一可观测输入下
   行为等价，否则记 `MISSING`、`MISMATCH` 或 `UNTESTED`。
 - 全局完成的唯一判定：函数账本无 `MISSING/MISMATCH/NO_ORACLE/UNTESTED`，所有映射函数
