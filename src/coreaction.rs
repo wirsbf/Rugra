@@ -5047,8 +5047,10 @@ impl ActionMarkImplied {
 
     /// Return false only if one Varnode is obtained by adding non-zero thing
     /// to another Varnode. Faithful to `isPossibleAliasStep`
-    /// (coreaction.cc).
-    #[allow(dead_code)] // reserved for full LOAD/STORE crossing check
+    /// (coreaction.cc:3279-3295): scan both directions; when one side's def
+    /// is INT_ADD/PTRSUB/PTRADD/INT_XOR whose in(0) is the other side and
+    /// in(1) is a constant, the pair has a fixed additive offset — not a
+    /// possible alias.
     // Ghidra: coreaction.cc:3279 ActionMarkImplied::isPossibleAliasStep
     fn is_possible_alias_step(
         vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -5086,14 +5088,208 @@ impl ActionMarkImplied {
         true
     }
 
+    /// Return false ONLY if we can guarantee two Varnodes have different
+    /// values. Faithful to `ActionMarkImplied::isPossibleAlias`
+    /// (coreaction.cc:3303-3368). `true` = possible alias (refuse the
+    /// implied form); `false` = provably distinct pointers (let the load
+    /// through the crossed store, keeping the canon inline form).
+    ///
+    /// Decisive semantics from the oracle body:
+    /// - vn identity (`vn1 == vn2`) is a definite alias (cc:3306).
+    /// - an unwritten side falls to the constant-offset compare / step
+    ///   test (cc:3307-3311); two constants alias iff offsets are equal.
+    /// - the step test gate (cc:3313) runs BEFORE any def-op comparison.
+    /// - PTRSUB normalizes to INT_ADD; PTRADD normalizes to INT_ADD with
+    ///   multiplier = in(2) offset cast to int4 (cc:3322-3333).
+    /// - opcode mismatch → possible alias; depth==0 → possible alias
+    ///   (cc:3334-3335), depth decremented once per recursion level.
+    /// - INT_ADD with two constant addends compares `mult*offset` in
+    ///   wrapping uintb arithmetic: equal → recurse on in(0)s; unequal →
+    ///   `!functionalEquality(in0, in0)` (cc:3347-3353).
+    /// - INT_ADD with any non-constant addend: mult mismatch → possible
+    ///   alias, else the four functionalEquality pairings pick the slot
+    ///   pair to recurse on (cc:3354-3362).
+    // Ghidra: coreaction.cc:3303 ActionMarkImplied::isPossibleAlias
+    fn is_possible_alias(
+        vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        depth: i32,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+
+        if std::sync::Arc::ptr_eq(vn1, vn2) {
+            return true; // Definite alias (cc:3306)
+        }
+
+        // cc:3307-3311: an unwritten side cannot be unwound through defs.
+        let (vn1_written, vn2_written) = {
+            let a = vn1.read().unwrap();
+            let b = vn2.read().unwrap();
+            if !a.is_written() || !b.is_written() {
+                if a.is_constant() && b.is_constant() {
+                    // cc:3308-3309: constants alias iff offsets equal (the
+                    // oracle FIXME about NEAR constants is part of the
+                    // oracle's observable behavior — keep it verbatim).
+                    return a.get_offset() == b.get_offset();
+                }
+            }
+            (a.is_written(), b.is_written())
+        };
+        if !vn1_written || !vn2_written {
+            return Self::is_possible_alias_step(vn1, vn2);
+        }
+
+        // cc:3313-3314: a fixed additive offset between the pair rules out
+        // "possible alias" outright.
+        if !Self::is_possible_alias_step(vn1, vn2) {
+            return false;
+        }
+
+        let (def1, def2) = {
+            let a = vn1.read().unwrap();
+            let b = vn2.read().unwrap();
+            (a.get_def(), b.get_def())
+        };
+        let (Some(op1_arc), Some(op2_arc)) = (def1, def2) else {
+            // is_written held but def arc vanished — structurally impossible
+            // in Ghidra (written ⇒ def); fail toward "possible alias".
+            return true;
+        };
+
+        // Snapshot opcode normalization + multipliers + input varnode arcs
+        // under the op guards, then drop them before any recursion so no
+        // PcodeOp read guard is held across a nested call (lock discipline
+        // mirrors crate::expression::functional_equality_level).
+        let (opc1, opc2, mult1, mult2, op1_ins, op2_ins) = {
+            let op1 = op1_arc.read().unwrap();
+            let op2 = op2_arc.read().unwrap();
+            let mut opc1 = op1.opcode;
+            let mut opc2 = op2.opcode;
+            let mut mult1: i32 = 1;
+            let mut mult2: i32 = 1;
+            // cc:3322-3327
+            if opc1 == OpCode::CPUI_PTRSUB {
+                opc1 = OpCode::CPUI_INT_ADD;
+            } else if opc1 == OpCode::CPUI_PTRADD {
+                opc1 = OpCode::CPUI_INT_ADD;
+                mult1 = op1.get_in(2).map(|v| v.read().unwrap().get_offset() as u32 as i32).unwrap_or(1);
+            }
+            // cc:3328-3333
+            if opc2 == OpCode::CPUI_PTRSUB {
+                opc2 = OpCode::CPUI_INT_ADD;
+            } else if opc2 == OpCode::CPUI_PTRADD {
+                opc2 = OpCode::CPUI_INT_ADD;
+                mult2 = op2.get_in(2).map(|v| v.read().unwrap().get_offset() as u32 as i32).unwrap_or(1);
+            }
+            let op1_ins: Vec<_> = (0..3).map(|i| op1.get_in(i).cloned()).collect();
+            let op2_ins: Vec<_> = (0..3).map(|i| op2.get_in(i).cloned()).collect();
+            (opc1, opc2, mult1, mult2, op1_ins, op2_ins)
+        };
+
+        // cc:3334: different normalized opcodes → cannot establish a
+        // difference → possible alias.
+        if opc1 != opc2 {
+            return true;
+        }
+        // cc:3335: recursion budget exhausted before finding an absolute
+        // difference → possible alias.
+        if depth == 0 {
+            return true;
+        }
+        let depth = depth - 1;
+
+        match opc1 {
+            // cc:3338-3343: unary value-through ops recurse on in(0).
+            OpCode::CPUI_COPY
+            | OpCode::CPUI_INT_ZEXT
+            | OpCode::CPUI_INT_SEXT
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_NEGATE => {
+                match (&op1_ins[0], &op2_ins[0]) {
+                    (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                    // Unary ops always carry in(0); absent ⇒ structurally
+                    // impossible ⇒ fail toward possible alias.
+                    _ => true,
+                }
+            }
+            // cc:3344-3363
+            OpCode::CPUI_INT_ADD => {
+                let cvn1_const = op1_ins[1].as_ref().map(|v| v.read().unwrap().is_constant());
+                let cvn2_const = op2_ins[1].as_ref().map(|v| v.read().unwrap().is_constant());
+                if cvn1_const == Some(true) && cvn2_const == Some(true) {
+                    // cc:3348-3349: uintb val = mult * offset (wrapping).
+                    let off1 = op1_ins[1].as_ref().map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let off2 = op2_ins[1].as_ref().map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let val1 = (mult1 as u64).wrapping_mul(off1);
+                    let val2 = (mult2 as u64).wrapping_mul(off2);
+                    if val1 == val2 {
+                        // cc:3351: same displacement → difference rides on
+                        // the bases.
+                        return match (&op1_ins[0], &op2_ins[0]) {
+                            (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                            _ => true,
+                        };
+                    }
+                    // cc:3352: different displacements with equal bases are
+                    // provably different.
+                    return !match (&op1_ins[0], &op2_ins[0]) {
+                        (Some(a), Some(b)) => crate::expression::functional_equality(a, b),
+                        _ => false,
+                    };
+                }
+                // cc:3354
+                if mult1 != mult2 {
+                    return true;
+                }
+                // cc:3355-3362: pick the slot pair pinned equal by
+                // functionalEquality and recurse on the complementary pair.
+                let fe = |a: &Option<_>, b: &Option<_>| -> bool {
+                    match (a, b) {
+                        (Some(x), Some(y)) => crate::expression::functional_equality(x, y),
+                        _ => false,
+                    }
+                };
+                if fe(&op1_ins[0], &op2_ins[0]) {
+                    return match (&op1_ins[1], &op2_ins[1]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[1], &op2_ins[1]) {
+                    return match (&op1_ins[0], &op2_ins[0]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[0], &op2_ins[1]) {
+                    return match (&op1_ins[1], &op2_ins[0]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[1], &op2_ins[0]) {
+                    return match (&op1_ins[0], &op2_ins[1]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                true // cc:3363 `break` → fallthrough return true
+            }
+            _ => true, // cc:3364-3365 default
+        }
+    }
+
     /// Check if a Varnode can be safely implied (its def expression inlined).
     /// Faithful to ActionMarkImplied::checkImpliedCover (coreaction.cc:3376).
     /// Returns true if it CAN be implied (no cover violation).
     ///
     /// Ghidra checks three conditions; Rugra implements:
-    ///  (1) LOAD def crossing STOREs — simplified: if def is LOAD and any
-    ///      STORE shares the def op's block, conservatively forbid.
-    ///  (2) LOAD/CALL def crossing CALLs — simplified: if def is LOAD/CALL
+    ///  (1) LOAD def crossing STOREs — faithful: for each alive STORE
+    ///      interior-contained in the cover (contain(storeop,2)), when the
+    ///      STORE's spacebase offset equals the LOAD's, refuse the implied
+    ///      form only if isPossibleAlias(store in(1), load in(1), 2) says
+    ///      the pointer pair may alias (coreaction.cc:3394-3397).
+    ///  (2) LOAD/CALL def crossing CALLs — faithful: if def is LOAD/CALL
     ///      and its block contains another CALL, forbid.
     ///  (3) Input cover inflation — the authoritative check: for each input
     ///      of the def op, test if inflating it to cover `high` intersects a
@@ -5169,24 +5365,34 @@ impl ActionMarkImplied {
                         continue;
                     }
                     // The LOAD crosses this STORE. Ghidra consults
-                    // isPossibleAlias (coreaction.cc:3396, fn at :3303) and
-                    // lets the load through when the STORE and LOAD pointers
-                    // are provably distinct; Rugra's full alias machinery is
-                    // unported (is_possible_alias_step is reserved), so
-                    // same-spacebase crossings are conservatively refused —
-                    // a SUPERSET of Ghidra's refusals. Over-materialization
-                    // fallout: canon-inlined field loads whose pointer is a
-                    // different base than the crossed store (httpd main
-                    // plVar12[9]/plVar12[10]) get materialized as explicit
-                    // temps here. Registered:
-                    // GETPARAM-STORECROSS-ALIASGATE-0001 (port
-                    // isPossibleAlias/isPossibleAliasStep,
-                    // coreaction.cc:3273-3330, then gate this refusal on
-                    // it).
+                    // isPossibleAlias (coreaction.cc:3396, fn at :3303) on
+                    // the pointer pair (STORE in(1) vs LOAD in(1)) and lets
+                    // the load through when the pointers are provably
+                    // distinct; only a possibly-aliasing pair refuses the
+                    // implied form (return false). Previously Rugra
+                    // refused every same-spacebase crossing — a superset
+                    // of Ghidra's refusals that over-materialized
+                    // canon-inlined field loads (httpd main
+                    // plVar12[9]/plVar12[10]):
+                    // GETPARAM-STORECROSS-ALIASGATE-0001, now resolved by
+                    // the ported gate.
                     let store_spacebase_off =
                         store_op.get_in(0).map(|v| v.read().unwrap().get_offset());
                     if load_spacebase_off == store_spacebase_off {
-                        return false;
+                        let store_ptr = store_op.get_in(1);
+                        let load_ptr = def_op.get_in(1);
+                        match (store_ptr, load_ptr) {
+                            (Some(store_ptr), Some(load_ptr)) => {
+                                // cc:3396 `if (isPossibleAlias(storeop->getIn(1),op->getIn(1),2)) return false;`
+                                if Self::is_possible_alias(store_ptr, load_ptr, 2) {
+                                    return false;
+                                }
+                            }
+                            // STORE/LOAD always carry an in(1) pointer;
+                            // a structural absence cannot be proven
+                            // distinct, so keep the refusal.
+                            (None, _) | (_, None) => return false,
+                        }
                     }
                 }
             }
