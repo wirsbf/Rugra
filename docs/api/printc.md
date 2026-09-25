@@ -13,7 +13,7 @@ printc 三段式落 opFunc 兜底印 `ZEXT48(x)`（oracle 印 `(uint8)x` cast）
 
 根因不变式：给 INT_ADD/SUB 输入从加法**输出**的指针用途回灌类型，是
 `TypeOpIntAdd::propagateType` 对**一切** def 族明文禁止的方向
-（typeop.cc:1193-1195 `inslot == -1 → newtype = 0`），WIDTHOP/
+（typeop.cc:1196-1197 `inslot == -1 → newtype = 0`），WIDTHOP/
 PTRSTAMP-CAST-OVERWRITE 的 def 黑名单只是逐语料打补丁。本次整撤加法输入
 臂：盖章域收缩为 **直接 LOAD/STORE 地址槽 varnode 单边**
 （`TypeOpLoad::propagateType` typeop.cc:487-502 的合法 value→address 边），
@@ -128,8 +128,12 @@ ZEXT/SEXT 印记）。
 
 > **2026-09-26 更新（Lane VZEXT）**：加法输入臂已**整撤**（sq 语料 200 失败
 > ZEXT 位点全数 out=Pointer 中毒实测；out→in 方向对一切 def 族非法，
-> typeop.cc:1193-1195）——盖章域现为直接 LOAD/STORE 地址槽单边，见本文件
-> 顶部「2026-09-26」条目。下文为收缩时点的历史记录。
+> typeop.cc:1196-1197）——盖章域现为直接 LOAD/STORE 地址槽单边，见本文件
+> 顶部「2026-09-26」条目。**CR-VZEXT 勘正（同日 follow-up commit）**：直连
+> 槽盖章残部的 `drop(vn);` 读守卫释放已恢复——探针周期误删致潜伏同线程
+> read-hold-write 死锁（reviewer 同形最小复现 timeout 124 钉死；基线
+> d0e27c14 原有该 drop）；禁向行号引用 1193-1195→**1196-1197** 勘正。
+> 下文为收缩时点的历史记录。
 
 **验收**（基线=亲父 b25bce7a 亲测）：curl 1995/0/0 → **1992/0/0**（−3：
 glob_range 69→67、file2string 113→112）、httpd 2072/0/0 → **2068/0/0**

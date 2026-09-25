@@ -10634,7 +10634,7 @@ impl PrintLanguage for PrintC {
                                 // from the add OUTPUT's address use — the
                                 // exact out->in direction
                                 // TypeOpIntAdd::propagateType forbids
-                                // (typeop.cc:1193-1195 `inslot == -1 ->
+                                // (typeop.cc:1196-1197 `inslot == -1 ->
                                 // newtype = 0`), for ALL input defs, not
                                 // just the extension/truncation/CAST family
                                 // the WIDTHOP (867bce7a) and
@@ -10686,6 +10686,14 @@ impl PrintLanguage for PrintC {
                     );
                     if needs_update {
                         let vn_size = vn.get_size();
+                        // CR-VZEXT F1: the read guard must be released
+                        // before the write below — std::sync::RwLock on the
+                        // same thread deadlocks deterministically if the
+                        // guard is still held (baseline d0e27c14 had this
+                        // drop; the VZEXT probe cycle accidentally removed
+                        // it). Same-shape minimal repro: read-hold + write
+                        // hangs (timeout 124), restored drop passes.
+                        drop(vn);
                         // Pointer sized to the address varnode, pointing at
                         // int (the previous fallback pointee), wordsize 1
                         // (ram) — propagateToPointer's sizing per
