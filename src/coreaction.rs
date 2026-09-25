@@ -12327,6 +12327,18 @@ impl ActionFuncLink {
         //   ProtoParameter *outparam = fc->getOutput();
         //   int4 sz = outparam->getSize();
         let sz = return_type.get_size().max(1);
+        // coreaction.cc:1543-1544: a 1-byte TYPE_BOOL locked output marks
+        // the call op as producing a calculated boolean. The mark fires
+        // BEFORE the storage read (cc:1545), so it survives both the
+        // spacebase-delay path (cc:1546-1550) and the immediate
+        // newVarnodeOut path (cc:1551). `isTypeRecoveryOn` channel: the
+        // per-run root reset reaches ActionStartTypes::reset
+        // (coreaction.hh:77 → setTypeRecovery(true)) before funclink runs
+        // (ifacedecomp.cc:907-908 reset-then-perform), so the flag is on in
+        // the production pipeline, matching the oracle default.
+        if sz == 1 && meta == TypeMetatype::Bool && fd.is_type_recovery_on() {
+            fd.op_mark_calculated_bool(op);
+        }
         let output_storage = match fd.get_call_specs(fc_idx) {
             Some(fc) => fc.get_output_storage(),
             None => return,
@@ -18537,6 +18549,97 @@ mod tests {
         // This Funcdata carries no model, so no placeholder is created and
         // the CALL input count stays exactly as constructed.
         assert_eq!(op_ref.0.read().unwrap().num_input(), 3);
+    }
+
+    /// funcLinkOutput coreaction.cc:1543-1544: a locked 1-byte TYPE_BOOL
+    /// return marks the call op as calculated-boolean when type recovery is
+    /// on (the per-run reset default).
+    #[test]
+    fn test_funclink_output_marks_calculated_bool() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto};
+        let bool_t = std::sync::Arc::new(crate::type_system::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "bool".into(), 1, crate::type_system::TypeMetatype::Bool,
+            ),
+        ));
+        let proto = FuncProto::new("callee".into(), bool_t.clone());
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x9000, 8),
+        ));
+        let mut call_op = crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x2000), 0),
+            crate::opcodes::OpCode::CPUI_CALL,
+        );
+        call_op.inrefs = vec![target_vn];
+        let op_ref = crate::op::PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(
+            call_op,
+        )));
+        fd.obank.alivelist.push(op_ref.clone());
+        let fc = FuncCallSpecs::new_for_op(&op_ref, proto);
+        fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+        // new_for_op deliberately drops the caller proto (CALLSPEC-0001);
+        // install the locked bool return the way the signature channel does.
+        {
+            let mut fc_mut = fd.get_call_specs_mut(0).unwrap();
+            fc_mut.prototype.return_type = bool_t;
+            fc_mut.prototype.set_output_lock(true);
+        }
+        // Type recovery ON (per-run reset default) → mark fires.
+        fd.set_type_recovery_on(true);
+        ActionFuncLink::func_link_output(&mut fd, 0, &op_ref);
+        assert!(
+            op_ref.0.read().unwrap().is_calculated_bool(),
+            "sz==1 TYPE_BOOL locked output must mark the call op"
+        );
+    }
+
+    /// coreaction.cc:1543-1544 channel gates: recovery off, or size != 1,
+    /// or non-BOOL metatype → no mark.
+    #[test]
+    fn test_funclink_output_bool_mark_gates() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto};
+        use crate::type_system::TypeMetatype;
+        let mk = |name: &str, sz: usize, meta: TypeMetatype| {
+            std::sync::Arc::new(crate::type_system::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(name.into(), sz, meta),
+            ))
+        };
+        for (name, sz, meta, recovery_on) in [
+            ("bool", 1usize, TypeMetatype::Bool, false),
+            ("bool", 2, TypeMetatype::Bool, true),
+            ("int", 1, TypeMetatype::Int, true),
+        ] {
+            let proto = FuncProto::new("callee".into(), mk(name, sz, meta));
+            let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+            let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_constant(0x9000, 8),
+            ));
+            let mut call_op = crate::op::PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 0),
+                crate::opcodes::OpCode::CPUI_CALL,
+            );
+            call_op.inrefs = vec![target_vn];
+            let op_ref = crate::op::PcodeOpRef(std::sync::Arc::new(
+                std::sync::RwLock::new(call_op),
+            ));
+            fd.obank.alivelist.push(op_ref.clone());
+            let fc = FuncCallSpecs::new_for_op(&op_ref, proto);
+            fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+            {
+                let mut fc_mut = fd.get_call_specs_mut(0).unwrap();
+                fc_mut.prototype.return_type = mk(name, sz, meta);
+                fc_mut.prototype.set_output_lock(true);
+            }
+            fd.set_type_recovery_on(recovery_on);
+            ActionFuncLink::func_link_output(&mut fd, 0, &op_ref);
+            assert!(
+                !op_ref.0.read().unwrap().is_calculated_bool(),
+                "{name}(sz={sz}) with recovery_on={recovery_on} must NOT mark"
+            );
+        }
     }
 
     /// FuncCallSpecs.is_input_locked: true when all params type-locked.

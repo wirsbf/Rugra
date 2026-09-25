@@ -293,7 +293,11 @@ fd、锁定 git archive、isolated Cargo.lock vendor 和 byte diff 起草，但 
 - **`generateOps`** 头部补 `clearProperties()`（flow.cc:790）。
 - **新增 `FlowInfoSnapshot`**（`snapshot()`）：为 oracle fixture 克隆 post-
   emission 的 op/time、VisitStat 值、relative 解析与 raw edge Arc；不缓存
-  SLEIGH callback `VarnodeData*` 身份，不改变生产 CFG。
+  SLEIGH callback `VarnodeData*` 身份，不改变生产 CFG。2026-09-25
+  （CURLWIRE-CR-F1-A1，LOCKFIX 修法）：relative 遍历的 opcode 过滤与
+  `inrefs[0]` 提升收进单一短守卫块，守卫在 `find_rel_target`（内部再锁
+  同一 op）之前释放——std RwLock 读读重入不对写者公平；同输入同输出，
+  双语料字节恒等验证。
 
 真实 `0f a2 c3`（CPUID; RET）门禁结果：`tools/run_sleigh_flow_relative_oracle.sh`
 差分 Rust 与锁定 Ghidra capture（sha256 `7490edf5…`）**逐字节一致**（81 ops /

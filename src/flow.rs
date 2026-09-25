@@ -2774,11 +2774,20 @@ impl<'a> FlowInfo<'a> {
             .collect();
         let mut relatives = Vec::new();
         for snapshot_op in &operations {
-            let operation = snapshot_op.op.0.read().unwrap();
-            if !matches!(operation.opcode, OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH) {
-                continue;
-            }
-            let Some(input) = operation.inrefs.first() else {
+            // CURLWIRE-CR-F1-A1 (LOCKFIX method): lift the opcode filter and
+            // the first input Arc under one short guard, then release the
+            // guard before `find_rel_target` re-locks this same op through
+            // its call chain (flow.rs find_rel_target takes op.0.read at its
+            // head) — std RwLock read-read reentrancy is not writer-fair.
+            let first_input = {
+                let operation = snapshot_op.op.0.read().unwrap();
+                if !matches!(operation.opcode, OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH) {
+                    None
+                } else {
+                    operation.inrefs.first().cloned()
+                }
+            };
+            let Some(input) = first_input else {
                 continue;
             };
             if !input.read().unwrap().get_space().is_const() {
