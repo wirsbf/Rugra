@@ -23,4 +23,10 @@ python3 "$REPO_ROOT/tools/check_ghidra_annotations.py" --all || exit $?
 #  使用锁定 12.0.4 源码树做全库 strict 检查。)
 python3 "$REPO_ROOT/tools/check_ghidra_refs.py" --all --strict || exit $?
 
+# AUDIT-CORPUS-MARKERS-GATE-0001: 库生产代码零语料标记门禁
+# src/**/*.rs 的 #[cfg(test)] 前区域不得出现 curl/httpd 语料符号、
+# 二进制名或语料地址（注释剥除、标识符边界、误报白名单见脚本头）。
+# EXPEL-CORPUS-TABLES-0001 清除后的防复发常驻门禁。
+python3 "$REPO_ROOT/tools/check_corpus_markers.py" --all || exit $?
+
 exit 0

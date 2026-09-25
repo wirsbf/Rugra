@@ -1,5 +1,38 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-25：语料名字表清除（EXPEL-CORPUS-TABLES-0001 / AUDIT-CORPUS-MARKERS-GATE-0001）
+
+- **删除** `known_param_count` / `known_param_types` / `is_known_function`
+  （原 :1990/:2084 区，2026-06-23 bootstrap 遗留）：按函数名硬编码的元数/类型表，
+  含 curl/httpd 语料内部条目（hugehelp/getparameter/match_url/SetHTTPrequest/
+  glob_*/ap_*/curl_easy_*/my_*/parseconfig/...）、libc 条目与 `_ => 6` 伪造默认。
+  oracle 的 coreaction.cc **无任何名字查表**：调用点参数知识只经被调者自身
+  FuncProto 拷贝（`ActionDefaultParams::apply` cc:2321-2330
+  `fc->copy(otherfunc->getFuncProto())`）或平台签名数据（Rugra 等价数据面 =
+  `debugproto::LibcSignatureTable`，经驱动 callspec link 装载）进入；
+  本函数自身形参只来自 trial 推导（`ActionInputPrototype::apply`
+  cc:4707-4761，无按自名补齐/截断）。
+- **删除** `ActionCallParams`（struct + 两个 impl）：表在调用点侧的唯一消费者，
+  且为**死代码**——从未在 `universal_action`（action.rs）注册、全仓无构造点；
+  其 `_ => 3` 调用点默认随表一并消失。`SYSV_ARG_REGS` 保留（ActionInferParams
+  的候选寄存器索引仍在用）。
+- **ActionInferParams 收敛为纯推导**：类型优先级降为 `ptr_param_offsets >
+  size-based`（原 `known_param_types` 顶级删除）；按自名的补齐/截断臂
+  （原 supplement/truncate 块）整体删除。libc 知识现只走
+  `LibcSignatureTable`（24 条 curl 锁定导入，glibc ABI 声明逐字）与 DWARF 通道。
+- **A/B（fast-release 双二进制，清除前=HEAD 2eaed4a6）**：curl
+  默认/MIRROR/裸态 与 httpd 默认/PARAMID/MIRROR 六态 stdout **逐字节恒等**
+  （sha256 见 lane 证据）；`cargo test --lib` 1713P/1F 同名失败；bank 391/391；
+  curl gcc 审计 104/20 同基线。零回退归因：表的两个消费面——死代码
+  ActionCallParams 与 proto_db 预扫计数（仅经 `external_prototypes`
+  `contains_key` 被 ActionDeindirect 消费，值不进输出）——均不在主管线输出路径。
+- **常驻门禁**：`tools/check_corpus_markers.py`（入 `.githooks/pre-commit`）：
+  生产区域（首个 `#[cfg(test)]` 前）语料函数名/二进制名/语料地址 grep，
+  注释剥除 + 标识符边界（`curlast` 类子串不误报）+ TODO 绑定白名单。
+  首跑全仓 0 violation（printc.rs `[FOUND-0x17520]` 探针为白名单唯一条目，
+  移除登记 PRINTC-CORPUS-PROBE-0001）。
+- 历史小节（2026-06-23 系）保留为过程记录，以本节为准。
+
 ## 2026-09-24：SUBPIECE/PIECE 输出 token 覆写臂（MYPROGRESS-SETCASTS-ORD399-0001 / FV2）
 
 - `cast_output`（cc:2532-2616）token 分发补 **CPUI_SUBPIECE** 臂：新增
@@ -890,17 +923,6 @@ Folds redundant expressions:
 - `x & x` → `COPY x`
 - `x | x` → `COPY x`
 - `BOOL_NOT(BOOL_NOT(x))` → `COPY x`
-
-### `pub fn new() -> Self`
-
-*暂无代码注释*
-
-### `pub struct ActionCallParams`
-
-Attach System V AMD64 ABI register parameters to CPUI_CALL operations
-
-Scans for register writes (rdi, rsi, rdx, rcx, r8, r9) preceding each call
-and attaches them as additional inputs so PrintC can emit function arguments.
 
 ### `pub fn new() -> Self`
 
