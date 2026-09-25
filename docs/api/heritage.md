@@ -1542,3 +1542,68 @@ cc:135 的 implicit-RAM 伪造（RAM@register 偏移 = 门控 ap_getparents 的
 - 残差：门控 main +74 归 HERITAGE-FLAGBASE-SPACELESS-0001（另一 P1 阻塞，
   flagbase 无空间查询域）；默认路径 ap_fini unique0x000a0830/register0x 族
   与本根因无关（AFINI lane 已归因 X86LIFT/PRINTC/headless 桥接域）。
+
+## 2026-09-25：processJoins 消费链 1:1 落地（Lane PJOINS，HERITAGE-PJOINS-0001）
+
+`process_joins`（heritage.cc:2281-2313）从扫描+log 存根改为完整消费端口，
+`split_join_read`（cc:2119-2163）/`split_join_write`（cc:2172-2227）从
+"2-piece 特例"改为逐层 `split_join_level` 迭代，`float_extension_read`/
+`float_extension_write`（cc:2235-2273）改为 joinrec 由调用方传入（oracle
+签名形态）。逐项语义：
+
+- **迭代**（cc:2287-2292）：loc 序快照 join 空间 varnode。oracle 的
+  `beginLoc(joinspace)..endLoc` + `getSpace()!=joinspace` break 守卫防御
+  迭代中插入；split 系列只往 piece/const 空间建 varnode，join 子区间不
+  增长，快照与守卫式游走可观察等价。
+- **findJoin**（cc:2293→translate.cc:746-762）：miss 时 oracle 抛
+  LowlevelError("Unlinked join address")。Rugra 生产者
+  （coreaction.rs `return_join_address`）以无状态 hash 铸 offset、无
+  findAddJoin 登记——**降级为响亮 log+跳过**（HERITAGE-PJOINS-UNLINKED-0001，
+  见下方证据：oracle 本语料上 trials 全程 used=0，生产侧分歧才是 canon
+  收敛正解）。
+- **尺寸校验**（cc:2296-2297）：unified.size≠vn 尺寸 oracle 抛错，同因
+  降级 log+continue。
+- **free 读拆分**（cc:2298-2303）：floatExtensionRead / splitJoinRead。
+  后者：`op` 从 loneDescend 起步，每层对非透传 curvn 建
+  `PIECE(mosthalf,leasthalf)`（output=curvn，insertBefore(op)，op 前滑）；
+  isPrimitive（typelock→isPrimitiveWhole，否则 true）置
+  `setPrecisHi/Lo`，否则 `opMarkNoCollapse(concat)`（cc:2145-2151）。
+- **delay 门**（cc:2305-2306）：`pass != get_info(piece0 空间).delay →
+  continue`——写拆分恰在 pass==delay 的一次发生。register 空间 delay=0。
+- **写拆分**（cc:2308-2311）：floatExtensionWrite / splitJoinWrite。后者：
+  `op`=def（input vn 为 None），input 基底锚 block0 起址（cc:2192-2195）；
+  每 SUBPIECE 对先 most（shift=leasthalf 尺寸）后 least（shift=0），
+  op==null 时 opInsertBegin(block0)（cc:2200-2203），op 后滑到最新。
+  SUBPIECE 常量与输出全部经 `fd.new_constant`/`fd.op_set_output` 全
+  def 接线（旧存根直写字段绕过 descend 簿记）。
+
+**Oracle 探针证据**（锁定 e40ed130 libdecomp + BFD，/dev/shm/rugra-tests/
+pjoins/oracle-cpp/，instrumented processJoins/ActionReturnRecovery）：
+httpd 473 函数全量扫描——9 函数产生 return-pair join
+（join:0x0,sz=16,pieces=[reg:0x10+8,reg:0x0+8],free=0：
+ap_build_cont_config/ap_die/ap_fini_vhost_config/ap_internal_redirect×2/
+ap_is_recursion_limit_exceeded/ap_mpm_run/ap_walk_config/unixd_setup_child），
+**80/80 次访问全部 `pass(≥1) != delay(0) → skip_write`，零次 split**；
+curl 全量仅 main 4 次访问同形态 skip。即 oracle 消费链在两语料上的可观察
+行为=迭代+查找+尺寸校验+跳过；join 存续到打印层。ap_init_vhost_config
+（Rugra 唯一 join 产地）oracle 侧 trials
+`[slot=1 reg:0x0+8 used=0 active=0][slot=2 reg:0x10+8 used=0 active=0]`——
+`buildReturnOutput` 的 `isUsed()` 早退使 oracle 根本不建 join；Rugra 生产
+者建了=生产侧（coreaction 判定链）分歧，AUVar16 残差归它（另行 TODO）。
+
+**Rugra 回归测试**（不升 B2 状态，仅回归锚）：write-split 双 SUBPIECE
+（shift 8→reg:0x10+precis_hi、shift 0→reg:0x0+precis_lo、均读 join vn）、
+delay 门（pass=2 零 SUBPIECE）、unlinked 降级（无记录零 SUBPIECE 不崩）、
+read-split（free+单读者→PIECE 链定义 join vn、半片 precis 旗）。
+
+**验收**：httpd/curl 输出与亲父 9d91f00c **cmp 字节恒等**（httpd 908/0/0、
+curl 489/0/0）；bank 391/391 MATCH；cargo test --lib 1717P/1F（预存
+nonzeromask 同败）；annotations/refs 检查全绿。
+
+## 2026-09-25：split 族注解行修正（CR-PJOINS F1）
+
+六个 `// Ghidra:` 注解从空行（定义行+1）改指真定义起始行：
+splitJoinLevel 2068→**2067**、splitJoinRead 2119→**2118**、splitJoinWrite
+2172→**2171**、floatExtensionRead 2236→**2235**、floatExtensionWrite
+2256→**2255**、processJoins 2282→**2281**（机制 D cited-line-drift 防逸）；
+连带两处区间引用起点同步（2118-2163/2171-2227）。零行为改动。

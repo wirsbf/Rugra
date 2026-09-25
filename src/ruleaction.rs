@@ -12404,52 +12404,84 @@ impl RulePullsubMulti {
                 None => return Err(crate::error::Error::from("Undefined pullsub")),
             }
         };
-        // cc:793-821: resolve the output address.  Join pieces are stored
-        // most-significant first, but SUBPIECE offsets count from the least
-        // significant end, so Ghidra scans the piece table in reverse.
+        // cc:791-821: resolve the output address, mirroring the oracle's
+        // usetmp decision exactly. Join pieces are stored most-significant
+        // first, but SUBPIECE offsets count from the least significant
+        // end, so Ghidra scans the piece table in reverse; a join base
+        // starts as usetmp=true and only a covering piece flips it to the
+        // piece's own address — the join-space offset itself is NEVER
+        // treated as a mappable plain offset (SPACEFIX-CR-F6 arm).
         let is_join = base_space == crate::space::AddressSpace::Join;
-        let mut piece_location = None;
+        let mut usetmp = false;
+        let mut piece_location: Option<(crate::space::AddressSpace, u64)> = None;
+        let mut plain_addr: Option<crate::address::Address> = None;
         if is_join {
-            if let Some(arch) = fd.arch.as_ref() {
-                if let Some(joinrec) = arch.join_db.find_join(base_addr.as_u64()) {
-                    if joinrec.num_pieces() > 1 {
-                        let mut skipleft = shift;
-                        for i in (0..joinrec.num_pieces()).rev() {
-                            let piece = joinrec.get_piece(i);
-                            if skipleft >= piece.size as u64 {
-                                skipleft -= piece.size as u64;
-                                continue;
-                            }
-                            if skipleft + out_size as u64 > piece.size as u64 {
-                                break;
-                            }
-                            let offset = if piece.space.is_big_endian() {
-                                piece
-                                    .offset
-                                    .wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
-                            } else {
-                                piece.offset.wrapping_add(skipleft)
-                            };
-                            piece_location = Some((piece.space, offset));
+            // cc:793-795: usetmp = true; findJoin throws
+            // LowlevelError("Unlinked join address") on a miss
+            // (translate.cc:746-762). Rugra degradation: the producer
+            // mints unlinked splitmix64 offsets (see
+            // HERITAGE-PJOINS-UNLINKED-0001), so the throw is logged and
+            // the subpiece falls back to unique — the oracle's own
+            // no-cover behavior (cc:825-826 newUniqueOut).
+            usetmp = true;
+            let joinrec = fd
+                .arch
+                .as_ref()
+                .and_then(|arch| arch.join_db.find_join(base_addr.as_u64()));
+            if joinrec.is_none() {
+                eprintln!(
+                    "[RULEACTION] build_subpiece: unlinked join address join:0x{:x} \
+                     (ruleaction.cc:795 via translate.cc:761 LowlevelError arm degraded; \
+                     HERITAGE-PJOINS-UNLINKED-0001)",
+                    base_addr.as_u64()
+                );
+            }
+            if let Some(joinrec) = joinrec {
+                // cc:796: single-piece records (float extensions)
+                // automatically keep the unique output.
+                if joinrec.num_pieces() > 1 {
+                    let mut skipleft = shift;
+                    for i in (0..joinrec.num_pieces()).rev() {
+                        let piece = joinrec.get_piece(i);
+                        if skipleft >= piece.size as u64 {
+                            skipleft -= piece.size as u64;
+                            continue;
+                        }
+                        if skipleft + out_size as u64 > piece.size as u64 {
                             break;
                         }
+                        let offset = if piece.space.is_big_endian() {
+                            piece
+                                .offset
+                                .wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
+                        } else {
+                            piece.offset.wrapping_add(skipleft)
+                        };
+                        piece_location = Some((piece.space, offset));
+                        usetmp = false;
+                        break;
                     }
                 }
             }
-        }
-        let small_addr = if let Some((_, piece_offset)) = piece_location {
-            crate::address::Address::new(piece_offset)
-        } else if !is_big_endian {
-            base_addr.offset(shift as i64)
         } else {
-            base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64))
-        };
+            // cc:816-821: plain spaces offset within their own space.
+            if !is_big_endian {
+                plain_addr = Some(base_addr.offset(shift as i64));
+            } else {
+                plain_addr =
+                    Some(base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64)));
+            }
+        }
         // Build the new SUBPIECE.
         let new_op = fd.new_op(2, new_addr);
         fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
         // cc:825-830: unresolved joins use unique; a resolved piece uses
-        // renormalize(smalladdr1,outsize) and newVarnodeOut in that piece space.
-        let out_vn = if let Some((piece_space, piece_offset)) = piece_location {
+        // renormalize(smalladdr1,outsize) and newVarnodeOut in that piece
+        // space (renormalizeJoinAddress only rewrites join-space
+        // addresses — piece and plain addresses are untouched).
+        let out_vn = if usetmp {
+            fd.new_unique_out(out_size as usize, &new_op)
+        } else if let Some((piece_space, piece_offset)) = piece_location {
             let piece_addr = crate::address::Address::new(piece_offset).offset(0);
             let vn = fd.vbank.create_def_with_space(
                 out_size as usize,
@@ -12464,9 +12496,10 @@ impl RulePullsubMulti {
             }
             fd.set_varnode_properties(&vn);
             vn
-        } else if is_join {
-            fd.new_unique_out(out_size as usize, &new_op)
         } else {
+            // The remaining non-tmp arm is the plain (non-join) space.
+            let small_addr = plain_addr
+                .unwrap_or_else(|| base_addr.offset(shift as i64));
             let vn = fd.vbank.create_def_with_space(
                 out_size as usize,
                 base_space,
