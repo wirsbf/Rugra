@@ -4984,7 +4984,30 @@ impl JumpTable {
             let addr = self.addresstable[i].clone();
             // cc:2541: op = flow.target(addr);
             let Some(op) = flow.target(addr) else {
-                return Err(unlinked());
+                // FlowInfo::target (flow.cc:133-137) throws LowlevelError
+                // "Could not find op at target address: (<spc>,<printRaw>)"
+                // when the address was never decoded into p-code — a
+                // distinct failure from the cc:2545-2546 out-edge link
+                // check. Rugra's FlowInfo::target returns Option instead of
+                // throwing, so the oracle's error text is reproduced here
+                // instead of conflating the two conditions (an address with
+                // no generated op is not a "not linked" destination).
+                // AddrSpace::printRaw (space.cc:206-216): wordsize-1 offset
+                // printed as 0x + 2*addrSize hex digits, leading-zero
+                // trimmed to 8/12 digits.
+                let off = addr.as_u64();
+                let width = if off >> 48 != 0 { 16 } else if off >> 32 != 0 { 12 } else { 8 };
+                return Err(JumpTableRecoveryError::Lowlevel {
+                    message: format!(
+                        "Could not find op at target address: ({},0x{:0width$x})",
+                        addr
+                            .get_space()
+                            .map(|s| s.get_name())
+                            .unwrap_or_else(|| "ram".to_string()),
+                        off,
+                        width = width
+                    ),
+                });
             };
             // cc:2542: tmpbl = op->getParent();
             let tmpbl = op
