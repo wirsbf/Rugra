@@ -3512,3 +3512,31 @@ sprintf 参数边 oracle [5,5,0,5]（whole 平局胜→不解析，canon 印
 53→45，124 函数零回退），httpd 896 字节恒等，defects/numbering 0/0，
 bank 391/391，gcc 审计 104/20 恒等，双跑 cmp 恒等（安静机器；构建窗口内
 首跑有既有 timing 噪声家族）。
+
+## 2026-09-25：propagate_ref 恢复 beginLoc(addr) 下界（GENSMOKE-S2-TYPEINFER-METATYPE-0001 首刀，wt/s2fix）
+
+`ActionInferTypes::propagate_ref`（coreaction.cc:5208-5254）的候选窗此前只实现
+了上界 `voff < end`（endLoc(endaddr)），漏掉下界 `iter = data.beginLoc(addr)`
+（cc:5224）。oracle 的 VarnodeLocSet 迭代从 `addr` 起（含），**偏移低于 addr
+的 varnode 永不访问**——即使其尺寸与窗口部分重叠。Rugra 侧 `curoff =
+voff.wrapping_sub(off)` 对 below-window 候选回绕成巨大无符号值，随后的
+`curoff.wrapping_add(vsize)` 意外再回绕后，部分重叠候选能以**负偏移**进入
+`get_exact_piece(ct, curoff as i64, vsize)`——oracle 排序下不存在的状态。
+该通道把毒化符号的 exact-piece 灌进窗口下方的栈槽链（vsh probeSys 的
+propref 泛洪、curl 镜像的 stack varmetatype 漂移），是 GENSMOKE-S2
+metatype 过推断族的主放大器。
+
+修复：候选过滤补 `voff < off → false`，恢复半开窗 `[addr, addr+ct_size)`。
+验收（五口径 defects/numbering 全零）：vsh 镜 51→41（main 的 argc
+int4/uint4 族 15→5 清零）、curl 镜 211→**143**、httpd 镜 412→386、
+curl canon 388→369、httpd canon 872 恒等；gcc 审计 httpd canon 15/14 恒等；
+bank 1730 pass / 1 fail（fspec 域 `test_nonzeromask_pipeline_wiring`，
+master 既有，DOTFIX 94276edf 已 A/B 复现）。
+
+**残余登记**：probeSys 26 行残余属 varmap 域符号中毒环（restructure 周期把
+int8 点位喂回 `axStack_60` 数组符号 → ADD in→out `ptr→int8` → 比较交换 →
+walk φ → gatherOpen int8 点位 → 符号，oracle 同信道因符号层恒 xunknown8 而
+不动点在 unknown）——详见 TODO_BOARD GENSMOKE-S2 残余条目；typeprop 边逐边
+对拍（oracle TYPEPROP_DEBUG 直跑 trace 已建，/dev/shm 证据目录）确认其余
+臂（MULTIEQUAL 重包、INT_EQUAL 横传、LOAD/STORE backedge、metain 表）逐行
+同构。
