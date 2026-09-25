@@ -7,8 +7,8 @@
 
 | 口径 | 波起点(09-24) | 当日终态 | 降幅 |
 |---|---|---|---|
-| curl 默认脸（全通道默认开） | 1329 →（本波）3718 为全管线裸口径 | **577**（cb759c42 亲验） | 全管线 −84.5% |
-| httpd 默认脸 | 1445 | **1141**（verify6 亲验,0 defects/0 numbering） | −68.1% |
+| curl 默认脸（全通道默认开） | 1329 →（本波）3718 为全管线裸口径 | **369**（verify8 亲验,−90.1%） | 全管线 −90.1% |
+| httpd 默认脸 | 1445 | **872**（verify8 亲验,0 defects/0 numbering） | −75.6% |
 | 函数级全同 | curl 62 | **curl 107+/124（86.3%）**;httpd 11/34 | — |
 
 默认脸构成（用户决策落地）: SYMDB+pretty emitter（DFLIP 791611bf）+ 种子三门（SEEDFLIP 2d88bbcb,opt-out 逃生门+mirror 恒裸+无 manifest 优雅 no-op=stripped 兼容）。
