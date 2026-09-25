@@ -762,3 +762,90 @@ setarch -R env -i STAGE_DRILL_FUNC=getparameter.constprop.0 STAGE_DRILL_ADDR=0x3
   ./stage_regsym_diag sleigh_specs <repo>/examples/curl        # = W4
 # W5 消融 = seed_getparameter_renamed.xml 替换 seed 后同跑（:: 全数消失）
 ```
+
+## §15 SECSEED 交付记录（Lane SECSEED，2026-09-25，基=亲父 6aa8c2aa=master SCOPEPFX 后）
+
+**任务**：W1B 预登记的 "sec_offset 全域"（harvest 丢弃的 DWARF sec_offset 形态条目回收）
+终审。判定结果：**归因收口**（种子通道不可收；真身是注释通道，Rugra 侧一处
+src 阻塞，登记 `PRINTC-COMMENTFILL-ARM` 解锁）。零 src/ 改动。
+
+### 15.1 形态判决（任务①）
+
+curl（DWARF-bearing，units v4）concrete subprogram 下的变量盘点（probe1_census.py，
+pyelftools，/dev/shm/rugra-tests/secseed/）：
+
+| 位置形态 | 条数 | canon 可见形 |
+|---|---|---|
+| `DW_FORM_sec_offset`（.debug_loc 位置表） | **67** | `/* Unresolved local var */` 注释 |
+| `DW_FORM_exprloc`/block（现行 C2 通道） | 22 | 命名局部（已收割） |
+| 无 location | 11 | 同注释通道（size/configbuffer 等） |
+
+**sec_offset 不是 DWARF5 str_offsets/addr 表偏移形态**：`.debug_loclists`、
+`.debug_str_offsets`、`.debug_addr` 三节全部缺席，unit version=4——是
+DWAR4 `DW_AT_location` 指向 `.debug_loc` 位置列表（多区间、寄存器/表达式混合、
+部分区间 fbreg）。
+
+### 15.2 canon 可见形与种子通道判决（任务①续）
+
+- **0/67 成为命名局部**：canon 从不以 DWARF 名提交这些变量（main 的 `url` 只作
+  `::config.url` 成员出现；`letter`/`line` 为字符串/参数误命中，严格 decl 扫描为零）。
+  种子通道（committed_locals 注入）会**新增**差异 ⇒ 不可收（RENUM 判例式归因）。
+- 槽位重合三例（infilesize@-560≡`local_230`、home@-352≡`local_160`、
+  parse@-1448≡`local_5a8`）已由 C1/C4 canon-decl 通道正确服务（canon 印的是
+  合成名，不是 DWARF 名）。
+- 真身：**commentdb warning 记录**。canon 45 行 / 8 函数（getparameter 20、
+  parseconfig 7、my_get_token 4、file2string 4、main 3、match_url 3、
+  myprogress 2、my_get_line 2）。httpd 剥离 DWARF ⇒ 0 行（通道 curl 专属）。
+  main/myprogress 的函数域组在 canon 缺席（Java 侧创建条件未究——收割时以
+  canon 文本门控 presence，不猜规则）。
+- 组规则（canon+DWARF 实证）：同 scope 的未解析变量合并为一条注释记录
+  （文本内 `\n` 连接）；**锚规则**=函数域组→function low_pc，词法域组→scope
+  首区间 low_pc。
+
+### 15.3 oracle 预验证（任务①"不可跳"项）
+
+新 harness `stage_cmt_diag.cc`（bridge1 stage_seed_diag 的 commentdb 注入变体，
+编译于锁定库 e40ed130 对象树 + libdecomp.a，build_cmt_diag.sh）：
+`addComment(Comment::warning, fad, anchor, text)` 后按 golden 生成器契约驱动。
+
+- my_get_line（entry 锚）：`/* Unresolved local var: char * nl@[???]\n... */`
+  **逐字节复现 canon**（20 列 line_commentindent + 3 空格 comment fill 续行、
+  单记录单块、decl 后首语句前位置）。
+- getparameter：函数域组（entry 锚，敏感性扫描 0x3f00/0x3f07/0x3f27/…/0x3f52
+  界定了窗口）+ fnam@0x40f0（词法块首区间）双双落 canon 位置（后者在
+  `if (cVar1 == '-') {` 分支首语句前，与 canon 逐位对齐）。
+- myprogress（prevblock/thisblock@0x3503）、parseconfig（line/tok1/tok2@0x3d35）
+  同样落 canon 锚定语句（`if (dltotal+ultotal==0)` / `if (__stream != 0)` 前）。
+
+### 15.4 Rugra 侧发射链实证与阻塞点（任务②判定）
+
+驱动域注入探测（examples/curl_decompile.rs env 门，已回退）：commentdb →
+CommentSorter（printc.rs:14812 setup_function_comments）→ emit_comment_group →
+emit_line_comment **链路活着**——my_get_line 注入后位置/块形正确。两个发现：
+
+1. **锚约束**：Rugra 侧 op 地址为 spaceless `Address::new(vaddr)`，而
+   `block_basic_contains`（comment.rs:480）要求双方 space 均 `Some`——
+   contains 主路径对 spaceless 恒 false，实际放置全走 `op.addr == comm.addr`
+   的 backup 路径 ⇒ **锚必须精确等于一条存活 op 的地址**（工作注释
+   "Subroutine does not return" 同此路径）。canon 锚（函数入口）在 Rugra 侧
+   需校准到同语句的存活 op（如 my_get_line 0x3854）。
+2. **阻塞点**：emit_line_comment（printc.rs:11032）**不调 start_comment/
+   stop_comment**（注释称 "markup only"——对 EmitNoMarkup 成立，对
+   EmitPrettyPrint 不成立：二者压 BeginComment/EndComment token 置
+   commentmode，gate 续行 3 空格 fill，prettyprint.rs:3851/3929 已移植）。
+   结果续行列 20 vs canon 23。**这是 src/printc.rs 一处两行量级的缺口**
+   （`let id = self.emit.start_comment(); … self.emit.stop_comment(id);` 包住
+   token 走查；EmitNoMarkup 默认实现已是无字节 no-op），出本车道写域
+   （printc 在 GETPARAM 重审车道写域内），按铁律停下归因：
+   **`PRINTC-COMMENTFILL-ARM`**（P2，write-set=src/printc.rs + docs/api/printc.md）。
+   解锁后纯驱动域注释通道（harvest --cmt + RUGRA_CMTSEED 门 + manifest）
+   即可收割，预期 −45 行（624 的 7.2%）。
+
+### 15.5 验收与产物
+
+- 默认 curl E2E **624/0/0**，探测回退后重建 cmp 亲父构建**字节恒等**。
+- census 全归账：100 = 67 sec_offset + 22 exprloc + 11 no-location。
+- 产物（/dev/shm/rugra-tests/secseed/，root 集成后按回收纪律处理）：
+  probe1-6（census/loclist/slot/scope/firstbegins）、stage_cmt_diag.cc +
+  build_cmt_diag.sh + 二进制、oracle_mygetline_cmt.c / oracle_getparam_cmt.c、
+  curl_{default,cmtprobe,final}.c、cmt_*.txt。
