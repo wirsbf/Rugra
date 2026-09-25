@@ -3038,13 +3038,51 @@ impl PrintC {
                 let meta = ct.as_ref().map(|c| c.get_metatype());
                 if let Some(meta) = meta {
                     if matches!(meta, TypeMetatype::Struct | TypeMetatype::Union) {
-                        // printc.cc:991-1010: resolve the field name via
-                        // findTruncation(suboff,0). Rugra uses find_partial_field
-                        // (same offset/size containment test). Default fallback
-                        // name is "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                        let (fieldname, fieldtype) = Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
-                            .map(|(name, _, ftype)| (name, Some(ftype)))
-                            .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None));
+                        // printc.cc:977-1010: the field-name resolution splits
+                        // on the pointee metatype. TYPE_UNION (cc:977-990):
+                        // a PTRSUB into a union must have suboff == 0 (else
+                        // the oracle throws LowlevelError) and takes the
+                        // field from the Funcdata union-resolution map —
+                        // `fd->getUnionField(ptype, op, -1)` keyed on the
+                        // POINTER type with slot -1 (the attach edge
+                        // ActionSetCasts::resolveUnion created in
+                        // coreaction.cc:2509), never findTruncation. Rugra
+                        // consults the doc_function-time snapshot
+                        // (union_resolutions) with the same ResolveEdge
+                        // key. The oracle's two LowlevelError arms
+                        // (non-zero suboff; missing/negative resolution)
+                        // are unreachable in a pipeline where resolveUnion
+                        // gated the insertion — and the printer has no
+                        // throw channel (same accommodation as the
+                        // cc:943-946 non-pointer arm above) — so both fall
+                        // through to the default field_0x name.
+                        let (fieldname, fieldtype) = if meta == TypeMetatype::Union {
+                            let resolved = ptype.as_ref().and_then(|pt| {
+                                self.union_resolutions
+                                    .get(&crate::unionresolve::ResolveEdge::new(pt, op, -1))
+                                    .filter(|res| res.get_field_num() >= 0)
+                                    .and_then(|res| {
+                                        match ct.as_ref().map(|c| c.as_ref()) {
+                                            Some(Datatype::Union(u)) => u
+                                                .fields
+                                                .get(res.get_field_num() as usize)
+                                                .map(|fld| (fld.name.clone(), Some(fld.type_ptr.clone()))),
+                                            _ => None,
+                                        }
+                                    })
+                            });
+                            resolved.unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                        } else {
+                            // printc.cc:991-1010 (TYPE_STRUCT): resolve the
+                            // field name via findTruncation(suboff,0). Rugra
+                            // uses find_partial_field (same offset/size
+                            // containment test). Default fallback name is
+                            // "field_0x<hex>"
+                            // (DataTypeComponent::getDefaultFieldName).
+                            Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
+                                .map(|(name, _, ftype)| (name, Some(ftype)))
+                                .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                        };
                         // printc.cc:1011-1016: arrayvalue = false; if the
                         // field's type is an ARRAY, the '&' is dropped (the
                         // value form prints the array as `f[0]`).
@@ -13532,14 +13570,41 @@ impl PrintC {
                         self.push_varnode(&in0.read().unwrap(), Some(op));
                         self.mods = saved_mods;
                     }
-                    // printc.cc:991-1010: field lookup via findTruncation.
-                    let fieldname = Self::find_partial_field(&ct, in1const as usize, 0)
-                        .map(|(name, _, _)| name)
-                        .unwrap_or_else(|| {
-                            // printc.cc:999-1001: default field name
-                            // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                            format!("field_0x{:x}", in1const)
-                        });
+                    // printc.cc:977-1010: field lookup. TYPE_UNION takes the
+                    // field from the union-resolution map (cc:979-990,
+                    // `fd->getUnionField(ptype, op, -1)` — the attach edge
+                    // from ActionSetCasts::resolveUnion, coreaction.cc:2509),
+                    // never findTruncation; Rugra reads the doc_function-time
+                    // snapshot with the same ResolveEdge key (the oracle's
+                    // LowlevelError arms are unreachable in a resolveUnion-
+                    // gated pipeline and the printer cannot throw — the
+                    // field_0x default stands in, cf. cc:943-946). TYPE_STRUCT
+                    // keeps the findTruncation walk (cc:991-1010).
+                    let fieldname = if meta == TypeMetatype::Union {
+                        in0_type
+                            .as_ref()
+                            .and_then(|pt| {
+                                self.union_resolutions
+                                    .get(&crate::unionresolve::ResolveEdge::new(pt, op, -1))
+                                    .filter(|res| res.get_field_num() >= 0)
+                                    .and_then(|res| match ct.as_ref() {
+                                        Datatype::Union(u) => u
+                                            .fields
+                                            .get(res.get_field_num() as usize)
+                                            .map(|fld| fld.name.clone()),
+                                        _ => None,
+                                    })
+                            })
+                            .unwrap_or_else(|| format!("field_0x{:x}", in1const))
+                    } else {
+                        Self::find_partial_field(&ct, in1const as usize, 0)
+                            .map(|(name, _, _)| name)
+                            .unwrap_or_else(|| {
+                                // printc.cc:999-1001: default field name
+                                // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
+                                format!("field_0x{:x}", in1const)
+                            })
+                    };
                     self.emit.print(if flex { "." } else { "->" });
                     self.emit.print(&fieldname);
                 } else if is_array {

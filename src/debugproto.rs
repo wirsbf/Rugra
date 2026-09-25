@@ -1876,8 +1876,21 @@ fn struct_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatyp
 
 // RUGRA-GLUE: constructs a fielded union Datatype from DWARF union members (all at offset 0)
 fn union_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype> {
+    let mut base = TypeBase::new(name, size, TypeMetatype::Union);
+    // Ghidra's TypeUnion constructor sets needs_resolution (type.hh:551);
+    // the import completes the fields immediately (the ctor's
+    // type_incomplete counterpart is cleared by setFields), but the
+    // resolution flag survives — every decoded/imported union carries it.
+    // Pointers to the union inherit the flag in TypePointer::calcSubmeta
+    // (type.cc:1048-1049), which is what drives
+    // ActionInferTypes::propagateTypeEdge's always-resolve arm
+    // (coreaction.cc:5081-5084) and ActionSetCasts::resolveUnion
+    // (coreaction.cc:2490). Without it the whole ResolvedUnion machinery
+    // starves (COREACT-C3-UNIONRES-0001). Same flagging pattern as
+    // enum_type's ENUMTYPE note above.
+    base.flags |= crate::type_system::datatype::type_flags::NEEDS_RESOLUTION;
     intern_named(Arc::new(Datatype::Union(TypeUnion {
-        base: TypeBase::new(name, size, TypeMetatype::Union),
+        base,
         fields,
     })))
 }
