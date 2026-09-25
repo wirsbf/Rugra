@@ -1507,10 +1507,20 @@ fn main() {
     for handle in handles {
         let _ = handle.join();
     }
+    let mut flush_failed = false;
     for writer_lock in [&outputs.functions, &outputs.results] {
         if let Ok(mut writer) = writer_lock.lock() {
-            let _ = writer.flush();
+            if let Err(error) = writer.flush() {
+                // ENOSPC and friends must be loud: a silently truncated
+                // JSONL corrupts every downstream aggregate.
+                eprintln!("[SWEEP] output flush FAILED: {error}");
+                flush_failed = true;
+            }
         }
+    }
+    if flush_failed {
+        eprintln!("[SWEEP] aborting before summary aggregation (outputs incomplete)");
+        std::process::exit(101);
     }
 
     // Aggregate summary from functions.jsonl (single source of truth).
