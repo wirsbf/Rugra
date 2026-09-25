@@ -4,13 +4,13 @@
 
 `MergeTypeIntersectCache` 补齐 `HighIntersectTest::intersection` 的第二判定臂
 （variable.cc:1186-1197）：cover 块交集为空且恰一侧 addrtied 时，经
-`testUntiedCallIntersection`（variable.cc:1072-1086）判定 untied 变量是否跨过
+`testUntiedCallIntersection`（variable.cc:1072-1083）判定 untied 变量是否跨过
 可能影响 tied 存储的 CALL/受控 STORE。配套落地 `StackAffectingOps`
-（merge.cc:63-99：populate=CALL 全集+有效 STORE guard；affectsTest=STORE 无
+（merge.cc:63-89：populate=CALL 全集+有效 STORE guard；affectsTest=STORE 无
 guard 即真/有 guard 按 isGuarded 地址段）与 `PcodeOpSet` 基座（cover.hh:36-70、
-cover.cc:49-66：按 (块索引, SeqNum order) 排序 + blockStart + is_pop 惰性
+cover.cc:627-652：按 (块索引, SeqNum order) 排序 + blockStart + is_pop 惰性
 populate）及 `Cover::intersect(const PcodeOpSet&, Varnode*)` 合并步进
-（cover.cc:342-390，Rust 侧为 `cover_intersects_op_set` 自由函数——Cover 是
+（cover.cc:342-382，Rust 侧为 `cover_intersects_op_set` 自由函数——Cover 是
 值类型且步进需缓存侧 op-set 状态）。通道字段（op_list/block_start/is_populated）
 随整个 cache 经 attach/detach 往返持久挂载，等价 C++ 的 by-reference 成员
 生命周期（merge.hh:85 + variable.hh:258）。`Merge::clear`/`MergePersistentState::clear`
