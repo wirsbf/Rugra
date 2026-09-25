@@ -1,10 +1,48 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（CURLSYM curl 侧 SYMDB 移植快照 + SEEDFLIP/DFLIP/HSEED 历史快照）
+**日期**: 2026-09-25（V3FLIP 被调原型通道默认转正快照 + CURLSYM/SEEDFLIP/DFLIP/HSEED 历史快照）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-25 CURLSYM curl 侧 SYMDB 移植快照（当前事实源）
+## 2026-09-25 V3FLIP 被调原型通道默认转正快照（当前事实源）
+
+**callee-siglock 通道默认转正**（Lane V3FLIP，wt/curlsig @ master 535dd91f）：httpd 驱动的
+被调锁定原型通道（HEADLESS-BRIDGE-V3-SIGLOCK-0003，manifest
+`tests/golden/manifests/callee_siglock_httpd_1204.json`——60 被调 = 27 全输入锁 + 26 返回锁）
+自本快照起为**默认行为**（转正判据：V3SIG opt-in 轮全量验证过——**−190 skeleton 零回退/默认脸
+字节恒等/mirror 恒拒/bank 391**，f9b3f1bf 终报 + 用户既定模式"实际性错误解决就默认开" +
+DFLIP/SEEDFLIP 门反转形态先例）。**新默认脸 == 原 opt-in 态逐字节**（httpd 951 ==
+RUGRA_V3SIG=1 态，cmp 恒等亲测）；curl 驱动未触、**577/0/0 不变**（cmp 字节恒等亲证）。
+门极性 = **opt-out 三段判定**（mirror 左短路恒拒 → `RUGRA_SEEDS=0` 全局退 →
+`RUGRA_V3SIG=0` 单门退 → 默认装）；任意二进制无 manifest 优雅 no-op（非致命告警 + 裸脸）。
+
+| 门禁（fast-release 亲测，@ master 535dd91f + V3FLIP） | 数字 | 说明 |
+|---|---|---|
+| httpd E2E（新默认脸） | **951 / 0 / 0**（skeleton/defects/numbering，34 函数） | vs `tests/golden/ghidra_httpd_1204.c`；==原 opt-in 态（RUGRA_V3SIG=1）逐字节；双跑 cmp 恒等；per-fn 表承 V3SIG 终报（main 613→505 / ap_fini 159→90 / ap_update_vhost_from_headers 56→51 / ap_matches 6→2 / caseD_0@0x154470 4→0 canon 逐字节，其余 29 函数恒等零回退） |
+| httpd 单门退 RUGRA_V3SIG=0 | **1141 / 0 / 0** | ==转正前默认脸 cmp 逐字节恒等（TYPESEED 保持默认开——单门退不牵连） |
+| httpd 全局逃生门 RUGRA_SEEDS=0 | **1234 / 0 / 0** | ==转正前 SEEDS=0 脸逐字节（分层退出：TYPESEED+V3SIG 同退）；`RUGRA_SEEDS=0 RUGRA_V3SIG=1` 仍全退（层级压制亲测 cmp 恒等） |
+| httpd 显式开 RUGRA_V3SIG=1 | **951 / 0 / 0** | ==新默认脸 cmp 恒等（历史 opt-in 见证形态保留） |
+| httpd mirror（RUGRA_MIRROR=1，含 +V3SIG=1） | 输出 cmp 恒等基线 mirror | 恒拒（左短路 "projection purity"，压制含显式 =1） |
+| httpd 无 manifest（RUGRA_V3SIG_MANIFEST→缺失路径） | **1141 / 0 / 0** ==旧默认 | 优雅 no-op（"cannot read manifest … (gate disabled)" 非致命告警）；任意二进制语义 |
+| curl E2E（默认脸） | **577 / 0 / 0**（124 函数） | curl 驱动未触；cmp 字节恒等基线（亲证）；curl 侧 siglock 通道另行立项（V3SIG 终报剩余面） |
+| httpd gcc 审计（新默认脸） | 14 OK / 15 FAIL | fail 函数名集与原 opt-in 态**逐名相同**（亲验；pRam 未声明族=在账 PRINTC-AFINI-UNIQUELOC-0001 等登记项，非本次引入） |
+| 投影银行（B2 钉板） | **391/391 MATCH** | 冻结投影 sha256 钉 + mirror 裸径采集契约 → 不受门极性影响（亲验） |
+| cargo test --lib | 1713 passed / 1 failed | 唯一失败 `test_nonzeromask_pipeline_wiring` 预存（多车道共证）；本 lane 零 src 触碰 |
+
+**V3SIG 门 env 语义矩阵（转正后）**：
+
+| env 形态 | 行为 |
+|---|---|
+| （无） | **装**（新默认；manifest 在库即装） |
+| `RUGRA_V3SIG=1` | 显式开——与默认等效（历史 opt-in 见证形态保留） |
+| `RUGRA_V3SIG=0` | 单门退（仅 V3SIG 关；TYPESEED 保持默认开，SEEDFLIP 语义不动） |
+| `RUGRA_SEEDS=0` | **全局退**——种子族全关（httpd TYPESEED+V3SIG 同退；curl 三门同语义），拿回裸脸（逃生门；在层级上压制含 `RUGRA_V3SIG=1` 的显式开——分层退出语义亲测） |
+| mirror 分量在场（RUGRA_MIRROR/RUGRA_FLOW_MIRROR/…） | 恒拒——压制一切 V3SIG 形态（含显式 =1），判定短路左侧 |
+
+注意：`RUGRA_V3SIG=0` 在转正前语义为"任意值=开"（`is_ok()` 判定），转正后按字面意义改为单门退——
+仓库内无任何脚本/测试依赖旧语义（grep 亲查，仅历史文档描述）；需要历史等价形态用 `=1`。
+
+## 2026-09-25 CURLSYM curl 侧 SYMDB 移植快照（历史，httpd 数字被 V3FLIP 节取代）
 
 **curl worker 的 action 侧符号库三件**（Lane CURLSYM，wt/curlsym @ master bdf2bd7f）：httpd
 DFLIP 已转正的 `build_action_data_symbol_db` 形态复制到 curl 驱动——①**R-only PT_LOAD 段范围**
