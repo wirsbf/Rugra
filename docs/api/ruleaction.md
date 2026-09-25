@@ -1150,10 +1150,20 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 ## 2026-06-27（续 21）：除法优化规则
 
 - **RuleSignDiv2**：完整移植 ruleaction.cc:8357-8408。`(V + -1*(V s>> 31)) s>> 1 => V s/ 2`（有符号除以 2 的编译器惯用法简化）。
-- **RuleDivChain**：完整移植 ruleaction.cc:8410-8455。折叠连续除法：
+- **RuleDivChain**：完整移植 ruleaction.cc:8401-8443（PATHOSLOW-DIVCHAIN-0001 重写，
+  修复旧版丢失 oracle 5 项语义导致的 oppool1 非终止）。折叠连续除法：
   - `(x / c1) / c2 => x / (c1*c2)`（相同符号 INT_DIV/INT_SDIV）
-  - `(x >> c1) / c2 => x / (2^c1 * c2)`（无符号 INT_RIGHT + INT_DIV）
-  - 中间结果必须 loneDescend（仅在此处使用）
+  - `(x >> c1) / c2 => x / (2^c1 * c2)`（无符号 INT_RIGHT + INT_DIV，cc:8423-8425 `val1 = 1 << sa`）
+  - 中间结果必须 loneDescend（仅在此处使用，cc:8417）
+  - **5 项决定性语义（cc:8427-8441，逐行对齐）**：
+    ① `baseVn = divOp->getIn(0)` 的 isFree 守卫（cc:8428）；
+    ② `resval = (val1*val2) & calc_mask(sz)` 零积守卫（cc:8431-8432，sz 取自 `vn->getSize()` cc:8429）；
+    ③ signbit_negative 归一——val1/val2 各自取绝对值 `(~v+1)&mask`（cc:8433-8436）；
+    ④ bitcount 溢出守卫 `mostsigbit_set(val1)+mostsigbit_set(val2)+2`，INT_DIV `> sz*8`、
+    INT_SDIV `> sz*8-2` 拒绝（cc:8437-8439）；
+    ⑤ **`opSetInput(op,baseVn,0)` in(0) 基数替换**（cc:8440）+ in(1)=newConstant(sz,resval)
+    （cc:8441）——中间结果失去唯一后代，模式不可再命中，链每 pass 短一层直至溢出守卫
+    终止；oracle 从不改写 op 的 opcode（旧版多出的 INT_RIGHT→INT_DIV op_set_opcode 已删）。
 
 ## 2026-06-27（续 22）：符号提取归一化规则
 

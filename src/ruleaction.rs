@@ -9280,7 +9280,7 @@ impl Rule for RuleSignDiv2 {
 }
 
 /// Collapse two consecutive divisions: `(x / c1) / c2 => x / (c1*c2)`.
-/// Faithful to Ghidra's `RuleDivChain` (ruleaction.cc:8410-8455).
+/// Faithful to Ghidra's `RuleDivChain` (ruleaction.cc:8401-8443).
 pub struct RuleDivChain;
 
 impl RuleDivChain {
@@ -9293,7 +9293,7 @@ impl Rule for RuleDivChain {
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleDivChain::applyOp (ruleaction.cc:8419-8455).
+        // Faithful to RuleDivChain::applyOp (ruleaction.cc:8401-8443).
         let (opc2, vn, const_vn2_val) = {
             let op = op_arc.read().unwrap();
             let opc2 = op.opcode;
@@ -9321,20 +9321,55 @@ impl Rule for RuleDivChain {
         if !const_vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // Intermediate result must only be used here.
         if vn.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
+        // cc:8418-8426: value divided by in the first div. Same opcode pair
+        // reads the constant directly; the (INT_DIV, INT_RIGHT) pair folds
+        // the shift as 1 << sa.
         let val1 = if opc1 == opc2 {
             const_vn1.read().unwrap().get_offset()
         } else {
-            // Unsigned case with INT_RIGHT.
-            1u64 << const_vn1.read().unwrap().get_offset()
+            // cc:8423-8425: int4 sa = constVn1->getOffset(); val1 = 1; val1 <<= sa;
+            1u64.wrapping_shl(const_vn1.read().unwrap().get_offset() as u32)
         };
-        let full_mask = calc_mask(const_vn1.read().unwrap().get_size());
-        let new_val = (val1.wrapping_mul(const_vn2_val)) & full_mask;
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        let new_const = fd.new_constant(const_vn1.read().unwrap().get_size(), new_val);
-        fd.op_set_input(&follow, new_const, 1);
-        if opc1 == OpCode::CPUI_INT_RIGHT {
-            fd.op_set_opcode(&follow, OpCode::CPUI_INT_DIV);
+        // cc:8427-8428: the chain base must still be live (isFree guard).
+        let base_vn = match div_op.read().unwrap().get_in(0) {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if base_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        // cc:8429-8431: resval = (val1 * val2) & calc_mask(sz), sz from vn.
+        let sz = vn.read().unwrap().get_size();
+        let val2 = const_vn2_val;
+        let resval = (val1.wrapping_mul(val2)) & calc_mask(sz);
+        // cc:8432: a zero product cannot replace the divisor.
+        if resval == 0 { return Ok(action_status::NO_CHANGE); }
+        // cc:8433-8436: normalize both constants to absolute value before
+        // counting bits.
+        let mut val1_abs = val1;
+        let mut val2_abs = val2;
+        if crate::address::signbit_negative(val1_abs, sz) {
+            val1_abs = (!val1_abs).wrapping_add(1) & calc_mask(sz);
         }
+        if crate::address::signbit_negative(val2_abs, sz) {
+            val2_abs = (!val2_abs).wrapping_add(1) & calc_mask(sz);
+        }
+        // cc:8437-8439: overflow guards on the collapsed constant.
+        let bitcount = crate::address::mostsigbit_set(val1_abs)
+            + crate::address::mostsigbit_set(val2_abs)
+            + 2;
+        if opc2 == OpCode::CPUI_INT_DIV && bitcount > (sz * 8) as i32 {
+            return Ok(action_status::NO_CHANGE); // Unsigned overflow
+        }
+        if opc2 == OpCode::CPUI_INT_SDIV && bitcount > (sz * 8) as i32 - 2 {
+            return Ok(action_status::NO_CHANGE); // Signed overflow
+        }
+        // cc:8440-8441: collapse the chain. in(0) becomes the chain base so
+        // the intermediate (x / c1) loses its lone descendent and the pattern
+        // cannot re-fire on it; in(1) becomes the product constant. The op
+        // keeps its DIV/SDIV opcode (oracle never rewrites it here).
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, base_vn, 0);
+        let new_const = fd.new_constant(sz, resval);
+        fd.op_set_input(&follow, new_const, 1);
         Ok(action_status::CHANGE)
     }
 
@@ -27861,6 +27896,134 @@ mod tests {
         let state = AddTreeState::new(fd, add_op, 0);
         assert_eq!(state.size, 0);
         state
+    }
+
+    // --- RuleDivChain (ruleaction.cc:8401-8443) ---
+
+    /// Build `((base op1 c1) op2 c2) -> out` through the real Funcdata path
+    /// with `base` an INPUT-flagged varnode (not free). Returns the outer op
+    /// (the rule target) and the base varnode.
+    fn build_div_chain(
+        fd: &mut Funcdata,
+        inner_opc: OpCode,
+        c1: u64,
+        outer_opc: OpCode,
+        c2: u64,
+        size: usize,
+    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+        let base = make_input_vn(fd, size, 0x300);
+        let c1_vn = fd.new_constant(size, c1);
+        let (div_op, mid) = build_op(fd, inner_opc, &[base.clone(), c1_vn], size);
+        let c2_vn = fd.new_constant(size, c2);
+        let (outer, _out) = build_op(fd, outer_opc, &[mid, c2_vn], size);
+        let _ = div_op;
+        (outer, base)
+    }
+
+    /// cc:8440-8441: the collapse must replace in(0) with the chain base
+    /// (opSetInput(op,baseVn,0)) and in(1) with the product constant. With
+    /// in(0) swapped to a non-written base, a second pass is a NO_CHANGE —
+    /// the non-termination mechanism of the old port (in(1)-only rewrite,
+    /// pattern re-firing forever) is structurally gone.
+    #[test]
+    fn divchain_collapses_in0_base_and_terminates() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_DIV, 8, OpCode::CPUI_INT_DIV, 4, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1, "oracle applyOp returns 1 on collapse");
+        {
+            let o = outer.0.read().unwrap();
+            assert_eq!(o.opcode, OpCode::CPUI_INT_DIV, "opcode untouched");
+            assert!(
+                Arc::ptr_eq(&o.inrefs[0], &base),
+                "cc:8440 in(0) must be the chain base"
+            );
+            let in1 = o.inrefs[1].read().unwrap();
+            assert!(in1.is_constant());
+            assert_eq!(in1.get_offset(), 32, "8 * 4 = 0x20");
+            assert_eq!(in1.get_size(), 4, "sz from vn (cc:8429)");
+        }
+        // Second pass: in(0) = base has no def -> isWritten fails -> 0.
+        let rc2 = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc2, 0, "chain pattern must not re-fire");
+    }
+
+    /// (INT_DIV, INT_RIGHT) pair: val1 = 1 << sa (cc:8423-8425); the outer
+    /// op is already INT_DIV and the oracle never rewrites its opcode.
+    #[test]
+    fn divchain_right_shift_inner_folds_without_opcode_rewrite() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_RIGHT, 4, OpCode::CPUI_INT_DIV, 2, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1);
+        let o = outer.0.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_DIV);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &base));
+        assert_eq!(o.inrefs[1].read().unwrap().get_offset(), 32, "(1<<4) * 2");
+    }
+
+    /// cc:8433-8436 + cc:8438-8439: negative divisors are normalized to
+    /// absolute value before the bit count, and SDIV must fit sz*8-2 bits.
+    /// ((x /s -1) /s 2) => x /s 0xfffffffe with no overflow rejection.
+    #[test]
+    fn divchain_sdiv_signbit_normalization() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_SDIV, 0xffff_ffff, OpCode::CPUI_INT_SDIV, 2, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1, "|−1|*|2| = 2 bits, fits sz*8−2 = 30");
+        let o = outer.0.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_SDIV);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &base));
+        assert_eq!(o.inrefs[1].read().unwrap().get_offset(), 0xffff_fffe);
+    }
+
+    /// cc:8432 + cc:8437-8439: a product that wraps to zero, and a
+    /// normalized bit count exceeding the width, both leave the op alone
+    /// (the old port rewrote in(1) unconditionally and never terminated).
+    #[test]
+    fn divchain_zero_product_and_overflow_rejected() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // (2^16) * (2^16) wraps to 0 mod 2^32 -> cc:8432 resval==0 reject.
+        let (outer, _) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_DIV, 0x1_0000, OpCode::CPUI_INT_DIV, 0x1_0000, 4,
+        );
+        let before = outer.0.read().unwrap().inrefs[1].clone();
+        assert_eq!(RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap(), 0);
+        assert!(
+            Arc::ptr_eq(&outer.0.read().unwrap().inrefs[1], &before),
+            "in(1) untouched on reject"
+        );
+        // Unsigned overflow: 0x8000_0000 * 2 -> resval 0 ok? no: wraps to 0,
+        // so use 0x4000_0001 * 4: resval = 0x1_0000_0004 & mask = 4 != 0,
+        // but |0x4000_0001| has mostsig=30, |4| -> 2, bitcount = 30+2+2 = 34
+        // > sz*8 = 32 -> cc:8438 reject.
+        let mut fd2 = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer2, _) = build_div_chain(
+            &mut fd2, OpCode::CPUI_INT_DIV, 0x4000_0001, OpCode::CPUI_INT_DIV, 4, 4,
+        );
+        assert_eq!(RuleDivChain::new().apply_op(&outer2.0, &mut fd2).unwrap(), 0);
+        assert_eq!(outer2.0.read().unwrap().opcode, OpCode::CPUI_INT_DIV);
+    }
+
+    /// cc:8428: a free base varnode (neither INPUT nor WRITTEN) must reject.
+    #[test]
+    fn divchain_free_base_rejected() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let base = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        assert!(base.read().unwrap().is_free());
+        let c1 = fd.new_constant(4, 8);
+        let (_, mid) = build_op(&mut fd, OpCode::CPUI_INT_DIV, &[base.clone(), c1], 4);
+        let c2 = fd.new_constant(4, 4);
+        let (outer, _) = build_op(&mut fd, OpCode::CPUI_INT_DIV, &[mid, c2], 4);
+        assert_eq!(RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap(), 0);
     }
 }
 
