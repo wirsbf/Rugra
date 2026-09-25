@@ -8297,20 +8297,15 @@ impl BlockSwitch {
         }
     }
 
-    /// Ghidra `BlockSwitch::isExit` (block.hh:791, inline): does the i-th case
-    /// block exit the switch? Rugra approximates this with `size_out()==1`
-    /// (matching the C++ `addCase` rule at block.cc:3514: a case with a single
-    /// out-edge exits the switch). Cases with goto labels (gototype != 0) are
-    /// never exits.
-    // Ghidra: block.hh:791 BlockSwitch::isExit
-    pub fn is_exit(&self, i: usize) -> bool {
-        // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) when gototype == 0.
-        if let Some(case) = self.cases.get(i) {
-            case.read().unwrap().size_out() == 1
-        } else {
-            false
-        }
-    }
+    // CASEWRAP-CR-F2: `isExit(i)` (block.hh:791 reads the captured
+    // `caseblocks[i].isexit` flag) is DELETED. It had zero callers, and its
+    // body re-derived `bl->sizeOut()==1` from the case block at read time —
+    // always false once identifyInternal's replaceInEdge half-deletes the
+    // case blocks' out-edge halves (block.cc:160-173), so the former doc
+    // claim ("matches the C++ addCase rule") never held for post-grab
+    // reads. The captured transports `case_isexit`/`default_isexit` (fields
+    // above, set at addCase time per block.cc:3511-3514) are the
+    // oracle-shaped source for any future reader of the exit property.
 
     /// Ghidra `BlockSwitch::markUnstructured` (block.cc:3603-3611): mark each
     /// case whose goto edge is a plain `goto` with `f_unstructured_targ`. The
