@@ -540,6 +540,31 @@ pub struct Varnode {
     pub nzm: u64,
 }
 
+// RUGRA-GLUE: borrow-safety helper materializing the propagation half of
+// Varnode::setFlags (varnode.cc:358-359 `high->coverDirty()`) and
+// Varnode::clearFlags (varnode.cc:371-372) — i.e. HighVariable::coverDirty
+// (variable.hh:275-281: `highflags |= coverdirty; if (piece)
+// piece->markExtendCoverDirty();`) — as a free function taking the Arc, so
+// `&mut self` Varnode mutation methods can fire it. The oracle inline is a
+// single call on a raw pointer; Rust's high lives in its own RwLock, and
+// HighVariable::cover_dirty's piece walk has a final self leg
+// (variable.cc:136 writes the OWN high again), so the flag write and the
+// piece walk are sequenced under separate guards to avoid same-lock write
+// reentrancy. Observable flag state is identical to the oracle inline.
+// MERGE-HIGHCOVER-PROPAGATION-0001: this restores the oracle invariant that
+// any mutation dirtying a member Varnode cover invalidates the stored high
+// cover aggregate at mutation time.
+pub(crate) fn propagate_cover_dirty_to_high(high: &Arc<RwLock<HighVariable>>) {
+    let piece_arc = {
+        let mut h = high.write().unwrap();
+        h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
+        h.piece.clone()
+    };
+    if let Some(piece_arc) = piece_arc {
+        crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
+    }
+}
+
 impl Varnode {
     // Ghidra: varnode.cc:578 Varnode::Varnode
     /// Create a new RAM-space varnode.
@@ -997,13 +1022,46 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:352 Varnode::setFlags
+    /// Set boolean attributes. Faithful to `Varnode::setFlags`
+    /// (varnode.cc:352-361): the flag bits are set, then the owning high is
+    /// notified — `flagsDirty()` always, plus `coverDirty()` when the mask
+    /// contains coverdirty. The coverdirty propagation half (cc:358-359) is
+    /// the MERGE-HIGHCOVER-PROPAGATION-0001 invariant: it keeps the stored
+    /// high cover aggregate invalidatable at mutation time so every raw
+    /// `HighVariable::getCover` reader (variable.hh:294 returns internalCover
+    /// with NO lazy update — freshness is purely this invariant) sees a
+    /// current aggregate whenever the high is not dirty.
+    /// The `flagsDirty` half (highflags flagsdirty|namerepdirty) is not
+    /// materialized here: no Rust reader consumes the high flagsdirty
+    /// channel yet (HighVariable::updateFlags has no live caller), so the
+    /// extra lock traffic would be unobservable dead state.
+    /// LOCK DISCIPLINE: the propagation takes a write guard on the high
+    /// while the caller still holds this Varnode's write guard — a
+    /// different lock, no reentrancy. Every in-tree call site acquires its
+    /// Varnode guard inline (statement-level), never across a live high
+    /// guard; verified per-caller 2026-09-25 (HIGHCOV lane).
     pub fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+        if (f & varnode_flags::COVERDIRTY) != 0 {
+            if let Some(high) = self.high.clone() {
+                propagate_cover_dirty_to_high(&high);
+            }
+        }
     }
 
     // Ghidra: varnode.cc:365 Varnode::clearFlags
+    /// Clear boolean attributes. Faithful to `Varnode::clearFlags`
+    /// (varnode.cc:365-374): the oracle ALSO propagates coverDirty when the
+    /// cleared mask contains coverdirty (cc:371-372) — e.g. a member that
+    /// was dirty before its high was attached re-dirties the high at its
+    /// first rebuild. The same arm is wired here for mask symmetry.
     pub fn clear_flags(&mut self, f: u32) {
         self.flags &= !f;
+        if (f & varnode_flags::COVERDIRTY) != 0 {
+            if let Some(high) = self.high.clone() {
+                propagate_cover_dirty_to_high(&high);
+            }
+        }
     }
 
     // --- Ghidra-faithful varnode flag accessors (varnode.hh:235-330) ---
@@ -1054,6 +1112,20 @@ impl Varnode {
     /// rebuilt while the root write guard remains held, then the same Box is
     /// reattached and the dirty flag is cleared. Rebuild uses the Arc only as
     /// a stable identity token and never attempts to lock the root again.
+    ///
+    /// NOTE (MERGE-HIGHCOVER-PROPAGATION-0001): the oracle's updateCover
+    /// ends with clearFlags(coverdirty) (varnode.cc:239), which propagates
+    /// coverDirty to the owning high (varnode.cc:371-372) — the load-bearing
+    /// case is a member that was dirty BEFORE its high was attached. Rugra
+    /// CANNOT fire that half here: callers hold READ guards on the member's
+    /// high across this call (merge.rs inflate_test via coreaction
+    /// check_implied_cover's borrowed &HighVariable; aggregate_high_cover_from),
+    /// and the propagation needs a write guard on that same high —
+    /// same-lock reentrancy deadlock. The reader-side compensations absorb
+    /// the gap: MergeTypeIntersectCache::update_high's instance scan marks
+    /// the high dirty from the member flag BEFORE any rebuild can clear it,
+    /// and inflate_test/aggregate_high_cover_from aggregate fresh from the
+    /// rebuilt members unconditionally.
     pub fn update_cover_locked(root: &Arc<RwLock<Varnode>>) {
         let mut value = root.write().unwrap();
         if (value.flags & varnode_flags::COVERDIRTY) == 0 {
@@ -1117,11 +1189,13 @@ impl Varnode {
 
     // Ghidra: varnode.cc:254 Varnode::calcCover
     /// Initialize a new Cover and set dirty bit. Faithful to `calcCover`
-    /// (varnode.cc:254-263).
+    /// (varnode.cc:254-263). The cc:261 setFlags(coverdirty) call now goes
+    /// through `set_flags`, carrying the high propagation half
+    /// (varnode.cc:358-359) — MERGE-HIGHCOVER-PROPAGATION-0001.
     pub fn calc_cover(&mut self) {
         if self.has_cover() {
             self.cover = Some(Box::new(Cover::new()));
-            self.flags |= varnode_flags::COVERDIRTY;
+            self.set_flags(varnode_flags::COVERDIRTY);
         }
     }
 
@@ -2587,8 +2661,11 @@ impl Varnode {
             }
         }
         self.descend.push(std::sync::Arc::downgrade(op));
-        // Ghidra cc:339: setFlags(Varnode::coverdirty)
-        self.flags |= varnode_flags::COVERDIRTY;
+        // Ghidra cc:339: setFlags(Varnode::coverdirty) — propagates
+        // coverDirty to the owning high (varnode.cc:358-359) so the stored
+        // aggregate is invalidated at mutation time (HIGHCOV lane 2026-09-25;
+        // previously set inline without the propagation half).
+        self.set_flags(varnode_flags::COVERDIRTY);
     }
 
     // Ghidra: varnode.cc:316 Varnode::eraseDescend
@@ -2599,7 +2676,8 @@ impl Varnode {
     /// matching occurrence. This is load-bearing when one op reads the same
     /// Varnode in multiple slots: Ghidra removes one list node per
     /// `opUnsetInput` call.
-    /// Also sets coverdirty (Ghidra cc:325); omitted (see add_descend note).
+    /// Also sets coverdirty (Ghidra cc:325), now with the high propagation
+    /// half (varnode.cc:358-359) — see set_flags.
     pub fn erase_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         let position = self.descend.iter().position(|weak| {
             weak.upgrade()
@@ -2613,8 +2691,10 @@ impl Varnode {
                 std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64()
             );
         }
-        // Ghidra cc:325: setFlags(Varnode::coverdirty)
-        self.flags |= varnode_flags::COVERDIRTY;
+        // Ghidra cc:325: setFlags(Varnode::coverdirty) — propagates
+        // coverDirty to the owning high (varnode.cc:358-359), same as
+        // add_descend (HIGHCOV lane 2026-09-25).
+        self.set_flags(varnode_flags::COVERDIRTY);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isBoolOutputDef

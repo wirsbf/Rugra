@@ -537,7 +537,10 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 ### `pub fn set_flags(&mut self, f: u32)`
 
-为节点添加一个或多个 flag。
+为节点添加一个或多个 flag。掩码含 `COVERDIRTY` 时按 varnode.cc:356-360
+传播 `high->coverDirty()`（经 `propagate_cover_dirty_to_high`，
+MERGE-HIGHCOVER-PROPAGATION-0001 收口，2026-09-25）；`flagsDirty` 半边
+未物化（Rust 无 high flagsdirty 读者=不可观察死态）。
 
 ### 参数
 - `f`: 位标志集合
@@ -1225,3 +1228,36 @@ Datatype *ct)`（varnode.cc:1265-1271）的 typed 镜像：分配 unique 地址�
 `Funcdata::new_unique_typed` 承担同一默认。调用方：
 `Merge::allocateCopyTrim`（merge.cc:416/429）与 `Merge::trimOpOutput`
 （merge.cc:668/677）的 trim COPY 输出携带源 varnode 类型（PM-F2S ord337 修复）。
+
+## 2026-09-25：coverDirty 传播半边接线（MERGE-HIGHCOVER-PROPAGATION-0001，Lane HIGHCOV）
+
+oracle 不变量：任何弄脏成员 varnode cover 的突变同步传播 coverDirty 到所属
+high（varnode.cc:352-361 setFlags / 365-374 clearFlags 的 cc:358-359/371-372
+臂；触发者 addDescend cc:339、eraseDescend cc:325、calcCover cc:261、
+VarnodeBank::replace cc:1350-1351、makeFree→setDef cc:1322）——存储聚合
+（`HighVariable::getCover` 裸读 internalCover，无惰性更新）的新鲜度完全靠它。
+
+接线（本日）：①新增 `propagate_cover_dirty_to_high(high)`（RUGRA-GLUE 借用安全
+helper：high 写锁置位 COVERDIRTY → 释放 → piece walk，规避
+markExtendCoverDirty 末腿 variable.cc:136 的同锁重入；merge.rs
+`mark_high_cover_dirty` 委托同一实现）；②`set_flags`/`clear_flags` 掩码含
+`COVERDIRTY` 时自动传播；③`add_descend`/`erase_descend`/`calc_cover` 的内联
+`flags |= COVERDIRTY` 改走 `set_flags`（oracle 字面 setFlags 调用形态）——
+replace/make_free/创建位点（set_input/set_output 置
+`INPUT|COVERDIRTY`/`WRITTEN|COVERDIRTY`，high==None 时传播臂自然 no-op，
+=oracle high==null 分支）随之自动携带。
+
+**锁不可达的 clear 侧**：`update_cover_locked`（varnode.cc:239
+clearFlags→传播）与 `get_cover`（varnode.hh:202 → updateCover）不传播——
+调用方持 high 读守卫（checkImpliedCover 借用 `&HighVariable`、
+aggregate_high_cover_from），见两函数 NOTE 注释；由 HighVariable::new 初始
+脏（variable.cc:224）+ update_high 实例扫描 + inflate/aggregate 现聚合吸收。
+该角落承载「成员在 attach 前已脏」的首次重建置脏语义。
+
+**flagsDirty 半边未物化**：oracle 每次 setFlags 无条件
+`high->flagsDirty()`（flagsdirty|namerepdirty）；Rust 无 high flagsdirty
+消费者（updateFlags 无活调用），物化=不可观察死态——登记而非实现。
+
+验证：curl/httpd 默认脸对亲父 a9475ecc cmp 逐字节恒等；cargo test --lib
+1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs --strict 绿。
+详见 docs/api/merge.md 同日节。
