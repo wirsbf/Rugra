@@ -1983,13 +1983,28 @@ impl Action for ActionMergeType {
 // which are implemented and wired. Deletion verified behavior-neutral:
 // curl E2E byte-identical, defects=0, numbering=0.
 
-/// Attach System V AMD64 ABI register parameters to CPUI_CALL operations
-///
-/// Scans for register writes (rdi, rsi, rdx, rcx, r8, r9) preceding each call
-/// and attaches them as additional inputs so PrintC can emit function arguments.
-pub struct ActionCallParams;
+// ActionCallParams + known_param_count + known_param_types + is_known_function
+// DELETED (EXPEL-CORPUS-TABLES-0001, 2026-09-25): 2026-06-23 bootstrap
+// leftovers — per-function-name arity/type tables special-casing the curl/
+// httpd corpora (hugehelp/getparameter/match_url/SetHTTPrequest/glob_*/
+// ap_*/curl_easy_*/my_*/parseconfig/...) plus libc entries and a fabricated
+// `_ => 6` default. Ghidra's coreaction.cc has NO name lookup anywhere:
+// call-site param knowledge reaches the caller only through the callee's
+// own FuncProto copy (ActionDefaultParams::apply, coreaction.cc:2321-2330,
+// `fc->copy(otherfunc->getFuncProto())`) or the platform signature data
+// (Rugra's equivalent data plane: debugproto::LibcSignatureTable, installed
+// on callspecs by the driver's callspec link); a function's own inputs come
+// from trial derivation only (ActionInputPrototype::apply,
+// coreaction.cc:4707-4761 — no self-name count override, no supplement/
+// truncate by name). ActionCallParams was additionally dead code: never
+// registered in universal_action (action.rs) and never constructed — the
+// sole consumer of the tables' call-site `_ => 3` default. Deletion
+// verified behavior-neutral on both corpora in all driver states (A/B
+// byte-identical; see commit message Differential block).
 
-/// SysV AMD64 argument register offsets in order
+/// SysV AMD64 argument register offsets in order, consumed by
+/// ActionInferParams' input-register candidate scan.
+// RUGRA-GLUE: Rugra-specific ABI register index for the SysV trial scan
 const SYSV_ARG_REGS: [(u64, &str); 6] = [
     (0x38, "rdi"),  // arg0
     (0x30, "rsi"),  // arg1
@@ -1998,373 +2013,6 @@ const SYSV_ARG_REGS: [(u64, &str); 6] = [
     (0x80, "r8"),   // arg4
     (0x88, "r9"),   // arg5
 ];
-
-/// Standard libc function signature database.
-/// Returns the known number of register parameters for common C library functions.
-/// For variadic functions (printf, etc.), returns the number of fixed parameters
-/// (the variadic args are handled separately).
-/// For unknown functions, returns 6 (all SysV AMD64 arg registers).
-/// This is the standard approach used by all decompilers (Ghidra .gdt, IDA .til).
-// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param count); no Ghidra counterpart (Ghidra uses FuncProto lock instead)
-fn known_param_count(func_name: Option<&str>) -> usize {
-    // Normalize function name: replace '.' with '_' so that GCC-optimized
-    // variants like "parseconfig.constprop.0" match "parseconfig_constprop_0".
-    let normalized = func_name.map(|n| n.replace('.', "_"));
-    match normalized.as_deref() {
-        Some(name) => match name {
-            "curl_version" | "curl_global_cleanup" | "__errno_location"
-            | "__ctype_b_loc" | "getpid" | "fork"
-            | "_init" | "_fini" | "__libc_csu_init" | "__libc_csu_fini"
-            | "main_init" | "main_free" => 0,
-
-            "malloc" | "free" | "strlen" | "strdup" | "puts" | "exit" | "_exit"
-            | "atoi" | "atol" | "atof" | "abs" | "isatty" | "fileno" | "close"
-            | "fclose" | "fflush" | "ferror" | "clearerr" | "rewind"
-            | "perror" | "remove" | "unlink" | "sleep" | "alarm"
-            | "toupper" | "tolower" | "isalpha" | "isdigit" | "isspace"
-            | "curl_easy_init" | "curl_easy_cleanup" | "curl_easy_perform"
-            | "curl_global_init" | "curl_getenv" | "curl_free"
-            | "curl_slist_free_all"
-            | "hugehelp"
-            | "progressbarinit" | "my_get_token" | "my_get_line" => 1,
-
-            "strcpy" | "strcat" | "strcmp" | "strstr" | "strchr" | "strrchr"
-            | "strpbrk" | "strtok" | "fopen" | "fdopen" | "freopen"
-            | "signal" | "access" | "stat" | "lstat" | "mkdir"
-            | "rename" | "fgets" | "fputs" | "realloc" | "calloc"
-            | "memcmp" | "strequal" | "strnequal" | "GetStr"
-            | "glob_url" | "glob_set"
-            | "curl_slist_append" | "fputc" | "fgetc"
-            | "SetHTTPrequest" | "SetHTTPrequest_part_0"
-            | "helpf"
-            | "glob_range"
-            | "ap_log_error" | "ap_exists_config_define" => 2,
-
-            "memcpy" | "memmove" | "memset" | "strncpy" | "strncat" | "strncmp"
-            | "fread" | "strtol" | "strtoul" | "strtod"
-            | "read" | "write" | "open" | "fcntl" | "ioctl"
-            | "__xstat"
-            | "curl_easy_setopt"
-            | "glob_word" | "next_url" => 3,
-
-            "fseek" | "snprintf" | "fwrite" | "my_fwrite"
-            | "parseconfig_constprop_0" | "parseconfig" => 4,
-
-            "match_url" | "myprogress"
-            | "getparameter.constprop.0" | "getparameter_constprop_0" => 5,
-
-            "__sprintf_chk" | "__fprintf_chk" | "__printf_chk"
-            | "__snprintf_chk"
-            | "__isoc99_sscanf" | "sscanf" => 5,
-            // __vfprintf_chk(fp, flag, format, va_list) — 4 fixed args, not variadic
-            "__vfprintf_chk" => 4,
-
-            "maprintf" | "maprintf_constprop_0" => 2,
-            "strdup" => 1,
-            "ap_ht_time" => 4,
-            "ap_strcmp_match" | "ap_strcasecmp_match" => 2,
-            "ap_fini_vhost_config" | "ap_parse_vhost_addrs" => 2,
-            "ap_init_vhost_config" | "ap_set_name_virtual_host" => 1,
-            "ap_matches_request_vhost" => 3,
-            "ap_update_vhost_given_ip" => 1,
-            "ap_make_dirstr_prefix" | "ap_no2slash" | "ap_getparents" | "ap_pregsub" => 1,
-
-            _ => 6,
-        },
-        None => 6,
-    }
-}
-
-/// Known parameter type signatures for functions whose source code we know.
-/// Returns a list of "ptr" or "int" for each parameter position.
-/// Used by ActionInferParams to override the default size-based type inference
-/// with source-accurate pointer types. This closes the gap between Rugra's
-/// "all long params" and the source code's typed params (void*, size_t, FILE*).
-// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param types)
-fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
-    let normalized = func_name.map(|n| n.replace('.', "_"));
-    let name = normalized.as_deref()?;
-    // (param_index → "ptr" or "int")
-    match name {
-        // curl functions (source: curl/src/tool_*.c)
-        "my_fwrite" => Some(vec!["ptr", "int", "int", "ptr"]),  // void*, size_t, size_t, FILE*
-        // myprogress disabled — param type conflicts in optimized binary
-        // "myprogress" => Some(vec!["ptr", "int", "int", "int", "ptr"]),
-        "SetHTTPrequest" | "SetHTTPrequest_part_0" => Some(vec!["int", "ptr"]),  // HttpReq, HttpReq*
-        "helpf" => Some(vec!["ptr"]),  // const char *fmt
-        // glob_* disabled — param_1 conflicts in optimized binary (used as int in some paths)
-        // "glob_url" | "glob_set" | "glob_range" | "glob_word" => Some(vec!["ptr", "ptr"]),
-        "next_url" => Some(vec!["ptr"]),  // URLGlob*
-        "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "ptr"]),  // const char*, Configurable*
-        "getparameter" | "getparameter_constprop_0" => {
-            Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"])
-        }
-        "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
-        "progressbarinit" => Some(vec!["ptr"]),  // void*
-        // httpd functions — only ones we're confident about
-        "ap_fini_vhost_config" => Some(vec!["ptr", "ptr"]),
-        "ap_parse_vhost_addrs" => Some(vec!["ptr", "ptr"]),
-        _ => None,
-    }
-}
-
-// RUGRA-GLUE: Rugra-specific ABI table (known-callee predicate)
-fn is_known_function(func_name: Option<&str>) -> bool {
-    known_param_count(func_name) != 6
-}
-
-impl ActionCallParams {
-    // RUGRA-GLUE: Rugra-specific param fill-in pass; no direct Ghidra Action counterpart
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Action for ActionCallParams {
-    // RUGRA-GLUE: Rugra-specific param fill-in apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        use crate::space::AddressSpace;
-        let mut changed = 0;
-
-        // Build symbol lookup for call targets
-        let symbol_table: std::collections::HashMap<u64, String> = fd.symbol_table.clone();
-
-        // Collect info about CALL ops: (index in alivelist, max_args, num_inputs)
-        // num_inputs distinguishes old-style (1 = target only) from new-style
-        // (7 = target + 6 SysV arg registers from the lifter).
-        let call_info: Vec<(usize, usize, usize)> = fd
-            .obank
-            .alivelist
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, op_ref)| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode == OpCode::CPUI_CALL {
-                    let target_addr = op.inrefs[0].read().unwrap().get_offset();
-                    let func_name = symbol_table.get(&target_addr).map(|s| s.as_str());
-                    let max_args = if is_known_function(func_name) {
-                        known_param_count(func_name)
-                    } else {
-                        match fd.external_prototypes.get(&target_addr) {
-                            Some(&count) if count > 0 => count,
-                            _ => 3,
-                        }
-                    };
-                    Some((idx, max_args, op.num_input()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for &(call_idx, max_args, num_inputs) in &call_info {
-            // New-style CALL: the x86 lifter already emitted the 6 SysV
-            // arg registers as explicit inputs. Heritage processed them
-            // into proper SSA varnodes. Trim to the callee's known param
-            // count (0 for void functions, up to 6 for full-register args).
-            if num_inputs > 1 {
-                let call_op = fd.obank.alivelist[call_idx].0.clone();
-                let desired_total = 1 + max_args.min(SYSV_ARG_REGS.len());
-                let mut call_op_w = call_op.write().unwrap();
-                while call_op_w.inrefs.len() > desired_total {
-                    call_op_w.inrefs.pop();
-                }
-                if max_args > 0 {
-                    changed += 1;
-                }
-                continue;
-            }
-
-            if max_args == 0 {
-                continue;
-            }
-
-            // Old-style CALL (num_inputs == 1): no lifter-provided args.
-            // Fall back to backwards search for arg register writes.
-            let search_regs = max_args.min(SYSV_ARG_REGS.len());
-            let mut arg_varnodes: Vec<Option<Arc<std::sync::RwLock<crate::varnode::Varnode>>>> =
-                vec![None; search_regs];
-
-            // Search backwards from the call through the alivelist.
-            // No arbitrary depth limit: the search naturally stops at
-            // CALL / BRANCH / RETURN boundaries, which are the hard
-            // cross-function or cross-path edges.
-            for search_idx in (0..call_idx).rev() {
-                let op_ref = &fd.obank.alivelist[search_idx];
-                let op = op_ref.0.read().unwrap();
-
-                // Skip if no output
-                if let Some(ref out_arc) = op.output {
-                    let out_vn = out_arc.read().unwrap();
-                    if out_vn.get_space() == AddressSpace::Register {
-                        let reg_offset = out_vn.get_offset();
-                        // Check if this is one of the SysV arg registers (up to max_args)
-                        for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                            if reg_offset == expected_off && arg_varnodes[i].is_none() {
-                                arg_varnodes[i] = Some(out_arc.clone());
-                            }
-                        }
-                    }
-                }
-
-                // Stop at previous CALL, RETURN, or unconditional BRANCH.
-                // CBRANCH is intentionally NOT a stop: the register write
-                // might be in a predecessor block reached via the
-                // conditional branch's fallthrough. Crossing the CBRANCH
-                // to find it matches Ghidra's SSA-based argument tracking.
-                if op.opcode == OpCode::CPUI_CALL
-                    || op.opcode == OpCode::CPUI_BRANCH
-                    || op.opcode == OpCode::CPUI_RETURN
-                {
-                    break;
-                }
-
-                // If all found, stop early
-                if arg_varnodes.iter().all(|v| v.is_some()) {
-                    break;
-                }
-            }
-
-            // Fallback: for arg registers still not found, search ONLY ops before
-            // the FIRST call in the function. This finds function entry parameter
-            // setup without picking up writes from unrelated paths.
-            if call_idx > 0 {
-                // Find how far to search: from start to first CALL (exclusive)
-                let first_call_idx = fd
-                    .obank
-                    .alivelist
-                    .iter()
-                    .position(|op_ref| {
-                    let op = op_ref.0.read().unwrap();
-                    op.opcode == OpCode::CPUI_CALL
-                })
-                    .unwrap_or(0);
-
-                // Only use this fallback if the current call IS the first call
-                if call_idx == first_call_idx {
-                    for i in 0..search_regs {
-                        if arg_varnodes[i].is_none() {
-                            let (expected_off, _) = SYSV_ARG_REGS[i];
-                            for idx in 0..first_call_idx {
-                                let op_ref = &fd.obank.alivelist[idx];
-                                let op = op_ref.0.read().unwrap();
-                                if let Some(ref out_arc) = op.output {
-                                    let out_vn = out_arc.read().unwrap();
-                                    if out_vn.get_space() == AddressSpace::Register
-                                        && out_vn.get_offset() == expected_off
-                                    {
-                                        arg_varnodes[i] = Some(out_arc.clone());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallback B: block-level search within the CALL's own basic block.
-            // The heritage pass places MULTIEQUAL (phi) nodes at block entries
-            // for registers with different definitions across predecessors.
-            // Scanning the CALL's block finds these phi nodes (the SSA-correct
-            // merged definition) without crossing BRANCH boundaries — avoiding
-            // the wrong-path regressions seen in earlier linear-search attempts.
-            if arg_varnodes.iter().any(|v| v.is_none()) {
-                let call_op_arc = fd.obank.alivelist[call_idx].0.clone();
-                let block_arc_opt = {
-                    let call_op = call_op_arc.read().unwrap();
-                    call_op.parent.as_ref().and_then(|w| w.upgrade())
-                };
-                if let Some(block_arc) = block_arc_opt {
-                    let block = block_arc.read().unwrap();
-                    let block_ops = block.get_ops();
-                    // Find the CALL op's position within its block.
-                    let call_pos = block_ops
-                        .iter()
-                        .position(|op_ref| Arc::ptr_eq(&op_ref.0, &call_op_arc)
-                    );
-                    let search_end = call_pos.unwrap_or(block_ops.len());
-                    for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                        if arg_varnodes[i].is_some() { continue; }
-                        // Scan this block's ops backwards from the CALL.
-                        for op_ref in block_ops[..search_end].iter().rev() {
-                            let op = op_ref.0.read().unwrap();
-                            if let Some(ref out_arc) = op.output {
-                                let out_vn = out_arc.read().unwrap();
-                                if out_vn.get_space() == AddressSpace::Register
-                                    && out_vn.get_offset() == expected_off
-                                {
-                                    arg_varnodes[i] = Some(out_arc.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallback C: INPUT varnode lookup. If the arg register was never
-            // written in this function, it's a function parameter (INPUT
-            // varnode created by heritage). Search the VarnodeBank for an
-            // INPUT varnode at the expected register offset.
-            if arg_varnodes.iter().any(|v| v.is_none()) {
-                use crate::varnode::varnode_flags;
-                for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                    if arg_varnodes[i].is_some() { continue; }
-                    for vn_ref in &fd.vbank.loc_tree {
-                        let vn = vn_ref.0.read().unwrap();
-                        if vn.get_space() == AddressSpace::Register
-                            && vn.get_offset() == expected_off
-                            && (vn.flags & varnode_flags::INPUT) != 0
-                        {
-                            arg_varnodes[i] = Some(vn_ref.0.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Attach found arg varnodes to the CALL op.
-            // Find the last non-None slot to determine how many args to attach.
-            // For gaps (None between two Some), create a register varnode directly
-            // so the argument position is preserved.
-            let last_found = arg_varnodes.iter().rposition(|v| v.is_some());
-            let mut args_to_add: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
-            if let Some(last_idx) = last_found {
-                for i in 0..=last_idx {
-                    if let Some(ref vn) = arg_varnodes[i] {
-                        args_to_add.push(vn.clone());
-                    } else {
-                        let (reg_off, _) = SYSV_ARG_REGS[i];
-                        let placeholder = fd.vbank
-                                .create_with_space(8, AddressSpace::Register, reg_off);
-                        args_to_add.push(placeholder);
-                    }
-                }
-            }
-
-            if !args_to_add.is_empty() {
-                let call_ref = &fd.obank.alivelist[call_idx];
-                let mut call_op = call_ref.0.write().unwrap();
-                for arg in args_to_add {
-                    call_op.inrefs.push(arg);
-                }
-                changed += 1;
-            }
-        }
-
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
-    }
-
-    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCallParams
-    fn get_name(&self) -> &str {
-        "call_params"
-    }
-}
 
 /// Infer function parameters and return type from P-code IR
 ///
@@ -2549,59 +2197,18 @@ impl Action for ActionInferParams {
 
         let mut params = Vec::new();
         let mut expected_abi_idx = 0usize;
-        let known_types = known_param_types(Some(fd.get_name()));
         for (abi_idx, offset, size, v_type) in &param_candidates {
             // Stop at first gap > 0 — require strictly contiguous ABI registers
             if *abi_idx != expected_abi_idx {
                 break;
             }
-            let param_pos = params.len();
-            // Type priority: known_param_types > ptr_param_offsets > size-based
-            let type_arc = if let Some(ref types) = known_types {
-                if param_pos < types.len() {
-                    match types[param_pos] {
-                        "ptr" => {
-                            let base = Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )));
-                            Arc::new(Datatype::Pointer(
-                                crate::type_system::datatype::TypePointer {
-                                base: crate::type_system::datatype::TypeBase::new(
-                                        "void *".to_string(), 8, TypeMetatype::Pointer,
-                                    ),
-                                ptr_to: base,
-                                wordsize: 1,
-                            },
-                            ))
-                        }
-                        "int" => Arc::new(match size {
-                            1 => Datatype::Base(TypeBase::new(
-                                "byte".to_string(), 1, TypeMetatype::Int,
-                            )),
-                            2 => Datatype::Base(TypeBase::new(
-                                "short".to_string(), 2, TypeMetatype::Int,
-                            )),
-                            4 => Datatype::Base(TypeBase::new(
-                                "int".to_string(), 4, TypeMetatype::Int,
-                            )),
-                            _ => Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )),
-                        }),
-                        _ => v_type.clone().unwrap_or_else(|| {
-                            Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )))
-                        }),
-                    }
-                } else {
-                    v_type.clone().unwrap_or_else(|| {
-                        Arc::new(Datatype::Base(TypeBase::new(
-                            "long".to_string(), 8, TypeMetatype::Int,
-                        )))
-                    })
-                }
-            } else if ptr_param_offsets.contains(offset) {
+            // Type priority: ptr_param_offsets > size-based. The former
+            // per-name known_param_types tier was corpus-table knowledge
+            // and is gone (EXPEL-CORPUS-TABLES-0001); oracle
+            // ActionInputPrototype (coreaction.cc:4707-4761) derives
+            // inputs purely from register trials with no self-name
+            // type table.
+            let type_arc = if ptr_param_offsets.contains(offset) {
                 let base = Arc::new(Datatype::Base(TypeBase::new(
                     "long".to_string(), 8, TypeMetatype::Int,
                 )));
@@ -2638,68 +2245,11 @@ impl Action for ActionInferParams {
             expected_abi_idx += 1;
         }
 
-        // If this function has a known parameter count in the signature database,
-        // trust it over the inferred count. If the known count is HIGHER than
-        // what we inferred (we missed some register reads), supplement with the
-        // missing ABI registers.
-        let known_types = known_param_types(Some(fd.get_name()));
-        let is_known = is_known_function(Some(fd.get_name()));
-        let known_n = if let Some(ref types) = known_types {
-            types.len()
-        } else if is_known {
-            known_param_count(Some(fd.get_name()))
-        } else {
-            0 // Unknown function — don't supplement or truncate
-        };
-
-        // Supplement missing params from ABI register list if known_n > params.len()
-        if known_n > params.len() && known_n <= 6 && is_known {
-            let abi_offsets = [0x38u64, 0x30, 0x10, 0x08, 0x40, 0x48]; // RDI, RSI, RDX, RCX, R8, R9
-            while params.len() < known_n {
-                let idx = params.len();
-                if idx >= abi_offsets.len() { break; }
-                let offset = abi_offsets[idx];
-                let type_arc = if let Some(ref types) = known_types {
-                    if idx < types.len() {
-                        match types[idx] {
-                            "ptr" => {
-                                let base = Arc::new(Datatype::Base(TypeBase::new(
-                                    "long".to_string(), 8, TypeMetatype::Int,
-                                )));
-                                Arc::new(Datatype::Pointer(
-                                    crate::type_system::datatype::TypePointer {
-                                    base: crate::type_system::datatype::TypeBase::new(
-                                            "void *".to_string(), 8, TypeMetatype::Pointer,
-                                        ),
-                                    ptr_to: base, wordsize: 1,
-                                },
-                                ))
-                            }
-                            _ => Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            ))),
-                        }
-                    } else {
-                        Arc::new(Datatype::Base(TypeBase::new(
-                            "long".to_string(), 8, TypeMetatype::Int,
-                        )))
-                    }
-                } else {
-                    Arc::new(Datatype::Base(TypeBase::new(
-                        "long".to_string(), 8, TypeMetatype::Int,
-                    )))
-                };
-                params.push(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", params.len() + 1),
-                    type_arc,
-                    crate::address::Address::new(offset),
-                ));
-            }
-        }
-
-        if is_known && known_n < params.len() {
-            params.truncate(known_n);
-        }
+        // No self-name count supplement/truncate: oracle
+        // ActionInputPrototype (coreaction.cc:4707-4761) derives the input
+        // map purely from register trials. The former per-name
+        // known_param_count/known_param_types supplement/truncate arms were
+        // corpus-table knowledge and are gone (EXPEL-CORPUS-TABLES-0001).
 
         // Ghidra: coreaction.cc:4711-4761 ActionInputPrototype mutates the
         // input map only when FuncProto::isInputLocked() is false. This

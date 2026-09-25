@@ -45,5 +45,8 @@ jobs:
       - name: Verify all Ghidra references against 12.0.4
         run: python3 tools/check_ghidra_refs.py --all --strict
 
+      - name: Verify zero corpus markers in library production code
+        run: python3 tools/check_corpus_markers.py --all
+
       - name: Verify strict four-category evidence parsing
         run: python3 tools/check_alignment_evidence.py --self-test
