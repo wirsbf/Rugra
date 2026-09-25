@@ -3309,3 +3309,191 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
 - 本模块 16 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+### 2026-09-26：MSTRUCT-WHILEDO-LABEL-PRINTC-0001 — 循环构造入口标号补发
+
+**症状**（curl 镜 glob_word 亲证）：`goto code_r0x00004c20;`（×2）与
+`goto code_r0x00004d0e;`（×2）引用的标号在函数内无定义（悬空 goto，gcc
+不可编译形态）；golden 同位在 `while( true )` / `do {` 头**前**打印
+`code_r0x00004c20:` / `code_r0x00004d0e:`。
+
+- **根因（本 session 探针钉死）**：oracle 的
+  `emitAnyLabelStatement(bl)` 调用位于**每个构造发射器自身入口**
+  （emitBlockCopy cc:2762、emitForLoop cc:2965、emitBlockWhileDo cc:3014、
+  emitBlockDoWhile cc:3076、emitBlockInfLoop cc:3104——虚分发 `emit` 的
+  任何路径都会经过）。Rugra 把该调用集中到分发器
+  `emit_block_structured`（对每个块先查后派发），但两条派发路径**绕过**
+  分发器直达构造发射器：①`emit_structured_list`（cc:2795-2812 子块循环）
+  经 `emit_flow_block` 派发 List 子块；②`emit_switch_case_body`
+  （cc:3339-3341 `bl2->emit(this)` 的传输层）直接匹配类型调
+  `emit_structured_whiledo/dowhile/infloop`。glob_word 的 whiledo
+  （0x4c20，顶层 List 子块）与 infloop（0x4d0e，switch case 体）恰好
+  各命中一条绕行路径——构造入口标号检查从未运行（探针
+  RUGRA_DBG_LABELS 亲证：两构造的 self_type 从不出现在
+  emit_any_label_statement 调用记录中，而其前叶 targ=true 已由
+  blockaction.cc:2194 `markUnstructured` 链正确标记——block 侧无缺口）。
+- **修法（oracle 逐位复刻）**：四个循环构造发射器入口、在
+  `pushMod(); unsetMod(no_branch|only_branch)` 之后（oracle 调用序）补
+  `emit_any_label_statement(block_arc)`：`emit_structured_whiledo`
+  （cc:3014）、`emit_structured_dowhile`（cc:3076）、
+  `emit_structured_infloop`（cc:3104）、`emit_for_loop`（cc:2965——签名
+  加 `block_arc` 参数以携带 Arc；旧注释"dispatcher 已覆盖故跳过"的
+  假设被两条绕行路径证伪，已删）。与分发器传输调用（GOTO-LABEL-
+  UNPRINTED-0001 的 Basic/Goto/List/Switch 运输层）经 printed_labels
+  once-guard 幂等：先到先打印，输出位置相同（构造首文本之前）。
+  oracle 的 only_branch 语义同时修复：构造入口调用在 unset 之后运行，
+  即使调用方带 only_branch（emitBlockLs cc:2810 尾块 only_branch 派发）
+  标号也照印——与 oracle 一致。
+- **效果（本 worktree fast-release 亲测，基=master 1414f6e3）**：glob_word
+  两标号与 golden 逐字节同位（`code_r0x00004c20:` 在 `while( true )` 前、
+  `code_r0x00004d0e:` 在 `do {` 前），悬空 goto 清零；curl 镜
+  110→101（glob_word 13→5、glob_set 3→2，其余 72 函数逐函数零变化）；
+  curl canon 269→267；httpd 镜 265、httpd canon 862、vsh 镜 15 全部
+  不变；defects=0/numbering=0 全档；bank 391/391；cargo test --lib
+  1735P/1F（nonzeromask 预存）。glob_word 剩余 5 行：xStack_40 多余
+  声明（F-DECL 族）+2 行语句序差 + `break;` vs `goto code_r0x00004c20;`
+  （switch-case 反向边 goto 类型分类，MSTRUCT-SWITCHGOTO-SELECTGOTO-0001
+  族 block 侧残差，非 printc 域）。
+
+### 2026-09-26：STRNCPY-PRINT-CALLOTHER-0001 — CALLOTHER 印刷臂接通（printc 侧交付）
+
+**症状**（httpd 镜 ap_ht_time 亲证）：`builtin_strncpy(pcVar3,"+0000",5);`
+语句印成裸 `;`（dispatch_op_rpn 无 CPUI_CALLOTHER 臂，落 `_ => {}`
+no-op）；STRINGDATA 字面量臂硬编码 `"badstring"`。
+
+- **修法①（RPN 臂）**：`dispatch_op_rpn` 补 `OpCode::CPUI_CALLOTHER =>`
+  臂，新增 `rpn_op_callother`（printc.cc:673-715 的 RPN 运输层移植，
+  与 rpn_op_call 同构）：display==0 功能语法 `name(in1,...)`（cc:678-692：
+  function_call token + 名 atom（optoken/funcname_color，
+  getOperatorName=TypeOpCallother typeop.cc:837-853 → UserPcodeOp 名）+
+  numInput()-2 个 comma + in(1..) 逆序 push）；annotation_assignment
+  （cc:693-697：assignment + in(2) + in(1) 逆序）；no_operator
+  （cc:698-700：裸 in(1)）；display_string（cc:701-714：out 原始 v_type
+  为 TYPE_PTR 时经 in(1) hash 常量地址查 string_manager
+  （register_internal_string_data 键=Address(hash)，stringmanage.rs:817），
+  失败/非指针落 `"badstring"`）。`rpn_def_inline_reachable` 补
+  CALLOTHER=true（每个 display 臂都发射——STRINGDATA 输出内联为字面量
+  而非泄漏 unique 临时名）。LHS 赋值由 emit_expression_rpn（cc:2471-2476）
+  发，臂内不发——与 oracle 一致（opCallother 从不碰 out）。
+- **修法②（legacy 臂）**：`op_callother` 的 DISPLAY_STRING 臂把硬编码
+  `"badstring"` 换成同一 print_character_constant 读回链（双运输层同
+  语义；legacy 臂经 typeop.rs TypeOpCallother::push 路由在案）。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票①后）**：ap_ht_time
+  语句从裸 `;` 恢复为 `builtin_strncpy(pcVar3,(char *)"badstring",5);`
+  （canon 同形恢复，gcc 可编译）；vsh 镜 15→14；curl 镜 101/httpd 镜
+  265/curl canon 267/httpd canon 862 全部不变；defects=0/numbering=0
+  全档；bank 391/391；lib 1735P/1F（nonzeromask 预存）。
+- **验收残差（上游域，非 printc）**：golden 逐字节形
+  `builtin_strncpy(pcVar3,"+0000",5);` 差两点——`(char *)` 前缀与
+  `"badstring"` 字面量。根因=**castOutput 对 STRINGDATA 误发**：
+  Rugra 的 CALLOTHER 输出 token 落 output_metatype 的 `_ => Int`
+  兜底（int8），oracle 链=TypeOpCallother::getOutputLocal
+  （typeop.cc:866-872）→ userOp->getOutputLocal：InternalStringOp
+  返回 `op->getOut()->getType()`（userop.cc:361-364，即锁定 char*）→
+  tokenct==outHighType → cc:2544 短路不发 CAST；Rugra int8≠char* →
+  castOutput 插 CAST（偷走原 out 给 CAST、给 STRINGDATA 换 int8 新
+  out）→ 打印侧忠实读 int8 → "badstring" + `(char *)`。登记
+  `COREACTION-CALLOTHER-OUTTOKEN-0001`（coreaction.rs token 计算 +
+  userop.rs InternalStringOp 特化；修后本票验收即达）。
+
+### 2026-09-26：HTTPDMAIN-F3-DOUBLECAST-0001 — switch 头双重强转折叠+legacy CAST 操作数括号
+
+**症状**（httpd canon main switch 头亲证）：
+`switch(*((undefined1 *)(undefined1 *)(long)plVar12 + 0x33))` 发两层
+`(undefined1 *)`，golden 同位 `switch(*(undefined1 *)((long)plVar12 + 0x33))`
+恰一层；其余表达式无此病。
+
+- **根因（本 session 探针钉死）**：switch 头经 `emit_switch_head_expr`
+  → `push_varnode`（**legacy 直发通道**）渲染，语句体走 RPN 通道——两条
+  运输层对 LOAD 的处理不同：RPN 的 LOAD 臂忠实（cc:486-498 只发
+  dereference token，cast 全部来自内联 CAST op，每 op 恰一次
+  printc.cc:448）；legacy 的 `emit_inline_expr` LOAD 臂自带
+  `*((T *)` 类型化包装（Rugra 传输层发明，oracle 无对应物），叠加内联
+  CAST 自己的 `(T *)` → 同型双层。地址输入即 CAST 输出 varnode，
+  两处类型文本恒等（数据流保证）。
+- **修法①（同型折叠）**：legacy LOAD 臂在地址输入为 implied 且 def 为
+  CPUI_CAST 时省略自身包装，发 `*` + 输入（内联 CAST 已带同型 cast，
+  `*(T *)expr` 合法 C）——oracle opLoad 从不发包装，cast 文本只来自
+  CAST op。
+- **修法②（操作数括号）**：legacy `emit_inline_expr` CAST 臂补
+  printlanguage.cc:277 的嵌套规则——typecast presurround（prec 62，
+  printc.cc:35）下的二元子表达式（binary token prec < 62）加操作数
+  括号。RPN 通道由 token 机制免费获得（canon
+  `apr_ctime((undefined1 *)((long)plVar12 + 0x60),...)` 亲证），
+  legacy 通道此前缺失——修后 `(T *)((long)p + 0x33)` 形与 RPN/golden
+  一致。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票②后）**：main
+  switch 头与 golden 3757 行逐字节一致
+  （`switch(*(undefined1 *)((long)plVar12 + 0x33))`）；httpd canon
+  **862→860**、httpd 镜 **265→263**；curl canon 267/curl 镜 101/vsh 镜
+  14 全部不变；defects=0/numbering=0 全档；bank 391/391；lib
+  1735P/1F（nonzeromask 预存）。
+
+### 2026-09-26：MIRATTR-F-ARRCAST-0001 — 数组指针 cast 声明器括号化
+
+**症状**（httpd 镜亲证）：指针到数组 cast 印成非法 C
+`(xunknown1 [16]*)`（flat `[N]*` 链），golden 同位
+`(xunknown1 (*) [16])`（C 声明器括号化）；双指针形
+`(xunknown1 (**) [16])`。
+
+- **oracle 机制（本 session 亲读钉死）**：`pushType`（printc.cc:1472-1478）
+  = pushTypeStart + **pushAtom(EMPTY_STRING)**（抽象声明器的标识符占位，
+  cc:1477）+ pushTypeEnd（`[N]` 尺寸原子，cc:305-330）。pushTypeStart
+  （cc:292-302）按 base 侧先推声明器 op（指针到数组=先 array_expr 后
+  ptr_expr）；RPN 嵌套规则（printlanguage.cc:286 postsurround 臂——
+  array_expr prec 66 > ptr_expr prec 62，printc.cc:75/78）在 `*` 推入
+  而数组仍 pending 时开括号；连续第二层 `*` 走 unary_prefix 臂
+  （cc:291-293）不加括号——**括号包住整段连续 `*` run**，closeParen
+  在 run 完结（EMPTY 原子级联完成）时发射。发射文本：`t` ` `
+  `(` `*`…`*` `)` ` [N]`。
+- **修法**：`cast_type_string` 的层链渲染重写为 run 语义——最内层先
+  遍历；连续 Pointer 层聚成 run；run 起点处有数组 pending（即 run
+  外层包着数组）→ 整 run 括号化 `(**…)`；Array 层中断 run、追加
+  ` [N]` 后缀（spacing=1）并置 pending。形态对照：
+  Pointer(Array)→`t (*) [N]`；Pointer(Pointer(Array))→`t (**) [N]`；
+  Pointer(Array(Pointer))→`t *(*) [N]`；Array(Pointer)→`t * [N]`；
+  Pointer(Ptr)→`char **`（原行为保持）。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票③后）**：httpd 镜
+  三处 cast 与 golden 逐字节一致（770/1033 `(xunknown1 (*) [16])`、
+  1036 `(xunknown1 (**) [16])`）；httpd 镜 **263→253**
+  （ap_parse_vhost_addrs 33→27、ap_set_name_virtual_host 14→10，其余
+  函数逐函数零变化）；httpd canon 860/curl canon 267/curl 镜 101/vsh 镜
+  14 全部不变；defects=0/numbering=0；bank 391/391；lib 1735P/1F
+  （nonzeromask 预存）；gcc 审计 15OK/14FAIL==基线比率。
+
+### 2026-09-26：UNIONRESOLVE-PKG-C-0001 — printc 29 站点换 snapshot-backed facing 孪生
+
+**背景**（UNION_CONSUMER_AUDIT_2026-09-26 §一/§三 包 C）：oracle 的四个
+facing 方法（varnode.cc:626-672 getTypeDefFacing/getTypeReadFacing/
+getHighTypeDefFacing/getHighTypeReadFacing = `needsResolution() ?
+findResolve(op,slot) : this`）在打印期经 `fd->unionMap` 活查询；Rugra 的
+打印站点此前用 varnode.rs 退化形（consult 恒走 map-miss 臂 `return
+this`）——union 分歧非潜伏（curl golden 含活 union
+`anon_union_16_3_e2f18bb4_for_content`×8）。
+
+- **新增 4 个 snapshot-backed helper**（printc.rs，
+  `vn_type_read_facing_snap`/`vn_type_def_facing_snap`/
+  `vn_high_type_read_facing_snap`/`vn_high_type_def_facing_snap`）+
+  核心镜像 `find_resolve_snap`：unionresolve::find_resolve 的逐臂复刻
+  （type.cc:1192-1202 Pointer-to-union/2137-2145 Union/1298-1306
+  Array/1944-1952 Struct/2517-2534 PartialUnion/586-590 base），consult
+  键=同一 ResolveEdge(parent, op-time, slot)，查询
+  `self.union_resolutions`——**doc_function 入口快照**
+  （snapshot_union_resolutions，printc.rs:10385 唯一调用点），语义等价
+  打印期冻结的 fd.union_map（审计风险提示「快照时点提前会掩盖回归
+  信号」——时点保持入口不变）。
+- **29 处替换**（RPN/legacy 双运输层，每 oracle 行两处）：
+  pushConstant 入口 read-facing（printlanguage.cc:227）、ZEXT/SEXT
+  isZext/isSextCast 双读（cc:789/802）、SUBPIECE 特印臂+isSubpieceCast
+  双读（cc:848/872-873）、PTRSUB in0（cc:942）、opTypeCast out+decay
+  检查（cc:451）、opFloatInt2Float out（cc:835）、emit_inline_expr
+  CAST/SUBPIECE 孪生、opConstructor/opNew 的 TYPE def-facing
+  （cc:726/1246）、legacy op_ptrsub/op_type_cast/op_int_zext/
+  op_int_sext/op_subpiece 全套、isExtensionCastImplied 双读
+  （cast.cc:259/289）。CALLIND code\* 门三处（aligned-in-practice，
+  审计在案）与 glue 兜名一处保持退化形。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票④后）**：五面全部
+  恒等——curl 镜 101/httpd 镜 253/curl canon 267/httpd canon 860/vsh 镜
+  14；defects=0/numbering=0；bank 391/391；lib 1735P/1F
+  （nonzeromask 预存）。语料中性=当前语料的打印站点无 map-hit 臂触发
+  （union 分歧的消费面在 coreaction 已对齐站点）；快照通道为后续 union
+  语料提供 oracle 等价语义。
