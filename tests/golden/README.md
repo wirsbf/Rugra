@@ -14,6 +14,7 @@
 | `ghidra_httpd_1204.c` | `examples/httpd`(sha `805f89cd…`) | 12.0.4(e40ed130) | 2026-08-15 | canonical,2010 函数 |
 | `ghidra_httpd_1204.direct-runner.c` | 同上 | 12.0.4(e40ed130) | 2026-08-15 | 库级基线,790 函数;`--base 0` |
 | `ghidra_vsh_1204.direct-runner.c` | `/usr/bin/virt-ssh-helper`(sha `26810693…`) | 12.0.4(e40ed130) | 2026-09-25 | **第三二进制泛化烟测靶**(GENSMOKE-0001):库级 BFD 契约,71 函数(12 定义 dynsym FUNC+59 PLT 桩),`--base 0`;canon headless 档 NO_ORACLE(宿主 dist 已失,见 provenance tier 字段);Rugra 对拍驱动=`cargo run --profile fast-release --example gen_decompile`(RUGRA_GEN_MIRROR=1 同契约) |
+| `ghidra_sq_1204.direct-runner.c` | `/usr/local/bin/sasquatch`(sha `5d1eb6d0…`) | 12.0.4(e40ed130) | 2026-09-26 | **第四二进制泛化棘轮靶**(GEN4-0001):库级 BFD 契约,810 函数(776 静态 symtab FUNC 真身+104 PLT 桩,含 2177 行 LZMA 编码器/C++ mangled 符号脸/goto joined 标签/extraout 寄存器输出),`--base 0`;canon headless 档 NO_ORACLE(同上);Rugra 对拍驱动=gen_decompile(RUGRA_GEN_MIRROR=1);镜像门禁第 4 面 `tools/verify_mirror_gate.sh --corpus sq`(宿主资产缺失时 SKIP) |
 
 双基线语义与量化裁决见 `docs/alignment_docs/GOLDEN_CONTRACT_QUANT_2026-09-23.md`
 (GOLDEN-CONTRACT-PUSHABSORB-0001):canonical=analyzeHeadless 桥接层产物(push 存储
