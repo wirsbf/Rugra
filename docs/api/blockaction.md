@@ -1556,3 +1556,35 @@ canon 同款 break 落在 Rugra 既有 default 排位上，形态+1 正确向 ca
 默认脸 767→**758**。main switch 区四症状全收敛（case 0x43+goto LAB_0012bb80+
 caseD_3f 标签+0x4d break+0x66 goto 与 canon 同形）；gcc 审计 fail 名集双语料逐名
 恒等；双跑 cmp 恒等。
+
+## 2026-09-25：collapse_switches 预安装器退役（BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001）
+
+CR-CASEWRAP F1 复核项收口。phase1 的 `collapse_switches` 预安装器（7PHASE
+legacy 路径调用；默认 5-step 从不经过）此前硬编码 `case_isexit:
+vec![false]`/`default_isexit: false`，而 oracle 的 addCase（block.cc:3511-3514）
+逐 case 捕获 `gt!=0→false; else isexit=(bl->sizeOut()==1)`。
+
+**收集环内捕获被 oracle 实证否定**：先按 reviewer 最小修方向在收集环内补
+`edge.point.size_out()==1` 捕获（与 CR-CASEWRAP 已批的 try_rule_switch 捕获环同
+构），再用锁定 oracle 仪器化 fixture（stage_isexit_1204，pristine libdecomp，
+e40ed130，httpd main entry=0x2b820）dump 终态树 18 caseblocks 的 gt/isexit/
+isdefault + 入口地址作键：oracle 仅 2/18 isexit=1（0x2ba9f、0x2bdcd），而预装
+器时点的同形捕获得 14/17 true——该时点 case 体出边仍指向下一 case/merge 块，
+`sizeOut()==1 ⟺ 边指向正式 exitblock` 的 ruleBlockSwitch 不变量
+（blockaction.cc:1697-1708）尚未成立，捕获语义只在 rule 成熟时点 sound（
+try_rule_switch 同 fixture 地址键 16/16 恒等已证）。
+
+**修法=退役（R15 判例同构）**：Ghidra 无此预安装器（LoopBody 无
+collapseSwitches 方法，标注行 blockaction.hh:46 是类声明行；oracle 唯一安装点=
+ruleBlockSwitch cc:1649-1723 → newBlockSwitch cc:1904-1919 → grabCaseBasic）。
+禁用 7PHASE 相位循环中的调用点（R17 注记），函数体保留并保留收集环捕获（防止
+复启用时回退到硬编码 vec![false]），函数头加 DISABLED 注记。退役后 switch 仅由
+try_rule_switch 安装——即 Ghidra 自身架构。
+
+**A/B 零差实证**（亲父 2632a2fc 对拍）：httpd/curl 默认脸 cmp 逐字节恒等（默认
+路径本就不经预安装器）；httpd 7PHASE 退役前后输出亦逐字节恒等（该模式下 httpd
+main 在 block.rs:4826 预存 panic，与本改动无关，panic 位点/计数前后同构）；curl
+7PHASE 预安装器 0 次点火。三门禁：curl/httpd 对 1204 canon defects=0
+numbering=0；gcc 审计 fail 名集逐名恒等（curl 104/20、httpd 14/15 与亲父一致）；
+投影银行 391/391 MATCH；cargo test --lib 1712P/1F（nonzeromask 预存）零回退；
+check_ghidra_annotations/refs 全绿。
