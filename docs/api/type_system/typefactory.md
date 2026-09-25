@@ -1139,3 +1139,25 @@ ScopeLocal，RulePtrArith 查询路径（ruleaction.rs `AddTreeState::spacebase_
 （`SpacebaseMap::Local`）后传入 datatype.rs 的 `*_in_map` 查询族。
 快照克隆对 localframe 查询的可见缺陷（oppool2 时点全部栈偏移查询 miss，
 extra 恒 0）就此消灭；构造签名与去重键不变。
+
+## 2026-09-25（Lane MIRROR2）：canonical_unknown_base_1 —— 1 字节 TYPE_UNKNOWN 的工厂命名通道（MIRROR2-UNKBYTE-0001）
+
+- **根因（镜面残差族=unkbyte 拼写）**：oracle 的 spacebase/符号查询 miss 臂
+  一律返回 `glb->types->getBase(1,TYPE_UNKNOWN)`（type.cc:2965-2967；
+  database.cc:629/681/731）——经工厂解析为**命名**核心类型
+  （standalone 档 `xunknown1`、DataOrg 档 `undefined1`）。Rugra 的
+  datatype.rs 六处 miss/untyped 臂构造**裸匿名** `TypeBase::new("",1,
+  Unknown)` → `PrintC::genericTypeName`（printc.cc:3383）拼成 `unkbyte1`
+  （curl 镜 5 处、httpd 镜 1 处 `(unkbyte1 *)` cast 实证）。
+- **修法**：`TypeFactory::canonical_unknown_base_1()`（typefactory.rs）+
+  datatype.rs 六处改调。**锁安全**（eu-stack 亲证死锁根因）：主调用链
+  `TypeFactory::down_chain_pointer`（持工厂**写**租约）→
+  `TypeSpacebase::get_sub_type` → 查询，helper 若重入 `shared_default`
+  的 RwLock 即自死锁（canon main/_start >10s 超时的根因；w1 假象 671
+  实为 3 函数死锁丢弃）。因此缓存 `CANONICAL_UNKNOWN_BASE_1`（OnceLock）
+  在 `shared_default` 构造闭包内**无租约**急切填充——任何租约存在必在
+  构造完成后 → 快路径恒已武装，查询零锁。工厂身份保留（与 typecache
+  同一 Arc），身份敏感下游（类型传播 ptr-eq、char-print 旗标读取）在
+  规范对象上决策。
+- **效果**：curl 镜/httpd 镜 unkbyte 0 残留；canon 466 不回退、零超时；
+  vsh 镜（gen 驱动）维持全函数健康。

@@ -138,6 +138,15 @@ pub enum CoreTypeFlavor {
     Standalone,
 }
 
+// MIRROR2 unkbyte family: the lock-free canonical 1-byte TYPE_UNKNOWN cache
+// (see TypeFactory::canonical_unknown_base_1). Populated eagerly inside
+// `TypeFactory::shared_default`'s construction closure — under no RwLock
+// lease — so factory write-lease holders (e.g. down_chain_pointer reaching
+// TypeSpacebase::get_sub_type's miss arm) always find the fast path armed
+// and never re-enter the shared factory's lock.
+static CANONICAL_UNKNOWN_BASE_1: std::sync::OnceLock<std::sync::Arc<Datatype>> =
+    std::sync::OnceLock::new();
+
 // RUGRA-GLUE: process-tier probe standing in for Ghidra's architecture-class
 // selection of the core-type table. The oracle has two harness faces:
 // SleighArchitecture::buildCoreTypes (sleigh_arch.cc:204-238) installs the
@@ -2728,9 +2737,62 @@ impl TypeFactory {
                 if factory.align_map.is_empty() {
                     factory.set_default_alignment_map();
                 }
-                Arc::new(RwLock::new(factory))
+                let arc = Arc::new(RwLock::new(factory));
+                // Eagerly populate the canonical 1-byte-unknown cache under
+                // NO lease (see canonical_unknown_base_1): once this closure
+                // completes, any factory write lease can exist only after
+                // the cache is filled, so the lock-free fast path is always
+                // armed before a lease-holder can reach the query.
+                let unknown_base_1 = arc
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_base(1, TypeMetatype::Unknown)
+                    .expect("TypeFactory::get_base always produces an unknown base type");
+                let _ = CANONICAL_UNKNOWN_BASE_1.set(unknown_base_1);
+                arc
             })
             .clone()
+    }
+
+    // Ghidra: type.cc:2965-2967 TypeSpacebase::getSubType miss return
+    /// The factory-mediated 1-byte TYPE_UNKNOWN base for the spacebase /
+    /// symbol-table miss and untyped-symbol arms
+    /// (`glb->types->getBase(1,TYPE_UNKNOWN)` — type.cc:2967;
+    /// `sc->getArch()->types->getBase(1,TYPE_UNKNOWN)` — database.cc:629/
+    /// 681/731). In the oracle this always resolves through the
+    /// architecture's TypeFactory, so the standalone console tier answers
+    /// the NAMED core `xunknown1` (sleigh_arch.cc:229, cacheCoreTypes
+    /// typecache slot) and the headless DataOrg tier `undefined1`; the
+    /// former raw-anonymous constructions printed `unkbyte1` via
+    /// PrintC::genericTypeName (printc.cc:3383) — the MIRROR2 unkbyte
+    /// family.
+    ///
+    /// Lock-safety (MIRROR2 deadlock evidence, eu-stack of the hung canon
+    /// worker): the dominant caller chain is
+    /// `TypeFactory::down_chain_pointer` (holding the factory's WRITE
+    /// lease) → `TypeSpacebase::get_sub_type` → here, so this helper MUST
+    /// NOT re-enter `shared_default`'s RwLock while that lease is held
+    /// (self-deadlock via read_contended; the oracle has no locks — any
+    /// factory query from inside a factory method is legal there). The
+    /// cache is therefore populated eagerly inside `shared_default`'s
+    /// construction closure (under no lease) and read lock-free here; the
+    /// on-demand population path can only run when the process-canonical
+    /// factory has never been constructed, in which case no lease on it
+    /// can be held either. Factory identity is preserved (the SAME Arc the
+    /// factory's typecache would answer), keeping downstream
+    /// identity-sensitive decisions (type-propagation ptr-eq, char-print
+    /// flag reads) on the canonical object.
+    pub fn canonical_unknown_base_1() -> Arc<Datatype> {
+        if let Some(base) = CANONICAL_UNKNOWN_BASE_1.get() {
+            return base.clone();
+        }
+        let base = Self::shared_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_base(1, TypeMetatype::Unknown)
+            .expect("TypeFactory::get_base always produces an unknown base type");
+        let _ = CANONICAL_UNKNOWN_BASE_1.set(base.clone());
+        base
     }
 
     // Ghidra: type.cc:4140 TypeFactory::concretize

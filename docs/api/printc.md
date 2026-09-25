@@ -3164,3 +3164,21 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
   typeop.cc:1241），其 downChain 经 parent 再入返回非空 → 全联合体平局 →
   whole-union 胜出；Rugra 该指针为裸形（rel=false 实证）→ Set 胜出 →
   该边过度解析为 `.content.Set`（match_url 24/next_url 22 的 +2 来源）。
+
+## 2026-09-25（Lane MIRROR2）：直接运行档被调名 `func_0x%.8x`（MIRROR2-S3-CALLEE-0001）
+
+- **根因（GENSMOKE-S3 收口）**：oracle `PrintC::opCall` 未名被调臂
+  （printc.cc:596-605）走 `genericFunctionName(fc->getEntryAddress())`
+  （cc:3359-3366）= `"func_" + addr.printRaw()`——`AddrSpace::printRaw`
+  （space.cc:206-222）零填充到 `2*addrsize`（offset<2^32 时 sz 缩 4），
+  即直接运行档 golden 的 `func_0x00003190`。`FUN_%x` 是 headless
+  **前端**数据库名（analyzeHeadless 符号管理器生成），反编译库自身从不
+  产生——Rugra printc 的 `FUN_{:x}` 兜底只是 canon 档的巧合匹配。
+- **修法**：opCall 兜底按档分派（`typefactory::direct_runner_tier_active`
+  探针，MIRROR-ENVS-CANONICAL-0001 三驱动 env 包）：direct-runner 档 =
+  `format!("func_{}", addr_space_print_raw(Ram, off))`（复用 printc 内
+  已有的 space.cc:206 1:1 移植，含 wordsize cut 与 sz 缩减）；canon 档
+  保持 `FUN_{:x}` 历史面。
+- **效果**：vsh 镜 `FUN_3190`×2 → `func_0x00003190`×2（与 golden 逐字节
+  一致，remoteGetUNIXSocket 7→3）；httpd 镜 −62（`FUN_2c520` 族）；
+  canon 不回退（FUN_ 路径不变）。

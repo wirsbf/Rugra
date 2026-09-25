@@ -2669,7 +2669,35 @@ impl PrintC {
                     self.symbol_table
                         .get(&off)
                         .cloned()
-                        .unwrap_or_else(|| format!("FUN_{:x}", off))
+                        .unwrap_or_else(|| {
+                            // printc.cc:596-605 opCall's unnamed-callee arm:
+                            // genericFunctionName(fc->getEntryAddress())
+                            // (cc:3359-3366) = "func_" + addr.printRaw —
+                            // AddrSpace::printRaw (space.cc:206-222) zero-
+                            // pads to 2*addrsize (sz shrunk to 4 below
+                            // 2^32), so the direct-runner golden spells
+                            // `func_0x00003190`. The `FUN_%x` face is the
+                            // headless FRONTEND's database name (analyzeHeadless
+                            // symbol manager), which the decompiler library
+                            // never generates — Rugra's canon-tier fallback
+                            // keeps it for the headless golden, and the
+                            // direct-runner tier (GENSMOKE-S3 /
+                            // MIRROR2-S3 callee-naming family) takes the
+                            // oracle's generic name (tier probe:
+                            // typefactory direct_runner_tier_active, the
+                            // MIRROR-ENVS-CANONICAL-0001 bundle).
+                            if crate::type_system::typefactory::direct_runner_tier_active() {
+                                format!(
+                                    "func_{}",
+                                    Self::addr_space_print_raw(
+                                        crate::space::AddressSpace::Ram,
+                                        off
+                                    )
+                                )
+                            } else {
+                                format!("FUN_{:x}", off)
+                            }
+                        })
                 } else {
                     "FUN_unknown".to_string()
                 };
@@ -14320,7 +14348,12 @@ impl PrintC {
             return;
         }
         // printc.cc:3211-3213: tagLine(0); emitLabel(bl); print(COLON).
-        self.emit.tag_line(0);
+        // tagLine(0) is the ABSOLUTE-indent virtual (line_t): the label
+        // lands at column 0 regardless of the current indent stack
+        // (prettyprint.cc:674-675) — the merged tag_line(0) transport
+        // printed it at the relative indent level (MIRROR2 label-indent
+        // family).
+        self.emit.tag_line_at(0);
         self.emit.print(&format!("{}:", self.code_label(addr)));
     }
 
@@ -14391,7 +14424,9 @@ impl PrintC {
                     return;
                 }
                 if self.printed_labels.insert(addr) {
-                    self.emit.tag_line(0);
+                    // printc.cc:3211: absolute-indent tagLine(0) — column 0
+                    // regardless of nesting (see emit_label_statement).
+                    self.emit.tag_line_at(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             } else if matches!(
@@ -14422,7 +14457,9 @@ impl PrintC {
                     && self.pending_goto_labels.contains(&addr)
                     && self.printed_labels.insert(addr)
                 {
-                    self.emit.tag_line(0);
+                    // printc.cc:3211: absolute-indent tagLine(0) — column 0
+                    // regardless of nesting (see emit_label_statement).
+                    self.emit.tag_line_at(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             }

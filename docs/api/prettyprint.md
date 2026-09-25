@@ -1059,3 +1059,27 @@ atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon gol
 遍历符号、永不为其发声明（golden 中 stack0x 使用站点 3 处、声明 0 处）。
 printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过会注入
 `long stack0x00000008;` 与 canon 文本分歧（_start 10→11 回退源）。
+
+## 2026-09-25（Lane MIRROR2）：`tag_line_at` —— oracle 绝对缩进 `Emit::tagLine(int4 indent)` 独立虚函数（MIRROR2-LABELINDENT-0001）
+
+- **根因（镜面残差族=label 缩进）**：oracle 的 `PrintC::emitLabelStatement`
+  （printc.cc:3211）调用 `emit->tagLine(0)`——这是与 `tagLine()` **不同的
+  虚函数**（prettyprint.hh:180），token 形态为 `line_t`：触发时以
+  `spaceremain = maxlinesize - indentbump` **绝对列**断行
+  （prettyprint.cc:674-675），与缩进栈无关 → goto 标号恒在列 0
+  （golden httpd 620/620、curl 47/47 全部 `^code_r` 列 0 实证）。
+- **Rugra 旧缺陷**：`Emit` trait 的合并式 `tag_line(indent: i32)` 用
+  `indent > 0` 分支区分两种形态，`tagLine(0)` 被路由到相对 `bump_t`
+  （当前缩进层）→ 标号随嵌套缩进（httpd 42 处、curl 45 处 `^ *code_r`
+  实证，golden 0 处）。语句层 `tag_line(0)`（=oracle 平凡 `tagLine()`）
+  的传输约定不能改——`close_brace_indent`/`open_brace_indent` 等大量
+  站点以 0 表示平凡形式。
+- **修法**：新增 trait 方法 `tag_line_at(indent)` = oracle 绝对形式：
+  `EmitPrettyPrint` 覆写为无条件 `line_t` token（prettyprint.cc:927-934
+  的逐行对齐：emitPending→checkbreak→push→tagLine(indent)→scan）；
+  `EmitNoMarkup` 覆写为 `endl + indent 个字面空格`（prettyprint.hh:
+  558-560）；trait 默认委托旧 `tag_line(indent)`（NullEmit/CaseDetect
+  保持 no-op）。printc 三个标号发射站点（emit_label_statement 与
+  emit_any_label_statement 两臂）改调 `tag_line_at(0)`。
+- **效果**：curl 镜 695→683、httpd 镜 −62（连带 S3 族）、canon 不回退
+  （466=466，canon 无标号面）。
