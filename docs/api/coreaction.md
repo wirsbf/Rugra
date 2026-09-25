@@ -3676,6 +3676,23 @@ RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲
 - 本模块 9 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+## 2026-09-26：ActionDoNothing 自环 warning 地址修复（MSTRUCT-DONOTHING-WARN-0001，Lane CORESMALL）
+
+`ActionDoNothing::apply`（= coreaction.cc:3466-3490）自环臂的 warning 地址：
+oracle `data.warning("Do nothing block with infinite loop", bb->getStart())`
+（cc:3479）取 **BlockBasic 自身** 的 cover 起址（block.cc:2319-2325：first
+range 的 first addr，虚分派 `get_start_addr`）。旧 Rugra 走 `front_leaf` 下降
++`unwrap_or(0)`——而 oracle `getFrontLeaf` 对 t_basic 块返回 null
+（block.cc:344-348：`subBlock(0)` 为 null），故 front_leaf 恒 None ⇒ 地址
+0x0 ⇒ commentdb 里该 warning 落在函数窗口之外，comment sorter 永不放置、
+`do { /* WARNING: ... */ } while(true)` 面缺失（curl main+_start 两处、vsh
+_start 一处）。修复=直接虚分派 `bl.read().get_start_addr()`（BlockBasic
+覆写= block.rs:2755，block.cc:2319 镜像），front_leaf 下降删除。
+
+E2E（基=efc28f4a A/B）：canon curl 267→266/0/0（_start 警告行与 golden 逐
+字节）；镜面 curl 78→76、vsh 15→14（警告面两/一处转 MATCH）、httpd 恒等
+（httpd golden 无该面）、sq −1（同面）；defects/numbering 全零恒定。
+
 ## 2026-09-26：try_resolution_adjustment build_resolve 工厂写 guard（UNIONRESOLVE-PKG-G-0001 调用点 ripple，Lane PKGG）
 `build_resolve` 闭包（cc:2447-2457 臂，`ResolvedUnion::with_field` 调用点）
 由工厂**读** guard 改为**写** guard：`with_field` 签名随本票改为

@@ -2979,13 +2979,16 @@ impl Action for ActionDoNothing {
                     bl.write()
                         .unwrap()
                         .set_flags(crate::block::block_flags::DONOTHING_LOOP);
-                    let start = crate::block::front_leaf(&bl)
-                        .map(|l| l.read().unwrap().get_start_addr().as_u64())
-                        .unwrap_or(0);
-                    fd.warning(
-                        "Do nothing block with infinite loop",
-                        crate::address::Address::new(start),
-                    );
+                    // cc:3479: data.warning(..., bb->getStart()) — the
+                    // BlockBasic's own cover start (block.cc:2319: first
+                    // range's first address), NOT a front-leaf descent:
+                    // oracle getFrontLeaf on a t_basic block returns null
+                    // (block.cc:344-348 — subBlock(0) is null), so a
+                    // front_leaf detour here produces address 0 and the
+                    // comment never lands in the function's window
+                    // (MSTRUCT-DONOTHING-WARN-0001).
+                    let start = bl.read().unwrap().get_start_addr();
+                    fd.warning("Do nothing block with infinite loop", start);
                 }
                 continue;
             }
