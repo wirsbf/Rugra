@@ -380,12 +380,14 @@ fn cmtseed_comments() -> Option<&'static Vec<(u64, String)>> {
 // ActionSetCasts::cast_input CALL arm
 // (TypeOp::getInputCast -> TypeOpCall::getInputLocal, typeop.cc:295-303
 // / 687-718) can consume the locked parameter slots. Gate polarity
-// mirrors SEEDFLIP/V3FLIP: any mirror component keeps the gate closed
-// (five-projection bank purity), RUGRA_SEEDS=0 is the global bare-face
-// escape, RUGRA_V3SIG=0 opts just this channel out,
-// RUGRA_V3SIG_MANIFEST=<path> overrides the manifest location, and a
-// missing/corrupt manifest is a loud no-op so a manifest-less checkout
-// decompiles as the unchanneled face.
+// after PFLIP (PARAMID-DEFAULT-FLIP-0001, mirroring the httpd driver):
+// any mirror component keeps the gate closed (five-projection bank
+// purity), RUGRA_SEEDS=0 is the global bare-face escape, the manifest
+// channel is OPT-IN ONLY (RUGRA_V3SIG=1 — the self-hosted Parameter ID
+// mode is the default callee-siglock source; unset or =0 leaves the
+// channel to it), RUGRA_V3SIG_MANIFEST=<path> overrides the manifest
+// location, and a missing/corrupt manifest is a loud no-op so a
+// manifest-less checkout decompiles as the unchanneled face.
 static CALLEE_SIGLOCK_PROTOS: std::sync::OnceLock<Option<HashMap<u64, CalleeSiglockProto>>> =
     std::sync::OnceLock::new();
 
@@ -415,7 +417,10 @@ fn load_callee_siglock_manifest() -> Option<HashMap<u64, CalleeSiglockProto>> {
     if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
         return None;
     }
-    if std::env::var("RUGRA_V3SIG").ok().as_deref() == Some("0") {
+    if std::env::var("RUGRA_V3SIG").ok().as_deref() != Some("1") {
+        // PFLIP: the manifest channel is opt-in only; the self-hosted
+        // Parameter ID mode (now the default) owns the callee-siglock
+        // channel whenever its requests carry a table.
         return None;
     }
     let path = std::env::var("RUGRA_V3SIG_MANIFEST")
@@ -568,12 +573,14 @@ fn load_callee_siglock_from_path(path: &str) -> Option<HashMap<u64, CalleeSigloc
 // EXTERNAL-block stub-projection entries, which never produce a body).
 // Rounds are monotone (locked sites keep contributing evidence — their
 // arg varnodes echo the lock after typeprop) and stop at a fixed point or
-// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). Opt-in only
-// (RUGRA_PARAMID=1, DriverMode::All); the mirror gates keep absolute
-// precedence (projection purity) and RUGRA_SEEDS=0 stays the global
-// escape, exactly like the manifest channel. The DEFAULT face is
-// untouched: with the env unset every request carries
-// `paramid_table: None` and the worker's manifest path is byte-identical.
+// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). PFLIP default-on
+// (opt-out RUGRA_PARAMID=0; DriverMode::All — the iteration window is
+// the full corpus); the mirror gates keep absolute precedence
+// (projection purity) and RUGRA_SEEDS=0 stays the global escape,
+// exactly like the manifest channel. The default face now carries the
+// self-produced table: every full-corpus request runs the iteration and
+// the final pass installs its locks (measured byte-identical to the
+// manifest face on this corpus — the PAB lane's three-face equality).
 //
 // Evidence tier (PARAMID2 §17.6): the DEFAULT admits undefined-family
 // scalars (the oracle's own lock tables contain undefined8 /
@@ -8273,16 +8280,17 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // CURLPARAM-DRIVER-0001: the self-hosted Parameter ID mode gate (the
-    // httpd driver's RUGRA_PARAMID form). Opt-in only
-    // (RUGRA_PARAMID=1, DriverMode::All — the iteration window is the
-    // full corpus); every mirror component keeps absolute precedence
-    // (five-projection bank purity) and RUGRA_SEEDS=0 stays the global
-    // escape, exactly like the manifest channel. With the gate closed
-    // every request below carries `paramid_table: None` and the worker's
-    // manifest path is byte-identical — the default face is untouched.
-    let paramid_active = if std::env::var("RUGRA_PARAMID").ok().as_deref() != Some("1") {
-        false
-    } else if mirror_bundle_enabled()
+    // httpd driver's RUGRA_PARAMID form). PFLIP (PARAMID-DEFAULT-FLIP-
+    // 0001) default-on: RUGRA_PARAMID=0 is the escape circuit, every
+    // mirror component keeps absolute precedence (five-projection bank
+    // purity) and RUGRA_SEEDS=0 stays the global escape, exactly like
+    // the manifest channel; DriverMode::All is still required (the
+    // iteration window is the full corpus). With the gate closed every
+    // request below carries `paramid_table: None` and the worker falls
+    // back to the manifest channel — itself opt-in (RUGRA_V3SIG=1)
+    // after the same flip, so the escaped face is the unchanneled one
+    // unless the manifest is explicitly requested.
+    let paramid_active = if mirror_bundle_enabled()
         || mirror_flow_enabled()
         || mirror_bare_load_enabled()
         || mirror_fixture_data_enabled()
@@ -8295,7 +8303,8 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[PARAMID] self-hosted Parameter ID mode requires the full-corpus run (All mode)");
         false
     } else {
-        true
+        // PFLIP: default-on; RUGRA_PARAMID=0 is the escape circuit.
+        std::env::var("RUGRA_PARAMID").ok().as_deref() != Some("0")
     };
 
     // CURLPARAM-DRIVER-0001: the iteration itself. Round 1 runs bare (the

@@ -1,10 +1,52 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（V3FLIP 被调原型通道默认转正快照 + CURLSYM/SEEDFLIP/DFLIP/HSEED 历史快照）
+**日期**: 2026-09-26（PFLIP 自产参数锁默认转正快照 + 2026-09-25 历史快照族）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-25 V3FLIP 被调原型通道默认转正快照（当前事实源）
+## 2026-09-26 PFLIP 自产参数锁默认转正快照（当前事实源——评测语义分界点）
+
+**自产 Parameter ID 模式默认转正**（Lane PFLIP，wt/pflip @ master efc28f4a，用户拍板
+PARAMID-DEFAULT-FLIP-0001；examples 驱动层极性翻转，**零 src/ 改动**）：httpd+curl 双驱动的
+`paramid_active` 默认 ON（`RUGRA_PARAMID=0` 逃生断路），callee-siglock manifest 通道退
+opt-in（仅 `RUGRA_V3SIG=1` 显式开；`=0` 保持 kill 义）。优先链=mirror > `RUGRA_SEEDS=0` >
+PARAMID（默认）> V3SIG（opt-in）。generic_clib 导入签名台账（59 条）保持默认开捆绑——
+`RUGRA_IMPORTSIG=0` 断路将退无导入锚脸（亲测 285→537；PAB 口径 ~691 族同向），台账为默认脸
+承重数据。转正判据=PAB A/B 复证（自产 ≥ manifest 严格成立+导入锚在场时锁源脸中性）。
+
+**⚠ 评测语义分界点（PFLIP commit=分界）**：httpd 默认脸口径自本 commit 起为**自产口径**。
+分界前数字谱系——908/898/862/590（纯 manifest 期，无导入锚）与 439/285（IMPORTFLIP 后
+manifest+导入锚）——均属 manifest 口径，**与分界后数字不可比**。分界后基线=httpd 默认
+**285/0/0**（与分界前 285 字节级仅差 7 行 typedef 序言——自产拼写避开 undefined 族，canon
+golden 零 typedef 行→更贴 canon）；curl 默认 267/0/0 分界前后恒等（锁源脸中性），
+`result/curl_cur.c` 无需回流。
+
+| 门禁（fast-release 亲测，@ master efc28f4a + PFLIP） | 数字 | 说明 |
+|---|---|---|
+| httpd E2E（新默认脸=自产） | **285 / 0 / 0**（34 函数） | 双跑 cmp 恒等+并发负载复现恒等；函数体与 manifest 脸逐字节同（唯一差=7 行 typedef 序言）；vs `tests/golden/ghidra_httpd_1204.c` |
+| httpd manifest 恢复（`RUGRA_PARAMID=0 RUGRA_V3SIG=1`） | **285 / 0 / 0** | ==翻转前默认脸 cmp **字节恒等**（回归证据）；manifest 文件与 harvest 工具链保留 |
+| httpd `RUGRA_PARAMID=0` 单退 | **285 / 0 / 0** | ==manifest 脸字节恒等——@efc28f4a 自产/manifest/无锁三态在导入锚在场时脸中性（IMPORTFLIP 台账已吸收 manifest 历史贡献） |
+| httpd `RUGRA_IMPORTSIG=0` 降级 | **537 / 0 / 0** | 断路实证（+252）；台账承重；A/B 仪器保留 |
+| httpd `RUGRA_SEEDS=0` 逃生 | **785 / 0 / 0** | 裸脸（全局逃生门，一切播种通道静默关） |
+| httpd gcc 审计（新默认脸） | 15 OK / 14 FAIL | fail 名集与 manifest 脸/翻转前默认**逐名恒等**（pRam 族=在账预存域） |
+| curl E2E（新默认脸=自产） | **267 / 0 / 0**（124 函数） | sha `c0610164…` ==翻转前默认==manifest 恢复==`RUGRA_PARAMID=0` 单退（三脸等式维持，canon 零回退）；复现 10/10；首跑并发下一次字节离群（gate 同 267/0/0）→ TODO PARAMID-CURL-LOADDETERMINISM-0001 |
+| 投影银行（B2 钉板） | **391/391 MATCH** | 冻结投影 sha256 钉+mirror 裸径契约→不受门极性影响（亲验） |
+| 镜面棘轮 | curl 78/275、httpd 208/460、vsh 15/55 全 PASS | 上限未动（mirror 恒拒一切通道——极性翻转不变量亲验） |
+| 三门禁（annotations/refs/evidence） | 全绿 | src/ 零改动（97 文件注解/引用不变量） |
+
+**PARAMID 门 env 语义矩阵（PFLIP 后）**：
+
+| env 形态 | 行为 |
+|---|---|
+| （无） | **自产迭代默认开**（httpd 主循环前迭代环+curl worker 表接管；curl 仅 DriverMode::All） |
+| `RUGRA_PARAMID=0` | 单门退（自产迭代关；callee-siglock 通道落到 V3SIG 门——见下） |
+| `RUGRA_V3SIG=1` | manifest 显式开（仅 `RUGRA_PARAMID=0` 时生效——PARAMID owns channel 优先） |
+| `RUGRA_V3SIG=0`/unset | manifest 不装（manifest 通道 opt-in 形态） |
+| `RUGRA_IMPORTSIG=0` | 导入锚断路（默认脸劣化——仪器用途，非逃生门） |
+| `RUGRA_SEEDS=0` | **全局退**（PARAMID/V3SIG/IMPORTSIG/TYPESEED 等全关，裸脸） |
+| mirror 分量在场 | 恒拒一切通道（projection purity，含显式 =1） |
+
+## 2026-09-25 V3FLIP 被调原型通道默认转正快照（历史，httpd 数字被 PFLIP 节取代）
 
 **callee-siglock 通道默认转正**（Lane V3FLIP，wt/curlsig @ master 535dd91f）：httpd 驱动的
 被调锁定原型通道（HEADLESS-BRIDGE-V3-SIGLOCK-0003，manifest

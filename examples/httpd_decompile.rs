@@ -1467,13 +1467,20 @@ fn install_v3sig_callee_protos(
 // struct base anymore (a genuine total miss stays a per-entry skip).
 //
 // GATING: the channel is part of the analyzer transport, not the bare
-// front-end: ON under the self-hosted Parameter ID mode (RUGRA_PARAMID=1,
-// whose face this lane is judged on), RUGRA_IMPORTSIG=1 enables it
-// standalone as the measurement instrument, RUGRA_IMPORTSIG=0 is the A/B
-// kill switch, and the mirror gate / RUGRA_SEEDS=0 keep absolute precedence
-// (projection purity + global escape, exactly like the V3SIG/PARAMID
-// channels). The DEFAULT face is untouched by construction: with all gates
-// closed this whole block is dead code.
+// front-end: ON under the self-hosted Parameter ID mode (PFLIP default —
+// the default face is judged with it on; RUGRA_IMPORTSIG=0 breaks it out
+// from under the default), ON standalone since the IMPORTFLIP promotion
+// (RUGRA_IMPORTSIG=1 remains the explicit witness form), and the mirror
+// gate / RUGRA_SEEDS=0 keep absolute precedence (projection purity +
+// global escape, exactly like the V3SIG/PARAMID channels). PFLIP note:
+// with the import anchors present the lock SOURCE is face-neutral (the
+// PAB lane's ablation — self-produced and manifest tables converge to
+// byte-identical function bodies); RUGRA_IMPORTSIG=0 therefore degrades
+// the default face to the no-import-signature measurement (the PAB
+// ablation's ~691-skeleton family, WORSE than the manifest-era ~590
+// baseline), so the 59-entry import ledger is load-bearing data for the
+// default face, not an optional enrichment. With all gates closed this
+// whole block is dead code.
 // ===========================================================================
 
 /// One canon-locked import signature datum:
@@ -2075,12 +2082,12 @@ fn install_import_signatures(
 // (install_v3sig_callee_protos). Locked sites keep contributing
 // evidence (their arg varnodes echo the lock after typeprop), so the
 // iteration is monotone and stops at a fixed point or at
-// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). Opt-in only
-// (RUGRA_PARAMID=1); the mirror gate keeps absolute precedence and
-// RUGRA_SEEDS=0 stays the global escape, exactly like the manifest
-// channel. The default and RUGRA_V3SIG=0 faces are untouched: with the
-// env unset this whole block is dead code and the loop below runs the
-// exact historical computation. The default evidence tier admits
+// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). PFLIP default-on
+// (opt-out RUGRA_PARAMID=0); the mirror gate keeps absolute precedence
+// and RUGRA_SEEDS=0 stays the global escape, exactly like the manifest
+// channel. The RUGRA_PARAMID=0 / mirror / RUGRA_SEEDS=0 faces skip this
+// block entirely and the loop below runs the unchanneled computation.
+// The default evidence tier admits
 // undefined-family scalars (canon's own table locks 9 undefined8 +
 // 5 undefined8 * slots); guarded by the refinements below it measures
 // BEST on both judges (face 1009 vs 1015 strict; entry precision 63.2%
@@ -3887,31 +3894,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and lock only the return. The mirror gate stays clean (no installs,
     // the five projections remain byte-identical); RUGRA_SEEDS=0 is the
     // global escape. V3FLIP promotion (DFLIP/SEEDFLIP precedent, opt-out
-    // polarity): the gate is default-on — the manifest ships in-repo, and
-    // the V3SIG opt-in pass measured −190 skeleton lines with zero
-    // regressions across the other 29 functions (f9b3f1bf lane report).
-    // RUGRA_V3SIG=0 restores the exact historical default face
-    // (byte-identical pre-flip bare face); RUGRA_V3SIG=1 remains the
-    // explicit form, equivalent to the new default. A binary whose callee
-    // manifest is absent decompiles as the unchanneled face (graceful
-    // no-op — the httpd-only manifest never gates other corpora).
-    // HEADLESS-BRIDGE-PARAMID-0001: the self-hosted Parameter ID mode
-    // (opt-in RUGRA_PARAMID=1) replaces this channel's manifest input —
-    // the callee-siglock locks become the binary's own runtime-recovered
-    // prototypes (see run_paramid_iteration before the main loop). The
-    // mirror gate keeps absolute precedence (projection purity) and
-    // RUGRA_SEEDS=0 stays the global escape, exactly like the manifest
-    // channel.
+    // polarity): the gate was default-on from the V3FLIP promotion (the
+    // manifest ships in-repo; the V3SIG opt-in pass measured −190 skeleton
+    // lines with zero regressions across the other 29 functions, f9b3f1bf
+    // lane report) until PFLIP.
+    // PFLIP (PARAMID-DEFAULT-FLIP-0001, 2026-09-26, user-decided — the
+    // inverted DFLIP/SEEDFLIP/V3FLIP/IMPORTFLIP precedent): HEADLESS-
+    // BRIDGE-PARAMID-0001's self-hosted Parameter ID mode becomes the
+    // DEFAULT face (opt-out RUGRA_PARAMID=0), and this manifest channel
+    // retreats to the explicit opt-in RUGRA_V3SIG=1 form (RUGRA_V3SIG=0
+    // keeps its historical kill meaning; unset now leaves the channel to
+    // the self-hosted mode). Flip evidence: the PAB A/B re-measure
+    // (/dev/shm/rugra-reports/PAB_PARAMID_AB_2026-09-26.md) — with the
+    // import-signature transport on (its own default since IMPORTFLIP)
+    // the self-produced table and the manifest table converge to
+    // byte-identical function bodies (the sole delta = the manifest
+    // face's 7 typedef preamble lines; the canon golden carries none),
+    // so the lock SOURCE is face-neutral with the import anchors
+    // present. Priority chain after the flip: mirror > RUGRA_SEEDS=0 >
+    // PARAMID (default) > V3SIG (opt-in). A binary whose callee manifest
+    // is absent decompiles as the unchanneled face (graceful no-op — the
+    // httpd-only manifest never gates other corpora).
     let paramid_active = if mirror_flow_enabled() {
         eprintln!("[PARAMID] self-hosted Parameter ID mode ignored under the mirror gate (projection purity)");
         false
     } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
         false
     } else {
-        std::env::var("RUGRA_PARAMID").ok().as_deref() == Some("1")
+        // PFLIP: default-on; RUGRA_PARAMID=0 is the escape circuit.
+        std::env::var("RUGRA_PARAMID").ok().as_deref() != Some("0")
     };
     let v3sig_active = if paramid_active {
-        eprintln!("[V3SIG] manifest load skipped: RUGRA_PARAMID=1 self-hosted mode owns the callee-siglock channel");
+        eprintln!("[V3SIG] manifest load skipped: self-hosted Parameter ID mode owns the callee-siglock channel");
         false
     } else if mirror_flow_enabled() {
         eprintln!("[V3SIG] callee-siglock gate ignored under the mirror gate (projection purity)");
@@ -3919,7 +3933,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
         false
     } else {
-        std::env::var("RUGRA_V3SIG").ok().as_deref() != Some("0")
+        // PFLIP: the manifest channel is opt-in only (RUGRA_V3SIG=1);
+        // unset or =0 leaves the callee-siglock channel unowned.
+        std::env::var("RUGRA_V3SIG").ok().as_deref() == Some("1")
     };
     // The manifest table: canon address (base-0 vaddr + 0x100000) ->
     // (callee name, params Vec<Option<type spelling>>, return spelling,
@@ -4593,12 +4609,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         plt_ranges: plt_entry_ranges.clone(),
     };
 
-    // HEADLESS-BRIDGE-PARAMID-0001 (opt-in RUGRA_PARAMID=1): run the
-    // Parameter-ID iteration loop BEFORE the printing pass and swap the
-    // V3SIG channel's input from the harvested manifest to the binary's
-    // own runtime-recovered prototypes. The final face pass (the main
-    // loop below) then decompiles with the self-produced locks installed
-    // — the same three-lock callspec transport the manifest channel uses.
+    // HEADLESS-BRIDGE-PARAMID-0001 (PFLIP default-on; RUGRA_PARAMID=0 is
+    // the escape circuit): run the Parameter-ID iteration loop BEFORE the
+    // printing pass and swap the V3SIG channel's input from the harvested
+    // manifest to the binary's own runtime-recovered prototypes. The
+    // final face pass (the main loop below) then decompiles with the
+    // self-produced locks installed — the same three-lock callspec
+    // transport the manifest channel uses.
     if paramid_active {
         let rounds = std::env::var("RUGRA_PARAMID_ROUNDS")
             .ok()
