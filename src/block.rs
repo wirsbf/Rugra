@@ -4008,6 +4008,33 @@ impl BlockGraph {
     /// (`moveRespectingCover`/`opMarkNonPrinting`), which cannot thread
     /// through a `&mut self` method on `fd.sblocks` itself.
     // Ghidra: block.cc:1364 BlockGraph::finalizePrinting
+    //
+    // NO re-entry guard — by alignment, not omission. The oracle's
+    // `BlockGraph::finalizePrinting` (cc:1364-1371) is a plain recursion
+    // over the component list with no visited set, exactly like its twin
+    // `finalTransform` (cc:1355-1362): Ghidra relies on the structured
+    // tree being single-owner over its walk shape BY CONSTRUCTION
+    // (identifyInternal removes the components from the parent list,
+    // cc:953-960; addBlock assigns the one `parent` pointer, cc:862-875;
+    // goto-arm switch targets stay unconsumed in the surrounding graph,
+    // cc:3548-3553; the BLOCKCONSISTENT_DEBUG build even asserts that
+    // ownership at collapse time, cc:945-948). Rugra's dispatch keeps
+    // the same per-node-once property structurally: the Switch arm walks
+    // control + gototype==0 cases only, so the one sanctioned aliasing
+    // (goto-arm case targets, which stay top-level roots AND sit in
+    // `cases` with gototype != 0) is excluded from this walk — see
+    // `final_transform_block` for the sweep that DOES need its visited
+    // guard against that aliasing. A silent visited guard here would
+    // only ever MASK an invariant break — turning a loud shape bug into
+    // the quiet for→while degradation of a doubly-finalized WhileDo —
+    // so debug builds machine-check the ownership invariant at this
+    // sweep entry instead (`debug_assert_structure_tree_unique`),
+    // mirroring Ghidra's BLOCKCONSISTENT_DEBUG philosophy; release
+    // builds run the oracle's exact unguarded recursion.
+    // (F8FOR-FINALIZE-VISITED-0001 disposal: shared-child premise
+    // disproven for the finalize walk shape — the asymmetry vs
+    // `final_transform_block`'s guard is semantically required, since
+    // the two sweeps walk different member sets for BlockSwitch.)
     pub fn finalize_printing_graph(fd: &mut crate::funcdata::Funcdata) {
         // cc:1368-1370: for(iter=list.begin();iter!=list.end();++iter)
         //   (*iter)->finalizePrinting(data);
@@ -4016,6 +4043,8 @@ impl BlockGraph {
         }
         let top: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
             fd.sblocks.blocks.clone();
+        #[cfg(debug_assertions)]
+        BlockGraph::debug_assert_structure_tree_unique(&top);
         for bl in &top {
             finalize_printing_block(bl, fd);
         }
@@ -4048,6 +4077,111 @@ impl BlockGraph {
             // libstdc++'s quicksort phase (registered residual, see the
             // blockstruct_orderblocks_1204 fixture notes).
             self.blocks.sort_by(compare_final_order);
+        }
+    }
+
+    /// Debug-only single-ownership invariant check for the structured
+    /// block tree (F8FOR-FINALIZE-VISITED-0001 disposal).
+    ///
+    /// The oracle runs BOTH tree sweeps unguarded —
+    /// `BlockGraph::finalTransform` (block.cc:1355-1362) and
+    /// `BlockGraph::finalizePrinting` (block.cc:1364-1371) are plain
+    /// recursions with no visited set — because over the oracle's walk
+    /// shape every node is reachable exactly once: `BlockGraph::addBlock`
+    /// assigns the one `parent` pointer (block.cc:862-875),
+    /// `identifyInternal` physically removes the components from the
+    /// parent list (`list = newlist`, block.cc:953-960), the goto-arm
+    /// switch targets are left in the surrounding graph (never consumed,
+    /// block.cc:3548-3553), and Ghidra's `BLOCKCONSISTENT_DEBUG` build
+    /// asserts exactly that ownership at collapse time (block.cc:945-948:
+    /// `if ((*iter)->parent != this) throw LowlevelError("Bad block
+    /// identify")`).
+    ///
+    /// Rugra's Arc block model reproduces that shape with ONE sanctioned
+    /// aliasing exception: a `BlockSwitch` whose control is a
+    /// `BlockMultiGoto` records the peeled goto-edge targets in `cases`
+    /// with gototype != 0 while they remain top-level roots
+    /// (blockaction.rs mirrors cc:3548-3553 — the bodies are not part of
+    /// the switch). Those aliased members are excluded from every oracle
+    /// walk: `final_transform_block`'s visited guard dedups them (its
+    /// `component_list_dyn` walk sees both paths — the guard is
+    /// load-bearing), and `finalize_printing_block`'s Switch arm
+    /// dispatches control + gototype==0 cases only, so the aliased
+    /// members are never finalized through the switch. This checker
+    /// walks the ORACLE shape (structured members only) and fails
+    /// loudly on any OTHER duplicate reachability — a consumed component
+    /// claimed by two composites, or a parent cycle — which would
+    /// otherwise silently degrade a doubly-finalized WhileDo's for-loop
+    /// back to `while` (the first visit's opMarkNonPrinting pair,
+    /// cc:3421-3423, makes the second testTerminal reject the notPrinted
+    /// root, cc:3409-3411). Mirrors Ghidra's BLOCKCONSISTENT_DEBUG
+    /// philosophy at sweep time; release builds compile it out and the
+    /// sweeps stay byte-identical to the oracle's unguarded recursion.
+    // RUGRA-GLUE: debug-only ownership invariant walk — Ghidra's counterpart
+    // is the compile-time BLOCKCONSISTENT_DEBUG #ifdef ownership check at the
+    // collapse site (block.cc:945-948), not a runtime tree walk; Rugra's Arc
+    // model without a `parent` invariant needs the walk to assert the same.
+    #[cfg(debug_assertions)]
+    fn debug_assert_component_tree_unique(
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        seen: &mut std::collections::HashSet<usize>,
+    ) {
+        let bl_id = Arc::as_ptr(bl) as *const () as usize;
+        if !seen.insert(bl_id) {
+            let (index, ty) = {
+                let r = bl.read().unwrap();
+                (r.get_index(), r.get_type())
+            };
+            panic!(
+                "structure tree ownership invariant violated: block index \
+                 {index} ({ty:?}) reachable twice over the oracle walk shape \
+                 (shared child or cycle); the oracle guarantees single \
+                 ownership via identifyInternal (block.cc:940-963) — \
+                 F8FOR-FINALIZE-VISITED-0001"
+            );
+        }
+        let ty = bl.read().unwrap().get_type();
+        // Oracle walk shape: a BlockSwitch's component list (cc:1904-1919
+        // identifyInternal) = the control block + the structured cases +
+        // the structured default; gototype != 0 members stay in the
+        // surrounding graph (cc:3548-3553) and are walked as roots. Every
+        // other composite walks component_list_dyn (whose own Switch arm
+        // includes the aliased goto members — NOT this shape).
+        let children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = if ty == BlockType::Switch {
+            let r = bl.read().unwrap();
+            let sw = r.as_any().downcast_ref::<BlockSwitch>().unwrap();
+            let mut v = vec![sw.control.clone()];
+            for (case, &gt) in sw.cases.iter().zip(sw.case_gototypes.iter()) {
+                if gt == 0 {
+                    v.push(case.clone());
+                }
+            }
+            if sw.default_gototype == 0 {
+                if let Some(dc) = &sw.default_case {
+                    v.push(dc.clone());
+                }
+            }
+            v
+        } else {
+            BlockGraph::component_list_dyn(bl)
+        };
+        for child in &children {
+            BlockGraph::debug_assert_component_tree_unique(child, seen);
+        }
+    }
+
+    /// Sweep-entry wrapper: validate the roots over the oracle walk shape
+    /// before the `final_transform_block` and `finalize_printing_block`
+    /// recursions (see `debug_assert_component_tree_unique`).
+    // RUGRA-GLUE: entry wrapper for the debug-only ownership invariant walk
+    // (no Ghidra counterpart — see debug_assert_component_tree_unique).
+    #[cfg(debug_assertions)]
+    fn debug_assert_structure_tree_unique(
+        roots: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) {
+        let mut seen = std::collections::HashSet::new();
+        for bl in roots {
+            BlockGraph::debug_assert_component_tree_unique(bl, &mut seen);
         }
     }
 
@@ -7435,10 +7569,22 @@ pub fn final_transform_block(
 ) {
     let bl_id = Arc::as_ptr(bl) as *const () as usize;
     if !visited.insert(bl_id) {
-        // Shared-child revisit guard: Rugra composites can alias one child
-        // under two parents; the oracle's tree never does. Visiting once
-        // preserves the oracle's per-node-once semantics (a revisit would
-        // re-detect idempotently but re-move ops against moved positions).
+        // LOAD-BEARING revisit guard (the oracle has none — cc:1355-1362
+        // is a plain recursion over its single-owner `list`). Rugra's
+        // walk uses `component_list_dyn`, whose BlockSwitch arm returns
+        // `cases + default_case` INCLUDING the gototype != 0 goto-arm
+        // targets — the one sanctioned aliasing in the Arc model: those
+        // blocks stay top-level roots (never consumed, mirroring
+        // cc:3548-3553's surrounding-graph placement) while remaining
+        // switch `cases` members. This sweep therefore can reach them
+        // twice (root + switch child); visiting once preserves the
+        // oracle's per-node-once semantics (a revisit would re-detect
+        // idempotently but re-move ops against moved positions). The
+        // finalizePrinting twin needs NO guard: its Switch dispatch
+        // walks control + gototype==0 cases only, so the aliased members
+        // are structurally excluded. Debug builds machine-check the
+        // ownership invariant at both sweep entries — see
+        // BlockGraph::debug_assert_structure_tree_unique.
         return;
     }
     // cc:1359-1361: recurse into every substructure first
@@ -7481,6 +7627,8 @@ pub fn for_loop_final_transform(fd: &mut crate::funcdata::Funcdata) {
         return;
     }
     let top: Vec<DynBlockArc> = fd.sblocks.blocks.clone();
+    #[cfg(debug_assertions)]
+    BlockGraph::debug_assert_structure_tree_unique(&top);
     let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for bl in &top {
         final_transform_block(bl, fd, &mut visited);
@@ -9224,3 +9372,182 @@ mod edge_flag_tests {
     }
 }
 
+
+/// F8FOR-FINALIZE-VISITED-0001 constructive verification: the single-
+/// ownership invariant that makes the oracle's unguarded
+/// finalizePrinting recursion (block.cc:1364-1371) sound, the one
+/// sanctioned aliasing exception (goto-arm switch targets), and the
+/// debug checker that machine-enforces both (see
+/// `BlockGraph::debug_assert_structure_tree_unique`).
+#[cfg(test)]
+mod finalize_visited_tests {
+    use super::{BlockBasic, BlockGraph, BlockList, BlockSwitch, FlowBlock};
+    use crate::address::Address;
+    use std::sync::{Arc, RwLock};
+
+    type BlockArc = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+
+    fn leaf(index: i32) -> BlockArc {
+        Arc::new(RwLock::new(BlockBasic::new(index, Address::new(0x1000 + index as u64 * 0x10))))
+    }
+
+    fn list(index: i32, children: Vec<BlockArc>) -> BlockArc {
+        Arc::new(RwLock::new(BlockList::new(index, children)))
+    }
+
+    /// A shared child under two composites is exactly the tree break the
+    /// CR-F8FOR finding worried about: a WhileDo reached this way would be
+    /// finalized twice (first visit's opMarkNonPrinting pair makes the
+    /// second testTerminal reject the notPrinted root → silent for→while
+    /// degradation). The debug checker must fail loudly on it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "ownership invariant violated")]
+    fn shared_child_over_oracle_walk_shape_is_detected() {
+        let inner_leaf = leaf(2);
+        // leaf #2 sits under BOTH the inner list and the outer list.
+        let outer = list(0, vec![list(1, vec![inner_leaf.clone()]), inner_leaf]);
+        BlockGraph::debug_assert_structure_tree_unique(&[outer]);
+    }
+
+    /// A parent cycle (composite holding itself as a child) would loop the
+    /// unguarded oracle-shaped recursions forever; the checker's seen-set
+    /// insert-before-recurse turns it into the same loud failure.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "ownership invariant violated")]
+    fn parent_cycle_is_detected() {
+        let cyc: BlockArc = Arc::new(RwLock::new(BlockList::new(0, Vec::new())));
+        {
+            let mut w = cyc.write().unwrap();
+            if let Some(l) = w.as_any_mut().downcast_mut::<BlockList>() {
+                l.children.push(cyc.clone());
+            }
+        }
+        BlockGraph::debug_assert_structure_tree_unique(&[cyc]);
+    }
+
+    /// The one sanctioned aliasing: a BlockSwitch with a multigoto control
+    /// keeps goto-arm targets in `cases` (gototype != 0) while they remain
+    /// top-level roots — mirroring the oracle leaving them in the
+    /// surrounding graph (block.cc:3548-3553). Over the oracle walk shape
+    /// (structured members only) the tree stays single-visit, so the
+    /// checker passes — while the raw `component_list_dyn` walk
+    /// `final_transform_block` uses really does reach the aliased target
+    /// twice, which is why that sweep's visited guard is load-bearing and
+    /// the finalize dispatch (control + gototype==0 cases) needs none.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn goto_arm_switch_aliasing_is_sanctioned_and_unique_over_oracle_walk() {
+        use crate::block::goto_type::GOTO_GOTO;
+        let control = leaf(0);
+        let structured_case = leaf(1);
+        let goto_target = leaf(2);
+        let switch: BlockArc = Arc::new(RwLock::new(BlockSwitch {
+            index: 0,
+            control: control.clone(),
+            cases: vec![structured_case.clone(), goto_target.clone()],
+            default_case: None,
+            case_gototypes: vec![0, GOTO_GOTO],
+            default_gototype: 0,
+            case_isexit: vec![false, false],
+            default_isexit: false,
+            jump: None,
+            case_order: Vec::new(),
+            default_label: None,
+            default_order: None,
+            case_values: Vec::new(),
+            index_varnode: None,
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+        }));
+        // Faithful root layout: the switch and the goto-arm target are
+        // siblings at the top level (the target was never consumed).
+        let roots = vec![switch.clone(), goto_target.clone()];
+
+        // (a) Oracle walk shape is single-visit despite the aliasing.
+        BlockGraph::debug_assert_structure_tree_unique(&roots);
+
+        // (b) The raw component walk final_transform_block uses DOES see
+        // the goto target twice (root + switch case) — the visited guard
+        // dedups exactly this.
+        fn count_visits(target: &BlockArc, bl: &BlockArc, n: &mut i32) {
+            if Arc::ptr_eq(target, bl) {
+                *n += 1;
+            }
+            for child in BlockGraph::component_list_dyn(bl) {
+                count_visits(target, &child, n);
+            }
+        }
+        let mut visits = 0;
+        for root in &roots {
+            count_visits(&goto_target, root, &mut visits);
+        }
+        assert_eq!(visits, 2, "component_list_dyn must reach the aliased goto target twice");
+
+        // (c) The finalize dispatch's Switch arm (control + gototype==0
+        // cases) structurally excludes the aliased member — no guard
+        // needed there.
+        let finalize_children = {
+            let r = switch.read().unwrap();
+            let sw = r.as_any().downcast_ref::<BlockSwitch>().unwrap();
+            let mut v = vec![sw.control.clone()];
+            for (case, &gt) in sw.cases.iter().zip(sw.case_gototypes.iter()) {
+                if gt == 0 {
+                    v.push(case.clone());
+                }
+            }
+            v
+        };
+        assert_eq!(finalize_children.len(), 2);
+        assert!(Arc::ptr_eq(&finalize_children[0], &control));
+        assert!(Arc::ptr_eq(&finalize_children[1], &structured_case));
+        assert!(
+            !finalize_children.iter().any(|c| Arc::ptr_eq(c, &goto_target)),
+            "finalize walk must skip the goto-arm target"
+        );
+    }
+
+    /// End-to-end protocol proof: the default 5-step collapse (the
+    /// production path — every composite install goes through
+    /// identify_internal's single-consumption protocol) yields a tree
+    /// that is single-visit over the oracle walk shape.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn default_5step_collapse_yields_single_owner_tree() {
+        use crate::block::BlockEdge;
+        // Linear chain entry -> a -> b -> exit: ruleBlockCat (via
+        // collapseInternal) merges it into one BlockList.
+        let entry = leaf(0);
+        let a = leaf(1);
+        let b = leaf(2);
+        let exit = leaf(3);
+        {
+            let mut w = entry.write().unwrap();
+            w.add_out_edge(BlockEdge::new(a.clone(), 0));
+        }
+        {
+            let mut w = a.write().unwrap();
+            w.add_in_edge(BlockEdge::new(entry.clone(), 0));
+            w.add_out_edge(BlockEdge::new(b.clone(), 0));
+        }
+        {
+            let mut w = b.write().unwrap();
+            w.add_in_edge(BlockEdge::new(a.clone(), 0));
+            w.add_out_edge(BlockEdge::new(exit.clone(), 0));
+        }
+        {
+            let mut w = exit.write().unwrap();
+            w.add_in_edge(BlockEdge::new(b.clone(), 0));
+        }
+        let mut graph = BlockGraph::new();
+        graph.blocks = vec![entry, a, b, exit];
+        let mut cs = crate::blockaction::CollapseStructure::new(&mut graph, "f8visited-test");
+        cs.collapse_all();
+        let roots: Vec<BlockArc> = graph.blocks.clone();
+        assert!(!roots.is_empty());
+        BlockGraph::debug_assert_structure_tree_unique(&roots);
+    }
+}

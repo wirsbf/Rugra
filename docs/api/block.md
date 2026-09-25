@@ -1885,6 +1885,26 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
 - **锁纪律**（RUGRA 侧）：`final_transform_block` 在持块写锁前解析
   `front_leaf()->sub_block(0)` 头块——std RwLock 同线程读写在同锁上死锁
   （实测 main 15s 超时根因）；共享子节点 visited 集防二次处理。
+- **visited 不对称的语义裁定**（F8FOR-FINALIZE-VISITED-0001，CR-F8FOR
+  发现项①处置）：oracle 两棵扫描均无守卫（cc:1355-1362/1364-1371 纯递归），
+  靠结构树单所有权不变式保证每块恰访一次——`addBlock` 唯一 `parent` 指针
+  （cc:862-875）+ `identifyInternal` 物理摘除组件（cc:953-960）+ goto 臂
+  switch 目标留在周围图不消费（cc:3548-3553），且 `BLOCKCONSISTENT_DEBUG`
+  构建在折叠期断言所有权（cc:945-948）。Rugra 的 Arc 块模型有一个**受制裁
+  别名**：multigoto 控制的 `BlockSwitch` 把 goto 臂目标留在顶层根的同时
+  记进 `cases`（gototype != 0，镜像 cc:3548-3553）。由此：
+  ①`final_transform_block` 走 `component_list_dyn`（Switch 臂=cases+
+  default，含 goto 臂）→ 别名成员可经两路到达，其 visited 守卫是**承重**
+  的（去重后等价 oracle per-node-once）；②`finalize_printing_block` 的
+  Switch 分发只走 control+gototype==0 cases → 别名成员被结构性排除，
+  **无需守卫**——不对称是两扫描成员集不同的必然结果，非缺陷。③新增
+  debug-only `BlockGraph::debug_assert_structure_tree_unique`（两扫描入口
+  各调一次，oracle 走形=control+结构化 cases+结构化 default，其余=
+  component_list_dyn）：任何其他重复可达（真共享子/父环）在 debug 构建
+  即 panic（镜像 BLOCKCONSISTENT_DEBUG 哲学于扫描期），release 编译剔除
+  （fast-release=release 继承，canon 零扰动结构保证）。构造性验证 4 测
+  （block.rs `finalize_visited_tests`）：共享子检出/父环检出/goto 臂别名
+  合规+oracle 走形唯一/默认 5 步折叠端到端单所有权。
 - **放置偏差登记**：oracle 在 :5715（ActionStructureTransform，merge 组前）
   跑 finalTransform；Rugra 的该 Action apply 在 coreaction.rs（车道写域
   冻结，为 no-op），扫描改挂在 blockaction.rs 的 ActionFinalStructure
