@@ -618,18 +618,21 @@ impl HeapSequence {
     }
 
     // Ghidra: constseq.cc:486 HeapSequence::findDuplicateBases
-    /// Back-track from `base_pointer` through PTRSUBs, PTRADDs, and INT_ADDs
+    /// Back-track from `base_pointer` through PTRSUBs, INT_ADDs, and PTRADDs
     /// to an earlier root, keeping track of any offsets; then trace forward
-    /// through ops trying to match the offsets. Faithful to `findDuplicateBases`
-    /// (constseq.cc:486-539). `duplist` is filled with the discovered alias
-    /// base Varnodes, including `base_pointer` itself.
+    /// through ops trying to match the offsets. Faithful to
+    /// `findDuplicateBases` (constseq.cc:486-539). `duplist` is filled with
+    /// the discovered alias base Varnodes, including `base_pointer` itself.
     ///
-    /// NOTE on Ghidra typo: cc:510 and cc:526 list `CPUI_PTRSUB` twice in the
-    /// `&&` chain (a transcription bug in upstream Ghidra — INT_ADD is dropped
-    /// on the second check). Rugra ports the *intended* semantics: the back-
-    /// track/forward-scan accepts PTRSUB, INT_ADD, and PTRADD with constant
-    /// input[1]. The upstream bug would in practice rarely fire because the
-    /// initial guard at cc:495 already gates entry.
+    /// Locked-text chain form: the entry gate (cc:495) accepts PTRSUB,
+    /// INT_ADD, and PTRADD with constant input[1], but BOTH chain filters
+    /// (the back-track break at cc:510-511 and the forward-scan accept at
+    /// cc:526-527) test `!= CPUI_PTRSUB && != CPUI_INT_ADD && !=
+    /// CPUI_PTRSUB` — the duplicated CPUI_PTRSUB is verbatim 12.0.4
+    /// upstream text and is the locked behavior: CPUI_PTRADD is NOT a
+    /// chain op anywhere past the entry gate (the cc:503-504/cc:531-532
+    /// PTRADD offset scaling applies to the gate-admitted entry op only;
+    /// under the locked forward filter the scaling branch is dead).
     pub fn find_duplicate_bases(
         &self,
         duplist: &mut Vec<Arc<RwLock<Varnode>>>,
@@ -713,16 +716,19 @@ impl HeapSequence {
             offsets.push(off);
             let Some(next) = in0 else { break };
             copy_root = next;
-            // cc:507-512: stop if copyRoot is not written or its def is not an
-            // acceptable address-arithmetic op (intended: PTRSUB/INT_ADD/PTRADD).
+            // cc:507-512: stop if copyRoot is not written, or its def fails
+            // the locked chain test `opc != CPUI_PTRSUB && opc !=
+            // CPUI_INT_ADD && opc != CPUI_PTRSUB` (constseq.cc:510-511 —
+            // the duplicated CPUI_PTRSUB is the 12.0.4 upstream text and is
+            // locked behavior: only PTRSUB/INT_ADD continue the chain;
+            // CPUI_PTRADD is NOT a chain op, it is accepted only by the
+            // entry gate at cc:495). The duplicated test is idempotent in
+            // Rust, so it collapses to the two-arm form here.
             let next_def = match in0_def {
                 Some(d) => d,
                 None => break,
             };
-            if next_opc != OpCode::CPUI_PTRSUB
-                && next_opc != OpCode::CPUI_INT_ADD
-                && next_opc != OpCode::CPUI_PTRADD
-            {
+            if next_opc != OpCode::CPUI_PTRSUB && next_opc != OpCode::CPUI_INT_ADD {
                 break;
             }
             cur_op = next_def;
@@ -748,11 +754,14 @@ impl HeapSequence {
                 for op in descendants {
                     let d = op.read().unwrap();
                     let d_opc = d.opcode;
-                    // cc:526: PTRSUB/INT_ADD/PTRADD only (intended semantics).
-                    if d_opc != OpCode::CPUI_PTRSUB
-                        && d_opc != OpCode::CPUI_INT_ADD
-                        && d_opc != OpCode::CPUI_PTRADD
-                    {
+                    // cc:526-527: the locked forward-scan filter `opc !=
+                    // CPUI_PTRSUB && opc != CPUI_INT_ADD && opc !=
+                    // CPUI_PTRSUB` (duplicated CPUI_PTRSUB = 12.0.4 upstream
+                    // text, locked behavior) accepts only PTRSUB/INT_ADD;
+                    // CPUI_PTRADD descendants are skipped. The cc:531-532
+                    // PTRADD offset scaling below is therefore dead under
+                    // the locked filter, exactly as in the oracle text.
+                    if d_opc != OpCode::CPUI_PTRSUB && d_opc != OpCode::CPUI_INT_ADD {
                         continue;
                     }
                     // cc:528: in(0) must be vn and in(1) must be constant.
@@ -1455,7 +1464,9 @@ impl HeapSequence {
                     fd.op_set_input(&add_op, extra.clone(), 1);
                     let out = fd.new_unique_out(base_ptr_size, &add_op);
                     if let Some(t) = &int_type {
-                        out.write().unwrap().update_type_lock(t.clone(), true, false);
+                        // cc:720: indexVn->updateType(intType) — the
+                        // single-argument non-locking form.
+                        out.write().unwrap().update_type(t.clone());
                     }
                     fd.op_insert_before(&add_op, &insert_point);
                     index_vn = Some(out);
@@ -1466,7 +1477,8 @@ impl HeapSequence {
                 let num_el = self.base_offset / char_align.max(1);
                 let cvn = fd.new_constant(base_ptr_size, num_el);
                 if let Some(t) = &int_type {
-                    cvn.write().unwrap().update_type_lock(t.clone(), true, false);
+                    // cc:727: cvn->updateType(intType) — non-locking form.
+                    cvn.write().unwrap().update_type(t.clone());
                 }
                 index_vn = match index_vn {
                     None => Some(cvn),
@@ -1477,7 +1489,9 @@ impl HeapSequence {
                         fd.op_set_input(&add_op, cvn, 1);
                         let out = fd.new_unique_out(base_ptr_size, &add_op);
                         if let Some(t) = &int_type {
-                            out.write().unwrap().update_type_lock(t.clone(), true, false);
+                            // cc:736: indexVn->updateType(intType) —
+                            // non-locking form.
+                            out.write().unwrap().update_type(t.clone());
                         }
                         fd.op_insert_before(&add_op, &insert_point);
                         Some(out)
@@ -1492,7 +1506,8 @@ impl HeapSequence {
             fd.op_set_input(&ptr_add, dest_ptr.clone(), 0);
             fd.op_set_input(&ptr_add, index_vn?, 1);
             fd.op_set_input(&ptr_add, align_vn, 2);
-            out.write().unwrap().update_type_lock(char_ptr_type.clone(), true, false);
+            // cc:746: destPtr->updateType(charPtrType) — non-locking form.
+            out.write().unwrap().update_type(char_ptr_type.clone());
             fd.op_insert_before(&ptr_add, &insert_point);
             dest_ptr = out;
         }
@@ -1510,7 +1525,8 @@ impl HeapSequence {
         fd.op_set_input(&copy_op, src_ptr, 2);
         let len_vn = fd.new_constant(4, length_index as u64);
         // cc:757-758: lenVn->updateType(copyOp->inputTypeLocal(3)) — the
-        // registered DatatypeUserOp's slot-3 local type (int4).
+        // registered DatatypeUserOp's slot-3 local type (int4), set via the
+        // single-argument non-locking updateType form.
         if let Some(int4) = fd
             .arch
             .as_ref()
@@ -1522,7 +1538,7 @@ impl HeapSequence {
                     .cloned()
             })
         {
-            len_vn.write().unwrap().update_type_lock(int4, true, false);
+            len_vn.write().unwrap().update_type(int4);
         }
         fd.op_set_input(&copy_op, len_vn, 3);
         fd.op_insert_before(&copy_op, &insert_point);

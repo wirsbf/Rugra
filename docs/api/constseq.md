@@ -1,5 +1,23 @@
 # `constseq.rs` API Reference
 
+## 2026-09-25（CR 修）：锁定文本链滤与非锁定 type set（CR-STRNCPY F1/F2）
+
+- **F1** `find_duplicate_bases` 两处链判定（回溯 break / 前向 accept）由三臂
+  （PTRSUB/INT_ADD/PTRADD）改为**双臂（PTRSUB/INT_ADD）**：锁定 12.0.4 文本
+  constseq.cc:510-511/526-527 的链滤是 `!= CPUI_PTRSUB && != CPUI_INT_ADD &&
+  != CPUI_PTRSUB`——CPUI_PTRSUB 写两遍=上游原文即锁定行为，**PTRADD 被排除在
+  链外**（仅 cc:495 入口门收）。注释改为如实描述锁定文本形态；cc:531-532 的
+  PTRADD 偏移缩放在锁定滤下为死支（与 oracle 文本同构保留）。
+- **F2** `build_string_copy` 五处类型赋值（cc:720/727/736/746/758 对应点）由
+  `update_type_lock(ct, true, false)` 全改**单参非锁定形 `update_type(ct)`**
+  （varnode.rs:1483）；三参锁定形仅保留在 oracle 同形位点
+  （get_internal_string 的 cc:1431），两形态不再混用。
+- 五档输出与 01879607 二进制 cmp 字节恒等（F1 不在 ap_ht_time 家族路径上、
+  F2 只改 typelock 状态不改打印字节）；四口径 297/868/200/309+51 双零；
+  mirror-gate 三面 PASS；bank 391/391；ROADMAP 第 24 行已随同 commit 刷新
+  （B2 现状注：wcsncpy/memcpy 选择、baseOffset≠0、nonConstAdds、dedup abort、
+  大端=UNTESTED，L2 维持）。
+
 ## 2026-09-25：STRNCPY 族 IR 层收口（Lane STRNCPY，MIRROR3-STRNCPY-RULE-0001）
 
 `RuleStringStore` 从简化收集器换为完整 HeapSequence 链路（constseq.cc:986-1002 逐行）：
