@@ -10619,39 +10619,34 @@ impl PrintLanguage for PrintC {
                                 let key = (in_vn.get_space(), in_vn.get_offset());
                                 self.pointer_varnodes
                                     .insert(key);
-                                // Stamp-side membership (oracle direction
-                                // check): a pointer reaches an INT_ADD input
-                                // only if the type already lives on that
-                                // varnode (param/load/copy/phi) — Ghidra
-                                // never flows the add OUTPUT's pointer back
-                                // into its inputs (typeop.cc:1197) and the
-                                // extension/truncation family (ZEXT/SEXT/
-                                // SUBPIECE/PIECE/INSERT) has no in→out
-                                // pointer propagation either (no override /
-                                // getSubType walk only, typeop.cc:1115-1189/
-                                // 2161-2186). So the fallback stamp may only
-                                // cover pointer-SIZED inputs whose defining
-                                // op is outside that family.
-                                if in_vn.get_size() == 8 {
-                                    let def_blocks_stamp = in_vn
-                                        .get_def()
-                                        .map(|d| {
-                                            !matches!(
-                                                d.read().unwrap().opcode,
-                                                OpCode::CPUI_CAST
-                                                    | OpCode::CPUI_INT_ZEXT
-                                                    | OpCode::CPUI_INT_SEXT
-                                                    | OpCode::CPUI_SUBPIECE
-                                                    | OpCode::CPUI_PIECE
-                                                    | OpCode::CPUI_INSERT
-                                            )
-                                        })
-                                        .unwrap_or(true);
-                                    if def_blocks_stamp {
-                                        self.load_addr_direct
-                                            .insert(in_vn.get_create_index());
-                                    }
-                                }
+                                // CASTFUSE-C ZEXT subfamily (VZEXT lane):
+                                // the former addinput stamp membership is
+                                // removed wholesale. Instrumented survey of
+                                // all 200 failing ZEXT sites in the sq
+                                // corpus (2026-09-26): every leak is
+                                // out=Pointer/sz8 — the ZEXT OUTPUT's
+                                // HighVariable merged a member whose type
+                                // was stamped on this edge
+                                // (Pointer/MULTIEQUAL 324,
+                                // Pointer/CALLIND 12, Pointer/INDIRECT 6,
+                                // Pointer/CALL=strtol 2 member hits). The
+                                // addinput path typed an INT_ADD/SUB input
+                                // from the add OUTPUT's address use — the
+                                // exact out->in direction
+                                // TypeOpIntAdd::propagateType forbids
+                                // (typeop.cc:1193-1195 `inslot == -1 ->
+                                // newtype = 0`), for ALL input defs, not
+                                // just the extension/truncation/CAST family
+                                // the WIDTHOP (867bce7a) and
+                                // PTRSTAMP-CAST-OVERWRITE scopes excluded.
+                                // Ghidra never builds this state; the
+                                // remaining stamp domain is the direct
+                                // LOAD/STORE slot-1 edge
+                                // (TypeOpLoad::propagateType typeop.cc:
+                                // 487-502) plus this naming-only
+                                // pointer_varnodes set. REALPTR-ADDRSLOT
+                                // (TYPEPROP-ADDRSLOT-PERSIST-0001) tracks
+                                // the legitimate ActionInferTypes lever.
                             }
                         }
                     }
@@ -10691,7 +10686,6 @@ impl PrintLanguage for PrintC {
                     );
                     if needs_update {
                         let vn_size = vn.get_size();
-                        drop(vn);
                         // Pointer sized to the address varnode, pointing at
                         // int (the previous fallback pointee), wordsize 1
                         // (ram) — propagateToPointer's sizing per

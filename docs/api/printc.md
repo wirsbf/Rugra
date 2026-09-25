@@ -1,5 +1,34 @@
 # `printc.rs` API Reference
 
+## 2026-09-26：印前指针盖章加法输入臂整撤（CASTFUSE-C ZEXT 子族 / Lane VZEXT）
+
+WIDTHOP（2026-09-24，见下条）收缩后的盖章域仍保留了"尺寸 8 且 def 不属
+扩展/截断/CAST 族的 INT_ADD/INT_SUB 输入"这一**加法输入臂**。sq 语料
+（sasquatch）仪器化实测证明该臂仍是元类型中毒源：全部 200 个失败 ZEXT
+位点无一例外 `out=Pointer/sz8`——ZEXT **输出**的 HighVariable 并入了被此臂
+盖成 `int *` 的成员（成员统计：`Pointer/MULTIEQUAL` 324、`Pointer/CALLIND`
+12、`Pointer/INDIRECT` 6、`Pointer/CALL=strtol` 2 次），代表类型被指针夺走
+→ `isZextCast`（cast.cc:463-477）的 out 元类型门（∈{UINT,INT}）判 false →
+printc 三段式落 opFunc 兜底印 `ZEXT48(x)`（oracle 印 `(uint8)x` cast）。
+
+根因不变式：给 INT_ADD/SUB 输入从加法**输出**的指针用途回灌类型，是
+`TypeOpIntAdd::propagateType` 对**一切** def 族明文禁止的方向
+（typeop.cc:1193-1195 `inslot == -1 → newtype = 0`），WIDTHOP/
+PTRSTAMP-CAST-OVERWRITE 的 def 黑名单只是逐语料打补丁。本次整撤加法输入
+臂：盖章域收缩为 **直接 LOAD/STORE 地址槽 varnode 单边**
+（`TypeOpLoad::propagateType` typeop.cc:487-502 的合法 value→address 边），
+命名消费面 `pointer_varnodes`（Hungarian `piVar` 前缀）集合原样保留。
+真正对齐杠杆（ActionInferTypes 的地址槽传播）仍由
+TYPEPROP-ADDRSLOT-PERSIST-0001 跟踪。
+
+**验收**（基=master d0e27c14 干净 A/B 亲测，fast-release）：sq 镜面
+ZEXT token **107→0**、骨架 7748→**7290**（−458，即 SQATTR 归因的
+CASTFUSE-C ~451 行族收敛）、defects 0/numbering 7 不变、matched 805/810
+不变；canon curl **字节恒等**（267/0/0，单行 ZEXT48→`(ulong)` cast 向
+golden 收敛）、canon httpd 283→**263**/0/0（20 行 SEXT48→`(long)` cast 全
+为 golden 方向）；镜面四面棘轮（275/460/55/22639）门禁全过；bank
+391/391 MATCH。
+
 ## 2026-09-25：常量叶显式后缀 U/L 通道（PRINTC-INTSUFFIX-0001 / Lane STRLIT）
 
 `PrintC::push_integer`（Ghidra: printc.cc:1288）的显式打印后缀补全——`force_unsigned_token = vn->isUnsignedPrint()` / `force_sized_token = vn->isLongPrint()`（cc:1296-1297，`vn != 0 && !isAnnotation()` 门内读取）与尾部 `t << 'U'` / `t << sizeSuffix`（cc:1362-1365）。旗标由 `ActionSetCasts` 经 `CastStrategy::markExplicitUnsigned`/`markExplicitLongSize`（cast.cc:38-108，coreaction.cc:2664-2665 调用）写入 varnode `addlflags`（Rugra 的 `UNSIGNED_PRINT`/`LONG_PRINT` 已在 coreaction 落地），此前打印侧从不读取——常量恒无后缀。
@@ -96,6 +125,11 @@ gcc 审计 curl 104OK/20FAIL、httpd 23OK/6FAIL；双发射行两口径均清零
 不动。扩展/截断族作地址侧同样排除：oracle 的 out→地址槽传播要求对面边
 （load 值）已有具体类型，本语料 golden 中扩展输出从不携带指针（全量 0 功能
 ZEXT/SEXT 印记）。
+
+> **2026-09-26 更新（Lane VZEXT）**：加法输入臂已**整撤**（sq 语料 200 失败
+> ZEXT 位点全数 out=Pointer 中毒实测；out→in 方向对一切 def 族非法，
+> typeop.cc:1193-1195）——盖章域现为直接 LOAD/STORE 地址槽单边，见本文件
+> 顶部「2026-09-26」条目。下文为收缩时点的历史记录。
 
 **验收**（基线=亲父 b25bce7a 亲测）：curl 1995/0/0 → **1992/0/0**（−3：
 glob_range 69→67、file2string 113→112）、httpd 2072/0/0 → **2068/0/0**
