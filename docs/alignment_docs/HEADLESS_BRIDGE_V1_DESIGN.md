@@ -1078,3 +1078,116 @@ CALL 臂。**接线车道若只挂 manifest 不补该臂，curl cast 族近零�
 - harness：stage_shape_diag.cc 增 STAGE_CALLSITE_PROTOS + 地址查询回退
   （/dev/shm/rugra-tests/shapefix/，随 lane 证据保留）。
 - 回收：/dev/shm/rugra-targets/sb-curlprep 留 root 集成后回收。
+
+## §17 PARAMID 交付记录（Lane PARAMID，2026-09-25，基=亲父 363c9cfd=master CVRHOIST 后）
+
+> HEADLESS-BRIDGE-PARAMID-0001：Decompiler Parameter ID 自宿主迭代环——把
+> V3SIG 通道的输入从 harvested manifest 换成运行时自产数据
+> （`RUGRA_PARAMID=1` opt-in）。写域=`examples/httpd_decompile.rs`+docs；
+> src/ 零触碰（判定标准=manifest 输出行为等价，编排层车道）。证据
+> /dev/shm/rugra-tests/paramid/（保留至 root 集成）。
+
+### 17.1 迭代环形态（一句话）
+
+**round1 裸反编译（不装任何锁）→ 从管线终态按调用点收集证据（被调入口/机器元数/
+槽位类型/返回消费类型——varnode 终态类型，非打印文本）→ 按 harvest 合并规则
+构造与 manifest 同形的锁表 → round2 起以自产锁表复用 V3SIG 三锁装载臂
+重跑 → 单调迭代至不动点或 3 轮 → 最终打印 pass 装最终自产表。**
+
+关键设计决定（各带实验判决）：
+
+1. **迭代宇宙** = 打印窗口（29 函数，同 ledger 同 skip filter）∪ 前端
+   analyzer-discovered 调用目标（46 个 = call_targets∪code_ref，PLT 桩除外；
+   extent=下一已知入口邻界，8192 封顶——前端邻居启发式镜像）。
+   Parameter ID 只对反编译过的函数提交签名；驱动不反编译的函数无从自产。
+2. **提交负载=调用点证据**（callee 侧 fd.funcp 方案被实验否决）：canon 自身
+   的被调 header 与调用点形漂移（"Parameter ID 迭代漂移"，16.1 记录的
+   ap_setup_prelinked_modules 自印 `char* f(undefined8*)` vs 调用点
+   `(long*)→long`）；直接锁 callee 侧恢复原型把脸打坏（1189 > 裸 1097，
+   74 条全锁、精确率 5%/召回 11% 的实测）。调用点证据读的是与
+   harvest 同义的信息：untyped varnode（undefined 族标量）=「无证据」形，
+   指针型 varnode =「x[k]/&x/(T*)」形，活 CALL 输出=已消费返回形。
+3. **合并规则=harvest 移植**：元数冲突弃收（varargs）；槽位证据冲突杀槽；
+   undefined 族标量默认不算证据（strict——canon 文本里的裸 undefined8 局部
+   是 analyzer 已提交的形态，而 Rugra 每个 untyped varnode 都是 undefined<N>，
+   loose 模式（`RUGRA_PARAMID_EVIDENCE=loose`）作为召回量具保留）；
+   全槽证据齐→input lock；活消费类型一致→return lock（无 cast 探针，为
+   近似，实测返回侧零冲突）。
+4. **锁定站点继续出证据**：typeprop 后其 arg varnode 类型=锁回声，迭代因此
+   单调（锁→类型→证据→锁），实测 30→31→31 不动点（先前的跳过锁定站点
+   版本在 65→3→64 振荡——Ghidra 的重推导语义是继续采证，提交因复得而持久）。
+5. **PLT 槽条目整体弃收**：imported external location 不是被反编译函数，
+   canon 对那些槽的锁来自 import-signature 通道（generic_clib），本车道不
+   自宿主该通道。实测带 PLT 锁 1072（ap_update/ap_matches 族过锁 +21 回归）
+   vs 弃收后 1038。
+6. **门极性**：mirror 恒拒（投影纯度）→ RUGRA_SEEDS=0 全局逃生 →
+   RUGRA_PARAMID=1 opt-in（接管 callee-siglock 通道，manifest 装载跳过并
+   日志）；`RUGRA_PARAMID_ROUNDS`（默认 3，clamp 1..=3）；
+   `RUGRA_PARAMID_DEBUG=1` 逐条 dump；`RUGRA_PARAMID_COMPARE=0` 关对拍。
+
+### 17.2 对拍（自产锁 vs manifest 60 锁）
+
+| 配置 | 表条目 | overlap | exact | shape-diff | manifest-only | self-only | 精确率(entry) | 召回率(entry) | 槽位 equal/diff/m-only/s-only | 返回 equal/diff |
+|---|---|---|---|---|---|---|---|---|---|---|
+| strict（默认） | 31 | 17 | 5 | 12 | 43 | 14 | 29.4% | 8.3% | 18/10/8/1 | 9/0 |
+| loose（量具） | 58 | 24 | 10 | 14 | 36 | 34 | 41.7% | 16.7% | 26/15/0/5 | 13/0 |
+
+- **返回锁零冲突**（strict 9/9、loose 13/13+2 diff）：活消费类型侧证据与
+  canon 完全同形。
+- **manifest-only 43 的构成**：33 条 PLT/import 域（import-signature 通道，
+  车道边界外）+ 8 条槽位证据缺失（我们调用点 untyped：ap_getnameinfo/
+  strncasecmp/ap_process_config_tree/ap_mpm_query 族——裸恢复里实参就是
+  undefined 族标量）+ 2 条调用点属主在迭代宇宙外（strcasecmp 的唯一调用者
+  = switchD caseD 发射环的 0x154470 处理器，不在 ledger/调用目标宇宙）。
+- **shape-diff 主族=槽位内容差**（10 槽）：自产 `undefined8*` vs canon
+  `long*`（ap_setup_prelinked_modules/ap_run_rewrite_args——pointee 无类型，
+  typeprop 残差域）、自产 `undefined1*`/`int*` vs canon `long`（ap_fini/
+  ap_mpm_run/FUN_12c8e0——深类型分歧）、`int*` vs `void*`（memcmp 槽 0）。
+  全部为恢复质量域（typeprop/UND224/typeOrder，登记域 V3SIG-UND224
+  -TYPEORDER-0001 同族），非迭代深度差（不动点已达成）。
+
+### 17.3 验收矩阵
+
+| 门 | 数字/结果 | 判定 |
+|---|---|---|
+| 默认脸（env 全空） | cmp 亲父基线字节恒等 | ✓（重构后复证） |
+| RUGRA_V3SIG=0 | cmp 其亲父基线字节恒等 | ✓ |
+| mirror（±RUGRA_PARAMID=1） | 恒拒（显式日志）+ 输出 cmp 恒等 | ✓ |
+| RUGRA_SEEDS=0+PARAMID=1 | 门静默关闭（全局逃生） | ✓ |
+| PARAMID=1 strict | **1038/0/0**（34 函数；裸 1097、manifest 908） | 收回 manifest 增益的 31%（−59/−189），零 defects/numbering |
+| PARAMID=1 loose | 1071/0/0（过锁伤脸，量具态保留） | 记录 |
+| PARAMID 双跑 | cmp 恒等 | ✓ |
+| 迭代收敛 | 30→31→31 不动点（3 轮上限内） | ✓ |
+| 投影银行 | 391/391 MATCH（exit 0） | ✓ |
+| gcc 审计 | 15 OK/14 FAIL ==默认脸同名集 | ✓ |
+| src/ | 零触碰（git diff=examples+docs） | ✓ |
+| curl | 驱动与库未触（构造性不变） | ✓ |
+
+**逐函数（vs 裸/manifest 态）**：ap_fini_vhost_config 148→**89**（manifest
+80；void*/返回消费族大头）· main 611→**590**（manifest 503；long* 族未翻
+=槽位内容差域）· ap_matches_request_vhost 6→13（+7 回归）·
+ap_update_vhost_from_headers 56→70（+14 回归）——两处回归=自产锁内容差
+（int*/undefined1* 锚进调用链）把裸态的自然 long 族改写，属同一恢复质量域；
+其余 30 函数与裸态恒等。
+
+### 17.4 差距归因（1038 vs 908 的 130 行）
+
+1. **main 87 行**：manifest 的 (long*)→long/ap_run 族锚未自产——调用点
+   实参在 Rugra 恢复里是 undefined8*/undefined 族（无 strict 证据或锁成
+   undefined8*），canon 调用点显形 long* 靠其 typeprop 质量。迭代深度非因
+   （不动点已到）。
+2. **ap_update 族 21 行**：自产 int* 锁的级联（见 17.3 逐函数）。
+3. **caseD 4 行**：strcasecmp 无自产条目（调用点属主在宇宙外）。
+4. **其余 ~18 行**：ap_fini/ap_matches 的槽位差级联。
+
+### 17.5 机制声明与移交
+
+- 机制 C：examples 写域豁免（src 零触碰）。
+- 机制 B：examples 非白名单；Differential 精确率表随 commit（17.2）。
+- **移交排队**：①槽位内容差的根因在 typeprop/类型传播（src 域，
+  V3SIG-UND224-TYPEORDER-0001 同族登记域）——自产环已把「差在哪」量化成
+  逐槽表；②switchD caseD 处理器纳入迭代宇宙（当前 strcasecmp 类唯一调用
+  者不在 ledger/调用目标面）；③loose 模式若要转正需先解决 undefined 族
+  标量过锁（当前仅量具）。
+- 回收：/dev/shm/rugra-targets/sb-paramid 留 root 集成后回收；lane 证据
+  /dev/shm/rugra-tests/paramid/。
