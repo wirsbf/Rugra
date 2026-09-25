@@ -5015,12 +5015,12 @@ impl RuleLeftRight {
 }
 
 impl Rule for RuleLeftRight {
-    // Ghidra: ruleaction.cc:2030 RuleLeftRight::applyOp
+    // Ghidra: ruleaction.cc:2010 RuleLeftRight::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
         // Phase 1: validate and extract raw values.
-        let (sa, leftshift_arc, is_sright, shiftin_size, tsz) = {
+        let (sa, leftshift_arc, is_sright, shiftin_size, tsz, shiftin) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
@@ -5068,14 +5068,30 @@ impl Rule for RuleLeftRight {
             }
             (
                 sa, leftshift_arc, op.opcode == OpCode::CPUI_INT_SRIGHT, shiftin_size, tsz,
+                shiftin,
             )
         };
         // Phase 2: transform.
         let leftshift_ref = crate::op::PcodeOpRef(leftshift_arc.clone());
         let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Ghidra (ruleaction.cc:2029-2031): `Address addr = shiftin->getAddr();`
+        // — captured BEFORE the unsets, carrying shiftin's OWN space and
+        // offset. Big-endian keeps the most-significant bytes: `addr += isa`.
+        // (Rugra's AddressSpace endianness predicate is the little-endian
+        // enum stub; the x86-64 oracle's spaces are all little-endian.)
+        let (shiftin_space, mut newaddr) = {
+            let s = shiftin.read().unwrap();
+            (s.get_space(), *s.get_addr())
+        };
+        if shiftin_space.is_big_endian() {
+            newaddr = newaddr.offset((sa >> 3) as i64);
+        }
         fd.op_unset_input(&follow, 0);
         fd.op_unset_output(&leftshift_ref);
-        let newvn = fd.new_varnode_out(tsz, crate::address::Address::new(0x1000), &leftshift_ref);
+        // cc:2034: `addr.renormalize(tsz)` only acts in the join space
+        // (address.cc:191-194, renormalizeJoinAddress); Rugra has no
+        // JoinRecord store (degraded glue, SPACELESS family precedent).
+        let newvn = fd.new_varnode_out_full(tsz, shiftin_space, newaddr, &leftshift_ref);
         fd.op_set_opcode(&leftshift_ref, OpCode::CPUI_SUBPIECE);
         let zero_const = fd.new_constant(4, 0);
         fd.op_set_input(&leftshift_ref, zero_const, 1);
@@ -14358,7 +14374,13 @@ impl Rule for RulePullsubIndirect {
         let indir_addr = indir.read().unwrap().get_addr();
         let new_ind = fd.new_op(2, indir_addr);
         fd.op_set_opcode(&new_ind, OpCode::CPUI_INDIRECT);
-        let small2 = fd.new_varnode_out(new_size as usize, smalladdr2, &new_ind);
+        // Ghidra (ruleaction.cc:1011): `newVarnodeOut(newSize,smalladdr2,new_ind)`
+        // — smalladdr2 derives from `vn->getAddr()` (cc:993-996), so the new
+        // varnode lives in vn's OWN space (the INDIRECT output's space), not
+        // an implicit register pin. The creation branch above already passes
+        // this space to new_indirect_creation_in_space.
+        let vn_space = vn.read().unwrap().get_space();
+        let small2 = fd.new_varnode_out_full(new_size as usize, vn_space, smalladdr2, &new_ind);
         fd.op_set_input(&new_ind, small1, 0);
         // data.opSetInput(new_ind, data.newVarnodeIop(targ_op), 1);
         let iop_vn = fd.new_varnode_iop(&targ_op);
@@ -17579,12 +17601,14 @@ impl RulePushPtr {
     // Ghidra: ruleaction.cc:6852 RulePushPtr
     pub fn new() -> Self { Self }
 
-    /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6783-6789).
+    /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6765-6771).
     ///
     /// Build a duplicate of `vn` as an output of `op`, preserving the storage
-    /// address if possible. AddrTied / internal-space varnodes get a fresh
-    /// unique; otherwise a new varnode-out at the original address.
-    // Ghidra: ruleaction.cc:6783 RulePushPtr::buildVarnodeOut
+    /// address if possible. AddrTied / internal-space (unique) varnodes get a
+    /// fresh unique; otherwise a new varnode-out at the original address —
+    /// `newVarnodeOut(vn->getSize(), vn->getAddr(), op)` (cc:6770) carries
+    /// vn's OWN space.
+    // Ghidra: ruleaction.cc:6765 RulePushPtr::buildVarnodeOut
     fn build_varnode_out(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &crate::op::PcodeOpRef,
@@ -17594,10 +17618,14 @@ impl RulePushPtr {
             let v = vn.read().unwrap();
             (v.is_addr_tied(), v.get_space(), v.get_size(), *v.get_addr())
         };
-        if is_addr_tied || space == crate::space::AddressSpace::Iop {
+        // cc:6768: `vn->isAddrTied() || vn->getSpace()->getType() == IPTR_INTERNAL`
+        // — IPTR_INTERNAL is the UNIQUE space (SpaceType::Internal), not the
+        // iop space: duplicated ZEXT/SEXT/2COMP/MULT outputs are typically
+        // unique-space and must take the fresh-unique allocation.
+        if is_addr_tied || space.is_unique() {
             return fd.new_unique_out(size, op);
         }
-        fd.new_varnode_out(size, addr, op)
+        fd.new_varnode_out_full(size, space, addr, op)
     }
 
     /// Faithful to `RulePushPtr::collectDuplicateNeeds` (ruleaction.cc:6798-6817).
@@ -19446,8 +19474,8 @@ impl RulePtrFlow {
     /// operation truncating the value to the size necessary for a pointer into
     /// the given address space, and updates the PcodeOp input. Returns the new
     /// truncated Varnode. Faithful to `RulePtrFlow::truncatePointer`
-    /// (ruleaction.cc:9154-9184).
-    // Ghidra: ruleaction.cc:9154 RulePtrFlow::truncatePointer
+    /// (ruleaction.cc:9136-9157).
+    // Ghidra: ruleaction.cc:9136 RulePtrFlow::truncatePointer
     fn truncate_pointer(
         spc: &crate::space::AddressSpace,
         op: &crate::op::PcodeOpRef,
@@ -19470,15 +19498,19 @@ impl RulePtrFlow {
             // Address addr = vn->getAddr();
             //   if (addr.isBigEndian()) addr = addr + (vn->getSize() - spc->getAddrSize());
             //   addr.renormalize(spc->getAddrSize());
-            // Rugra's Address is a plain u64 (Copy); renormalize is a no-op
-            // modulo word_size, which is 1 here, so the address is unchanged.
+            // cc:9147-9151: the address carries vn's OWN space.
+            // addr.isBigEndian() (cc:9148) reads THAT space's endianness —
+            // not the pointer-target space's. renormalize is join-space-only
+            // (address.cc:191-194); Rugra has no JoinRecord store (degraded
+            // glue). Rugra's AddressSpace endianness predicate is the
+            // little-endian enum stub; the x86-64 oracle's spaces are all LE.
             let addr = vn.read().unwrap().get_addr().clone();
-            let addr_val = if spc.is_big_endian() {
+            let addr_val = if vn_space.is_big_endian() {
                 addr.offset((vn_size - addr_size) as i64)
             } else {
                 addr
             };
-            data.new_varnode_out(addr_size, addr_val, &truncop)
+            data.new_varnode_out_full(addr_size, vn_space, addr_val, &truncop)
         };
         data.op_set_input(op, newvn.clone(), slot);
         data.op_set_input(&truncop, vn.clone(), 0);
