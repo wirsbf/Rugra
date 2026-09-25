@@ -1969,3 +1969,15 @@ RULEACTION-RS0-RELGATE-0001（臂实现残项继续跟踪，owner 待认领）�
 STRUCT/ARRAY 路径（6726-6755）保持忠实。连带区域行号勘误：
 6678-6774→6660-6756、6693-6774→6675-6756、6713-6743→6695-6725、
 6744-6767→6726-6755。零行为变化（注释-only）。
+
+## 2026-09-26：`// Ghidra:` 起始行批量纠偏（RULEACTION-ANNO-DRIFT-0001）
+
+票面三处（6927→6909 / 7146→7128 / 6036→6018）经全文件扫描为两族系统性漂移
+（+18 族与 +20 族，旧 oracle 版本行差）的样本，另有 5 处错域引用
+（RulePullsubMulti minMaxUse/acceptableSize/replaceDescendants 引到调用点
+977/981/1017、RulePushPtr::duplicateNeed 引到 RuleExtensionPush 区 7469、
+RulePtrArith::evaluatePointerExpression 引到 6876）与 RuleDoubleShift +1
+两处。修法：对每个 `// Ghidra: ruleaction.cc:N FN` 解析 FN 在锁定 oracle
+e40ed130 的真实定义行替换 N（类名无 `::` 的代表性行引用不动），共 **221
+处**；修后复核脚本验证 584 个函数引用 0 漂移，`check_ghidra_refs --all
+--strict` 绿。注释-only：零行为变化。
