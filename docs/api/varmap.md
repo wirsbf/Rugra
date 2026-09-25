@@ -118,7 +118,7 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 - `absorb(&mut self, b)` — `RangeHint::absorb` (varmap.cc:217)
 - `merge_with(&mut self, b, types)` — `RangeHint::merge` (varmap.cc:259)，三态 resType（0/1/2）；`types` 对应 Ghidra 签名的 `TypeFactory *typeFactory` 参数（varmap.hh:124），resType==2 时经 `getBase(size,TYPE_UNKNOWN)` 取未知类型（varmap.cc:309）（2026-08-16，`TYPE-WIRING-0001`）
 - `compare(a, b)` — `RangeHint::compare` (varmap.cc:321)，排序：offset→size小优先→rangeType→flags→highind
-- `attempt_join(&mut self, b)` — `RangeHint::attemptJoin` (varmap.cc:170)，数组元素吸收
+- `attempt_join(&mut self, b)` — `RangeHint::attemptJoin` (varmap.cc:170)，数组元素吸收。**2026-09-26 提交时序修复**（GENSMOKE-S2-TYPEINFER-METATYPE-0001 毒环入口）：oracle 的 `settype = b->type`（varmap.cc:192）只改局部替身，`type = settype` 的提交发生在 `diffsz > highind` 越界拒绝检查**之后**（varmap.cc:208）；旧实现把 `self.dtype = Some(b_dt)` 写在 keep_b 臂（检查之前），被拒绝的吸收（probeSys 的 -0x40 int8 canary 提示，`diffsz=4 > highind=3`）仍把 int8 泄进 open range，随后调用方的 `cur.size = next->sstart - cur.sstart` + createEntry 把 `int8[4]` 写进符号层，喂出整个 int8 反哺环（符号 int8 → downChain `ptr→int8` → INT_EQUAL/φ 横传 → gatherOpen int8 → 下轮 restructure）。修复后局部 `settype` 贯穿检查链，diffsz 的模/除用（可能已替换的）settype 对齐尺寸（varmap.cc:205 语义），仅在全部通过后提交
 
 ### `pub struct AliasChecker`
 栈指针别名分析器。对应 Ghidra AliasChecker。
