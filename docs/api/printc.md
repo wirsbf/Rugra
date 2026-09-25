@@ -3421,3 +3421,35 @@ no-op）；STRINGDATA 字面量臂硬编码 `"badstring"`。
   **862→860**、httpd 镜 **265→263**；curl canon 267/curl 镜 101/vsh 镜
   14 全部不变；defects=0/numbering=0 全档；bank 391/391；lib
   1735P/1F（nonzeromask 预存）。
+
+### 2026-09-26：MIRATTR-F-ARRCAST-0001 — 数组指针 cast 声明器括号化
+
+**症状**（httpd 镜亲证）：指针到数组 cast 印成非法 C
+`(xunknown1 [16]*)`（flat `[N]*` 链），golden 同位
+`(xunknown1 (*) [16])`（C 声明器括号化）；双指针形
+`(xunknown1 (**) [16])`。
+
+- **oracle 机制（本 session 亲读钉死）**：`pushType`（printc.cc:1472-1478）
+  = pushTypeStart + **pushAtom(EMPTY_STRING)**（抽象声明器的标识符占位，
+  cc:1477）+ pushTypeEnd（`[N]` 尺寸原子，cc:305-330）。pushTypeStart
+  （cc:292-302）按 base 侧先推声明器 op（指针到数组=先 array_expr 后
+  ptr_expr）；RPN 嵌套规则（printlanguage.cc:286 postsurround 臂——
+  array_expr prec 66 > ptr_expr prec 62，printc.cc:75/78）在 `*` 推入
+  而数组仍 pending 时开括号；连续第二层 `*` 走 unary_prefix 臂
+  （cc:291-293）不加括号——**括号包住整段连续 `*` run**，closeParen
+  在 run 完结（EMPTY 原子级联完成）时发射。发射文本：`t` ` `
+  `(` `*`…`*` `)` ` [N]`。
+- **修法**：`cast_type_string` 的层链渲染重写为 run 语义——最内层先
+  遍历；连续 Pointer 层聚成 run；run 起点处有数组 pending（即 run
+  外层包着数组）→ 整 run 括号化 `(**…)`；Array 层中断 run、追加
+  ` [N]` 后缀（spacing=1）并置 pending。形态对照：
+  Pointer(Array)→`t (*) [N]`；Pointer(Pointer(Array))→`t (**) [N]`；
+  Pointer(Array(Pointer))→`t *(*) [N]`；Array(Pointer)→`t * [N]`；
+  Pointer(Ptr)→`char **`（原行为保持）。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票③后）**：httpd 镜
+  三处 cast 与 golden 逐字节一致（770/1033 `(xunknown1 (*) [16])`、
+  1036 `(xunknown1 (**) [16])`）；httpd 镜 **263→253**
+  （ap_parse_vhost_addrs 33→27、ap_set_name_virtual_host 14→10，其余
+  函数逐函数零变化）；httpd canon 860/curl canon 267/curl 镜 101/vsh 镜
+  14 全部不变；defects=0/numbering=0；bank 391/391；lib 1735P/1F
+  （nonzeromask 预存）；gcc 审计 15OK/14FAIL==基线比率。

@@ -1828,12 +1828,57 @@ impl PrintC {
         if !layers.is_empty() {
             spelling.push(' ');
         }
+        // cc:292-302 pushTypeStart pushes the declarator ops base-side
+        // first (for a pointer-to-array: array_expr, THEN ptr_expr), and
+        // the RPN nesting rules (printlanguage.cc:286 postsurround case —
+        // array_expr prec 66 > ptr_expr prec 62, printc.cc:75/78; and the
+        // unary_prefix case cc:291-293 — a second `*` under a pending `*`
+        // takes NO parens) parenthesize the RUN of `*` layers starting at
+        // the first star pushed while an array_expr is still pending: the
+        // paren opens at that star, every later consecutive star joins
+        // inside (unary-under-unary), and the closeParen fires when the
+        // run completes at the abstract-identifier EMPTY atom (pushType
+        // printc.cc:1477). Text forms: Pointer(Array) → `t (*) [N]`
+        // (golden `(xunknown1 (*) [16])`); Pointer(Pointer(Array)) →
+        // `t (**) [N]` (golden `(xunknown1 (**) [16])`); an array layer
+        // interrupts the run (Pointer(Array(Pointer)) → `*(*) [N]`);
+        // stars emit innermost-first and each bracket follows with its
+        // spacing=1 space (cc:78). MIRATTR-F-ARRCAST-0001: the former flat
+        // ` [N]*` chain rendered the illegal-C `t [N]*`.
+        let mut runs: Vec<(String, bool)> = Vec::new(); // (stars, paren)
+        let mut run_open = false;
+        let mut brackets: Vec<String> = Vec::new();
+        let mut array_pending = false;
         for layer in layers.iter().rev() {
+            // Innermost-first: an array layer closes the current star run
+            // and marks every later (outer) run as parenthesized.
             match layer {
-                Datatype::Pointer(_) => spelling.push('*'),
-                Datatype::Array(a) => spelling.push_str(&format!(" [{}]", a.num_elements)),
+                Datatype::Pointer(_) => {
+                    if !run_open {
+                        runs.push((String::new(), array_pending));
+                        run_open = true;
+                    }
+                    runs.last_mut().unwrap().0.push('*');
+                }
+                Datatype::Array(a) => {
+                    run_open = false;
+                    brackets.push(format!(" [{}]", a.num_elements));
+                    array_pending = true;
+                }
                 _ => unreachable!("only pointer/array layers are stacked"),
             }
+        }
+        for (stars, paren) in &runs {
+            if *paren {
+                spelling.push('(');
+                spelling.push_str(stars);
+                spelling.push(')');
+            } else {
+                spelling.push_str(stars);
+            }
+        }
+        for bracket in &brackets {
+            spelling.push_str(bracket);
         }
         spelling
     }
