@@ -3682,3 +3682,26 @@ RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲
 `&mut TypeFactory`，指针臂执行 oracle unionresolve.cc:54 的
 `typegrp.getTypePointer` interning（type.cc:3867）。本文件仅此一处
 guard 翻转，无其他逻辑变化；调用方不持工厂 guard，无重入面。
+
+## 2026-09-26：cast_output 三 token 臂 fd 化 + COPY 臂接线（UNIONRESOLVE-PKG-B-0001，Lane CORESMALL）
+
+`ActionSetCasts::cast_output`（= coreaction.cc:2532-2616）的 token 分派对齐
+oracle 虚分派（cc:2541 `op->getOpcode()->getOutputToken(op,castStrategy)`）：
+
+- **PTRSUB/PTRADD 臂**改经 `TypeOpPtrsub/Ptradd::get_output_token_in_fd(op, fd)`
+  （typeop.rs 单一实现）：cc:2352/2247 的 in0 High read-facing 基座 consult
+  换 fd-aware 孪生（union map，slot-0 键）——union-ptr 基座 resolved 后
+  downChain 走 field 指针（旧退化形恒走 union-ptr）。外层 op guard 在臂内
+  不再持有（fd-aware 孪生自取锁，CURLWIRE-CR-F1 审计序）。
+- **COPY 臂新接线**（此前缺失的独立保真缺口）：COPY 落
+  `output_metatype=None` ⇒ 旧行为恒 `return 0`（oracle 却经虚分派到
+  `TypeOpCopy::getOutputToken`，cc:405-409 = in0 的 High read-facing）。
+  现新增 `TypeOpCopy::new(tf).get_output_token_in_fd(op, fd)` 臂，token=
+  outHigh 时短路（cc:2544-2548 union force-parent 臂已在位），否则进入
+  castStandard/implied 重定型链。
+- **EQUAL/NOTEQUAL 输入 cast 调用点**（cc:2662 虚分派 → typeop.cc:932）改
+  传 `(fd, op_ref)`；canonical 见 typeop.md 本日条目。
+- `output_metatype` 注释同步：PTRSUB/PTRADD/COPY 的 None 表项对 castOutput
+  默认臂不再可达（被前置臂拦截）。
+
+## 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
