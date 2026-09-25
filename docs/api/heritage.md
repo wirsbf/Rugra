@@ -1599,3 +1599,11 @@ read-split（free+单读者→PIECE 链定义 join vn、半片 precis 旗）。
 **验收**：httpd/curl 输出与亲父 9d91f00c **cmp 字节恒等**（httpd 908/0/0、
 curl 489/0/0）；bank 391/391 MATCH；cargo test --lib 1717P/1F（预存
 nonzeromask 同败）；annotations/refs 检查全绿。
+
+## 2026-09-25：split 族注解行修正（CR-PJOINS F1）
+
+六个 `// Ghidra:` 注解从空行（定义行+1）改指真定义起始行：
+splitJoinLevel 2068→**2067**、splitJoinRead 2119→**2118**、splitJoinWrite
+2172→**2171**、floatExtensionRead 2236→**2235**、floatExtensionWrite
+2256→**2255**、processJoins 2282→**2281**（机制 D cited-line-drift 防逸）；
+连带两处区间引用起点同步（2118-2163/2171-2227）。零行为改动。

@@ -446,3 +446,33 @@ carrier 的身份修正；完整 TypeCode prototype、null output 和 dependency
   backward@-0x4f8 命中 newoff=0、forward@-0x4f0 吸附 newoff=-8、远距 miss
   (undefined1,0)）+ test_struct_nearest_arrayed_component_walks（结构体
   字段 walk 的 newoff/elSize 精度与基类 null walk）。
+
+## 2026-09-25：is_primitive_whole 1:1 重写（CR-PJOINS M1，wt/pjoins）
+
+`is_primitive_whole`（type.cc:501-513）从 metatype 白名单
+{Int,Uint,Bool,Float} 改为 oracle 三段结构：
+
+1. `!is_piece_structured()` → **true**（type.hh:929
+   `metatype <= TYPE_ARRAY(7)` 的补集=Pointer/PtrRel/Code/Float/Bool/
+   Uint/Int/Unknown/Spacebase/Void——旧白名单漏掉的全部为 TRUE）；
+2. Array/Struct 且 `numDepend()>0`、首组件尺寸==整体尺寸 → 递归
+   `component->isPrimitiveWhole()`（退化 `T[1]` 数组与单满尺寸字段
+   结构体；TypeArray::getDepend type.hh:455-456、TypeStruct::getDepend
+   type.hh:526-527）；
+3. 其余（Union/PartialUnion/PartialStruct/非退化 Array/Struct）→ false。
+
+**枚举上报口径注记（CR 裁定核实项）**：oracle `TypeEnum` 构造器把存储
+metatype 无条件归一为 TYPE_INT/TYPE_UINT（type.hh:489-490 三元式，
+`TypePartialEnum` 经 type.cc:2255-2256 同落 TYPE_UINT），故 oracle 枚举
+实例恒 `!isPieceStructured()` → isPrimitiveWhole=true。Rugra 枚举可能存
+折叠变体 `TypeMetatype::Enum`（oracle 存储空间不存在的上报分歧，另行
+登记域）——但 `is_piece_structured` 显式集同时排除 Enum 与 Int/Uint 两
+形态，两谓词在枚举上均与 oracle 一致，该分歧对本谓词无可观察影响。
+
+**染及面与触发声明**：消费者=heritage split 族 isPrimitive 臂
+（heritage.rs split_join_read/write——join_db 恒空，生产零触发）+
+double_precis RuleDoubleIn/Out attemptMarking 的 typelock 守卫
+（double.cc:3222-3224/3299-3302——仅 typelocked 非基础 metatype 的
+PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 终报），
+激活面现语料 0 触发；旧白名单 TRUE 集是 oracle TRUE 集的真子集，修复
+方向单调扩 TRUE（Pointer/Unknown/退化 wrapper 族由 FALSE→TRUE）。

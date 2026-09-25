@@ -2949,7 +2949,7 @@ impl Heritage {
         );
     }
 
-    // Ghidra: heritage.cc:2282 Heritage::processJoins
+    // Ghidra: heritage.cc:2281 Heritage::processJoins
     /// Process join-space varnodes: split PIECE/SUBPIECE on free join varnodes.
     /// Faithful to `processJoins` (heritage.cc:2282-2314). Iterates Join-space
     /// varnodes. For free ones, calls splitJoinRead (which creates the
@@ -3967,11 +3967,11 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2119 Heritage::splitJoinRead
+    // Ghidra: heritage.cc:2118 Heritage::splitJoinRead
     /// Construct pieces for a \e join-space Varnode read by an operation:
     /// build a concatenation expression (PIECE ops) that constructs the
     /// Varnode out of the JoinRecord's pieces, one split level at a time.
-    /// Faithful to `splitJoinRead` (heritage.cc:2119-2163). The joinrec
+    /// Faithful to `splitJoinRead` (heritage.cc:2118-2163). The joinrec
     /// comes from the caller (`processJoins`), exactly like the oracle.
     pub fn split_join_read(
         &mut self,
@@ -4052,10 +4052,10 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2172 Heritage::splitJoinWrite
+    // Ghidra: heritage.cc:2171 Heritage::splitJoinWrite
     /// Split a written \e join-space Varnode into specified pieces: build
     /// SUBPIECE expressions that construct the JoinRecord's pieces from
-    /// the Varnode. Faithful to `splitJoinWrite` (heritage.cc:2172-2227).
+    /// the Varnode. Faithful to `splitJoinWrite` (heritage.cc:2171-2227).
     /// The joinrec comes from the caller (`processJoins`).
     pub fn split_join_write(
         &mut self,
@@ -4176,7 +4176,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2068 Heritage::splitJoinLevel
+    // Ghidra: heritage.cc:2067 Heritage::splitJoinLevel
     /// One level of Varnode splitting to match a JoinRecord: split all
     /// the pieces in \p lastcombo into \p nextlev (2 entries per input,
     /// pass-throughs get a null second entry to maintain the 2-1
@@ -4264,7 +4264,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2236 Heritage::floatExtensionRead
+    // Ghidra: heritage.cc:2235 Heritage::floatExtensionRead
     /// Create float truncation into a free lower precision \e join-space
     /// Varnode: define the lower precision Varnode as a FLOAT2FLOAT
     /// truncation of the record's full-precision piece. Faithful to
@@ -4307,7 +4307,7 @@ impl Heritage {
         fd.op_insert_before(&trunc, &PcodeOpRef(read_op));
     }
 
-    // Ghidra: heritage.cc:2256 Heritage::floatExtensionWrite
+    // Ghidra: heritage.cc:2255 Heritage::floatExtensionWrite
     /// Create float extension from a lower precision \e join-space
     /// Varnode: define the record's full-precision piece via a FLOAT2FLOAT
     /// extension of the Varnode. Faithful to `floatExtensionWrite`
@@ -5678,7 +5678,7 @@ impl Heritage {
         true
     }
 
-    // Ghidra: heritage.cc:2282 Heritage::processJoins
+    // Ghidra: heritage.cc:2281 Heritage::processJoins
     /// Split \e join-space Varnodes up into their real components.
     /// Faithful to `processJoins` (heritage.cc:2281-2313): for every
     /// Varnode in the join space, look up its JoinRecord and split it

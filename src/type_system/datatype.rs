@@ -1743,12 +1743,56 @@ impl Datatype {
     }
 
     // Ghidra: type.cc:501 Datatype::isPrimitiveWhole
-    /// Check if this type occupies a whole primitive value.
-    /// Faithful to Datatype::isPrimitiveWhole (type.cc:501).
+    /// If \b this has no component data-types, return \b true (every
+    /// non-piece-structured metatype: Pointer/PtrRel/Code/Float/Bool/
+    /// Uint/Int/Unknown/Spacebase/Void). If \b this has only a single
+    /// primitive component filling the whole data-type, also return
+    /// \b true (degenerate `T[1]` arrays and single-full-size-field
+    /// structs recurse into the component).
+    /// Faithful to `Datatype::isPrimitiveWhole` (type.cc:501-513):
+    ///   1. `!isPieceStructured()` → true (type.hh:929
+    ///      `metatype <= TYPE_ARRAY(7)`).
+    ///   2. Array/Struct with `numDepend() > 0` whose first component
+    ///      size equals the whole size → recursive component check
+    ///      (TypeArray::getDepend type.hh:455-456; TypeStruct::getDepend
+    ///      type.hh:526-527).
+    ///   3. Otherwise false (Union/PartialUnion/PartialStruct and
+    ///      non-degenerate Array/Struct).
+    /// Enum reporting口径 (CR-PJOINS M1 核实注记): the oracle's TypeEnum
+    /// constructors normalize the stored metatype to TYPE_INT/TYPE_UINT
+    /// (type.hh:489-490 ternary, TypePartialEnum included via
+    /// type.cc:2255-2256), so an oracle enum instance is never
+    /// piece-structured and isPrimitiveWhole returns true. Rugra's enum
+    /// instances may store the collapsed `TypeMetatype::Enum` variant —
+    /// a reporting divergence outside this predicate's observable set,
+    /// because `is_piece_structured` excludes both the Enum and the
+    /// Int/Uint forms, so both predicates agree with the oracle on
+    /// enums either way.
     pub fn is_primitive_whole(&self) -> bool {
-        matches!(self.get_metatype(),
-            TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool
-            | TypeMetatype::Float)
+        // cc:504: if (!isPieceStructured()) return true;
+        if !self.is_piece_structured() {
+            return true;
+        }
+        // cc:505: if (metatype == TYPE_ARRAY || metatype == TYPE_STRUCT)
+        if matches!(
+            self.get_metatype(),
+            TypeMetatype::Array | TypeMetatype::Struct
+        ) {
+            // cc:506-507: if (numDepend() > 0) component = getDepend(0);
+            let component: Option<&Arc<Datatype>> = match self {
+                Datatype::Array(a) => Some(&a.array_of),
+                Datatype::Struct(s) => s.fields.first().map(|f| &f.type_ptr),
+                _ => None,
+            };
+            // cc:508-509: component->getSize() == getSize() → recurse.
+            if let Some(component) = component {
+                if component.get_size() == self.get_size() {
+                    return component.is_primitive_whole();
+                }
+            }
+        }
+        // cc:512: return false;
+        false
     }
 
     // Ghidra: type.cc:139 Datatype::printRaw
@@ -6659,5 +6703,127 @@ mod tests {
         // Non-struct base: the base null walks (type.cc:188/201).
         assert!(nearest_arrayed_component_forward(&scalar8, 0).dtype.is_none());
         assert!(nearest_arrayed_component_backward(&scalar8, 0).dtype.is_none());
+    }
+
+    // ---- is_primitive_whole (type.cc:501-513, CR-PJOINS M1) ----
+
+    #[test]
+    fn test_is_primitive_whole_non_piece_structured_metatypes() {
+        // cc:504: !isPieceStructured() -> true. The old whitelist missed
+        // every non-base metatype.
+        let cases: Vec<Datatype> = vec![
+            Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)),
+            Datatype::Base(TypeBase::new("uint".into(), 4, TypeMetatype::Uint)),
+            Datatype::Base(TypeBase::new("bool".into(), 1, TypeMetatype::Bool)),
+            Datatype::Base(TypeBase::new("double".into(), 8, TypeMetatype::Float)),
+            Datatype::Base(TypeBase::new("undefined8".into(), 8, TypeMetatype::Unknown)),
+            Datatype::Void(TypeBase::new("void".into(), 0, TypeMetatype::Void)),
+            Datatype::Code(TypeCode {
+                base: TypeBase::new("code".into(), 1, TypeMetatype::Code),
+                proto: None,
+            }),
+            Datatype::Spacebase(TypeSpacebase {
+                base: TypeBase::new("spacebase".into(), 8, TypeMetatype::Spacebase),
+                address: crate::address::Address::new(0),
+                fd: None,
+                spaceid: None,
+                localframe: crate::address::Address::new(0),
+                scope: None,
+            }),
+            Datatype::Pointer(TypePointer {
+                base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+                ptr_to: Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+                wordsize: 1,
+            }),
+            // Enums: the oracle normalizes the stored metatype to
+            // Int/Uint (type.hh:489-490), so enums are never
+            // piece-structured; Rugra's collapsed Enum variant is
+            // likewise excluded by is_piece_structured.
+            Datatype::Enum(TypeEnum {
+                base: TypeBase::new("color".into(), 4, TypeMetatype::Enum),
+                values: std::collections::BTreeMap::new(),
+            }),
+            Datatype::Enum(TypeEnum {
+                base: TypeBase::new("flags".into(), 4, TypeMetatype::Uint),
+                values: std::collections::BTreeMap::new(),
+            }),
+        ];
+        for dt in &cases {
+            assert!(dt.is_primitive_whole(), "expected true: {:?}", dt.get_metatype());
+        }
+    }
+
+    #[test]
+    fn test_is_primitive_whole_piece_structured_families() {
+        // cc:512: Union/PartialUnion/PartialStruct and non-degenerate
+        // Array/Struct -> false.
+        let int4 = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let int4b = int4.clone();
+        let two_field_struct = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("pair".into(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: int4 },
+                TypeField { name: "b".into(), offset: 4, type_ptr: int4b },
+            ],
+        });
+        let array_of_two = Datatype::Array(TypeArray {
+            base: TypeBase::new("int[2]".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+            num_elements: 2,
+        });
+        let union_dt = Datatype::Union(TypeUnion {
+            base: TypeBase::new("u".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        });
+        let partial_struct = Datatype::PartialStruct(TypePartialStruct {
+            base: TypeBase::new("part".into(), 4, TypeMetatype::PartialStruct),
+            container: Arc::new(two_field_struct.clone()),
+            offset: 0,
+            stripped: None,
+        });
+        assert!(!two_field_struct.is_primitive_whole());
+        assert!(!array_of_two.is_primitive_whole());
+        assert!(!union_dt.is_primitive_whole());
+        assert!(partial_struct.get_metatype() == TypeMetatype::PartialStruct);
+        assert!(!partial_struct.is_primitive_whole());
+    }
+
+    #[test]
+    fn test_is_primitive_whole_degenerate_single_component_wrappers() {
+        // cc:505-511: Array/Struct whose FIRST component fills the whole
+        // size recurse into the component.
+        let long8 = Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int)));
+        // T[1] with element size == array size.
+        let array_of_one = Datatype::Array(TypeArray {
+            base: TypeBase::new("long[1]".into(), 8, TypeMetatype::Array),
+            array_of: long8.clone(),
+            num_elements: 1,
+        });
+        assert!(array_of_one.is_primitive_whole());
+        // struct { long x; } — single full-size field.
+        let single_field_struct = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("s".into(), 8, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "x".into(), offset: 0, type_ptr: long8 }],
+        });
+        assert!(single_field_struct.is_primitive_whole());
+        // Nested degenerate: long[1] of struct { long x; }.
+        let nested = Datatype::Array(TypeArray {
+            base: TypeBase::new("s[1]".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(single_field_struct),
+            num_elements: 1,
+        });
+        assert!(nested.is_primitive_whole());
+        // Degenerate array of a UNION-sized component: the component is
+        // piece-structured and not a primitive whole -> false.
+        let union8 = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("u8".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        }));
+        let array_of_union = Datatype::Array(TypeArray {
+            base: TypeBase::new("u8[1]".into(), 8, TypeMetatype::Array),
+            array_of: union8,
+            num_elements: 1,
+        });
+        assert!(!array_of_union.is_primitive_whole());
     }
 }
