@@ -662,7 +662,7 @@ impl Symbol {
         (self.flags & symbol_flags::NAMELOCK) != 0
     }
 
-    // Ghidra: database.cc:249 Symbol::isNameUndefined
+    // Ghidra: database.cc:246 Symbol::isNameUndefined
     /// Return true if this symbol's name is the auto-generated "$$undef"
     /// placeholder. Faithful to `isNameUndefined` (database.cc:249).
     pub fn is_name_undefined(&self) -> bool {
@@ -2965,6 +2965,24 @@ impl Scope {
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "func");
         sym.symbol_id = id;
+        // FunctionSymbol::buildType (database.cc:514-520): the symbol's
+        // data-type is the generic code type (type.cc:3692
+        // TypeFactory::getTypeCode) and the symbol carries
+        // namelock|typelock. container_hit surfaces the metatype, which
+        // PrintC::opPtrsub's spacebase arm reads (printc.cc:1068-1069
+        // `TYPE_CODE → valueon = true` — a function symbol drops the '&').
+        sym.dtype = Some(std::sync::Arc::new(crate::type_system::datatype::Datatype::Code(
+            crate::type_system::datatype::TypeCode::new(),
+        )));
+        sym.flags |= symbol_flags::NAMELOCK | symbol_flags::TYPELOCK;
+        // Scope::addMap (database.cc:1131-1133, 1147-1151) — the whole-map
+        // point integration on a global scope sets `persist`, and a valid
+        // address with an EMPTY uselimit sets `addrtied` (both fold into
+        // the symbol flags before addMapInternal). addrtied is load-bearing
+        // for SymbolEntry::inUse (database.cc:114-119: an address-tied
+        // entry is valid at ANY usepoint, including the invalid usepoint
+        // linkSymbolReference and PrintC's spacebase arm query with).
+        sym.flags |= symbol_flags::PERSIST | symbol_flags::ADDRTIED;
         // Build the FunctionSymbol view for the caller (database.cc:1615 return).
         let fs = FunctionSymbol::new(self.unique_id, nm, consume_size, addr);
         self.symbols.insert(id, Arc::new(RwLock::new(sym)));
@@ -4139,7 +4157,7 @@ impl Database {
         self.fill_resolve(scope_id);
     }
 
-    // Ghidra: database.cc:2871 Database::clearResolve
+    // Ghidra: database.cc:2870 Database::clearResolve
     /// Erase this namespace Scope's ranges from the resolvemap. Faithful to
     /// `clearResolve` (database.cc:2871-2890): for each owned range, find
     /// the resolvemap partition starting at its first address and erase it
@@ -4161,7 +4179,7 @@ impl Database {
         }
     }
 
-    // Ghidra: database.cc:2897 Database::fillResolve
+    // Ghidra: database.cc:2908 Database::fillResolve
     /// Insert every range this namespace Scope owns into the resolvemap.
     /// Faithful to `fillResolve` (database.cc:2897-2908) — each insert goes
     /// through the rangemap `ScopeResolve::insert` overlap-split semantics

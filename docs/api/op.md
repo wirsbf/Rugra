@@ -835,6 +835,10 @@ Ghidra: `op.cc:323 PcodeOp::nextOp`。返回流程上紧随本 op 的下一个 o
 
 这种方式比“见一个删一个”更安全，因为它允许规则系统先完成批量重写，再统一收尾。
 
+每个被销毁的 dead 操作从 `optree`/`deadlist`/code-list 移除后**退役进
+`deadandgone` 保留列表**（见下），内存直至 `clear()` 才回收——与 Ghidra
+`destroyDead` → `destroy` 的链路逐层同构（op.cc:971-982 → op.cc:989-999）。
+
 ---
 
 ### `pub fn destroy(&mut self, op: PcodeOpRef)`
@@ -850,6 +854,27 @@ Ghidra: `op.cc:323 PcodeOp::nextOp`。返回流程上紧随本 op 的下一个 o
 - 引用关系可安全解除
 - 不会留下悬空输入/输出链接
 - 上层图与 bank 状态保持一致
+
+销毁即**退役**：操作从所有索引（optree/alivelist|deadlist/code-list）移除后，
+其句柄进入 `deadandgone` 保留列表（op.cc:998 `deadandgone.push_back(op)`），
+分配在 `clear()` 前不被回收。这是 iop 空间常量（`Arc::as_ptr` 编码，
+`Funcdata::get_op_from_const` 解码）能继续安全解引用的生命周期契约。
+
+---
+
+### `pub deadandgone: Vec<PcodeOpRef>`
+
+退役操作保留列表（Ghidra `deadandgone`，op.hh:297）。
+
+Ghidra op.cc:984-999 注释明确："The memory is not reclaimed until the whole
+container is destroyed, in case pointer references still exist. These will all
+still be marked as *dead*." 悬空引用 = iop 空间常量编码的裸指针。Rust 侧
+缺少该保留时，被销毁操作的最后一个外部句柄 drop 即释放分配，glibc tcache
+元数据覆写 Arc 计数与 `inrefs`，之后 `get_op_from_const` 从常量伪造的句柄
+在 drop 时对已释放内存做 `-1`（HTTPD-FULL-SEGV：httpd 全量
+ap_content_length_filter 在 RuleIndirectCollapse dead-indop 路径 SIGSEGV，
+引入点 af6c5ee2 的 IR 内容首次使该函数以"ActionPool 已 purge indop"的形态
+到达该规则）。`clear()`（op.cc:1194-1211 镜像）清空全部三个列表并真正回收。
 
 ---
 
@@ -1017,6 +1042,15 @@ PcodeOpRaw
 ### 2026-07-05: op.cc 缺失方法批量补齐
 - `is_assignment`/`is_flow_break`/`is_instruction_start`(op.hh inline)。
 - `is_collapsible`(cc:115)、`set_num_inputs`/`remove_input`/`insert_input_slot`(cc:290/301/311)、`get_repeat_slot`(cc:93)、`print_debug`(cc:376)。
+- （2026-09-22，SB-ORD159-NULLSLOT-0001）`set_num_inputs` 忠实化：cc:290-296 的
+  "All slots, regardless of the total being increased or decreased, are set to
+  null"——先 clear 再以共享 null 哨兵 resize 到 `num`（旧实现增长时 panic，
+  且缩减时保留旧槽）。新增 `pub fn null_slot_sentinel()`（RUGRA-GLUE）：
+  Ghidra NULL input-slot 指针 `(Varnode*)0` 的进程级共享替身（脱离 bank、
+  size-0、无 descendant、无 create-index）；单一实例保证两个 NULL 槽之间
+  `Arc::ptr_eq` 为 true，对应 Ghidra `inrefs[i] == vn` 指针相等语义
+  （op.hh:166 getSlot）。`Funcdata::op_unset_input` 的 clearInput 写入与
+  观察投影的 NULL 渲染（`-`）都消费它。
  
  
  
@@ -1077,3 +1111,32 @@ addlflags `concat_root` = 0x100，常量此前已存在但无访问器与使用�
 RulePieceStructure::applyOp 顶部闸门（ruleaction.cc:7610）+ 建树前
 `setPartialRoot()`（:7642）——CONCAT 树只重排一次；缺失该闸门时
 cleanup 池对同一根反复返回 change 导致 universal 尾部不收敛。
+
+## 2026-09-24：create 即注册 code-list（前代 WIP 收编核证）
+
+Ghidra cc:941-948 PcodeOpBank::create 无操作码分配；操作码经 opSetOpcode→
+changeOpcode（op.cc:1005-1012）的 addToCodeList（op.cc:881-900）注册进
+STORE/LOAD/RETURN/CALLOTHER 专用表。Rugra create() 直接收操作码，故在
+create 处补 add_to_code_list 以维持"可列表操作码自诞生即在表中"不变量
+（否则 inject_raw_ops 出生的 RETURN 对 begin_op(RETURN) 消费者不可见，
+httpd 语系未锁返回值全体塌缩 `return;`）。change_opcode 的先删后加防双注册。
+
+## 2026-09-24：destroy 退役进 deadandgone（HTTPD-FULL-SEGV 修复）
+
+`PcodeOpBank::destroy`/`destroy_dead`/`clear` 补齐 Ghidra 的**退役保留**
+语义（op.hh:297 `deadandgone` 列表；op.cc:984-999 destroy 把已 dead 的操作
+从 optree/deadlist/code-list 移除后 `deadandgone.push_back(op)`，op.cc:1203-1209
+clear 才统一 delete）。Ghidra 在容器析构前**从不回收退役操作的内存**，
+正是为了让 iop 空间常量（`RuleIndirectCollapse::getOpFromConst` 等解码的
+裸指针）在原对象销毁后仍可安全读 `isDead()` 等旗标。Rugra 此前 destroy
+直接丢弃 bank 全部句柄 → 末句柄 drop 即释放 → tcache 元数据覆写 Arc 计数/
+`inrefs` → `Funcdata::get_op_from_const` 依据陈旧常量伪造的 `Arc<PcodeOp>`
+在 RuleIndirectCollapse 尾部 drop 时对已释放内存 `-1`，级联 drop 垃圾
+`inrefs` 中的 `Arc<Varnode>` → SIGSEGV（回归窗 bisect 钉死内容触发点
+af6c5ee2/GG2：其 RETURN-类型播种使 ap_content_length_filter 首次以
+"indop 已被 ActionPool processOp 死臂 purge"形态到达该规则；生命周期缺陷
+本身先于该 commit 潜伏，同 EW 车道"锁缺陷潜伏+内容触发"先例）。
+验证：MAX_FUNCS=840 全量 473 函数零 SEGV；三门禁 curl 1438/0/0、httpd
+1447/0/0 与 master 逐数一致且门禁 stdout 修复前后**逐字节相同**；
+五投影 next_url/match_url/myprogress/getparameter/parseconfig 全 MATCH 保持；
+cargo test --lib 串行 1688P/18F == master 预存集。

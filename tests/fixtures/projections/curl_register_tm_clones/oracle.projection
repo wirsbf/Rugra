@@ -1,0 +1,3309 @@
+META side=oracle oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86:LE:64:default cspec=gcc
+META analysis_options=default build_flags=v1-no-OPACTION_DEBUG
+META binary_sha256=8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41 func_entry=0x33d0 func_name=register_tm_clones load_mode=single_function_bfd
+META producer=24a4bec28f2786d0b0f4b23e540c67228519b92f maxrestarts=1 unique_base=0x364200
+@BEGIN 1 universal
+@BEGIN 2 universal:start
+@END 2 universal:start result=0 count=0 tests=0 apply=0
+@SNAP 2 ops 119
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=n:register:288:8
+@BEGIN 3 universal:constbase
+@END 3 universal:constbase result=0 count=0 tests=0 apply=0
+@SNAP 3 ops 120
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=n:register:288:8
+@BEGIN 4 universal:defaultparams
+@END 4 universal:defaultparams result=0 count=0 tests=0 apply=0
+@SNAP 4 ops 120
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=n:register:288:8
+@BEGIN 5 universal:extrapopsetup
+@END 5 universal:extrapopsetup result=0 count=0 tests=0 apply=0
+@SNAP 5 ops 121
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=n:register:288:8
+@BEGIN 6 universal:prototypetypes
+@END 6 universal:prototypetypes result=0 count=0 tests=0 apply=0
+@SNAP 6 ops 121
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 7 universal:funclink
+@END 7 universal:funclink result=0 count=0 tests=0 apply=0
+@SNAP 7 ops 123
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 8 universal:fullloop
+@BEGIN 9 universal:fullloop:mainloop
+@BEGIN 10 universal:fullloop:mainloop:unreachable
+@END 10 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 10 ops 123
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 11 universal:fullloop:mainloop:varnodeprops
+@END 11 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 11 ops 123
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 12 universal:fullloop:mainloop:heritage
+@END 12 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 12 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 13 universal:fullloop:mainloop:paramdouble
+@END 13 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 13 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 14 universal:fullloop:mainloop:segmentize
+@END 14 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 14 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 15 universal:fullloop:mainloop:internalstorage
+@END 15 universal:fullloop:mainloop:internalstorage result=0 count=0 tests=0 apply=0
+@SNAP 15 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 16 universal:fullloop:mainloop:forcegoto
+@END 16 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 16 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 17 universal:fullloop:mainloop:directwrite
+@END 17 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 17 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 18 universal:fullloop:mainloop:activeparam
+@END 18 universal:fullloop:mainloop:activeparam result=1 count=1 tests=0 apply=1
+@SNAP 18 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4,n:register:0:8
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8,n:register:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 19 universal:fullloop:mainloop:returnrecovery
+@END 19 universal:fullloop:mainloop:returnrecovery result=3 count=3 tests=0 apply=1
+@SNAP 19 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 20 universal:fullloop:mainloop:restrictlocal
+@END 20 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 20 ops 143
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d0:77 COPY d=0 out=n:register:20a:1 in=c:0:1
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:2 INT_LESS d=0 out=n:register:200:1 in=n:register:30:8,n:register:38:8
+33de:3 INT_SBORROW d=0 out=n:register:20b:1 in=n:register:30:8,n:register:38:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33de:5 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33de:6 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33de:7 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33de:8 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33de:9 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33de:a INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:d COPY d=0 out=u:dcb00:8 in=n:register:30:8
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e4:f INT_NOTEQUAL d=0 out=u:5ed00:1 in=u:dca00:4,c:0:4
+33e4:10 INT_SUB d=0 out=u:5ee00:4 in=u:dca00:4,c:1:4
+33e4:11 INT_RIGHT d=0 out=u:5ef00:8 in=u:dcb00:8,u:5ee00:4
+33e4:12 INT_AND d=0 out=u:5f000:8 in=u:5ef00:8,c:1:8
+33e4:13 INT_NOTEQUAL d=0 out=u:5f200:1 in=u:5f000:8,c:0:8
+33e4:14 BOOL_NEGATE d=0 out=u:5f300:1 in=u:5ed00:1
+33e4:15 INT_AND d=0 out=u:5f400:1 in=u:5f300:1,n:register:200:1
+33e4:16 INT_AND d=0 out=u:5f500:1 in=u:5ed00:1,u:5f200:1
+33e4:17 INT_OR d=0 out=n:register:200:1 in=u:5f400:1,u:5f500:1
+33e4:18 INT_EQUAL d=0 out=u:5f800:1 in=u:dca00:4,c:1:4
+33e4:19 INT_SLESS d=0 out=u:5fa00:1 in=u:dcb00:8,c:0:8
+33e4:1a BOOL_NEGATE d=0 out=u:5fb00:1 in=u:5f800:1
+33e4:1b INT_AND d=0 out=u:5fc00:1 in=u:5fb00:1,n:register:20b:1
+33e4:1c INT_AND d=0 out=u:5fd00:1 in=u:5f800:1,u:5fa00:1
+33e4:1d INT_OR d=0 out=n:register:20b:1 in=u:5fc00:1,u:5fd00:1
+33e4:1e INT_NOTEQUAL d=0 out=u:58800:1 in=u:dca00:4,c:0:4
+33e4:1f INT_SLESS d=0 out=u:58a00:1 in=n:register:30:8,c:0:8
+33e4:20 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e4:21 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e4:22 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e4:23 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e4:24 INT_EQUAL d=0 out=u:59000:1 in=n:register:30:8,c:0:8
+33e4:25 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e4:26 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e4:27 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e4:28 INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e4:29 INT_AND d=0 out=u:59500:8 in=n:register:30:8,c:ff:8
+33e4:2a POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e4:2b INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e4:2c INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e4:2d BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e4:2e INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e4:2f INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e4:30 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:32 COPY d=0 out=u:d1100:8 in=n:register:0:8
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33e8:34 INT_NOTEQUAL d=0 out=u:5de00:1 in=u:d1000:4,c:0:4
+33e8:35 INT_SUB d=0 out=u:5df00:4 in=u:d1000:4,c:1:4
+33e8:36 INT_SRIGHT d=0 out=u:5e000:8 in=u:d1100:8,u:5df00:4
+33e8:37 INT_AND d=0 out=u:5e100:8 in=u:5e000:8,c:1:8
+33e8:38 INT_NOTEQUAL d=0 out=u:5e300:1 in=u:5e100:8,c:0:8
+33e8:39 BOOL_NEGATE d=0 out=u:5e400:1 in=u:5de00:1
+33e8:3a INT_AND d=0 out=u:5e500:1 in=u:5e400:1,n:register:200:1
+33e8:3b INT_AND d=0 out=u:5e600:1 in=u:5de00:1,u:5e300:1
+33e8:3c INT_OR d=0 out=n:register:200:1 in=u:5e500:1,u:5e600:1
+33e8:3d INT_EQUAL d=0 out=u:5e900:1 in=u:d1000:4,c:1:4
+33e8:3e BOOL_NEGATE d=0 out=u:5ea00:1 in=u:5e900:1
+33e8:3f INT_AND d=0 out=n:register:20b:1 in=u:5ea00:1,n:register:20b:1
+33e8:40 INT_NOTEQUAL d=0 out=u:58800:1 in=u:d1000:4,c:0:4
+33e8:41 INT_SLESS d=0 out=u:58a00:1 in=n:register:0:8,c:0:8
+33e8:42 BOOL_NEGATE d=0 out=u:58b00:1 in=u:58800:1
+33e8:43 INT_AND d=0 out=u:58c00:1 in=u:58b00:1,n:register:207:1
+33e8:44 INT_AND d=0 out=u:58d00:1 in=u:58800:1,u:58a00:1
+33e8:45 INT_OR d=0 out=n:register:207:1 in=u:58c00:1,u:58d00:1
+33e8:46 INT_EQUAL d=0 out=u:59000:1 in=n:register:0:8,c:0:8
+33e8:47 BOOL_NEGATE d=0 out=u:59100:1 in=u:58800:1
+33e8:48 INT_AND d=0 out=u:59200:1 in=u:59100:1,n:register:206:1
+33e8:49 INT_AND d=0 out=u:59300:1 in=u:58800:1,u:59000:1
+33e8:4a INT_OR d=0 out=n:register:206:1 in=u:59200:1,u:59300:1
+33e8:4b INT_AND d=0 out=u:59500:8 in=n:register:0:8,c:ff:8
+33e8:4c POPCOUNT d=0 out=u:59600:1 in=u:59500:8
+33e8:4d INT_AND d=0 out=u:59700:1 in=u:59600:1,c:1:1
+33e8:4e INT_EQUAL d=0 out=u:59900:1 in=u:59700:1,c:0:1
+33e8:4f BOOL_NEGATE d=0 out=u:59a00:1 in=u:58800:1
+33e8:50 INT_AND d=0 out=u:59b00:1 in=u:59a00:1,n:register:202:1
+33e8:51 INT_AND d=0 out=u:59c00:1 in=u:58800:1,u:59900:1
+33e8:52 INT_OR d=0 out=n:register:202:1 in=u:59b00:1,u:59c00:1
+33ec:53 INT_CARRY d=0 out=n:register:200:1 in=n:register:30:8,n:register:0:8
+33ec:54 INT_SCARRY d=0 out=n:register:20b:1 in=n:register:30:8,n:register:0:8
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ec:56 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ec:57 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ec:58 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ec:59 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ec:5a INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ec:5b INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33ef:5c INT_AND d=0 out=u:d0800:8 in=n:register:30:8,c:1:8
+33ef:5d INT_NOTEQUAL d=0 out=n:register:200:1 in=u:d0800:8,c:0:8
+33ef:5e COPY d=0 out=n:register:20b:1 in=c:0:1
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:60 INT_SLESS d=0 out=n:register:207:1 in=n:register:30:8,c:0:8
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33ef:62 INT_AND d=0 out=u:58300:8 in=n:register:30:8,c:ff:8
+33ef:63 POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33ef:64 INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33ef:65 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:68 COPY d=0 out=n:register:200:1 in=c:0:1
+33fb:69 COPY d=0 out=n:register:20b:1 in=c:0:1
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6b INT_SLESS d=0 out=n:register:207:1 in=u:e0500:8,c:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fb:6d INT_AND d=0 out=u:58300:8 in=u:e0500:8,c:ff:8
+33fb:6e POPCOUNT d=0 out=u:58400:1 in=u:58300:8
+33fb:6f INT_AND d=0 out=u:58500:1 in=u:58400:1,c:1:1
+33fb:70 INT_EQUAL d=0 out=n:register:202:1 in=u:58500:1,c:0:1
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:78 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3400:7f DELAY_SLOT d=0 out=n:register:0:8 in=c:0:8,o:3400:72
+3400:81 DELAY_SLOT d=0 out=n:register:30:8 in=n:register:30:8,o:3400:72
+3400:82 DELAY_SLOT d=0 out=n:register:38:8 in=n:register:38:8,o:3400:72
+3400:83 DELAY_SLOT d=0 out=n:register:200:1 in=n:register:200:1,o:3400:72
+3400:85 DELAY_SLOT d=0 out=n:register:202:1 in=n:register:202:1,o:3400:72
+3400:87 DELAY_SLOT d=0 out=n:register:206:1 in=n:register:206:1,o:3400:72
+3400:89 DELAY_SLOT d=0 out=n:register:207:1 in=n:register:207:1,o:3400:72
+3400:8b DELAY_SLOT d=0 out=n:register:20a:1 in=n:register:20a:1,o:3400:72
+3400:8c DELAY_SLOT d=0 out=n:register:20b:1 in=n:register:20b:1,o:3400:72
+3400:8e DELAY_SLOT d=0 out=n:register:288:8 in=n:register:288:8,o:3400:72
+3408:73 LOAD d=0 out=n:register:288:8 in=s:ram,n:register:20:8
+3408:74 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+3408:75 RETURN d=0 out=- in=c:0:8
+3408:7b BUILD d=0 out=u:58300:8 in=u:58300:8,u:58300:8
+3408:7c BUILD d=0 out=u:58400:1 in=u:58400:1,u:58400:1
+3408:7d BUILD d=0 out=u:58500:1 in=u:58500:1,u:58500:1
+3408:7e BUILD d=0 out=u:e0500:8 in=u:e0500:8,u:e0500:8
+3408:80 BUILD d=0 out=n:register:0:8 in=n:register:0:8,n:register:0:8
+3408:84 BUILD d=0 out=n:register:200:1 in=n:register:200:1,n:register:200:1
+3408:86 BUILD d=0 out=n:register:202:1 in=n:register:202:1,n:register:202:1
+3408:88 BUILD d=0 out=n:register:206:1 in=n:register:206:1,n:register:206:1
+3408:8a BUILD d=0 out=n:register:207:1 in=n:register:207:1,n:register:207:1
+3408:8d BUILD d=0 out=n:register:20b:1 in=n:register:20b:1,n:register:20b:1
+@BEGIN 21 universal:fullloop:mainloop:deadcode
+@END 21 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 21 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 22 universal:fullloop:mainloop:dynamicmapping
+@END 22 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 22 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 23 universal:fullloop:mainloop:restructure_varnode
+@END 23 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 23 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 24 universal:fullloop:mainloop:spacebase
+@END 24 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 24 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 25 universal:fullloop:mainloop:nonzeromask
+@END 25 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 25 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 26 universal:fullloop:mainloop:infertypes
+@END 26 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 26 ops 21
+33d0:0 COPY d=0 out=n:register:38:8 in=c:174d0:8
+33d7:1 COPY d=0 out=n:register:30:8 in=c:174d0:8
+33de:4 INT_SUB d=0 out=n:register:30:8 in=n:register:30:8,n:register:38:8
+33e1:b COPY d=0 out=n:register:0:8 in=n:register:30:8
+33e4:c INT_AND d=0 out=u:dca00:4 in=c:3f:4,c:3f:4
+33e4:e INT_RIGHT d=0 out=n:register:30:8 in=n:register:30:8,u:dca00:4
+33e8:31 INT_AND d=0 out=u:d1000:4 in=c:3:4,c:3f:4
+33e8:33 INT_SRIGHT d=0 out=n:register:0:8 in=n:register:0:8,u:d1000:4
+33ec:55 INT_ADD d=0 out=n:register:30:8 in=n:register:30:8,n:register:0:8
+33ef:5f INT_SRIGHT d=0 out=n:register:30:8 in=n:register:30:8,c:1:4
+33ef:61 INT_EQUAL d=0 out=n:register:206:1 in=n:register:30:8,c:0:8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6a INT_AND d=0 out=u:e0500:8 in=n:register:0:8,n:register:0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=u:e0500:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,n:register:30:8,n:register:38:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:79 INT_ADD d=0 out=u:10000000:8 in=n:register:20:8,c:0:8
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,u:10000000:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 27 universal:fullloop:mainloop:stackstall
+@BEGIN 28 universal:fullloop:mainloop:stackstall:oppool1
+@END 28 universal:fullloop:mainloop:stackstall:oppool1 result=49 count=49 tests=0 apply=10
+@SNAP 28 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 29 universal:fullloop:mainloop:stackstall:lanedivide
+@END 29 universal:fullloop:mainloop:stackstall:lanedivide result=0 count=0 tests=0 apply=0
+@SNAP 29 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 30 universal:fullloop:mainloop:stackstall:multicse
+@END 30 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 30 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 31 universal:fullloop:mainloop:stackstall:shadowvar
+@END 31 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 31 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 32 universal:fullloop:mainloop:stackstall:deindirect
+@END 32 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 32 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 33 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 33 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 33 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 34 universal:fullloop:mainloop:stackstall:oppool1
+@END 34 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 34 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 35 universal:fullloop:mainloop:stackstall:multicse
+@END 35 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 35 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 36 universal:fullloop:mainloop:stackstall:shadowvar
+@END 36 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 36 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 37 universal:fullloop:mainloop:stackstall:deindirect
+@END 37 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 37 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 38 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 38 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 38 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 27 universal:fullloop:mainloop:stackstall result=49 count=49 tests=0 apply=1
+@SNAP 27 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 39 universal:fullloop:mainloop:redundbranch
+@END 39 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 39 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 40 universal:fullloop:mainloop:blockstructure
+@END 40 universal:fullloop:mainloop:blockstructure result=1 count=1 tests=0 apply=1
+@SNAP 40 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 41 universal:fullloop:mainloop:constantptr
+@END 41 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 41 ops 8
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,u:10000008:1,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3400:7a LOAD d=0 out=u:10000008:1 in=s:ram,n:register:20:8
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 42 universal:fullloop:mainloop:oppool2
+@END 42 universal:fullloop:mainloop:oppool2 result=1 count=1 tests=0 apply=1
+@SNAP 42 ops 7
+33f2:66 CBRANCH d=0 out=- in=n:ram:3408:1,c:1:1
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 43 universal:fullloop:mainloop:determinedbranch
+@END 43 universal:fullloop:mainloop:determinedbranch result=1 count=1 tests=0 apply=1
+@SNAP 43 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=0 out=n:register:0:8 in=n:ram:16ff0:8
+33fb:6c INT_EQUAL d=0 out=n:register:206:1 in=n:register:0:8,c:0:8
+33fe:71 CBRANCH d=0 out=- in=n:ram:3408:1,n:register:206:1
+3400:72 CALLIND d=0 out=- in=n:register:0:8,c:0:8,c:174d0:8
+3400:76 RETURN d=0 out=- in=c:1:4
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 44 universal:fullloop:mainloop:unreachable
+@END 44 universal:fullloop:mainloop:unreachable result=1 count=1 tests=0 apply=1
+@SNAP 44 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 45 universal:fullloop:mainloop:nodejoin
+@END 45 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 45 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 46 universal:fullloop:mainloop:conditionalexe
+@END 46 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 46 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 47 universal:fullloop:mainloop:condconst
+@END 47 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 47 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 48 universal:fullloop:mainloop:unreachable
+@END 48 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 48 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 49 universal:fullloop:mainloop:varnodeprops
+@END 49 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 49 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 50 universal:fullloop:mainloop:heritage
+@END 50 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 50 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 51 universal:fullloop:mainloop:paramdouble
+@END 51 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 51 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 52 universal:fullloop:mainloop:segmentize
+@END 52 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 52 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 53 universal:fullloop:mainloop:forcegoto
+@END 53 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 53 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 54 universal:fullloop:mainloop:directwrite
+@END 54 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 54 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 55 universal:fullloop:mainloop:activeparam
+@END 55 universal:fullloop:mainloop:activeparam result=0 count=0 tests=0 apply=0
+@SNAP 55 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 56 universal:fullloop:mainloop:returnrecovery
+@END 56 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 56 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 57 universal:fullloop:mainloop:restrictlocal
+@END 57 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 57 ops 7
+33f2:66 CBRANCH d=1 out=- in=-,-
+33f4:67 COPY d=1 out=- in=-
+33fb:6c INT_EQUAL d=1 out=- in=-,-
+33fe:71 CBRANCH d=1 out=- in=-,-
+3400:72 CALLIND d=1 out=- in=-,-,-
+3400:76 RETURN d=1 out=- in=-
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 58 universal:fullloop:mainloop:deadcode
+@END 58 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 58 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 59 universal:fullloop:mainloop:dynamicmapping
+@END 59 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 59 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 60 universal:fullloop:mainloop:restructure_varnode
+@END 60 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 60 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 61 universal:fullloop:mainloop:spacebase
+@END 61 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 61 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 62 universal:fullloop:mainloop:nonzeromask
+@END 62 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 62 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 63 universal:fullloop:mainloop:infertypes
+@END 63 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 63 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 64 universal:fullloop:mainloop:stackstall
+@BEGIN 65 universal:fullloop:mainloop:stackstall:oppool1
+@END 65 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 65 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 66 universal:fullloop:mainloop:stackstall:multicse
+@END 66 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 66 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 67 universal:fullloop:mainloop:stackstall:shadowvar
+@END 67 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 67 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 68 universal:fullloop:mainloop:stackstall:deindirect
+@END 68 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 68 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 69 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 69 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 69 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 64 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 64 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 70 universal:fullloop:mainloop:redundbranch
+@END 70 universal:fullloop:mainloop:redundbranch result=1 count=1 tests=0 apply=1
+@SNAP 70 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 71 universal:fullloop:mainloop:blockstructure
+@END 71 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 71 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 72 universal:fullloop:mainloop:constantptr
+@END 72 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 72 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 73 universal:fullloop:mainloop:oppool2
+@END 73 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 73 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 74 universal:fullloop:mainloop:determinedbranch
+@END 74 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 74 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 75 universal:fullloop:mainloop:unreachable
+@END 75 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 75 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 76 universal:fullloop:mainloop:nodejoin
+@END 76 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 76 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 77 universal:fullloop:mainloop:conditionalexe
+@END 77 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 77 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 78 universal:fullloop:mainloop:condconst
+@END 78 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 78 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 79 universal:fullloop:mainloop:unreachable
+@END 79 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 79 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 80 universal:fullloop:mainloop:varnodeprops
+@END 80 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 80 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 81 universal:fullloop:mainloop:heritage
+@END 81 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 81 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 82 universal:fullloop:mainloop:paramdouble
+@END 82 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 82 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 83 universal:fullloop:mainloop:segmentize
+@END 83 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 83 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 84 universal:fullloop:mainloop:forcegoto
+@END 84 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 84 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 85 universal:fullloop:mainloop:directwrite
+@END 85 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 85 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 86 universal:fullloop:mainloop:activeparam
+@END 86 universal:fullloop:mainloop:activeparam result=0 count=0 tests=0 apply=0
+@SNAP 86 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 87 universal:fullloop:mainloop:returnrecovery
+@END 87 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 87 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 88 universal:fullloop:mainloop:restrictlocal
+@END 88 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 88 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 89 universal:fullloop:mainloop:deadcode
+@END 89 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 89 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 90 universal:fullloop:mainloop:dynamicmapping
+@END 90 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 90 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 91 universal:fullloop:mainloop:restructure_varnode
+@END 91 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 91 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 92 universal:fullloop:mainloop:spacebase
+@END 92 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 92 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 93 universal:fullloop:mainloop:nonzeromask
+@END 93 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 93 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 94 universal:fullloop:mainloop:infertypes
+@END 94 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 94 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 95 universal:fullloop:mainloop:stackstall
+@BEGIN 96 universal:fullloop:mainloop:stackstall:oppool1
+@END 96 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 96 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 97 universal:fullloop:mainloop:stackstall:multicse
+@END 97 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 97 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 98 universal:fullloop:mainloop:stackstall:shadowvar
+@END 98 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 98 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 99 universal:fullloop:mainloop:stackstall:deindirect
+@END 99 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 99 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 100 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 100 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 100 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 95 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 95 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 101 universal:fullloop:mainloop:redundbranch
+@END 101 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 101 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 102 universal:fullloop:mainloop:blockstructure
+@END 102 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 102 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 103 universal:fullloop:mainloop:constantptr
+@END 103 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 103 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 104 universal:fullloop:mainloop:oppool2
+@END 104 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 104 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 105 universal:fullloop:mainloop:determinedbranch
+@END 105 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 105 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 106 universal:fullloop:mainloop:unreachable
+@END 106 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 106 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 107 universal:fullloop:mainloop:nodejoin
+@END 107 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 107 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 108 universal:fullloop:mainloop:conditionalexe
+@END 108 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 108 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 109 universal:fullloop:mainloop:condconst
+@END 109 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 109 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 9 universal:fullloop:mainloop result=58 count=58 tests=0 apply=2
+@SNAP 9 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 110 universal:fullloop:likelytrash
+@END 110 universal:fullloop:likelytrash result=0 count=0 tests=0 apply=0
+@SNAP 110 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 111 universal:fullloop:directwrite
+@END 111 universal:fullloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 111 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 112 universal:fullloop:deadcode
+@END 112 universal:fullloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 112 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 113 universal:fullloop:donothing
+@END 113 universal:fullloop:donothing result=0 count=0 tests=0 apply=0
+@SNAP 113 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 114 universal:fullloop:switchnorm
+@END 114 universal:fullloop:switchnorm result=0 count=0 tests=0 apply=0
+@SNAP 114 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 115 universal:fullloop:returnsplit
+@END 115 universal:fullloop:returnsplit result=0 count=0 tests=0 apply=0
+@SNAP 115 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 116 universal:fullloop:unjustparams
+@END 116 universal:fullloop:unjustparams result=0 count=0 tests=0 apply=0
+@SNAP 116 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 117 universal:fullloop:starttypes
+@END 117 universal:fullloop:starttypes result=1 count=1 tests=0 apply=1
+@SNAP 117 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 118 universal:fullloop:activereturn
+@END 118 universal:fullloop:activereturn result=0 count=0 tests=0 apply=0
+@SNAP 118 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 119 universal:fullloop:mainloop
+@BEGIN 120 universal:fullloop:mainloop:unreachable
+@END 120 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 120 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 121 universal:fullloop:mainloop:varnodeprops
+@END 121 universal:fullloop:mainloop:varnodeprops result=0 count=0 tests=0 apply=0
+@SNAP 121 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 122 universal:fullloop:mainloop:heritage
+@END 122 universal:fullloop:mainloop:heritage result=0 count=0 tests=0 apply=0
+@SNAP 122 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 123 universal:fullloop:mainloop:paramdouble
+@END 123 universal:fullloop:mainloop:paramdouble result=0 count=0 tests=0 apply=0
+@SNAP 123 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 124 universal:fullloop:mainloop:segmentize
+@END 124 universal:fullloop:mainloop:segmentize result=0 count=0 tests=0 apply=0
+@SNAP 124 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 125 universal:fullloop:mainloop:forcegoto
+@END 125 universal:fullloop:mainloop:forcegoto result=0 count=0 tests=0 apply=0
+@SNAP 125 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 126 universal:fullloop:mainloop:directwrite
+@END 126 universal:fullloop:mainloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 126 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 127 universal:fullloop:mainloop:activeparam
+@END 127 universal:fullloop:mainloop:activeparam result=0 count=0 tests=0 apply=0
+@SNAP 127 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 128 universal:fullloop:mainloop:returnrecovery
+@END 128 universal:fullloop:mainloop:returnrecovery result=0 count=0 tests=0 apply=0
+@SNAP 128 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 129 universal:fullloop:mainloop:restrictlocal
+@END 129 universal:fullloop:mainloop:restrictlocal result=0 count=0 tests=0 apply=0
+@SNAP 129 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 130 universal:fullloop:mainloop:deadcode
+@END 130 universal:fullloop:mainloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 130 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 131 universal:fullloop:mainloop:dynamicmapping
+@END 131 universal:fullloop:mainloop:dynamicmapping result=0 count=0 tests=0 apply=0
+@SNAP 131 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 132 universal:fullloop:mainloop:restructure_varnode
+@END 132 universal:fullloop:mainloop:restructure_varnode result=0 count=0 tests=0 apply=0
+@SNAP 132 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 133 universal:fullloop:mainloop:spacebase
+@END 133 universal:fullloop:mainloop:spacebase result=0 count=0 tests=0 apply=0
+@SNAP 133 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 134 universal:fullloop:mainloop:nonzeromask
+@END 134 universal:fullloop:mainloop:nonzeromask result=0 count=0 tests=0 apply=0
+@SNAP 134 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 135 universal:fullloop:mainloop:infertypes
+@END 135 universal:fullloop:mainloop:infertypes result=0 count=0 tests=0 apply=0
+@SNAP 135 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 136 universal:fullloop:mainloop:stackstall
+@BEGIN 137 universal:fullloop:mainloop:stackstall:oppool1
+@END 137 universal:fullloop:mainloop:stackstall:oppool1 result=0 count=0 tests=0 apply=0
+@SNAP 137 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 138 universal:fullloop:mainloop:stackstall:multicse
+@END 138 universal:fullloop:mainloop:stackstall:multicse result=0 count=0 tests=0 apply=0
+@SNAP 138 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 139 universal:fullloop:mainloop:stackstall:shadowvar
+@END 139 universal:fullloop:mainloop:stackstall:shadowvar result=0 count=0 tests=0 apply=0
+@SNAP 139 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 140 universal:fullloop:mainloop:stackstall:deindirect
+@END 140 universal:fullloop:mainloop:stackstall:deindirect result=0 count=0 tests=0 apply=0
+@SNAP 140 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 141 universal:fullloop:mainloop:stackstall:stackptrflow
+@END 141 universal:fullloop:mainloop:stackstall:stackptrflow result=0 count=0 tests=0 apply=0
+@SNAP 141 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 136 universal:fullloop:mainloop:stackstall result=0 count=0 tests=0 apply=0
+@SNAP 136 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 142 universal:fullloop:mainloop:redundbranch
+@END 142 universal:fullloop:mainloop:redundbranch result=0 count=0 tests=0 apply=0
+@SNAP 142 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 143 universal:fullloop:mainloop:blockstructure
+@END 143 universal:fullloop:mainloop:blockstructure result=0 count=0 tests=0 apply=0
+@SNAP 143 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 144 universal:fullloop:mainloop:constantptr
+@END 144 universal:fullloop:mainloop:constantptr result=0 count=0 tests=0 apply=0
+@SNAP 144 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 145 universal:fullloop:mainloop:oppool2
+@END 145 universal:fullloop:mainloop:oppool2 result=0 count=0 tests=0 apply=0
+@SNAP 145 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 146 universal:fullloop:mainloop:determinedbranch
+@END 146 universal:fullloop:mainloop:determinedbranch result=0 count=0 tests=0 apply=0
+@SNAP 146 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 147 universal:fullloop:mainloop:unreachable
+@END 147 universal:fullloop:mainloop:unreachable result=0 count=0 tests=0 apply=0
+@SNAP 147 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 148 universal:fullloop:mainloop:nodejoin
+@END 148 universal:fullloop:mainloop:nodejoin result=0 count=0 tests=0 apply=0
+@SNAP 148 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 149 universal:fullloop:mainloop:conditionalexe
+@END 149 universal:fullloop:mainloop:conditionalexe result=0 count=0 tests=0 apply=0
+@SNAP 149 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 150 universal:fullloop:mainloop:condconst
+@END 150 universal:fullloop:mainloop:condconst result=0 count=0 tests=0 apply=0
+@SNAP 150 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 119 universal:fullloop:mainloop result=0 count=0 tests=0 apply=0
+@SNAP 119 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 151 universal:fullloop:likelytrash
+@END 151 universal:fullloop:likelytrash result=0 count=0 tests=0 apply=0
+@SNAP 151 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 152 universal:fullloop:directwrite
+@END 152 universal:fullloop:directwrite result=0 count=0 tests=0 apply=0
+@SNAP 152 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 153 universal:fullloop:deadcode
+@END 153 universal:fullloop:deadcode result=0 count=0 tests=0 apply=0
+@SNAP 153 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 154 universal:fullloop:donothing
+@END 154 universal:fullloop:donothing result=0 count=0 tests=0 apply=0
+@SNAP 154 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 155 universal:fullloop:switchnorm
+@END 155 universal:fullloop:switchnorm result=0 count=0 tests=0 apply=0
+@SNAP 155 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 156 universal:fullloop:returnsplit
+@END 156 universal:fullloop:returnsplit result=0 count=0 tests=0 apply=0
+@SNAP 156 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 157 universal:fullloop:unjustparams
+@END 157 universal:fullloop:unjustparams result=0 count=0 tests=0 apply=0
+@SNAP 157 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 158 universal:fullloop:starttypes
+@END 158 universal:fullloop:starttypes result=0 count=0 tests=0 apply=0
+@SNAP 158 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 159 universal:fullloop:activereturn
+@END 159 universal:fullloop:activereturn result=0 count=0 tests=0 apply=0
+@SNAP 159 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 8 universal:fullloop result=59 count=59 tests=0 apply=1
+@SNAP 8 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 160 universal:mapped_local_sync
+@END 160 universal:mapped_local_sync result=0 count=0 tests=0 apply=0
+@SNAP 160 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 161 universal:startcleanup
+@END 161 universal:startcleanup result=0 count=0 tests=0 apply=0
+@SNAP 161 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 162 universal:cleanup
+@END 162 universal:cleanup result=0 count=0 tests=0 apply=0
+@SNAP 162 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 163 universal:prefercomplement
+@END 163 universal:prefercomplement result=0 count=0 tests=0 apply=0
+@SNAP 163 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 164 universal:structuretransform
+@END 164 universal:structuretransform result=0 count=0 tests=0 apply=0
+@SNAP 164 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 165 universal:assignhigh
+@END 165 universal:assignhigh result=0 count=0 tests=0 apply=0
+@SNAP 165 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 166 universal:mergerequired
+@END 166 universal:mergerequired result=0 count=0 tests=0 apply=0
+@SNAP 166 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 167 universal:markexplicit
+@END 167 universal:markexplicit result=0 count=0 tests=0 apply=0
+@SNAP 167 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 168 universal:markimplied
+@END 168 universal:markimplied result=0 count=0 tests=0 apply=0
+@SNAP 168 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 169 universal:mergemultientry
+@END 169 universal:mergemultientry result=0 count=0 tests=0 apply=0
+@SNAP 169 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 170 universal:mergecopy
+@END 170 universal:mergecopy result=0 count=0 tests=0 apply=0
+@SNAP 170 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 171 universal:dominantcopy
+@END 171 universal:dominantcopy result=0 count=0 tests=0 apply=0
+@SNAP 171 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 172 universal:dynamicsymbols
+@END 172 universal:dynamicsymbols result=0 count=0 tests=0 apply=0
+@SNAP 172 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 173 universal:markindirectonly
+@END 173 universal:markindirectonly result=0 count=0 tests=0 apply=0
+@SNAP 173 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 174 universal:mergeadjacent
+@END 174 universal:mergeadjacent result=0 count=0 tests=0 apply=0
+@SNAP 174 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 175 universal:mergetype
+@END 175 universal:mergetype result=0 count=0 tests=0 apply=0
+@SNAP 175 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 176 universal:hideshadow
+@END 176 universal:hideshadow result=0 count=0 tests=0 apply=0
+@SNAP 176 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 177 universal:copymarker
+@END 177 universal:copymarker result=0 count=0 tests=0 apply=0
+@SNAP 177 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 178 universal:outputprototype
+@END 178 universal:outputprototype result=0 count=0 tests=0 apply=0
+@SNAP 178 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 179 universal:inputprototype
+@END 179 universal:inputprototype result=0 count=0 tests=0 apply=0
+@SNAP 179 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 180 universal:mapglobals
+@END 180 universal:mapglobals result=0 count=0 tests=0 apply=0
+@SNAP 180 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 181 universal:dynamicsymbols
+@END 181 universal:dynamicsymbols result=0 count=0 tests=0 apply=0
+@SNAP 181 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 182 universal:namevars
+@END 182 universal:namevars result=0 count=0 tests=0 apply=0
+@SNAP 182 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 183 universal:setcasts
+@END 183 universal:setcasts result=0 count=0 tests=0 apply=0
+@SNAP 183 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 184 universal:finalstructure
+@END 184 universal:finalstructure result=0 count=0 tests=0 apply=0
+@SNAP 184 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 185 universal:prototypewarnings
+@END 185 universal:prototypewarnings result=0 count=0 tests=0 apply=0
+@SNAP 185 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@BEGIN 186 universal:stop
+@END 186 universal:stop result=0 count=0 tests=0 apply=0
+@SNAP 186 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8
+@END 1 universal result=59 count=59 tests=0 apply=1
+@SNAP 1 ops 1
+3408:75 RETURN d=0 out=- in=c:0:8

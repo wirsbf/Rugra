@@ -1,5 +1,63 @@
 # `subflow.rs` API Reference
 
+## 2026-09-26：UNIONRESOLVE-PKG-E-0001 — 10 处 union facing 退化调用换 fd-aware 孪生
+
+`SplitDatatype`/`RootPointer`/`RuleSplit*` 的 10 处 union facing 读取（原退化形
+`Varnode::get_type_read_facing_op`/`get_type_read_facing`/`get_type_def_facing`
+恒走 map-miss 臂）换为 fd-aware 孪生
+（`crate::unionresolve::vn_type_read_facing`/`vn_type_def_facing`，
+unionresolve.rs:1898-1970，consult `fd.union_map`）。oracle 的
+`TypeUnion::findResolve` 从 `op->getParent()->getFuncdata()`（type.cc:2138）取
+包含函数并 consult `fd->getUnionField`；Rugra 的 `PcodeOp` 无反向指针，故
+`Funcdata` 通道显式穿参。签名变化：
+
+- `RootPointer::back_up_pointer(fd, implied_base)`（cc:2118 consult
+  `tmpPointer->getTypeReadFacing(addOp)`，slot 0）
+- `RootPointer::find(fd, op, value_type)`（cc:2157 consult
+  `pointer->getTypeReadFacing(op)`，slot 1；两处 `back_up_pointer` 跳同传 fd）
+- `SplitDatatype::get_value_datatype(fd, load_store, size, types)`（cc:2914
+  consult `loadStore->getIn(1)->getTypeReadFacing(loadStore)`，slot 1；三调用方
+  `split_store`/`RuleSplitLoad::apply_op`/`RuleSplitStore::apply_op` 同步）
+- `split_copy` 内联双读（cc:2950/2951 键：COPY op slot 0 / def-facing）——oracle
+  在 `RuleSplitCopy::applyOp` 读取后作参数传入，Rugra 保留内联重读（两次读之间
+  `test_copy_constraints` 不写 union_map，语义等价）
+- `split_load`（cc:2772 `outVn->getTypeDefFacing()`，def-facing）
+- `split_store` 双读（cc:2822/2828 `inVn->getTypeReadFacing(storeOp)`，slot 2，
+  含去 LOAD 重试臂）
+- `RuleSplitCopy::apply_op` metatype 门双读（cc:2950/2951，同键）
+
+slot 键逐处对照 oracle 实参（`op->getSlot(this)` 推导）：2118→0（addOp in(0)）、
+2157→1（LOAD/STORE in(1)）、2822/2828→2（STORE in(2)）、2914→1、2950→0。
+行为变化面：规则期 union_map 仅 typeprop 填充；map-miss 臂对 union/ptr-to-union
+返回 `this`（与退化形同），但 size-1 数组→元素、单字段满幅 struct→field[0]、
+partial-union→stripped（type.cc:1298/1944/2517 虚分派），与退化形的 `this`
+不同——这正是 oracle 行为。差分验收见车道终报。
+
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
+## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — buildInSubpieces 偏移常量宽度 4
+
+`subpiece_value`（splitStore 非常量输入 stand-in 路径）与 `split_copy` 内联
+SUBPIECE 循环的尾随偏移常量由 `new_constant(8, off)` 改为 `new_constant(4, off)`，
+按 oracle `SplitDatatype::buildInSubpieces`（subflow.cc:2497-2519，关键行 2513
+`data.opSetInput(subpiece,data.newConstant(4, off), 1)`；splitCopy cc:2735 与
+splitStore cc:2871 共用该 helper）。同时修正 `subpiece_value` 的 Ghidra 注释：
+原引用 `subflow.hh:271 RootPointer::subpieceValue` 为不存在的符号（subflow.hh:271
+是 RootPointer 类声明行），改为真实对应 `subflow.cc:2497
+SplitDatatype::buildInSubpieces`。**同 TODO 普查结论**：next_url Phase 2 首分歧
+（heritage op-line 22 `4ff4:5ad/5b0 SUBPIECE` 尾常量 8 vs 4）的真实源头不是本
+文件——该对 op 由 heritage `normalize_read_size`/`normalize_write_size` 创建
+（输出为寄存器空间 root+off 地址，stand-in 路径输出 u: 临时），实修在
+`src/space.rs`（Register addr_size 8→4）与 `src/heritage.rs`（normalizeReadSize
+常量宽度），见 `docs/api/space.md`/`docs/api/heritage.md` 同日条目。本文件的
+宽度 4 修正独立有效（buildInSubpieces 语义），stand-in 其余已登记偏差（地址放置
+输出、generateConstants 折叠、big-endian off 换算 cc:2508-2509）不变。
+
 ## 2026-08-30：`test_split_datatype_constructs` 断言按 canonical-Architecture 不变式翻转
 
 `Funcdata::new` 自 2026-08-30 起在构造尾绑定 canonical 默认 Architecture
@@ -60,7 +118,7 @@ coverage 登记；S-3（clear 等价注释）与 S-5（categorize 冗余臂合�
 `TypeFactory::get_exact_piece`（type.cc:4090-4117，与四个生产调用点同一
 Architecture 工厂）——再过 STRUCT/ARRAY/PARTIALSTRUCT 元类型门。
 分解走 `categorize_datatype` + `test_datatype_compatibility`
-（subflow.cc:2237-2274 / 2285-2367，新增）:类别门（load/store 的
+（subflow.cc:2244-2274 / 2296-2367，新增）:类别门（load/store 的
 array/primitive 组合、整结构同 Arc 非常量拒绝）、hole 填充与
 initial-hole/two-piece-padding 拒绝、numDepend>1 整结构门。构造器从
 Architecture 读取 `split_datatype_config`（subflow.cc:2701-2709）。
@@ -132,16 +190,34 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 ### cleanup pool split 族 Rule (coreaction.cc:5706-5708)
 - `RuleSplitCopy` / `RuleSplitLoad` / `RuleSplitStore` (2941/2964/2985) + `SplitDatatype`
 - `SplitDatatype::new` — 从 Architecture 读取 `split_datatype_config` 与工厂 (subflow.cc:2701-2709)
-- `SplitDatatype::get_value_datatype(op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938)
-- `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
+- `SplitDatatype::get_value_datatype(fd, op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938);fd 通道=cc:2914 read-facing consult（2026-09-26 UNIONRESOLVE-PKG-E-0001）
+- `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2215-2234/2244-2274/2296-2367)
 - `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
-- `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)
-- `RootPointer::find` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203)
+- `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)。`split_copy` 按 cc:2730-2744 分派到四个 builder:
+  `generate_constants`(cc:2409-2465, ZEXT/PIECE 扩展精度常量折叠为分片常量并销毁 def op;
+  `build_in_constants` cc:2483 的 `baseVal >> (8*off)` 在 oracle 侧因纯常量 ≤8 字节而
+  8*off<64 恒成立, Rugra 对 >8 字节纯常量按缺失高字节读 0(饱和移位), 避免 C++ UB 边界 panic)、
+  `build_in_subpieces`(cc:2497-2519, 非常量输入按 piece offset 建 SUBPIECE, 输出落 root 空间
+  `baseAddr+off` 地址并 `updateType(inType)`)、`build_out_varnodes`(cc:2527-2539, 输出分片落
+  root 空间地址并 `updateType(outType)`)、`build_out_concats`(cc:2548-2603, root 无读者早退;
+  非 addr-tied 时全部分片 `setProtoPartial`, 大端/小端各自 most→least significant 建 PIECE 栈,
+  中间输出 `newVarnodeOut` 于分片地址、非 addr-tied 时 `setProtoPartial`, 末位 PIECE
+  `setPartialRoot` 且输出绑回 root, 非 addr-tied 时向 `Merge` `registerProtoPartialRoot(root)`)。
+- `RootPointer::find(fd, op, value_type)` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer(fd, implied_base)`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203);fd 通道=cc:2118/2157 read-facing consult（2026-09-26 UNIONRESOLVE-PKG-E-0001）
 - `test_copy_constraints` — COPY 约束（函数输入/同地址 addrTied/LOAD 单读者）(subflow.cc:2370-2384)
 - 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` / `load_store_space` — arithmetic sanity / LOAD·STORE 空间常量解码 (subflow.cc:2673-2696, typeop.hh:140, varnode.hh:426)
 
 ### `RuleSubfloatConvert` (subflow.cc:3489, 5633)
-浮点子精度转换——Rule struct 存在，TransformManager.apply 待补（依赖 transform.rs 基础设施）。
+浮点子精度转换——完整 `SubfloatFlow`（subflow.cc:3070-3481）已移植：`maxPrecision`
+（迭代 DFS + `maxPrecisionMap` 缓存 + op mark 环截断）、`exceedsPrecision`、
+`setReplacement`（mark/constant 重编码/free/addrforce/typelock/input 守卫 +
+newPiece/newPreexistingVarnode/worklist）、`traceForward`（算术 exceedsPrecision 门、
+pass-through 替换、FLOAT2FLOAT/比较/TRUNC/NAN preexisting terminator、
+`preexistingGuard` + `getRepeatSlot` 重复输入修正）、`traceBackward`（pass-through
+def 复用、INT2FLOAT/FLOAT2FLOAT 源替换、常量 precision 重编码）、`doTrace`
+（terminatorCount≥1 门）与 `apply`（委托 transform.rs `TransformManager::apply`）。
+`preserveAddress` override（subflow.cc:3451 `vn->isInput()`）经
+`set_preserve_address_override` 虚分发钩子接入。
 
 ## 基础设施缺口（已标注 TODO，未绕过）
 - `Varnode::isPtrFlow()` — 缺失，RuleSubvarSubpiece/Zext 保守 default false
@@ -302,6 +378,30 @@ output-locked/output-active guards 与 `addPush`。两者继续保守返回 fals
 确认它们尚未等价，但没有同输入双侧 fixture，证据状态为 `UNTESTED`，统一绑定
 已登记的 `CALLSPEC-0001`，不计入 D0 的 identity `MATCH` 投影。
 
+## 2026-09-22：SB-OPPOOL-R4-COUNT-0001 — `try_call_pull` 接线（D0 residual 消除之一）
+
+Phase 2 next_url 镜像态首分歧 ordinal 65（event-ordinal 60，
+`universal:fullloop:mainloop:stackstall:oppool1` apply 轮 4）result/count
+85(oracle) vs 77(rugra) 的根因落地：Rugra `try_call_pull` 在 CALLSPEC-0001
+D0 下无条件返回 false，凡 4 字节 lane 直达 CALL/CALLIND 参数槽的
+`RuleSubvarZext` 触发全部夭折（窗口内首例：ZEXT `5040:69a` 的 R9 lane 流入
+`505d:131` call free 的 R9D 槽，oracle 创建 `R9D(:803) = u:23d00:4(:11a)` 并
+parameter_patch 呼叫输入）。修复后 `try_call_pull` 1:1 执行
+subflow.cc:208-228 全体语义：slot==0 早退 → 非 aggressive 的
+`(consume & ~mask)!=0` 截断拒绝 → `get_call_specs_of_op`
+（funcdata.cc:484-497 fast path + 线性回退）→ `isInputActive` 拒绝 →
+`isInputLocked && !isDotdotdot` 拒绝 → `parameter_patch` PatchRecord +
+`pullcount += 1`（消费端 `do_replacement` 的 ParameterPatch 臂
+`op_set_input(pullop, invn, slot)` 已在位）。`try_call_return_push` 仍保留
+保守 false（indirect-creation trim 未被当前语料触发，绑定 CALLSPEC-0001）。
+
+验证（镜像态）：oppool1 四窗口应用计数 oracle/rugra = [863,85,15,12] 全等
+（修复前 [863,**77**,15,12]，差 8 = earlyremoval −4 / propagatecopy −2 /
+subvar_zext −2）；v1 投影首分歧由 ordinal 65 后移至 ordinal 159
+（`universal:fullloop:activereturn`，dead DELAY_SLOT `2534:5a4` 输入计数
+`-,-` vs `-`——master 同位置实测一致，属 pre-existing latent 家族，非本修复
+回归，移交 Phase 2 后续车道）。
+
 ## 2026-08-29：SUBFLOAT-TRANSFORM-NOT-PORTED-0001 — RuleSubfloatConvert 非常量路径改为 defer
 
 `RuleSubfloatConvert::applyOp`（subflow.cc:3489-3507）在 oracle 中构造完整
@@ -316,3 +416,68 @@ Datatype 尺寸错配，另一方面与 `ActionInferTypes::writeBack`（每轮�
 两个旧断言盖章行为的单测改为断言 defer 且不出现小尺寸 float 盖章。
 遗留：完整 `SubfloatFlow` trace/transform 移植登记于
 SUBFLOAT-TRANSFORM-NOT-PORTED-0001。
+（2026-09-01 更新：该遗留已由 SUBFLOAT-TRANSFORM-RESIDUAL-0001 关闭，见下方
+2026-09-01 节——三处 defer 全部替换为真实 trace+apply，双侧 oracle fixture
+`subflow_transform_subfloat_1204` MATCH。）
+
+## 2026-09-01：SUBFLOAT-TRANSFORM-RESIDUAL-0001 — SubfloatFlow 完整移植
+
+`TransformManager`（transform.rs）已具备全部簿记原语（SplitFlow/LaneDivide 已用），
+缺口是 `SubfloatFlow` 本体未接线。本次按 subflow.cc:3070-3481 逐函数移植：
+
+- `max_precision`（cc:3079-3175）：`State{op,slot,maxPrecision}` 显式栈 DFS；
+  MULTIEQUAL/COPY/一元 float def 穿透，ADD/SUB/MULT/DIV 贡献 0，
+  FLOAT2FLOAT/INT2FLOAT 贡献 `min(in(0) size, vn size)`，default 贡献 vn size；
+  op mark 截环、完成后入 `max_precision_map`（key=`Arc::as_ptr` 身份），
+  命中缓存直接吸收。
+- `exceeds_precision`（cc:3186-3193）：两输入 maxPrecision 的 min > precision。
+- `set_replacement`（cc:3200-3240）：mark 复查→`getPiece(vn, precision*8, 0)`；
+  常量 `convertEncoding` 重编码（格式缺失→abort）；free/addrforce(尺寸≠precision)/
+  typelock(非 PARTIALSTRUCT 且尺寸≠precision)/input(尺寸≠precision) 守卫；
+  `newPreexistingVarnode`（size==precision）或 `newPiece`+worklist。
+- `trace_forward`（cc:3249-3330）：descend 快照遍历；outvn 已 mark 跳过；
+  二元算术先 `exceedsPrecision`；pass-through 族 `newOpReplace(numInput)` +
+  输出 `setReplacement`；FLOAT2FLOAT 下游按 outsize==precision 折 COPY 作
+  preexisting terminator；比较族重复输入走 `getRepeatSlot`（count=descend
+  中当前 op 之前的出现次数+1，对齐 op.cc:93-111 迭代器语义）+ `preexistingGuard`；
+  TRUNC/NAN 一元 terminator；default abort。
+- `trace_backward`（cc:3339-3419）：def 为 input→true；pass-through 复用
+  `rvn->getDef()` placeholder 或 new；INT2FLOAT 源替换（free 非常量拒绝）；
+  FLOAT2FLOAT 源常量按 size==precision 直取 offset / 否则 setReplacement
+  重编码，非常量 `getPreexistingVarnode`，COPY/FLOAT2FLOAT 二选一。
+- `do_trace`（cc:3462-3481）：format 缺失 false；drain worklist；清 mark；
+  `terminatorCount==0` 拒绝。
+- `apply_op`（cc:3489-3507）改回 oracle 结构：widening root=outvn/prec=insize，
+  narrowing root=invn/prec=outsize，`doTrace` 过→`apply`，**无常量特判**。
+
+行为修复（对齐 oracle，非回归）：常量 widening 现在要求下游 terminator 才折叠
+（`doTrace` 的 terminatorCount 门，cc:3479）；常量 narrowing root 是常量、不进
+worklist，永不折叠（此前无条件折叠为 COPY，偏离 oracle）。widening/narrowing
+非常量路径从 defer 变为真实数据流重写：原 op 销毁（op_replacement）、新建
+Varnode/ops、terminator 原地 retarget（op_preexisting），**不 retype 原 Varnode**
+（myprogress「Type propagation not settling」的根因家族 F2 就此关闭）。
+
+### 2026-09-01（续）：getRepeatSlot 迭代器语义内联 + 双侧 oracle fixture
+
+双侧 fixture `tests/oracle/subflow_transform_subfloat_1204.{cc,rs}`（runner
+`tools/run_subflow_transform_subfloat_oracle.sh`，registry 条目
+`subflow_transform_subfloat_1204`）以 9 个 IR 场景对拍锁定 oracle：非 const
+widen/narrow 重写、常量 narrow / 无 terminator 常量 widen 拒绝、常量 widen
+折叠、exceedsPrecision 阻断（COPY 链 maxPrecision=8）、精度 4 算术穿透、
+比较 preexistingGuard slot-0/slot-1、重复输入 getRepeatSlot count 1/2。
+观察为全 IR GraphProjection（op 顺序/opcode/addr/seqnum/dead/parent/in-out
+边 + varnode create-index/size/space/free/input/written/def/descends + bank
+计数）before/after，双侧 stdout 逐字节一致 = MATCH（sha256 钉在 metadata）。
+
+fixture 引出 `src/op.rs PcodeOp::get_repeat_slot` 缺 op.cc:101 的
+`count==1 → firstSlot` 早退（登记 `OPS-GETREPEATSLOT-COUNT1-0001`，op.rs 属
+他人 write-set 未越界修复）。subflow 调用点改为内联完整迭代器重载语义的
+`subfloat_get_repeat_slot`（op.cc:93-111），同时修正 count 前缀为
+[0..current)（不含当前 descend 条目，对齐 `--ourIter` 后的 Ghidra 区间）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 6 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

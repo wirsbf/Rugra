@@ -8,10 +8,28 @@
 //! The full Ghidra scoring algorithm is implemented as the typed
 //! [`ScoreUnionFields`] API, which threads `Arc<Datatype>`,
 //! `Arc<RwLock<PcodeOp>>`, and `Arc<RwLock<Varnode>>` exactly as Ghidra
-//! threads raw `Datatype*`/`PcodeOp*`/`Varnode*`. The scoring tables in
+//! threads raw `Datatype*`/`PcodeOp*`/`Varnode*`. The TypeFactory is held
+//! as `Arc<RwLock<TypeFactory>>` — the mutable twin of Ghidra's
+//! `TypeFactory&` — because the scoring interning arms
+//! (`getTypePointerStripArray` cc:1022, `downChain` cc:435,
+//! `getTypePointer` cc:665) mutate the factory. The scoring tables in
 //! [`score_trial_down`](ScoreUnionFields::score_trial_down) and
 //! [`score_trial_up`](ScoreUnionFields::score_trial_up) are 1:1 with
 //! unionresolve.cc:305-833.
+//!
+//! Pipeline producers (wired 2026-09-23, UNIONRESOLVE-PIPELINE-WIRING-0001):
+//! four call sites populate `Funcdata::union_map` via `setUnionField`, all
+//! routing through `resolve_in_flow` below — `ActionSetCasts::resolveUnion`
+//! (coreaction.cc:2499 → coreaction.rs `resolve_union`), `castOutput`
+//! (coreaction.cc:2556 → coreaction.rs), the typeprop driver
+//! (coreaction.cc:5083 → coreaction.rs), and `RulePieceStructure`
+//! (ruleaction.cc:7678 → ruleaction.rs). The oracle entry points
+//! `TypePointer::resolveInFlow`/`TypeUnion::resolveInFlow` (type.cc:1177 /
+//! type.cc:2125) are mirrored as the fd-aware free functions in the
+//! "Pipeline wiring" section below; `varnode.rs` keeps the degenerate
+//! map-miss forms of varnode.cc:626-672 (EJ2 write-domain lease), with the
+//! fd-aware twins `vn_type_read_facing`/`vn_type_def_facing`/
+//! `vn_high_type_read_facing`/`vn_high_type_def_facing` living here.
 //!
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/unionresolve.{hh,cc}.
@@ -56,19 +74,38 @@ impl ResolvedUnion {
     // Ghidra: unionresolve.cc:40 ResolvedUnion::ResolvedUnion(Datatype*,int4,TypeFactory&)
     /// Construct a reference to a specific field. Faithful to
     /// `ResolvedUnion::ResolvedUnion(Datatype *parent,int4 fldNum,
-    /// TypeFactory &typegrp)` (unionresolve.hh:47).
-    pub fn with_field(parent: Arc<Datatype>, fld_num: i32, typegrp: &TypeFactory) -> Self {
+    /// TypeFactory &typegrp)` (unionresolve.hh:47), including the cc:43-44
+    /// PARTIALUNION unwrap and the cc:51-55 pointer-parent arm (resolve is a
+    /// POINTER to the field, sized by the parent pointer). The pointer is
+    /// interned through [`TypeFactory::get_type_pointer`] (type.cc:3867
+    /// `findAdd` canonicalization + one `getStripped` step on the pointee),
+    /// so the resolve Arc is factory-owned exactly as Ghidra's returned
+    /// `Datatype*` is: downstream `Arc::ptr_eq` identity comparisons —
+    /// cast.cc:303-304 `castStandard`'s `curtype == reqtype` no-cast
+    /// short-circuit and the facing/lock identity family — hit against
+    /// pointers minted by any other `get_type_pointer` call site.
+    pub fn with_field(parent: Arc<Datatype>, fld_num: i32, typegrp: &mut TypeFactory) -> Self {
+        // cc:43-44: a partial-union parent resolves within its container.
+        let unwrapped;
+        let parent = match parent.as_ref() {
+            Datatype::PartialUnion(pu) => {
+                unwrapped = pu.container.clone();
+                &unwrapped
+            }
+            _ => &parent,
+        };
         let base_type = parent.clone();
         let resolve = if fld_num < 0 {
             parent.clone()
         } else {
             match parent.as_ref() {
-                Datatype::Pointer(_p) => {
-                    let field = depend_at(parent.as_ref(), fld_num as usize);
-                    let _ = typegrp;
-                    field
+                // cc:51-55: field = ptrTo->getDepend(fldNum); resolve =
+                // typegrp.getTypePointer(parent.size, field, wordSize).
+                Datatype::Pointer(pointer) => {
+                    let field = get_depend(pointer.ptr_to.as_ref(), fld_num as usize);
+                    typegrp.get_type_pointer(parent.get_size(), field, pointer.wordsize)
                 }
-                _ => depend_at(parent.as_ref(), fld_num as usize),
+                _ => get_depend(parent.as_ref(), fld_num as usize),
             }
         };
         Self { resolve, base_type, field_num: fld_num, lock: false }
@@ -146,6 +183,12 @@ impl ResolveEdge {
                 encoding += 0x1000;
                 pointee.get_id()
             }
+            // cc:73-74: a partial union keys by its container union id (the
+            // encoding is NOT bumped, unlike the pointer arm).
+            TypeMetatype::PartialUnion => match parent {
+                Datatype::PartialUnion(pu) => pu.container.get_id(),
+                _ => unreachable!("metatype PartialUnion without PartialUnion"),
+            },
             _ => parent.get_id(),
         };
         Self { type_id, op_time, encoding }
@@ -306,8 +349,17 @@ pub const MAX_TRIALS: i32 = 1024;
 /// Analyze data-flow to resolve which field of a union data-type is being
 /// accessed. Faithful to `ScoreUnionFields` (unionresolve.hh:82).
 pub struct ScoreUnionFields<'t> {
-    /// The factory containing data-types (cc:136 `typegrp`).
-    pub typegrp: &'t TypeFactory,
+    /// The factory containing data-types (cc:136 `typegrp`). Held as the
+    /// shared mutable twin of Ghidra's `TypeFactory&`: the scoring interning
+    /// arms mutate the factory in Ghidra (getTypePointerStripArray cc:1022,
+    /// downChain cc:435, getTypePointer cc:665).
+    pub typegrp: Arc<RwLock<TypeFactory>>,
+    /// The function being scored, for the locked call-spec consults
+    /// (scoreParameter cc:184 / scoreReturnType cc:204). Ghidra derives it
+    /// from `op->getParent()->getFuncdata()`; Rugra PcodeOps carry no
+    /// Funcdata back-pointer, so the caller threads it. `None` falls back to
+    /// the unlocked-param heuristic arms of both scorers.
+    pub fd: Option<&'t crate::funcdata::Funcdata>,
     /// Score for each field, indexed by `fieldNum + 1` (whole union is
     /// index 0) (cc:137 `scores`).
     pub scores: Vec<i32>,
@@ -330,8 +382,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a data-type involving a union against a data-flow edge.
     /// Faithful to the primary constructor (unionresolve.cc:990-1037).
     pub fn new(
-        typegrp: &'t TypeFactory, parent_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, parent_type: Arc<Datatype>,
         op: Arc<RwLock<PcodeOp>>, slot: i32,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(parent_type.clone());
         {
@@ -372,7 +425,9 @@ impl<'t> ScoreUnionFields<'t> {
             let mut is_array = false;
             if word_size != 0 {
                 if field_type.get_metatype() == TypeMetatype::Array { is_array = true; }
-                field_type = type_pointer_strip_array(typegrp, parent_type.get_size(), field_type, word_size);
+                let mut tg = typegrp.write().unwrap();
+                field_type = get_type_pointer_strip_array(
+                    &mut tg, parent_type.get_size(), field_type, word_size);
             }
             let vn_size = vn.read().unwrap().get_size();
             if vn_size != field_type.get_size() {
@@ -386,7 +441,7 @@ impl<'t> ScoreUnionFields<'t> {
             visited.insert(VisitMark::new(&vn, (i + 1) as i32));
         }
         let mut s = Self {
-            typegrp, scores, fields, visited, trial_current,
+            typegrp, fd, scores, fields, visited, trial_current,
             trial_next: Vec::new(), result, trial_count: 0,
         };
         s.run_passes();
@@ -398,8 +453,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a union against a SUBPIECE truncation. Faithful to the
     /// SUBPIECE constructor (unionresolve.cc:1050-1072).
     pub fn new_for_subpiece(
-        typegrp: &'t TypeFactory, union_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, union_type: Arc<Datatype>,
         offset: i64, op: Arc<RwLock<PcodeOp>>,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(union_type.clone());
         let vn = {
@@ -412,7 +468,7 @@ impl<'t> ScoreUnionFields<'t> {
         fields[0] = union_type.clone();
         scores[0] = -10;
         let mut s = Self {
-            typegrp, scores, fields,
+            typegrp, fd, scores, fields,
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result, trial_count: 0,
@@ -436,8 +492,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a union against an implied truncation at a data-flow edge.
     /// Faithful to the implied-truncation constructor (unionresolve.cc:1083-1108).
     pub fn new_for_implied_trunc(
-        typegrp: &'t TypeFactory, union_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, union_type: Arc<Datatype>,
         offset: i64, op: Arc<RwLock<PcodeOp>>, slot: i32,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(union_type.clone());
         let vn = {
@@ -456,8 +513,8 @@ impl<'t> ScoreUnionFields<'t> {
         for (i, uf) in union_fields.iter().enumerate() {
             let field_offset = uf.offset as i64;
             let ct_opt = score_truncation_inplace(
-                &mut scores, uf.type_ptr.as_ref(), vn_size,
-                offset - field_offset, (i + 1) as i32);
+                &mut scores, &uf.type_ptr, vn_size,
+                offset - field_offset, (i + 1) as i32, &result.base_type);
             fields[i + 1] = uf.type_ptr.clone();
             if let Some(ct) = ct_opt {
                 if slot < 0 {
@@ -469,7 +526,7 @@ impl<'t> ScoreUnionFields<'t> {
             }
         }
         let mut s = Self {
-            typegrp, scores, fields, visited, trial_current,
+            typegrp, fd, scores, fields, visited, trial_current,
             trial_next: Vec::new(), result, trial_count: 0,
         };
         if s.trial_current.len() > 1 { s.run_passes(); }
@@ -485,9 +542,9 @@ impl<'t> ScoreUnionFields<'t> {
         fields.push(parent.clone());
         for n in field_names { fields.push(name_placeholder(n)); }
         let scores = vec![0i32; fields.len()];
-        let leaked: &'static TypeFactory = Box::leak(Box::new(TypeFactory::new(8)));
         Self {
-            typegrp: leaked, scores, fields,
+            typegrp: Arc::new(RwLock::new(TypeFactory::new(8))),
+            fd: None, scores, fields,
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result: ResolvedUnion::new(parent), trial_count: 0,
@@ -495,9 +552,9 @@ impl<'t> ScoreUnionFields<'t> {
     }
 
     // RUGRA-GLUE: Construct an empty scorer holding just an initial result.
-    fn empty(typegrp: &'t TypeFactory, result: ResolvedUnion) -> Self {
+    fn empty(typegrp: Arc<RwLock<TypeFactory>>, result: ResolvedUnion) -> Self {
         Self {
-            typegrp, scores: Vec::new(), fields: Vec::new(),
+            typegrp, fd: None, scores: Vec::new(), fields: Vec::new(),
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result, trial_count: 0,
@@ -601,7 +658,13 @@ impl<'t> ScoreUnionFields<'t> {
         if op.is_marker() { return true; }
         if parent.get_metatype() == TypeMetatype::Pointer {
             if in_slot < 0 { return true; }
-            if Self::test_array_arithmetic(op, in_slot, parent.get_size()) { return true; }
+            // cc:94/101/108 compare against result.baseType->getSize() —
+            // the pointer-stripped union size, not the pointer size.
+            let base_size = match parent {
+                Datatype::Pointer(p) => p.ptr_to.get_size(),
+                _ => parent.get_size(),
+            };
+            if Self::test_array_arithmetic(op, in_slot, base_size) { return true; }
         }
         if op.get_opcode() != OpCode::CPUI_COPY { return false; }
         if in_slot < 0 { return false; }
@@ -619,13 +682,14 @@ impl<'t> ScoreUnionFields<'t> {
         let mut score = 0i32;
         let mut ct = ct;
         let mut lock_type = lock_type;
+        // cc:149-150: the identity bonus is checked once, before the
+        // pointer-peel loop (no in-loop re-check).
         if std::ptr::eq(ct, lock_type) { score += 5; }
         while ct.get_metatype() == TypeMetatype::Pointer {
             if lock_type.get_metatype() != TypeMetatype::Pointer { break; }
             score += 5;
             ct = pointee_of(ct);
             lock_type = pointee_of(lock_type);
-            if std::ptr::eq(ct, lock_type) { score += 5; }
         }
         let ct_meta = ct.get_metatype();
         let vn_meta = lock_type.get_metatype();
@@ -691,19 +755,26 @@ impl<'t> ScoreUnionFields<'t> {
     // Ghidra: unionresolve.cc:227 ScoreUnionFields::derefPointer
     /// Score a trial data-type as a pointer being dereferenced by LOAD/STORE.
     /// Faithful to `derefPointer` (unionresolve.cc:227-246).
-    fn deref_pointer<'a>(ct: &'a Datatype, vn_size: usize) -> (Option<&'a Datatype>, i32) {
+    fn deref_pointer(ct: &Datatype, vn_size: usize) -> (Option<Arc<Datatype>>, i32) {
         let mut score = 0i32;
-        let mut res_type: Option<&Datatype> = None;
+        let mut res_type: Option<Arc<Datatype>> = None;
         if ct.get_metatype() == TypeMetatype::Pointer {
-            let mut ptr_to: Option<&Datatype> = Some(pointee_of(ct));
-            while let Some(p) = ptr_to {
+            // Seed with the canonical pointee Arc (Ghidra:
+            // ((TypePointer*)ct)->getPtrTo()); each descent step takes the
+            // canonical component Arc from the virtual getSubType dispatch.
+            let ptr_seed = match ct {
+                Datatype::Pointer(p) => p.ptr_to.clone(),
+                _ => return (res_type, score),
+            };
+            let mut ptr_to: Option<Arc<Datatype>> = Some(ptr_seed);
+            while let Some(p) = &ptr_to {
                 if p.get_size() > vn_size {
                     let (sub, _newoff) = p.get_sub_type(0);
                     ptr_to = sub;
                 } else { break; }
             }
-            if let Some(p) = ptr_to {
-                if p.get_size() == vn_size { score = 10; res_type = Some(p); }
+            if let Some(p) = &ptr_to {
+                if p.get_size() == vn_size { score = 10; res_type = ptr_to.clone(); }
             }
         } else { score = -10; }
         (res_type, score)
@@ -807,7 +878,7 @@ impl<'t> ScoreUnionFields<'t> {
                 if let Some(out_sz) = out_size {
                     let (rt, s) = Self::deref_pointer(trial.fit_type.as_ref(), out_sz);
                     score = s;
-                    if let Some(rt) = rt { res_type = Some(Arc::new(rt.clone())); }
+                    res_type = rt;
                 }
             }
             OpCode::CPUI_STORE => {
@@ -817,7 +888,7 @@ impl<'t> ScoreUnionFields<'t> {
                     score = s;
                     if let Some(pt) = ptr_to {
                         if !last_level {
-                            self.new_trials(&op, 2, Arc::new(pt.clone()), trial.score_index, trial.is_array);
+                            self.new_trials(&op, 2, pt, trial.score_index, trial.is_array);
                         }
                     }
                 } else if trial.in_slot == 2 {
@@ -837,11 +908,21 @@ impl<'t> ScoreUnionFields<'t> {
             OpCode::CPUI_CALL | OpCode::CPUI_CALLOTHER => {
                 let _ = in1;
                 if trial.in_slot > 0 {
-                    if matches!(meta,
-                        TypeMetatype::Array | TypeMetatype::Struct
-                        | TypeMetatype::Union | TypeMetatype::Code) {
-                        score = -1;
-                    } else { score = 0; }
+                    score = match self.fd {
+                        // cc:352-353: scoreParameter consults the locked
+                        // call-specs; absent/unlocked specs fall back to the
+                        // generic param heuristic inside score_parameter.
+                        Some(fd) => Self::score_parameter(
+                            trial.fit_type.as_ref(), fd,
+                            &crate::op::PcodeOpRef(op.clone()), trial.in_slot - 1),
+                        None => {
+                            if matches!(meta,
+                                TypeMetatype::Array | TypeMetatype::Struct
+                                | TypeMetatype::Union | TypeMetatype::Code) {
+                                -1
+                            } else { 0 }
+                        }
+                    };
                 }
             }
             OpCode::CPUI_CALLIND => {
@@ -851,11 +932,19 @@ impl<'t> ScoreUnionFields<'t> {
                         if ptrto.get_metatype() == TypeMetatype::Code { score = 10; } else { score = -10; }
                     }
                 } else {
-                    if matches!(meta,
-                        TypeMetatype::Array | TypeMetatype::Struct
-                        | TypeMetatype::Union | TypeMetatype::Code) {
-                        score = -1;
-                    } else { score = 0; }
+                    // cc:367-368: scoreParameter for the indirect input slot.
+                    score = match self.fd {
+                        Some(fd) => Self::score_parameter(
+                            trial.fit_type.as_ref(), fd,
+                            &crate::op::PcodeOpRef(op.clone()), trial.in_slot - 1),
+                        None => {
+                            if matches!(meta,
+                                TypeMetatype::Array | TypeMetatype::Struct
+                                | TypeMetatype::Union | TypeMetatype::Code) {
+                                -1
+                            } else { 0 }
+                        }
+                    };
                 }
             }
             OpCode::CPUI_RETURN => {
@@ -909,10 +998,29 @@ impl<'t> ScoreUnionFields<'t> {
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRSUB => {
                 if meta == TypeMetatype::Pointer {
                     if trial.in_slot >= 0 {
-                        if let Some(off) = in1_offset_const {
-                            let _ = off;
-                            if off == 0 { res_type = Some(trial.fit_type.clone()); }
-                            score = 5;
+                        // cc:429-438: the offset is the constant on the OTHER
+                        // input slot (1 - inslot); the drill is the virtual
+                        // TypePointer::downChain(off, par, parOff, array),
+                        // and score 5 is added only when the drill succeeds.
+                        let other_off_const = {
+                            let op_rg = op.read().unwrap();
+                            op_rg.get_in((1 - trial.in_slot) as usize).and_then(|v| {
+                                let vr = v.read().unwrap();
+                                if vr.is_constant() { Some(vr.get_offset() as i64) } else { None }
+                            })
+                        };
+                        if let Some(off) = other_off_const {
+                            let typegrp_arc = self.typegrp.clone();
+                            let mut tg = typegrp_arc.write().unwrap();
+                            let mut chain_off = off;
+                            let mut par: Option<Arc<Datatype>> = None;
+                            let mut par_off: i64 = 0;
+                            if let Some(rt) = tg.down_chain_virtual(
+                                &trial.fit_type, &mut chain_off, &mut par, &mut par_off,
+                                trial.is_array) {
+                                res_type = Some(rt);
+                                score = 5;
+                            }
                         } else if trial.is_array {
                             score = 1;
                             let mut el_size = 1usize;
@@ -1062,8 +1170,8 @@ impl<'t> ScoreUnionFields<'t> {
                 let offset = in1_offset_const.unwrap_or(0) as i64;
                 let vn_size = out_size.unwrap_or(0);
                 if let Some(rt) = self.score_truncation(
-                    trial.fit_type.as_ref(), vn_size, offset, trial.score_index) {
-                    res_type = Some(Arc::new(rt.clone()));
+                    &trial.fit_type, vn_size, offset, trial.score_index) {
+                    res_type = Some(rt);
                 }
             }
             OpCode::CPUI_PTRADD => {
@@ -1140,19 +1248,40 @@ impl<'t> ScoreUnionFields<'t> {
             (def_rg.get_opcode(), in1_off, in2_off)
         };
         let meta = trial.fit_type.get_metatype();
-        let new_slot = 0i32;
+        let mut new_slot = 0i32;
         match def_code {
             OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT => {
                 res_type = Some(trial.fit_type.clone());
             }
-            OpCode::CPUI_LOAD => { res_type = Some(trial.fit_type.clone()); }
+            // cc:664-666: wrap the trial type in a pointer sized by the
+            // pointer input (slot 1, wordsize 1) and recurse on that input.
+            OpCode::CPUI_LOAD => {
+                let ptr_size = {
+                    let def_rg = def.read().unwrap();
+                    def_rg.get_in(1).map(|v| v.read().unwrap().get_size())
+                };
+                if let Some(sz) = ptr_size {
+                    let typegrp_arc = self.typegrp.clone();
+                    let mut tg = typegrp_arc.write().unwrap();
+                    res_type = Some(tg.get_type_pointer(sz, trial.fit_type.clone(), 1));
+                    new_slot = 1;
+                }
+            }
             OpCode::CPUI_CALL | OpCode::CPUI_CALLOTHER | OpCode::CPUI_CALLIND => {
-                let meta = trial.fit_type.get_metatype();
-                if matches!(meta,
-                    TypeMetatype::Array | TypeMetatype::Struct
-                    | TypeMetatype::Union | TypeMetatype::Code) {
-                    score = -1;
-                } else { score = 0; }
+                // cc:668-672: scoreReturnType consults the locked output
+                // prototype; the fallback heuristic lives inside it.
+                score = match self.fd {
+                    Some(fd) => Self::score_return_type(
+                        trial.fit_type.as_ref(), fd,
+                        &crate::op::PcodeOpRef(def.clone())),
+                    None => {
+                        if matches!(meta,
+                            TypeMetatype::Array | TypeMetatype::Struct
+                            | TypeMetatype::Union | TypeMetatype::Code) {
+                            -1
+                        } else { 0 }
+                    }
+                };
             }
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
             | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
@@ -1284,21 +1413,21 @@ impl<'t> ScoreUnionFields<'t> {
     // Ghidra: unionresolve.cc:843 ScoreUnionFields::scoreTruncation
     /// Score a truncation in the data-flow. Faithful to `scoreTruncation`
     /// (unionresolve.cc:843-879).
-    fn score_truncation<'a>(
-        &mut self, ct_in: &'a Datatype, vn_size: usize, offset: i64, score_index: i32,
-    ) -> Option<&'a Datatype> {
+    fn score_truncation(
+        &mut self, ct_in: &Arc<Datatype>, vn_size: usize, offset: i64, score_index: i32,
+    ) -> Option<Arc<Datatype>> {
         let idx = score_index as usize;
         if ct_in.get_metatype() == TypeMetatype::Union {
-            let union_dt = as_union(ct_in);
+            let union_dt = as_union(ct_in.as_ref());
             let mut score = -10i32;
-            let mut recurse: Option<&Datatype> = None;
+            let mut recurse: Option<Arc<Datatype>> = None;
             if let Some(u) = union_dt {
                 for field in &u.fields {
                     if field.offset as i64 == offset && field.type_ptr.get_size() == vn_size {
                         score = 10;
-                        if let Datatype::Union(base_u) = self.result.base_type.as_ref() {
-                            if base_u.fields.len() == u.fields.len() { score += 5; }
-                        }
+                        // cc:856-857: the +5 bonus is the identity
+                        // result.getBase() == unionDt (pointer compare).
+                        if Arc::ptr_eq(&self.result.base_type, ct_in) { score += 5; }
                         recurse = None;
                         break;
                     }
@@ -1309,8 +1438,8 @@ impl<'t> ScoreUnionFields<'t> {
         }
         let mut score = 10i32;
         let mut cur_off = offset;
-        let mut ct: Option<&Datatype> = Some(ct_in);
-        while let Some(c) = ct {
+        let mut ct: Option<Arc<Datatype>> = Some(ct_in.clone());
+        while let Some(c) = &ct {
             if cur_off == 0 && c.get_size() == vn_size { break; }
             if c.get_metatype() == TypeMetatype::Int || c.get_metatype() == TypeMetatype::Uint {
                 if c.get_size() >= vn_size + cur_off as usize { score = 1; ct = None; break; }
@@ -1390,6 +1519,460 @@ impl<'t> ScoreUnionFields<'t> {
 }
 
 // ===========================================================================
+// Pipeline wiring — type.cc resolveInFlow/findResolve virtual dispatch +
+// varnode.cc:626-672 read/def-facing (UNIONRESOLVE-PIPELINE-WIRING-0001)
+// ===========================================================================
+//
+// Ghidra dispatches `Datatype::resolveInFlow` / `Datatype::findResolve`
+// virtually per concrete subclass (type.hh:279-280). Rugra's `Datatype` is an
+// enum in type_system/datatype.rs with no Funcdata back-pointer, so the
+// virtual dispatch is mirrored here as free functions threading `fd` — the
+// same pattern the type layer already uses for `find_truncation`'s
+// `resolutions` channel. `varnode.rs`'s own read-facing methods stay
+// degenerate (EJ write-domain); these helpers are the fd-aware twins the
+// Action/Rule call sites consult.
+
+// Ghidra: type.cc:1177 TypePointer::resolveInFlow + type.cc:2125 TypeUnion::resolveInFlow
+//   + type.cc:1283 TypeArray::resolveInFlow + type.cc:1929 TypeStruct::resolveInFlow
+//   + type.cc:2498 TypePartialUnion::resolveInFlow + type.cc:574 Datatype::resolveInFlow
+/// Resolve a data-type based on its use at a data-flow edge, consulting and
+/// populating `Funcdata::union_map` exactly as the oracle virtual dispatch
+/// does:
+///
+/// - `TypePointer` (type.cc:1177-1190): only when the pointee is a union —
+///   consult the map, else score via [`ScoreUnionFields`] and write the edge.
+///   A pointer to anything else returns `this` unchanged.
+/// - `TypeUnion` (type.cc:2125-2135): consult, else score + write.
+/// - `TypeArray` (type.cc:1283-1296) / `TypeStruct` (type.cc:1929-1942):
+///   consult, else `scoreSingleComponent` + `ResolvedUnion(parent, fieldNum)`
+///   fill and write.
+/// - `TypePartialUnion` (type.cc:2498-2515): truncation walk down the
+///   container (resolveTruncation through unions, getSubType otherwise);
+///   no map write happens on this path.
+/// - base `Datatype` (type.cc:574-578): return `this`.
+///
+/// Callers gate on `ct->needsResolution()` exactly as the oracle call sites
+/// do (coreaction.cc:2496/2499, 2545/2554-2556, 5081-5083; ruleaction.cc:7678).
+pub fn resolve_in_flow(
+    fd: &mut crate::funcdata::Funcdata,
+    ct: &Arc<Datatype>,
+    op: &PcodeOpRef,
+    slot: i32,
+) -> Arc<Datatype> {
+    match ct.as_ref() {
+        // type.cc:1177-1190 TypePointer::resolveInFlow
+        Datatype::Pointer(p) if p.ptr_to.get_metatype() == TypeMetatype::Union => {
+            if let Some(res) = fd.get_union_field(ct.as_ref(), op, slot) {
+                return res.get_datatype().clone();
+            }
+            let Some(typegrp) = fd.get_arch().and_then(|a| a.types.clone()) else {
+                // No TypeFactory: cannot score (detached fixtures only).
+                return ct.clone();
+            };
+            // cc:1185-1187: ScoreUnionFields scoreFields(*types,this,op,slot);
+            //   fd->setUnionField(this,op,slot,scoreFields.getResult());
+            let result = ScoreUnionFields::new(
+                typegrp,
+                ct.clone(),
+                op.0.clone(),
+                slot,
+                Some(&*fd),
+            )
+            .result
+            .clone();
+            fd.set_union_field(ct.as_ref(), op, slot, result.clone());
+            result.get_datatype().clone()
+        }
+        // type.cc:2125-2135 TypeUnion::resolveInFlow
+        Datatype::Union(_) => {
+            if let Some(res) = fd.get_union_field(ct.as_ref(), op, slot) {
+                return res.get_datatype().clone();
+            }
+            let Some(typegrp) = fd.get_arch().and_then(|a| a.types.clone()) else {
+                return ct.clone();
+            };
+            let result = ScoreUnionFields::new(
+                typegrp,
+                ct.clone(),
+                op.0.clone(),
+                slot,
+                Some(&*fd),
+            )
+            .result
+            .clone();
+            fd.set_union_field(ct.as_ref(), op, slot, result.clone());
+            result.get_datatype().clone()
+        }
+        // type.cc:1283-1296 TypeArray::resolveInFlow and
+        // type.cc:1929-1942 TypeStruct::resolveInFlow share this shape.
+        Datatype::Array(_) | Datatype::Struct(_) => {
+            if let Some(res) = fd.get_union_field(ct.as_ref(), op, slot) {
+                return res.get_datatype().clone();
+            }
+            let Some(typegrp_arc) = fd.get_arch().and_then(|a| a.types.clone()) else {
+                // cc:1293 ResolvedUnion(this,fieldNum,*types) needs the
+                // factory for the field construction; without it the edge is
+                // left unresolved (base-arm return-this).
+                return ct.clone();
+            };
+            let field_num = crate::type_system::datatype::TypeStruct::score_single_component(
+                ct.as_ref(),
+                fd,
+                op,
+                slot,
+            );
+            let comp_fill = {
+                // cc:1293 ResolvedUnion(this,fieldNum,*types): the factory
+                // interns the pointer arm (unionresolve.cc:54), so this is a
+                // write guard — same lock discipline as the union arms'
+                // ScoreUnionFields interning (cc:1185).
+                let mut tg = typegrp_arc.write().unwrap();
+                ResolvedUnion::with_field(ct.clone(), field_num, &mut tg)
+            };
+            fd.set_union_field(ct.as_ref(), op, slot, comp_fill.clone());
+            comp_fill.get_datatype().clone()
+        }
+        // type.cc:2498-2515 TypePartialUnion::resolveInFlow
+        Datatype::PartialUnion(pu) => {
+            let size = pu.base.size;
+            let mut cur_type: Option<Arc<Datatype>> = Some(pu.container.clone());
+            let mut cur_off = pu.offset;
+            while let Some(c) = cur_type.clone() {
+                if c.get_size() <= size {
+                    break;
+                }
+                if c.get_metatype() == TypeMetatype::Union {
+                    // cc:2505: curType->resolveTruncation(curOff,op,slot,&curOff)
+                    match union_resolve_truncation(fd, &c, cur_off, op, slot) {
+                        Some((field, new_off)) => {
+                            cur_off = new_off;
+                            cur_type = Some(field.type_ptr.clone());
+                        }
+                        None => cur_type = None,
+                    }
+                } else {
+                    let (sub, new_off) = c.get_sub_type(cur_off);
+                    cur_off = new_off;
+                    cur_type = sub;
+                }
+            }
+            if let Some(c) = cur_type {
+                if c.get_size() == size {
+                    return c;
+                }
+            }
+            // cc:2514: return stripped;
+            pu.stripped.clone().unwrap_or_else(|| ct.clone())
+        }
+        // type.cc:574-578 Datatype::resolveInFlow (base): return this.
+        _ => ct.clone(),
+    }
+}
+
+// Ghidra: type.cc:2147 TypeUnion::resolveTruncation
+/// Resolve which union field is used for a truncation, scoring when no
+/// cached resolution exists. Faithful to `TypeUnion::resolveTruncation`
+/// (type.cc:2147-2177): consult `union_map`; on hit with `fieldNum >= 0`
+/// return the field with `newoff = offset - field->offset`; on miss score
+/// via the SUBPIECE constructor (cc:2160, slot 1 is artificial) or the
+/// implied-truncation constructor (cc:2168), write the edge, and return the
+/// field when one was chosen. Returns `None` when no field resolves.
+pub fn union_resolve_truncation(
+    fd: &mut crate::funcdata::Funcdata,
+    union_type: &Arc<Datatype>,
+    offset: i64,
+    op: &PcodeOpRef,
+    slot: i32,
+) -> Option<(TypeField, i64)> {
+    let Datatype::Union(u) = union_type.as_ref() else {
+        return None;
+    };
+    // cc:2151-2158: cached resolution wins; fieldNum < 0 falls through to
+    // the null return WITHOUT scoring (only a full miss scores).
+    if let Some(res) = fd.get_union_field(union_type.as_ref(), op, slot) {
+        if res.get_field_num() >= 0 {
+            let field = u.fields.get(res.get_field_num() as usize)?;
+            return Some((field.clone(), offset - field.offset as i64));
+        }
+        return None;
+    }
+    let Some(typegrp) = fd.get_arch().and_then(|a| a.types.clone()) else {
+        return None;
+    };
+    let (result, subpiece_form) = {
+        let op_code = op.0.read().unwrap().opcode;
+        if op_code == OpCode::CPUI_SUBPIECE && slot == 1 {
+            // cc:2159-2165: the slot is artificial in this case.
+            let s = ScoreUnionFields::new_for_subpiece(
+                typegrp,
+                union_type.clone(),
+                offset,
+                op.0.clone(),
+                Some(&*fd),
+            );
+            (s.result.clone(), true)
+        } else {
+            // cc:2167-2174.
+            let s = ScoreUnionFields::new_for_implied_trunc(
+                typegrp,
+                union_type.clone(),
+                offset,
+                op.0.clone(),
+                slot,
+                Some(&*fd),
+            );
+            (s.result.clone(), false)
+        }
+    };
+    fd.set_union_field(union_type.as_ref(), op, slot, result.clone());
+    if result.get_field_num() >= 0 {
+        let field = u.fields.get(result.get_field_num() as usize)?;
+        let new_off = if subpiece_form { 0 } else { offset - field.offset as i64 };
+        return Some((field.clone(), new_off));
+    }
+    None
+}
+
+// Ghidra: type.cc:1192 TypePointer::findResolve + type.cc:2137 TypeUnion::findResolve
+//   + type.cc:1298 TypeArray::findResolve + type.cc:1944 TypeStruct::findResolve
+//   + type.cc:2517 TypePartialUnion::findResolve + type.cc:586 Datatype::findResolve
+/// Find a previously calculated resolution for this data-type at the given
+/// edge, WITHOUT scoring. The const consult mirror of [`resolve_in_flow`]:
+///
+/// - `TypePointer` (type.cc:1192-1202): union pointee consults the map, else
+///   returns `this`.
+/// - `TypeUnion` (type.cc:2137-2145): consult, else `this`.
+/// - `TypeArray` (type.cc:1298-1306): consult, else the ELEMENT type
+///   ("assume referring to the element").
+/// - `TypeStruct` (type.cc:1944-1952): consult, else `field[0].type`.
+/// - `TypePartialUnion` (type.cc:2517-2534): container walk delegating to
+///   `findResolve` through unions / `getSubType` otherwise; the result must
+///   exactly match the partial size, else the stripped twin.
+pub fn find_resolve(
+    fd: &crate::funcdata::Funcdata,
+    ct: &Arc<Datatype>,
+    op: &PcodeOpRef,
+    slot: i32,
+) -> Arc<Datatype> {
+    let consulted = |fd: &crate::funcdata::Funcdata| -> Option<Arc<Datatype>> {
+        fd.get_union_field(ct.as_ref(), op, slot)
+            .map(|res| res.get_datatype().clone())
+    };
+    match ct.as_ref() {
+        // type.cc:1192-1202 TypePointer::findResolve
+        Datatype::Pointer(p) if p.ptr_to.get_metatype() == TypeMetatype::Union => {
+            consulted(fd).unwrap_or_else(|| ct.clone())
+        }
+        // type.cc:2137-2145 TypeUnion::findResolve
+        Datatype::Union(_) => consulted(fd).unwrap_or_else(|| ct.clone()),
+        // type.cc:1298-1306 TypeArray::findResolve
+        Datatype::Array(a) => consulted(fd).unwrap_or_else(|| a.array_of.clone()),
+        // type.cc:1944-1952 TypeStruct::findResolve
+        Datatype::Struct(s) => consulted(fd).unwrap_or_else(|| {
+            // cc:1951: field[0].type — the arm is only reached for
+            // single-field structs via needsResolution callers, but Ghidra
+            // indexes field[0] unconditionally.
+            s.fields
+                .first()
+                .map(|f| f.type_ptr.clone())
+                .unwrap_or_else(|| ct.clone())
+        }),
+        // type.cc:2517-2534 TypePartialUnion::findResolve
+        Datatype::PartialUnion(pu) => {
+            let size = pu.base.size;
+            let mut cur_type: Option<Arc<Datatype>> = Some(pu.container.clone());
+            let mut cur_off = pu.offset;
+            while let Some(c) = cur_type.clone() {
+                if c.get_size() <= size {
+                    break;
+                }
+                if c.get_metatype() == TypeMetatype::Union {
+                    // cc:2524-2525: newType = curType->findResolve(op,slot);
+                    //   curType = (newType == curType) ? null : newType;
+                    let new_type = find_resolve(fd, &c, op, slot);
+                    if Arc::ptr_eq(&new_type, &c) {
+                        cur_type = None;
+                    } else {
+                        cur_type = Some(new_type);
+                    }
+                } else {
+                    let (sub, new_off) = c.get_sub_type(cur_off);
+                    cur_off = new_off;
+                    cur_type = sub;
+                }
+            }
+            if let Some(c) = cur_type {
+                if c.get_size() == size {
+                    return c;
+                }
+            }
+            // cc:2533: return stripped;
+            pu.stripped.clone().unwrap_or_else(|| ct.clone())
+        }
+        // type.cc:586-590 Datatype::findResolve (base): return this.
+        _ => ct.clone(),
+    }
+}
+
+// Ghidra: type.cc:2201 TypeUnion::findCompatibleResolve + type.cc:1308
+//   TypeArray::findCompatibleResolve + type.cc:1954 TypeStruct::findCompatibleResolve
+//   + type.cc:2536 TypePartialUnion::findCompatibleResolve + type.cc:596 Datatype::findCompatibleResolve
+/// If this data-type has an alternate form matching `ct`, return the field
+/// index of that form, else -1. The virtual-dispatch mirror used by
+/// `ActionSetCasts::tryResolutionAdjustment` (coreaction.cc:2436/2441):
+///
+/// - base (type.cc:596-600): always -1.
+/// - `TypeUnion` (type.cc:2201-2221): a non-resolution `ct` matches a field
+///   by pointer identity at offset 0; a resolution `ct` matches through a
+///   same-size non-resolution field whose own `findCompatibleResolve`
+///   accepts `ct` (mutual recursion through the argument type).
+/// - `TypeArray` (type.cc:1308-1318) / `TypeStruct` (type.cc:1954-1964):
+///   offset-0 element/field mutual-recursion arm, then direct identity.
+/// - `TypePartialUnion` (type.cc:2536-2540): delegates to the container.
+pub fn find_compatible_resolve(ct: &Arc<Datatype>, other: &Arc<Datatype>) -> i32 {
+    match ct.as_ref() {
+        // type.cc:2201-2221 TypeUnion::findCompatibleResolve
+        Datatype::Union(u) => {
+            if !other.needs_resolution() {
+                // cc:2205-2208: field[i].type == ct (pointer identity).
+                for (i, f) in u.fields.iter().enumerate() {
+                    if Arc::ptr_eq(&f.type_ptr, other) && f.offset == 0 {
+                        return i as i32;
+                    }
+                }
+            } else {
+                // cc:2211-2218.
+                for (i, f) in u.fields.iter().enumerate() {
+                    if f.offset != 0 {
+                        continue;
+                    }
+                    if f.type_ptr.get_size() != other.get_size() {
+                        continue;
+                    }
+                    if f.type_ptr.needs_resolution() {
+                        continue;
+                    }
+                    if find_compatible_resolve(other, &f.type_ptr) >= 0 {
+                        return i as i32;
+                    }
+                }
+            }
+            -1
+        }
+        // type.cc:1308-1318 TypeArray::findCompatibleResolve
+        Datatype::Array(a) => {
+            if other.needs_resolution() && !a.array_of.needs_resolution() {
+                if find_compatible_resolve(other, &a.array_of) >= 0 {
+                    return 0;
+                }
+            }
+            if Arc::ptr_eq(&a.array_of, other) {
+                return 0;
+            }
+            -1
+        }
+        // type.cc:1954-1964 TypeStruct::findCompatibleResolve
+        Datatype::Struct(s) => {
+            let Some(field_type) = s.fields.first().map(|f| f.type_ptr.clone()) else {
+                return -1;
+            };
+            if other.needs_resolution() && !field_type.needs_resolution() {
+                if find_compatible_resolve(other, &field_type) >= 0 {
+                    return 0;
+                }
+            }
+            if Arc::ptr_eq(&field_type, other) {
+                return 0;
+            }
+            -1
+        }
+        // type.cc:2536-2540 TypePartialUnion::findCompatibleResolve
+        Datatype::PartialUnion(pu) => find_compatible_resolve(&pu.container, other),
+        // type.cc:596-600 Datatype::findCompatibleResolve (base).
+        _ => -1,
+    }
+}
+
+// Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
+/// The resolved data-type of `vn` as read by `op` at `slot` — the fd-aware
+/// twin of the degenerate `Varnode::get_type_read_facing_op` (varnode.rs
+/// write-domain): `type->findResolve(op, slot)` when the instance type
+/// needs resolution (varnode.cc:639-645).
+pub fn vn_type_read_facing(
+    fd: &crate::funcdata::Funcdata,
+    vn: &Arc<RwLock<Varnode>>,
+    op: &PcodeOpRef,
+    slot: i32,
+) -> Option<Arc<Datatype>> {
+    let ct = vn.read().unwrap().get_type()?;
+    if !ct.needs_resolution() {
+        return Some(ct);
+    }
+    Some(find_resolve(fd, &ct, op, slot))
+}
+
+// Ghidra: varnode.cc:626 Varnode::getTypeDefFacing
+/// The resolved data-type of `vn` as written by its defining op —
+/// `type->findResolve(def, -1)` when the instance type needs resolution
+/// (varnode.cc:626-632).
+pub fn vn_type_def_facing(
+    fd: &crate::funcdata::Funcdata,
+    vn: &Arc<RwLock<Varnode>>,
+) -> Option<Arc<Datatype>> {
+    let (ct, def) = {
+        let rg = vn.read().unwrap();
+        (rg.get_type(), rg.get_def())
+    };
+    let ct = ct?;
+    if !ct.needs_resolution() {
+        return Some(ct);
+    }
+    let def = def?;
+    Some(find_resolve(fd, &ct, &PcodeOpRef(def), -1))
+}
+
+// Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing
+/// The resolved HighVariable type of `vn` as read by `op` at `slot` —
+/// `ct->findResolve(op, slot)` when the high type needs resolution
+/// (varnode.cc:665-672). This is the read the ② `(char **)` leaf takes
+/// (TypeOpStore::getInputCast, typeop.cc:525/527).
+pub fn vn_high_type_read_facing(
+    fd: &crate::funcdata::Funcdata,
+    vn: &Arc<RwLock<Varnode>>,
+    op: &PcodeOpRef,
+    slot: i32,
+) -> Option<Arc<Datatype>> {
+    let ct = {
+        let rg = vn.read().unwrap();
+        rg.high.as_ref().map(|h| h.read().unwrap().get_type())
+    }?;
+    if !ct.needs_resolution() {
+        return Some(ct);
+    }
+    Some(find_resolve(fd, &ct, op, slot))
+}
+
+// Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing
+/// The resolved HighVariable type of `vn` as written by its defining op —
+/// `ct->findResolve(def, -1)` when the high type needs resolution
+/// (varnode.cc:651-658).
+pub fn vn_high_type_def_facing(
+    fd: &crate::funcdata::Funcdata,
+    vn: &Arc<RwLock<Varnode>>,
+) -> Option<Arc<Datatype>> {
+    let (ct, def) = {
+        let rg = vn.read().unwrap();
+        (rg.high.as_ref().map(|h| h.read().unwrap().get_type()), rg.get_def())
+    };
+    let ct = ct?;
+    if !ct.needs_resolution() {
+        return Some(ct);
+    }
+    let def = def?;
+    Some(find_resolve(fd, &ct, &PcodeOpRef(def), -1))
+}
+
+// ===========================================================================
 // Free helpers — porting Ghidra inline / virtual dispatch used by the scorer
 // ===========================================================================
 
@@ -1406,16 +1989,19 @@ fn test_simple_cases(op: &PcodeOp, in_slot: i32, parent: &Datatype) -> bool {
 /// Score an implied truncation, returning the recurse-type if any.
 /// Faithful to `ScoreUnionFields::scoreTruncation` (unionresolve.cc:843-879).
 fn score_truncation_inplace(
-    scores: &mut [i32], ct_in: &Datatype, vn_size: usize, offset: i64, score_index: i32,
+    scores: &mut [i32], ct_in: &Arc<Datatype>, vn_size: usize, offset: i64, score_index: i32,
+    result_base: &Arc<Datatype>,
 ) -> Option<Arc<Datatype>> {
     let idx = score_index as usize;
     if ct_in.get_metatype() == TypeMetatype::Union {
-        let union_dt = as_union(ct_in);
+        let union_dt = as_union(ct_in.as_ref());
         let mut score = -10i32;
         if let Some(u) = union_dt {
             for field in &u.fields {
                 if field.offset as i64 == offset && field.type_ptr.get_size() == vn_size {
                     score = 10;
+                    // cc:856-857: result.getBase() == unionDt identity bonus.
+                    if Arc::ptr_eq(result_base, ct_in) { score += 5; }
                     break;
                 }
             }
@@ -1425,8 +2011,8 @@ fn score_truncation_inplace(
     }
     let mut score = 10i32;
     let mut cur_off = offset;
-    let mut ct: Option<&Datatype> = Some(ct_in);
-    while let Some(c) = ct {
+    let mut ct: Option<Arc<Datatype>> = Some(ct_in.clone());
+    while let Some(c) = &ct {
         if cur_off == 0 && c.get_size() == vn_size { break; }
         if c.get_metatype() == TypeMetatype::Int || c.get_metatype() == TypeMetatype::Uint {
             if c.get_size() >= vn_size + cur_off as usize { score = 1; ct = None; break; }
@@ -1437,7 +2023,7 @@ fn score_truncation_inplace(
     }
     if ct.is_none() { score = -10; }
     scores[idx] += score;
-    ct.map(|c| Arc::new(c.clone()))
+    ct
 }
 
 // RUGRA-GLUE: Datatype::numDepend / getDepend aggregator. Mirrors Ghidra's
@@ -1454,7 +2040,9 @@ fn num_depend(dt: &Datatype) -> usize {
 
 // RUGRA-GLUE: `Datatype::getDepend(i)` aggregator.
 /// Get the i-th dependency sub-type. Faithful to `Datatype::getDepend`.
-fn get_depend(dt: &Datatype, i: usize) -> Arc<Datatype> {
+/// Public for the pipeline wiring (coreaction.cc:2441
+/// `inType->getDepend(inResolve)` in tryResolutionAdjustment).
+pub fn get_depend(dt: &Datatype, i: usize) -> Arc<Datatype> {
     match dt {
         Datatype::Struct(s) => s.fields[i].type_ptr.clone(),
         Datatype::Union(u) => u.fields[i].type_ptr.clone(),
@@ -1514,14 +2102,21 @@ fn union_field_list(dt: &Datatype) -> (Vec<TypeField>, usize) {
     }
 }
 
-// RUGRA-GLUE: `TypeFactory::getTypePointerStripArray(size, ptrto, wordsize)`
-//   (type.cc). Rugra's TypeFactory lacks this method, so we approximate: for
-//   an array pointee we return a pointer to its element type; otherwise we
-//   return the pointee itself.
-fn type_pointer_strip_array(
-    _typegrp: &TypeFactory, _size: usize, ptrto: Arc<Datatype>, _word_size: usize,
+// Ghidra: type.cc:3849 TypeFactory::getTypePointerStripArray
+/// Construct a pointer to the given data-type, stripping the formal
+/// stripped twin and one ARRAY level from the pointee first. Faithful to
+/// `TypeFactory::getTypePointerStripArray` (type.cc:3849-3859): the result
+/// is factory-INTERNED through findAdd (the cc:3858 calcTruncate step is
+/// the known TYPE-0001 structural residual), so pointer-identity
+/// comparisons see the canonical instance.
+fn get_type_pointer_strip_array(
+    typegrp: &mut TypeFactory, size: usize, ptrto: Arc<Datatype>, wordsize: usize,
 ) -> Arc<Datatype> {
-    match ptrto.as_ref() { Datatype::Array(a) => a.array_of.clone(), _ => ptrto }
+    let mut pt = ptrto;
+    // cc:3851-3852: strip the formal twin, then the first array level.
+    if let Some(stripped) = Datatype::get_stripped_arc(&pt) { pt = stripped; }
+    if let Datatype::Array(a) = pt.as_ref() { pt = a.array_of.clone(); }
+    typegrp.get_type_pointer(size, pt, wordsize)
 }
 
 // RUGRA-GLUE: Ghidra `bit_transitions(val,size)` (address.cc). Counts the
@@ -1728,6 +2323,149 @@ mod tests {
         let int_base = Datatype::Base(crate::type_system::datatype::TypeBase::new(
             "int".into(), 4, TypeMetatype::Int));
         assert_eq!(num_depend(&int_base), 0);
+    }
+
+    fn mk_union(name: &str, size: usize) -> Arc<Datatype> {
+        Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                name.into(), size, TypeMetatype::Union),
+            fields: vec![],
+        }))
+    }
+
+    #[test]
+    fn test_resolve_edge_partial_union_keys_by_container() {
+        use crate::address::{Address, SeqNum};
+        use crate::opcodes::OpCode as Op;
+        let union_dt = mk_union("U", 8);
+        let pu = Datatype::PartialUnion(crate::type_system::datatype::TypePartialUnion::new(
+            union_dt.clone(), 0, 4, None));
+        let op = crate::op::PcodeOp::new(SeqNum::new(Address::new(0x1000), 7), Op::CPUI_COPY);
+        let edge = ResolveEdge::new(&pu, &op, 1);
+        // cc:73-74: key = container union id, encoding NOT bumped.
+        assert_eq!(edge.type_id, union_dt.get_id());
+        assert_eq!(edge.encoding, 1);
+        let plain = ResolveEdge::new(union_dt.as_ref(), &op, 1);
+        assert_eq!(edge.type_id, plain.type_id);
+    }
+
+    #[test]
+    fn test_with_field_pointer_parent_builds_field_pointer() {
+        let set_struct = Arc::new(Datatype::Struct(crate::type_system::datatype::TypeStruct {
+            base: crate::type_system::datatype::TypeBase::new(
+                "Set".into(), 16, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let union_dt = Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                "U".into(), 16, TypeMetatype::Union),
+            fields: vec![TypeField {
+                name: "Set".into(), offset: 0, type_ptr: set_struct.clone(),
+            }],
+        }));
+        let parent = Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8, union_dt, 1)));
+        let mut factory = TypeFactory::new(8);
+        factory.set_default_alignment_map();
+        // cc:51-55: pointer parent resolves to a POINTER to the field.
+        let r = ResolvedUnion::with_field(parent.clone(), 0, &mut factory);
+        assert_eq!(r.get_field_num(), 0);
+        let resolve = r.get_datatype();
+        assert!(matches!(resolve.as_ref(), Datatype::Pointer(_)));
+        assert_eq!(resolve.get_size(), 8);
+        match resolve.as_ref() {
+            Datatype::Pointer(p) => assert!(Arc::ptr_eq(&p.ptr_to, &set_struct)),
+            _ => unreachable!(),
+        }
+        // fldNum < 0 resolves to the parent itself (cc:48-49).
+        let r_self = ResolvedUnion::with_field(parent.clone(), -1, &mut factory);
+        assert_eq!(r_self.get_field_num(), -1);
+        assert!(Arc::ptr_eq(r_self.get_datatype(), &parent));
+        // UNIONRESOLVE-PKG-G-0001: the pointer arm interns through the
+        // factory (cc:54 typegrp.getTypePointer) — a second mint of the same
+        // (size, field, wordsize) pointer returns the identical Arc, which
+        // is what cast.cc:303's `curtype == reqtype` short-circuit rides on.
+        let again = factory.get_type_pointer(8, set_struct.clone(), 1);
+        assert!(
+            Arc::ptr_eq(r.get_datatype(), &again),
+            "with_field pointer arm must be factory-interned"
+        );
+    }
+
+    #[test]
+    fn test_with_field_partial_union_parent_unwraps_container() {
+        let union_dt = mk_union("U", 8);
+        let int_t = Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int)));
+        let union_field = Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                "U".into(), 8, TypeMetatype::Union),
+            fields: vec![TypeField { name: "x".into(), offset: 0, type_ptr: int_t.clone() }],
+        }));
+        let union_dt = union_field;
+        let pu = Arc::new(Datatype::PartialUnion(
+            crate::type_system::datatype::TypePartialUnion::new(union_dt.clone(), 0, 4, None)));
+        let mut factory = TypeFactory::new(8);
+        // cc:43-44: the partial-union parent resolves within the container.
+        let r = ResolvedUnion::with_field(pu, 0, &mut factory);
+        assert!(Arc::ptr_eq(r.get_base(), &union_dt));
+        assert!(Arc::ptr_eq(r.get_datatype(), &int_t));
+    }
+
+    #[test]
+    fn test_get_type_pointer_strip_array_interns_pointer() {
+        let mut factory = TypeFactory::new(8);
+        factory.set_default_alignment_map();
+        let elem = Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
+            "char".into(), 1, TypeMetatype::Int)));
+        let arr = Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
+            base: crate::type_system::datatype::TypeBase::new(
+                "char[4]".into(), 4, TypeMetatype::Array),
+            array_of: elem.clone(),
+            num_elements: 4,
+        }));
+        // type.cc:3849-3859: the result is a POINTER (8B) to the stripped
+        // element, interned so repeat calls return the same instance.
+        let p1 = get_type_pointer_strip_array(&mut factory, 8, arr, 1);
+        assert!(matches!(p1.as_ref(), Datatype::Pointer(_)));
+        assert_eq!(p1.get_size(), 8);
+        match p1.as_ref() {
+            Datatype::Pointer(p) => assert!(Arc::ptr_eq(&p.ptr_to, &elem)),
+            _ => unreachable!(),
+        }
+        let arr2 = Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
+            base: crate::type_system::datatype::TypeBase::new(
+                "char[4]".into(), 4, TypeMetatype::Array),
+            array_of: elem.clone(),
+            num_elements: 4,
+        }));
+        let p2 = get_type_pointer_strip_array(&mut factory, 8, arr2, 1);
+        assert!(Arc::ptr_eq(&p1, &p2), "strip-array pointer must be interned");
+    }
+
+    #[test]
+    fn test_simple_cases_array_arith_uses_stripped_union_size() {
+        use crate::address::{Address, SeqNum};
+        use crate::opcodes::OpCode as Op;
+        // union U is 32 bytes; the pointer parent is 8 bytes.
+        let union_dt = mk_union("U", 32);
+        let parent = Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8, union_dt, 1));
+        let mut op = crate::op::PcodeOp::new(
+            SeqNum::new(Address::new(0x2000), 1), Op::CPUI_INT_ADD);
+        op.inrefs = vec![
+            std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_register(0x10, 8))),
+            std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_constant(16, 8))),
+        ];
+        // cc:94 + cc:993: 16 < union size 32 → NOT array arithmetic (the
+        // old code compared against the pointer size 8 and fired).
+        assert!(!ScoreUnionFields::score_simple_cases_inner(&op, 0, &parent));
+        // >= union size still fires the simple case.
+        op.inrefs[1] = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(32, 8)));
+        assert!(ScoreUnionFields::score_simple_cases_inner(&op, 0, &parent));
     }
 
     #[test]

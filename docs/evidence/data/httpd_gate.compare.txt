@@ -1,0 +1,45 @@
+Rugra functions: 32
+Ghidra functions: 2010
+Matched: 32
+
+  ✗ main                           diff=645  defects=0 numbering=0
+  ✗ ap_get_server_built            diff=4    defects=0 numbering=0
+  ✗ suck_in_APR                    diff=3    defects=0 numbering=0
+  ✗ ap_init_vhost_config           diff=14   defects=0 numbering=0
+  ✗ ap_parse_vhost_addrs           diff=27   defects=0 numbering=0
+  ✗ ap_set_name_virtual_host       diff=3    defects=0 numbering=0
+  ✗ ap_fini_vhost_config           diff=237  defects=0 numbering=0
+  ✗ ap_matches_request_vhost       diff=5    defects=0 numbering=0
+  ✗ ap_update_vhost_from_headers   diff=94   defects=0 numbering=0
+  ✗ ap_vhost_iterate_given_conn    diff=36   defects=0 numbering=0
+  ✗ ap_update_vhost_given_ip       diff=19   defects=0 numbering=0
+  ✗ ap_field_noparam               diff=21   defects=0 numbering=0
+  ✗ ap_ht_time                     diff=37   defects=0 numbering=0
+  ✗ ap_strcmp_match                diff=4    defects=0 numbering=0
+  ✗ ap_strcasecmp_match            diff=20   defects=0 numbering=0
+  ✗ ap_os_is_path_absolute         diff=23   defects=0 numbering=0
+  ✗ ap_is_matchexp                 diff=5    defects=0 numbering=0
+  ✗ ap_pregcomp                    diff=9    defects=0 numbering=0
+  ✓ ap_pregfree                    diff=0    defects=0 numbering=0
+  ✗ ap_strcasestr                  diff=21   defects=0 numbering=0
+  ✓ ap_stripprefix                 diff=0    defects=0 numbering=0
+  ✗ ap_pregsub                     diff=61   defects=0 numbering=0
+  ✗ ap_getparents                  diff=78   defects=0 numbering=0
+  ✗ ap_no2slash                    diff=8    defects=0 numbering=0
+  ✗ ap_make_dirstr_prefix          diff=15   defects=0 numbering=0
+  ✗ ap_make_dirstr_parent          diff=22   defects=0 numbering=0
+  ✓ ap_count_dirs                  diff=0    defects=0 numbering=0
+  ✗ ap_getword                     diff=32   defects=0 numbering=0
+  ✗ ap_getword_nc                  diff=4    defects=0 numbering=0
+  ✓ default                        diff=0    defects=0 numbering=0
+  ✓ default                        diff=0    defects=0 numbering=0
+  ✓ default                        diff=0    defects=0 numbering=0
+
+============================================================
+Total skeleton diff lines: 1447
+Total Rugra defects: 0 (in 0/32 functions)
+Total Rugra numbering issues: 0
+
+NOTE: skeleton diff > 0 不一定是对齐缺陷 (for↔while 等价变换).
+      defects > 0 是真实质量缺陷 (空else/寄存器泄漏/调用丢失).
+      numbering issues > 0 是 181538f 类编号 bug (per-prefix 计数器 / 重复声明).

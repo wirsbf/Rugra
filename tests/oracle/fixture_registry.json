@@ -1358,6 +1358,38 @@
       }
     },
     {
+      "id": "merge_trim_lane_1204",
+      "description": "RULE-PROPCOPY-ADDRTIED-0001 phi(X,f(X)) lane-trim chain vs locked 12.0.4: lazy Varnode cover rebuild via setHighLevel, X x f(X) interval intersection in the cond block, trimOpInput COPY at each MULTIEQUAL lane's incoming-block end (CMOVcc branch-local instantiation), trimOpOutput, phi lane rewiring, markInternalCopies np flags (T1/T2 MATCH)",
+      "runner": [
+        "tools/run_merge_trim_lane_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/merge_trim_lane_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/merge_trim_lane_1204.cc",
+          "rust_fixture": "tests/oracle/merge_trim_lane_1204.rs"
+        },
+        "tools": {
+          "runner_1": "tools/run_merge_trim_lane_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tests/oracle/merge_trim_lane_1204.cc",
+          "tests/oracle/merge_trim_lane_1204.rs",
+          "tools/run_merge_trim_lane_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
       "id": "condexe_success_state",
       "description": "CONDEXE-SUCCESS-STATE-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata)",
       "runner": [
@@ -5712,7 +5744,7 @@
     },
     {
       "id": "rule_propcopy_1204",
-      "description": "RulePropagateCopy reader-dispatch, isHeritageKnown/marker/self-defined guards, opSetInput bookkeeping (constant dedup + multi-reader descend erase)",
+      "description": "RulePropagateCopy reader-dispatch, isHeritageKnown/marker/self-defined guards (incl. W4 cmov marker_addrtied_merge_guard natural-flag shape + marker_addrforce_guard cc:3948), opSetInput bookkeeping (constant dedup + multi-reader descend erase)",
       "runner": [
         "tools/run_rule_propcopy_oracle.sh"
       ],
@@ -7629,7 +7661,7 @@
     },
     {
       "id": "blockstruct_dowhile_absorb_1204",
-      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4 [BLOCKACTION-DOWHILE-ABSORB-0001; main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING]",
+      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4",
       "runner": [
         "tools/run_blockstruct_dowhile_absorb_oracle.sh"
       ],
@@ -7641,29 +7673,46 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/blockstruct_dowhile_absorb_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "f4c2d017ff1bcb00c9102132c616288553c09f7e"
+      },
+      "impact": {
+        "todo_ids": [
+          "BLOCKACTION-DOWHILE-ABSORB-0001"
+        ],
+        "src_files": [
+          "src/blockaction.rs"
+        ],
+        "notes": "main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING"
+      }
+    },
+    {
+      "id": "blockstruct_scopebreak_gototype_1204",
+      "description": "BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 bilateral scopeBreak goto_type fixture: WhileDo/DoWhile exit gotos convert to f_break_goto while a two-loop-scopes-out goto (the curl next_url shape) stays f_goto_goto with its target marked f_unstructured_targ on the locked 12.0.4 oracle (block.cc:2866-2874/3075-3084, blockaction.cc:2193-2194) — the disproof record showing the next_url `goto X; X:` residual is printc label anchoring (GOTO-LABEL-UNPRINTED-0001), not a scopeBreak gap; fixed same wave in printc emit_flow_basic/tail-anchor.",
+      "runner": [
+        "tools/run_blockstruct_scopebreak_gototype_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_scopebreak_gototype_1204.metadata.json",
         "tools": {
-          "runner": "tools/run_blockstruct_dowhile_absorb_oracle.sh"
+          "runner": "tools/run_blockstruct_scopebreak_gototype_oracle.sh"
         },
         "inputs": {
-          "fixture_source_1": "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
-          "fixture_source_2": "tests/oracle/blockstruct_dowhile_absorb_1204.rs"
+          "fixture_source_1": "tests/oracle/blockstruct_scopebreak_gototype_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_scopebreak_gototype_1204.rs"
         }
       },
       "impact": {
         "paths": [
+          "src/block.rs",
           "src/blockaction.rs",
-          "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
-          "tests/oracle/blockstruct_dowhile_absorb_1204.rs",
-          "tools/run_blockstruct_dowhile_absorb_oracle.sh"
-        ],
-        "rust_function_ids": [
-          "RG-F-6f4fa4078b6b3a2f6a2f",
-          "RG-F-0e8ed93409d11e65e670",
-          "RG-F-d18af6e7aacac4ddb137"
-        ],
-        "ghidra_function_ids": [
-          "GH12-F-d345bfb9c1f5620afdb6",
-          "GH12-F-dc3cd1632f00bcf8f3a5"
+          "src/printc.rs"
         ]
       }
     },
@@ -7786,6 +7835,242 @@
         ],
         "ghidra_function_ids": [
           "GH12-F-472f3b78edfb9031015e"
+        ]
+      }
+    },
+    {
+      "id": "funcdata_nodesplit_space_1204",
+      "description": "nodeSplit clone output keeps the original output's FULL address including space (Funcdata::newVarnodeOut at opvn->getAddr(), funcdata_block.cc:988) plus the addlflag fold (cc:995-997): clone storage space/offset/size, flag/addlflag projections with out-of-mask sentinels, SeqNum, MULTIEQUAL->COPY inedge pick, clone-input remap/share, original-block post-split shape, in-edge counts over N1/N2/N3 — byte-identical MATCH [FUNCDATA-NODESPLIT-SPACE-0001; P23/UNLINKED-REF family F1; residual: CloneBlockOps::cloneExpression unported, registered in ruleaction.rs]",
+      "runner": [
+        "tools/run_funcdata_nodesplit_space_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_nodesplit_space_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_funcdata_nodesplit_space_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/funcdata_nodesplit_space_1204.cc",
+          "fixture_source_2": "tests/oracle/funcdata_nodesplit_space_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "tests/oracle/funcdata_nodesplit_space_1204.cc",
+          "tests/oracle/funcdata_nodesplit_space_1204.rs",
+          "tools/run_funcdata_nodesplit_space_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "subflow_transform_subfloat_1204",
+      "description": "SubfloatFlow full transform (SUBFLOAT-TRANSFORM-RESIDUAL-0001): RuleSubfloatConvert::applyOp drives the real SubfloatFlow trace + TransformManager::apply over 9 IR scenarios (non-const widen/narrow rewrites, constant narrow / constant widen without terminator rejections, constant widen fold, exceedsPrecision block via COPY-chain maxPrecision 8, arithmetic pass-through at precision 4, comparison preexistingGuard slot-0/slot-1, repeated-input getRepeatSlot count 1/2); full-IR GraphProjection before/after byte-identical on locked oracle 12.0.4",
+      "runner": [
+        "tools/run_subflow_transform_subfloat_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/subflow_transform_subfloat_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_subflow_transform_subfloat_oracle.sh"
+        },
+        "inputs": {}
+      },
+      "impact": {
+        "paths": [
+          "src/subflow.rs",
+          "tests/oracle/subflow_transform_subfloat_1204.cc",
+          "tests/oracle/subflow_transform_subfloat_1204.rs",
+          "tests/oracle/subflow_transform_subfloat_1204.metadata.json",
+          "tools/run_subflow_transform_subfloat_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "funcdata_scopelocal_wrap_1204",
+      "description": "FUNCDATA-SCOPELOCALOVERFLOW-0001 / FUNCDATA-SCOPELOCAL-WRAP-0001 wrap-domain oracle: database.cc:2397 addr.getOffset()+size-1 evaluated in the uint8 modular domain (int4 size sign-extended, wrapping add/sub); 7 queries (top-of-stack record wrap full/last-byte/from-below -> top8, negative size -> null, zero size -> null, low_hit -> low8, nonoverlap -> null) byte-identical vs locked 12.0.4",
+      "runner": [
+        "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_scopelocal_wrap_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/funcdata_scopelocal_wrap_1204.cc",
+          "rust_fixture": "tests/oracle/funcdata_scopelocal_wrap_1204.rs"
+        },
+        "tools": {
+          "runner_1": "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "tests/oracle/funcdata_scopelocal_wrap_1204.*",
+          "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "scope_local_find_overlap",
+          "scope_local_in_scope"
+        ],
+        "ghidra_function_ids": [
+          "ScopeInternal::findOverlap",
+          "Scope::inScope"
+        ]
+      }
+    },
+    {
+      "id": "blockstruct_orderblocks_1204",
+      "description": "BLOCKSTRUCT-ORDERBLOCKS-0001: BlockGraph::orderBlocks / FlowBlock::compareFinalOrder final-print-order sort keys (entry-first, RETURN-last, index) incl. BlockGoto/BlockMultiGoto lastOp delegation and the single-element guard",
+      "runner": [
+        "tools/run_blockstruct_orderblocks_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_orderblocks_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_blockstruct_orderblocks_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_orderblocks_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_orderblocks_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "src/blockaction.rs",
+          "docs/api/block.md",
+          "docs/api/blockaction.md",
+          "tests/oracle/blockstruct_orderblocks_1204.*",
+          "tools/run_blockstruct_orderblocks_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": [
+          "GH12-F-8129b72588e28d509633",
+          "GH12-F-4d4c5cc660c5f15851b2",
+          "GH12-F-b107435cfddafb799088",
+          "GH12-F-4a08fe6f0d0948f6eb91"
+        ]
+      }
+    },
+    {
+      "id": "minimalmask_ladder_1204",
+      "description": "MINIMALMASK-LADDER-CONSUMERS-0001: minimalmask whole-byte ladder (address.hh:525-534) + its three consumers markConsumedParameters (coreaction.cc:3840), gatherConsumedReturn (coreaction.cc:3871), JumpTable::foldInNormalization (jumptable.cc:2574) as direct bilateral function fixtures (CR-CN condition 2)",
+      "runner": [
+        "tools/run_minimalmask_ladder_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/minimalmask_ladder_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_minimalmask_ladder_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/minimalmask_ladder_1204.cc",
+          "fixture_source_2": "tests/oracle/minimalmask_ladder_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_minimalmask_ladder_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "rugra::address::minimalmask",
+          "rugra::coreaction::ActionDeadCode::mark_consumed_parameters",
+          "rugra::coreaction::ActionDeadCode::gather_consumed_return",
+          "rugra::jumptable::JumpTable::fold_in_normalization"
+        ],
+        "ghidra_function_ids": [
+          "ghidra::minimalmask",
+          "ghidra::ActionDeadCode::markConsumedParameters",
+          "ghidra::ActionDeadCode::gatherConsumedReturn",
+          "ghidra::JumpTable::foldInNormalization"
+        ]
+      }
+    },
+    {
+      "id": "debugproto_unknown_model_1204",
+      "description": "seeding-layer unknown-calling-convention identity: generic_clib PLT locks and void-signature DWARF pins versus parameterized DWARF keeping the resolved model, projected through the real ActionPrototypeWarnings channel [PLTSTUB-WARNLOSS-0001] — replayed by content from wt2/debugwarn 5aecd028 (salvage SALVAGE-BRANAUDIT-DEBUGPROTO-FIXTURE-0001)",
+      "runner": [
+        "tools/run_debugproto_unknown_model_oracle.sh"
+      ],
+      "timeout_seconds": 1200,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/debugproto_unknown_model_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_debugproto_unknown_model_oracle.sh"
+        },
+        "inputs": {
+          "cpp_fixture": "tests/oracle/debugproto_unknown_model_1204.cc",
+          "rust_fixture": "tests/oracle/debugproto_unknown_model_1204.rs",
+          "curl_binary": "examples/curl",
+          "sla": "sleigh_specs/x86-64.sla",
+          "processor_spec": "sleigh_specs/x86-64.pspec",
+          "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+          "language_definitions": "sleigh_specs/x86.ldefs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/debugproto.rs",
+          "src/coreaction.rs",
+          "src/fspec.rs",
+          "src/arch.rs",
+          "src/comment.rs",
+          "docs/api/debugproto.md",
+          "docs/api/coreaction.md",
+          "docs/api/fspec.md",
+          "sleigh_specs/**",
+          "examples/curl",
+          "tests/oracle/debugproto_unknown_model_1204.*",
+          "tools/run_debugproto_unknown_model_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-7d3212010e608ec3957e",
+          "RG-F-2a34c9f6095ee64fb93b",
+          "RG-F-1ce28154f6b860b85d1e"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-c0ef8ecfe0a8786b6b11",
+          "GH12-F-693fa9ed3e33b60a59f8",
+          "GH12-F-6cc6ebe4a2e3667a2881",
+          "GH12-F-65687a06a76eaa459f1f"
         ]
       }
     }

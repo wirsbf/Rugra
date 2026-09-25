@@ -79,7 +79,7 @@ fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
 /// canonical interned base type. Ghidra converts larger requests to an
 /// unknown-byte array (type.cc:3652-3656); Rugra's remaining large-base
 /// caller closure is tracked by `TYPEFACTORY-LOCALTYPE-CACHE-0001`.
-// Ghidra: typeop.cc:264 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
+// Ghidra: typeop.cc:261 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
 fn base_local_type(
     type_factory: &Arc<RwLock<TypeFactory>>,
     size: usize,
@@ -88,7 +88,7 @@ fn base_local_type(
     type_factory.read().unwrap().get_base(size, metatype)
 }
 
-// Ghidra: typeop.cc:2320 TypeOp::getInputCast (base fallback)
+// Ghidra: typeop.cc:295 TypeOp::getInputCast (base fallback)
 fn default_input_cast(_op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
     None
 }
@@ -98,29 +98,35 @@ fn default_input_cast(_op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
 /// operands are viewed through their HighVariable at this exact reader; the
 /// more-specific type under `typeOrder` is the common requirement, subject to
 /// C integer-promotion rules and then `castStandard`.
+/// The three High read-facing reads (cc:935/936/941) are fd-aware — keyed
+/// on each varnode's own slot — so a resolving (union) high type consults
+/// the Funcdata union map exactly as the oracle's `getHighTypeReadFacing`
+/// (varnode.cc:665-672) does (UNIONRESOLVE-PKG-B-0001).
 pub fn comparison_input_cast(
-    op: &PcodeOp,
+    fd: &crate::funcdata::Funcdata,
+    op_ref: &crate::op::PcodeOpRef,
     slot: usize,
     strategy: &crate::type_system::cast::CastStrategyC,
 ) -> Option<Arc<Datatype>> {
     if slot > 1 {
         return None;
     }
-    let input_type = |input_slot: usize| {
-        let input = op.get_in(input_slot)?;
-        let input = input.read().unwrap();
-        input
-            .get_high_type_read_facing(op, input_slot as i32)
+    let input_type = |input_slot: usize| -> Option<Arc<Datatype>> {
+        let in_arc = op_ref.0.read().unwrap().get_in(input_slot)?.clone();
+        crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, input_slot as i32)
             // Detached unit fixtures have no AssignHigh phase. Production
             // SetCasts always takes the High path above.
-            .or_else(|| input.v_type.clone())
+            .or_else(|| in_arc.read().unwrap().v_type.clone())
     };
     let mut required = input_type(0)?;
     let other = input_type(1)?;
     if other.type_order(&required) < 0 {
         required = other;
     }
-    if strategy.check_int_promotion_for_compare_op(op, slot) {
+    if {
+        let op = op_ref.0.read().unwrap();
+        strategy.check_int_promotion_for_compare_op(&op, slot)
+    } {
         return Some(required);
     }
     let current = input_type(slot)?;
@@ -248,13 +254,42 @@ pub trait TypeOp {
         None
     }
 
+    /// Funcdata-carrying form of [`Self::get_output_token`] — the dispatch
+    /// entry `ActionSetCasts::castOutput` consumes (coreaction.cc:2541).
+    /// Overriders whose oracle body reads a facing type (COPY typeop.cc:405,
+    /// PTRADD cc:2244, PTRSUB cc:2349) consult the Funcdata union map through
+    /// the fd-aware facing twins (varnode.cc:626-672) in this form — the
+    /// single implementation; the default delegates to the fd-less form,
+    /// which mirrors Ghidra's one virtual reaching the same override.
+    // Ghidra: typeop.hh:155 TypeOp::getOutputToken (fd-carrying dispatch form)
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let _ = fd;
+        let op = op.0.read().unwrap();
+        self.get_output_token(&op)
+    }
+
     /// Find the data-type of the input to a specific PcodeOp (for casting).
     ///
     /// Corresponds to Ghidra's `TypeOp::getInputCast(op, slot, castStrategy)`.
     /// A `None` result indicates the input does not need a cast (the default).
+    /// The Funcdata is threaded for the same reason as
+    /// [`Self::get_input_local_in_fd`]: the fd-aware read-facing consults
+    /// (union_map) need the owning function; detached fixtures observe the
+    /// map-miss arm inside the canonical functions they delegate to.
     // Ghidra: typeop.hh:158 TypeOp::getInputCast
-    fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        default_input_cast(op, slot)
+    fn get_input_cast(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let _ = fd;
+        let op = op.0.read().unwrap();
+        default_input_cast(&op, slot)
     }
 
     /// Propagate an incoming data-type across a specific PcodeOp.
@@ -740,12 +775,24 @@ impl TypeOp for TypeOpCopy {
         Some(&self.type_factory)
     }
 
-    /// The output token of a COPY is just the high type of its input.
-    /// Faithful to `TypeOpCopy::getOutputToken` (typeop.cc:405-409).
+    /// The output token of a COPY is the HIGH read-facing type of its input
+    /// (cc:408). The fd-carrying dispatch form is the single implementation:
+    /// cc:408's `getHighTypeReadFacing(op)` consults the Funcdata union map
+    /// keyed on slot 0 (varnode.cc:665-672). The former fd-less override
+    /// read the raw `v_type` (not even the High type) and was unreachable
+    /// from the production token dispatch (cast_output had no COPY arm) —
+    /// UNIONRESOLVE-PKG-B-0001 replaced the read and wired the arm.
     // Ghidra: typeop.cc:405 TypeOpCopy::getOutputToken
-    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|vn| vn.read().unwrap().v_type.clone())
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let in0 = op.0.read().unwrap().get_in(0)?.clone();
+        crate::unionresolve::vn_high_type_read_facing(fd, &in0, op, 0)
+            // Detached unit fixtures have no AssignHigh phase; production
+            // castOutput always takes the High path above.
+            .or_else(|| in0.read().unwrap().v_type.clone())
     }
 
     /// COPY is transparent: a type propagates across it in either direction
@@ -1000,6 +1047,52 @@ pub fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
     // diverging from Ghidra's anonymous drilled rendering (oracle
     // printc_anonymous_pointer_decl_1204 named_ptr_contrast).
     Arc::new(Datatype::Pointer(TypePointer::new(sz, pointee, 1)))
+}
+
+/// Faithful `TypeOp::propagateToPointer` (typeop.cc:186-198): the POINTER is
+/// sized by the propagation edge's destination varnode (`sz` — the LOAD/STORE
+/// callers pass `outvn->getSize()` at typeop.cc:495/565), NOT by the alttype,
+/// and the product is factory-INTERNED via `t->getTypePointer(sz,dt,wordsz)`
+/// so pointer-identity comparisons (`TypeOpStore::getInputCast` cc:546-548)
+/// see the canonical instance. A pointer alttype is demoted to an unknown
+/// base of its own size (never ptr->ptr); a PARTIALSTRUCT alttype resolves
+/// through `getComponentForPtr` (cc:194-196).
+// Ghidra: typeop.cc:186 TypeOp::propagateToPointer
+pub fn propagate_to_pointer_sized(
+    alt_type: &Arc<Datatype>,
+    sz: usize,
+    type_factory: Option<&Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>>,
+) -> Arc<Datatype> {
+    use crate::type_system::datatype::TypePointer;
+    use std::sync::Arc as ArcT;
+    let unknown_base = |size: usize| -> ArcT<Datatype> {
+        if let Some(factory) = type_factory {
+            if let Some(base) =
+                factory.read().unwrap().get_base(size, TypeMetatype::Unknown)
+            {
+                return base;
+            }
+        }
+        ArcT::new(Datatype::Base(crate::type_system::TypeBase::new(
+            "unknown".to_string(),
+            size,
+            TypeMetatype::Unknown,
+        )))
+    };
+    let pointee = match alt_type.as_ref() {
+        // cc:190-193: pointer alttype → unknown base of the pointer's size.
+        Datatype::Pointer(_) => unknown_base(alt_type.get_size()),
+        // cc:194-196: partial struct → its pointer component.
+        Datatype::PartialStruct(ps) => ps.get_component_for_ptr().unwrap_or_else(|| alt_type.clone()),
+        _ => alt_type.clone(),
+    };
+    if let Some(factory) = type_factory {
+        return factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_pointer(sz, pointee, 1);
+    }
+    ArcT::new(Datatype::Pointer(TypePointer::new(sz, pointee, 1)))
 }
 
 /// Unwrap a pointer data-type to its pointee (used by LOAD/STORE input->output
@@ -1275,7 +1368,7 @@ impl TypeOp for TypeOpIntLeft {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Int)
     }
-    // Ghidra: typeop.cc:1509 TypeOpIntLeft::getInputLocal
+    // Ghidra: typeop.cc:1510 TypeOpIntLeft::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         if slot == 1 {
@@ -1348,7 +1441,7 @@ impl TypeOp for TypeOpIntRight {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Uint)
     }
-    // Ghidra: typeop.cc:1536 TypeOpIntRight::getInputLocal
+    // Ghidra: typeop.cc:1535 TypeOpIntRight::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         if slot == 1 {
@@ -1389,7 +1482,7 @@ impl TypeOp for TypeOpIntSright {
     fn get_flags(&self) -> u32 {
         typeop_flags::SHIFT_OP
     }
-    // Ghidra: typeop.cc:1572 TypeOpIntSright::printRaw
+    // Ghidra: typeop.cc:1575 TypeOpIntSright::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -2207,6 +2300,45 @@ impl TypeOp for TypeOpReturn {
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_return(op);
     }
+
+    // Ghidra: typeop.cc:901 TypeOpReturn::getInputLocal
+    /// A RETURN input (slot >= 1) reads its local type from the enclosing
+    /// function's return-value parameter: `fp->getOutputType()`
+    /// (typeop.cc:918), kept only when it is not void and its size equals
+    /// the input's; every other case (slot 0, missing Funcdata) observes
+    /// the base default `getBase(size, TYPE_UNKNOWN)` (typeop.cc:271-275).
+    /// This is the seed that lets a DWARF-locked enum return type
+    /// (`CURLcode`, `main_init`'s `return CURLE_OK;`) reach the returned
+    /// constant through ActionInferTypes' buildLocaltypes/writeBack.
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let input_size = op.0.read().unwrap().get_in(slot)?.read().unwrap().get_size();
+        if slot == 0 {
+            // typeop.cc:907-908: slot 0 is the indeterminate marker input —
+            // base default getBase(size, TYPE_UNKNOWN) (typeop.cc:271-275).
+            return base_local_type(
+                &TypeFactory::shared_default(),
+                input_size,
+                TypeMetatype::Unknown,
+            );
+        }
+        // typeop.cc:918: ct = fp->getOutputType(); — the current output
+        // parameter's type (void when cleared/never set).
+        let ct = fd.funcp.return_type.clone();
+        if matches!(ct.as_ref(), Datatype::Void(_)) || ct.get_size() != input_size {
+            // typeop.cc:919-920: void or size mismatch -> base default.
+            return base_local_type(
+                &TypeFactory::shared_default(),
+                input_size,
+                TypeMetatype::Unknown,
+            );
+        }
+        Some(ct)
+    }
 }
 
 pub struct TypeOpPtradd {
@@ -2254,46 +2386,39 @@ impl TypeOp for TypeOpPtradd {
         format!("{} = ptradd({}, {}, {})", out, in0, in1, in2)
     }
 
-    // Ghidra: typeop.cc:2235 TypeOpPtradd::getInputLocal
+    // Ghidra: typeop.cc:2232 TypeOpPtradd::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
     }
 
-    // Ghidra: typeop.cc:2240 TypeOpPtradd::getOutputLocal
+    // Ghidra: typeop.cc:2238 TypeOpPtradd::getOutputLocal
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
     }
 
     // Ghidra: typeop.cc:2244 TypeOpPtradd::getOutputToken
-    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|vn| vn.read().unwrap().get_high_type_read_facing(op, 0))
+    /// The PTRADD output token is the input-0 HIGH read-facing type ("cast
+    /// to the input data-type"). The fd-carrying dispatch form is the single
+    /// implementation: cc:2247's `getHighTypeReadFacing(op)` consults the
+    /// Funcdata union map keyed on slot 0 (varnode.cc:665-672), so a
+    /// resolving (union) high type resolves to its field before becoming
+    /// the token (UNIONRESOLVE-PKG-B-0001).
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let in0 = op.0.read().unwrap().get_in(0)?.clone();
+        crate::unionresolve::vn_high_type_read_facing(fd, &in0, op, 0)
     }
 
-    // Ghidra: typeop.cc:2250 TypeOpPtradd::getInputCast
-    fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        if slot != 0 { return default_input_cast(op, slot); }
-        let req = op
-            .get_in(0)?
-            .read()
-            .unwrap()
-            .get_type_read_facing_op(op, 0)?;
-        let cur = op
-            .get_in(0)?
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 0)?;
-        if req.get_metatype() != TypeMetatype::Pointer || cur.get_metatype() != TypeMetatype::Pointer {
-            return Some(req);
-        }
-        let reqbase = match req.as_ref() { Datatype::Pointer(p) => &p.ptr_to, _ => unreachable!() ,
-        };
-        let curbase = match cur.as_ref() { Datatype::Pointer(p) => &p.ptr_to, _ => unreachable!() ,
-        };
-        if reqbase.get_align_size() == curbase.get_align_size() { None } else { Some(req) }
-    }
+    // TypeOpPtradd::getInputCast (typeop.cc:2250-2266) has no trait-side
+    // duplicate anymore: the production SetCasts dispatch computes it via
+    // `ActionSetCasts::ptr_input_reqtype` (coreaction.rs), whose cc:2255/2256
+    // read-facing consults are fd-aware (UNIONRESOLVE-PKG-B-0001 merged the
+    // former degenerate trait copy into that single implementation).
 
     // Ghidra: typeop.cc:2268 TypeOpPtradd::propagateType
     fn propagate_type(
@@ -2377,64 +2502,44 @@ impl TypeOp for TypeOpPtrsub {
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
     }
 
-    // Ghidra: typeop.cc:2320 TypeOpPtrsub::getInputCast
-    fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        if slot != 0 { return default_input_cast(op, slot); }
-        let req = op
-            .get_in(0)?
-            .read()
-            .unwrap()
-            .get_type_read_facing_op(op, 0)?;
-        let cur = op
-            .get_in(0)?
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 0)?;
-        if Arc::ptr_eq(&req, &cur) { return None; }
-        if req.get_metatype() != TypeMetatype::Pointer || cur.get_metatype() != TypeMetatype::Pointer { return Some(req); }
-        let (mut reqbase, mut curbase) = match (req.as_ref(), cur.as_ref()) {
-            (Datatype::Pointer(r), Datatype::Pointer(c)) => (r.ptr_to.clone(), c.ptr_to.clone()), _ => unreachable!()
-        ,
-        };
-        if reqbase.get_metatype() == TypeMetatype::Array && curbase.get_metatype() == TypeMetatype::Array {
-            if let Datatype::Array(r) = reqbase.as_ref() { reqbase = r.array_of.clone(); }
-            if let Datatype::Array(c) = curbase.as_ref() { curbase = c.array_of.clone(); }
-        }
-        // Ghidra: typeop.cc:2337-2343 unwraps each typedefImm before
-        // comparing the canonical pointee identities.
-        let factory = self.type_factory.read().unwrap();
-        let unwrap_typedef = |mut base: Arc<Datatype>| {
-            while let Some(target) = factory.get_typedef_target(base.get_name()) {
-                if Arc::ptr_eq(&base, target) { break; }
-                base = target.clone();
-            }
-            base
-        };
-        reqbase = unwrap_typedef(reqbase);
-        curbase = unwrap_typedef(curbase);
-        if Arc::ptr_eq(&reqbase, &curbase) { None } else { Some(req) }
-    }
+    // TypeOpPtrsub::getInputCast (typeop.cc:2320-2347) has no trait-side
+    // duplicate anymore: the production SetCasts dispatch computes it via
+    // `ActionSetCasts::ptr_input_reqtype` (coreaction.rs), whose cc:2325/2326
+    // read-facing consults are fd-aware (UNIONRESOLVE-PKG-B-0001 merged the
+    // former degenerate trait copy into that single implementation).
 
     // Ghidra: typeop.cc:2349 TypeOpPtrsub::getOutputToken
-    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        let high = match op
-            .get_in(0)?
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 0) {
+    /// The fd-carrying dispatch form is the single implementation: the
+    /// cc:2352 `op->getIn(0)->getHighTypeReadFacing(op)` base consult goes
+    /// through the fd-aware twin (Funcdata union map, slot-0 key,
+    /// varnode.cc:665-672), so a union-ptr base resolves to its field
+    /// pointer before `downChain` runs (UNIONRESOLVE-PKG-B-0001).
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let in0 = op.0.read().unwrap().get_in(0)?.clone();
+        let high = match crate::unionresolve::vn_high_type_read_facing(fd, &in0, op, 0) {
             Some(high) => high,
             // cc:2363 delegates non-pointer inputs to TypeOp::getOutputToken,
             // whose cc:282-286 implementation returns outputTypeLocal().
-            None => return self.get_output_local(op),
+            None => {
+                let op_rg = op.0.read().unwrap();
+                return self.get_output_local(&op_rg);
+            }
         };
         let pointer = match high.as_ref() {
             Datatype::Pointer(p) => p,
-            _ => return self.get_output_local(op),
+            _ => {
+                let op_rg = op.0.read().unwrap();
+                return self.get_output_local(&op_rg);
+            }
         };
         // cc:2354 assigns the unsigned addressToByte result to the signed
         // in/out offset consumed by downChain.  The residual value written
         // back by that one virtual call is the value tested at cc:2358.
-        let raw = op.get_in(1)?.read().unwrap().get_offset();
+        let raw = op.0.read().unwrap().get_in(1)?.read().unwrap().get_offset();
         let mut type_offset =
             crate::space::AddrSpace::address_to_byte(raw, pointer.wordsize as u32) as i64;
         let mut parent = None;
@@ -2452,7 +2557,7 @@ impl TypeOp for TypeOpPtrsub {
         }
         let pointee = factory.get_base(1, TypeMetatype::Unknown)?;
         Some(factory.get_type_pointer(
-            op.get_out()?.read().unwrap().get_size(), pointee, pointer.wordsize,
+            op.0.read().unwrap().get_out()?.read().unwrap().get_size(), pointee, pointer.wordsize,
         ))
     }
 
@@ -2533,18 +2638,35 @@ impl TypeOp for TypeOpMulti {
         if inslot != -1 && outslot != -1 {
             return None; // Must propagate input <-> output
         }
-        let src_slot = if inslot == -1 { outslot } else { inslot };
-        if src_slot >= 0 {
-            if let Some(vn) = op.get_in(src_slot as usize) {
-                if vn.read().unwrap().is_spacebase() {
-                    return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
-                        crate::type_system::TypeBase::new(
-                            "unknown".to_string(),
+        // coreaction.cc:5080: invn = (inslot==-1) ? op->getOut() : op->getIn(inslot)
+        // — the SPACEBASE test is on the edge's SOURCE varnode, which is the
+        // op output when propagating output->input.
+        let src_vn = if inslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(inslot as usize).cloned()
+        };
+        if let Some(vn) = src_vn {
+            if vn.read().unwrap().is_spacebase() {
+                // typeop.cc:1957-1960: getTypePointer(alttype->getSize(),
+                    // getBase(1,TYPE_UNKNOWN), defaultDataSpace->getWordSize())
+                    // — the POINTER SIZE is the alttype's size, the pointee is
+                    // unknown1 (SB-ORD186-PTRARITH-0001: propagate_to_pointer
+                    // sized the pointer from the unknown1 base (=1), not from
+                    // alttype). Ram wordsize is 1.
+                    return Some(std::sync::Arc::new(Datatype::Pointer(
+                        crate::type_system::datatype::TypePointer::new(
+                            alt_type.get_size(),
+                            std::sync::Arc::new(Datatype::Base(
+                                crate::type_system::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            )),
                             1,
-                            TypeMetatype::Unknown,
                         ),
-                    ))));
-                }
+                    )));
             }
         }
         Some(alt_type.clone())
@@ -3249,21 +3371,33 @@ macro_rules! compare_op_impl {
 
             /// The two comparison operands use the exact Equal/NotEqual cast
             /// selection, including High read-facing types, `typeOrder`, and
-            /// the comparison integer-promotion check.
+            /// the comparison integer-promotion check — routed through the
+            /// fd-aware canonical `comparison_input_cast` (union_map consult
+            /// at each High read-facing read, UNIONRESOLVE-PKG-B-0001).
             // Ghidra: typeop.cc:932 TypeOpEqual::getInputCast
-            fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+            fn get_input_cast(
+                &self,
+                op: &crate::op::PcodeOpRef,
+                slot: usize,
+                fd: &crate::funcdata::Funcdata,
+            ) -> Option<Arc<Datatype>> {
+                let opcode = op.0.read().unwrap().opcode;
                 if matches!(
-                    op.opcode,
+                    opcode,
                     OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                 ) {
                     return comparison_input_cast(
+                        fd,
                         op,
                         slot,
                         &crate::type_system::cast::CastStrategyC::new(4),
                     );
                 }
                 let other = if slot == 0 { 1 } else { 0 };
-                op.get_in(other)
+                op.0
+                    .read()
+                    .unwrap()
+                    .get_in(other)
                     .and_then(|vn| vn.read().unwrap().v_type.clone())
             }
 
@@ -4112,6 +4246,20 @@ mod tests {
         PcodeOp::new(SeqNum::new(Address::new(0), 0), opcode)
     }
 
+    /// Wrap a plain unit-fixture op into a `PcodeOpRef` for the fd-carrying
+    /// trait dispatch forms.
+    fn op_ref(op: PcodeOp) -> crate::op::PcodeOpRef {
+        crate::op::PcodeOpRef(Arc::new(RwLock::new(op)))
+    }
+
+    /// Detached Funcdata (empty union map) for fd-carrying calls from unit
+    /// fixtures — the union consult then observes exactly the map-miss arm,
+    /// matching the detached-fixture semantics documented on the degenerate
+    /// Varnode methods (varnode.rs).
+    fn detached_fd() -> crate::funcdata::Funcdata {
+        crate::funcdata::Funcdata::new("t", Address::new(0x1000), 0)
+    }
+
     fn int_t() -> Arc<Datatype> {
         Arc::new(Datatype::Base(TypeBase::new(
             "int".into(), 4, TypeMetatype::Int,
@@ -4171,8 +4319,13 @@ mod tests {
         let t = int_t();
         op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
         let copy = TypeOpCopy::new(raw_factory());
-        // The token is the input varnode's high type (Arc identity).
-        assert!(same_arc(copy.get_output_token(&op), &t));
+        // The token is the input varnode's high type (Arc identity); the
+        // detached fd consult takes the map-miss arm, and the v_type
+        // fallback serves the no-AssignHigh fixture.
+        assert!(same_arc(
+            copy.get_output_token_in_fd(&op_ref(op), &detached_fd()),
+            &t
+        ));
     }
 
     #[test]
@@ -4211,7 +4364,10 @@ mod tests {
         let less = TypeOpIntLess::new(raw_factory());
         assert_eq!(less.get_output_metatype(), Some(TypeMetatype::Bool));
         // Casting slot 1 should target the other operand's type (in[0]).
-        assert!(same_arc(less.get_input_cast(&op, 1), &t));
+        assert!(same_arc(
+            less.get_input_cast(&op_ref(op), 1, &detached_fd()),
+            &t
+        ));
     }
 
     #[test]
@@ -4333,7 +4489,13 @@ mod tests {
             .push(Arc::new(RwLock::new(Varnode::new_constant(28, 8))));
         gap.output = Some(typed_vn(8, 0x20, None));
         let ptrsub = TypeOpPtrsub::new(factory);
-        let token = ptrsub.get_output_token(&gap).expect("gap fallback token");
+        // Compute the fd-less local assertion before `gap` is moved into
+        // the PcodeOpRef for the fd-carrying token call.
+        let local_meta = ptrsub.get_output_local(&gap).unwrap().get_metatype();
+        let gap_ref = op_ref(gap);
+        let token = ptrsub
+            .get_output_token_in_fd(&gap_ref, &detached_fd())
+            .expect("gap fallback token");
         let pointee = match token.as_ref() {
             Datatype::Pointer(pointer) => &pointer.ptr_to,
             other => panic!("expected pointer token, got {other:?}"),
@@ -4341,9 +4503,7 @@ mod tests {
         assert_eq!(token.get_size(), 8);
         assert_eq!(pointee.get_metatype(), TypeMetatype::Unknown);
         assert_eq!(pointee.get_size(), 1);
-        assert_eq!(
-            ptrsub.get_output_local(&gap).unwrap().get_metatype(), TypeMetatype::Int
-        );
+        assert_eq!(local_meta, TypeMetatype::Int);
     }
 
     #[test]
@@ -4385,7 +4545,9 @@ mod tests {
         field.output = Some(typed_vn(8, 0x20, None));
 
         let ptrsub = TypeOpPtrsub::new(factory);
-        let token = ptrsub.get_output_token(&field).expect("exact field token");
+        let token = ptrsub
+            .get_output_token_in_fd(&op_ref(field), &detached_fd())
+            .expect("exact field token");
         let pointee = match token.as_ref() {
             Datatype::Pointer(pointer) => &pointer.ptr_to,
             other => panic!("expected pointer token, got {other:?}"),
@@ -4426,10 +4588,13 @@ mod tests {
         let branch = TypeOpBranch::new(Arc::new(RwLock::new(TypeFactory::raw())));
         let op = pcodeop(OpCode::CPUI_BRANCH);
         assert!(branch.get_output_token(&op).is_none());
-        assert!(branch.get_input_cast(&op, 0).is_none());
         assert!(branch.get_output_metatype().is_none());
         let t = int_t();
         assert!(branch.propagate_type(&t, &op, -1, 0).is_none());
+        let branch_op_ref = op_ref(op);
+        assert!(branch
+            .get_input_cast(&branch_op_ref, 0, &detached_fd())
+            .is_none());
     }
 
     #[test]

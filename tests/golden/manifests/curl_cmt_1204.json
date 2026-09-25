@@ -1,0 +1,180 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "curl",
+ "source": "cmt-warning",
+ "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+ "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+ "harvest_rule": "canon golden text gate (`/* Unresolved local var: ... */` blocks, 20-col `/* ` first line / 23-col commentfill continuations, emitter closer stripped \u2014 record text is verbatim canon output, never re-spelled from DWARF); anchors from .debug_info: function-domain group -> concrete subprogram low_pc, lexical-domain group -> scope low_pc | DW_AT_ranges FIRST interval begin, members = variables with DW_FORM_sec_offset or absent location (exprloc vars become named locals); per-function matching by exact var-name sequence in canon order, one group per record; calibration table per corpus (e40ed130 stage_cmt_diag oracle-verified): CommentSorter::findPosition backup path (comment.cc:298-306) requires op.addr == comm.addr, so dead-coded-prologue / mid-instruction anchors re-anchor to the first live op of the canon-anchored statement; records keyed by canon golden addresses (ELF vaddr + 0x100000)",
+ "anchor_calibrations": [
+  {
+   "function": "my_get_token",
+   "dwarf_anchor": "0x103720",
+   "anchor": "0x103729",
+   "reason": "my_get_token INT_EQUAL if((line==0)&&..): entry prologue dead-coded"
+  },
+  {
+   "function": "my_get_line",
+   "dwarf_anchor": "0x103840",
+   "anchor": "0x103850",
+   "reason": "my_get_line PTRSUB buf-alias (5 live ops; oracle placement identical to the entry anchor)"
+  },
+  {
+   "function": "parseconfig",
+   "dwarf_anchor": "0x103c80",
+   "anchor": "0x103c91",
+   "reason": "parseconfig INT_ADD canary read: entry prologue dead-coded"
+  },
+  {
+   "function": "getparameter",
+   "dwarf_anchor": "0x103f00",
+   "anchor": "0x103f52",
+   "reason": "getparameter first op after the alias-ptr init statements (for-init COPY@0x3f02 sorts below them in the op tree)"
+  },
+  {
+   "function": "getparameter",
+   "dwarf_anchor": "0x104283",
+   "anchor": "0x10428d",
+   "reason": "getparameter CALL strchr(...,0x3a): lexical-block start lands mid-instruction"
+  },
+  {
+   "function": "getparameter",
+   "dwarf_anchor": "0x1044af",
+   "anchor": "0x1044bb",
+   "reason": "getparameter COPY ';auto' (strstr arg): lexical-block start lands mid-instruction"
+  },
+  {
+   "function": "match_url",
+   "dwarf_anchor": "0x105220",
+   "anchor": "0x10522e",
+   "reason": "match_url LOAD *filename (movzbl (%rdi)): entry prologue dead-coded"
+  }
+ ],
+ "functions": {
+  "0x1025a0": {
+   "name": "main",
+   "comments": [
+    {
+     "addr": "0x102660",
+     "dwarf_anchor": "0x102660",
+     "text": "Unresolved local var: char * nextarg@[???]\nUnresolved local var: char * flag@[???]"
+    },
+    {
+     "addr": "0x102707",
+     "dwarf_anchor": "0x102707",
+     "text": "Unresolved local var: char * ptr@[???]"
+    }
+   ]
+  },
+  "0x1034d0": {
+   "name": "myprogress",
+   "comments": [
+    {
+     "addr": "0x103503",
+     "dwarf_anchor": "0x103503",
+     "text": "Unresolved local var: int prevblock@[???]\nUnresolved local var: int thisblock@[???]"
+    }
+   ]
+  },
+  "0x103720": {
+   "name": "my_get_token",
+   "comments": [
+    {
+     "addr": "0x103729",
+     "dwarf_anchor": "0x103720",
+     "text": "Unresolved local var: char * first@[???]\nUnresolved local var: char * last@[???]\nUnresolved local var: char * retval@[???]\nUnresolved local var: size_t size@[???]"
+    }
+   ]
+  },
+  "0x103840": {
+   "name": "my_get_line",
+   "comments": [
+    {
+     "addr": "0x103850",
+     "dwarf_anchor": "0x103840",
+     "text": "Unresolved local var: char * nl@[???]\nUnresolved local var: char * retval@[???]"
+    }
+   ]
+  },
+  "0x103a90": {
+   "name": "file2string",
+   "comments": [
+    {
+     "addr": "0x103a90",
+     "dwarf_anchor": "0x103a90",
+     "text": "Unresolved local var: char * ptr@[???]\nUnresolved local var: char * string@[???]\nUnresolved local var: int len@[???]\nUnresolved local var: int stringlen@[???]"
+    }
+   ]
+  },
+  "0x103c80": {
+   "name": "parseconfig",
+   "comments": [
+    {
+     "addr": "0x103c91",
+     "dwarf_anchor": "0x103c80",
+     "text": "Unresolved local var: int res@[???]\nUnresolved local var: FILE * file@[???]\nUnresolved local var: bool[4096] configbuffer@[???]\nUnresolved local var: char * home@[???]"
+    },
+    {
+     "addr": "0x103d35",
+     "dwarf_anchor": "0x103d35",
+     "text": "Unresolved local var: char * line@[???]\nUnresolved local var: char * tok1@[???]\nUnresolved local var: char * tok2@[???]"
+    }
+   ]
+  },
+  "0x103f00": {
+   "name": "getparameter",
+   "comments": [
+    {
+     "addr": "0x103f52",
+     "dwarf_anchor": "0x103f00",
+     "text": "Unresolved local var: bool letter@[???]\nUnresolved local var: char * parse@[???]\nUnresolved local var: int res@[???]\nUnresolved local var: int j@[???]\nUnresolved local var: int hit@[???]"
+    },
+    {
+     "addr": "0x1040f0",
+     "dwarf_anchor": "0x1040f0",
+     "text": "Unresolved local var: int fnam@[???]"
+    },
+    {
+     "addr": "0x10428d",
+     "dwarf_anchor": "0x104283",
+     "text": "Unresolved local var: char * ptr@[???]"
+    },
+    {
+     "addr": "0x1044bb",
+     "dwarf_anchor": "0x1044af",
+     "text": "Unresolved local var: char * ptr@[???]"
+    },
+    {
+     "addr": "0x1047f9",
+     "dwarf_anchor": "0x1047f9",
+     "text": "Unresolved local var: FILE * file@[???]"
+    },
+    {
+     "addr": "0x104822",
+     "dwarf_anchor": "0x104822",
+     "text": "Unresolved local var: bool[256] buffer@[???]\nUnresolved local var: char * ptr@[???]\nUnresolved local var: char * string@[???]\nUnresolved local var: int len@[???]\nUnresolved local var: int stringlen@[???]"
+    },
+    {
+     "addr": "0x104854",
+     "dwarf_anchor": "0x104854",
+     "text": "Unresolved local var: FILE * file@[???]"
+    },
+    {
+     "addr": "0x104879",
+     "dwarf_anchor": "0x104879",
+     "text": "Unresolved local var: bool[256] buffer@[???]\nUnresolved local var: char * ptr@[???]\nUnresolved local var: char * string@[???]\nUnresolved local var: int len@[???]\nUnresolved local var: int stringlen@[???]"
+    }
+   ]
+  },
+  "0x105220": {
+   "name": "match_url",
+   "comments": [
+    {
+     "addr": "0x10522e",
+     "dwarf_anchor": "0x105220",
+     "text": "Unresolved local var: char * buf@[???]\nUnresolved local var: URLPattern pat@[???]\nUnresolved local var: int i@[???]"
+    }
+   ]
+  }
+ },
+ "harvest_drops": []
+}

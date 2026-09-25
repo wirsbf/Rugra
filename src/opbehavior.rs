@@ -120,17 +120,17 @@ impl EvaluationError {
 pub fn evaluate_unary(opc: OpCode, size_out: usize, size_in: usize, in1: u64) -> Option<u64> {
     let out_mask = calc_mask(size_out);
     let result = match opc {
-        // Ghidra: opbehavior.cc:185 OpBehaviorCopy::evaluateUnary
+        // Ghidra: opbehavior.cc:171 OpBehaviorCopy::evaluateUnary
         OpCode::CPUI_COPY => in1,
-        // Ghidra: opbehavior.cc:265 OpBehaviorIntZext::evaluateUnary
+        // Ghidra: opbehavior.cc:251 OpBehaviorIntZext::evaluateUnary
         OpCode::CPUI_INT_ZEXT => in1,
-        // Ghidra: opbehavior.cc:280 OpBehaviorIntSext::evaluateUnary
+        // Ghidra: opbehavior.cc:266 OpBehaviorIntSext::evaluateUnary
         OpCode::CPUI_INT_SEXT => sign_extend_size(in1, size_in, size_out),
-        // Ghidra: opbehavior.cc:393 OpBehaviorIntNegate::evaluateUnary
+        // Ghidra: opbehavior.cc:376 OpBehaviorIntNegate::evaluateUnary
         OpCode::CPUI_INT_NEGATE => uintb_negate(in1, size_in),
-        // Ghidra: opbehavior.cc:378 OpBehaviorInt2Comp::evaluateUnary
+        // Ghidra: opbehavior.cc:362 OpBehaviorInt2Comp::evaluateUnary
         OpCode::CPUI_INT_2COMP => uintb_negate(in1.wrapping_sub(1), size_in),
-        // Ghidra: opbehavior.cc:570 OpBehaviorBoolNegate::evaluateUnary
+        // Ghidra: opbehavior.cc:541 OpBehaviorBoolNegate::evaluateUnary
         OpCode::CPUI_BOOL_NEGATE => in1 ^ 1,
         // Ghidra: opbehavior.cc:782 OpBehaviorPopcount::evaluateUnary
         OpCode::CPUI_POPCOUNT => crate::utils::bits::popcount(in1) as u64,
@@ -168,13 +168,13 @@ pub fn evaluate_binary(
 ) -> Option<u64> {
     let out_mask = calc_mask(size_out);
     let result = match opc {
-        // Ghidra: opbehavior.cc:304 OpBehaviorIntAdd::evaluateBinary
+        // Ghidra: opbehavior.cc:290 OpBehaviorIntAdd::evaluateBinary
         OpCode::CPUI_INT_ADD => (in1.wrapping_add(in2)) & out_mask,
-        // Ghidra: opbehavior.cc:319 OpBehaviorIntSub::evaluateBinary
+        // Ghidra: opbehavior.cc:304 OpBehaviorIntSub::evaluateBinary
         OpCode::CPUI_INT_SUB => (in1.wrapping_sub(in2)) & out_mask,
-        // Ghidra: opbehavior.cc:516 OpBehaviorIntMult::evaluateBinary
+        // Ghidra: opbehavior.cc:492 OpBehaviorIntMult::evaluateBinary
         OpCode::CPUI_INT_MULT => (in1.wrapping_mul(in2)) & out_mask,
-        // Ghidra: opbehavior.cc:524 OpBehaviorIntDiv::evaluateBinary
+        // Ghidra: opbehavior.cc:499 OpBehaviorIntDiv::evaluateBinary
         // (in2==0 throws EvaluationError in Ghidra; here surfaced as None)
         OpCode::CPUI_INT_DIV => {
             if in2 == 0 {
@@ -182,7 +182,7 @@ pub fn evaluate_binary(
             }
             in1 / in2
         }
-        // Ghidra: opbehavior.cc:534 OpBehaviorIntSdiv::evaluateBinary
+        // Ghidra: opbehavior.cc:507 OpBehaviorIntSdiv::evaluateBinary
         // Signed division with truncation toward zero (C semantics), then
         // zero_extend to size_out.
         OpCode::CPUI_INT_SDIV => {
@@ -194,14 +194,14 @@ pub fn evaluate_binary(
             let denom = sign_extend_to_i64(in2 & mask_bits(bits + 1), size_in);
             zero_extend(num / denom, size_out)
         }
-        // Ghidra: opbehavior.cc:548 OpBehaviorIntRem::evaluateBinary
+        // Ghidra: opbehavior.cc:519 OpBehaviorIntRem::evaluateBinary
         OpCode::CPUI_INT_REM => {
             if in2 == 0 {
                 return None;
             }
             in1 % in2
         }
-        // Ghidra: opbehavior.cc:558 OpBehaviorIntSrem::evaluateBinary
+        // Ghidra: opbehavior.cc:529 OpBehaviorIntSrem::evaluateBinary
         OpCode::CPUI_INT_SREM => {
             if in2 == 0 {
                 return None;
@@ -211,13 +211,13 @@ pub fn evaluate_binary(
             let modulus = sign_extend_to_i64(in2 & mask_bits(bits + 1), size_in);
             zero_extend(val % modulus, size_out)
         }
-        // Ghidra: opbehavior.cc:416 OpBehaviorIntAnd::evaluateBinary
+        // Ghidra: opbehavior.cc:397 OpBehaviorIntAnd::evaluateBinary
         OpCode::CPUI_INT_AND => in1 & in2,
-        // Ghidra: opbehavior.cc:424 OpBehaviorIntOr::evaluateBinary
+        // Ghidra: opbehavior.cc:404 OpBehaviorIntOr::evaluateBinary
         OpCode::CPUI_INT_OR => in1 | in2,
-        // Ghidra: opbehavior.cc:408 OpBehaviorIntXor::evaluateBinary
+        // Ghidra: opbehavior.cc:390 OpBehaviorIntXor::evaluateBinary
         OpCode::CPUI_INT_XOR => in1 ^ in2,
-        // Ghidra: opbehavior.cc:432 OpBehaviorIntLeft::evaluateBinary
+        // Ghidra: opbehavior.cc:411 OpBehaviorIntLeft::evaluateBinary
         // (in2 >= sizeout*8 ⇒ 0)
         OpCode::CPUI_INT_LEFT => {
             if in2 >= (size_out * 8) as u64 {
@@ -226,7 +226,7 @@ pub fn evaluate_binary(
                 (in1 << in2) & out_mask
             }
         }
-        // Ghidra: opbehavior.cc:454 OpBehaviorIntRight::evaluateBinary
+        // Ghidra: opbehavior.cc:432 OpBehaviorIntRight::evaluateBinary
         // Logical right shift; input is first masked to sizeout bytes.
         OpCode::CPUI_INT_RIGHT => {
             if in2 >= (size_out * 8) as u64 {
@@ -235,7 +235,7 @@ pub fn evaluate_binary(
                 (in1 & out_mask) >> in2
             }
         }
-        // Ghidra: opbehavior.cc:477 OpBehaviorIntSright::evaluateBinary
+        // Ghidra: opbehavior.cc:454 OpBehaviorIntSright::evaluateBinary
         // Arithmetic right shift. For overlarge shifts, returns all-ones
         // (negative) or 0 depending on the input sign bit.
         OpCode::CPUI_INT_SRIGHT => {
@@ -256,15 +256,15 @@ pub fn evaluate_binary(
                 in1 >> in2
             }
         }
-        // Ghidra: opbehavior.cc:197 OpBehaviorEqual::evaluateBinary
+        // Ghidra: opbehavior.cc:183 OpBehaviorEqual::evaluateBinary
         OpCode::CPUI_INT_EQUAL => u64::from(in1 == in2),
-        // Ghidra: opbehavior.cc:204 OpBehaviorNotEqual::evaluateBinary
+        // Ghidra: opbehavior.cc:190 OpBehaviorNotEqual::evaluateBinary
         OpCode::CPUI_INT_NOTEQUAL => u64::from(in1 != in2),
-        // Ghidra: opbehavior.cc:251 OpBehaviorIntLess::evaluateBinary
+        // Ghidra: opbehavior.cc:237 OpBehaviorIntLess::evaluateBinary
         OpCode::CPUI_INT_LESS => u64::from(in1 < in2),
-        // Ghidra: opbehavior.cc:258 OpBehaviorIntLessEqual::evaluateBinary
+        // Ghidra: opbehavior.cc:244 OpBehaviorIntLessEqual::evaluateBinary
         OpCode::CPUI_INT_LESSEQUAL => u64::from(in1 <= in2),
-        // Ghidra: opbehavior.cc:211 OpBehaviorIntSless::evaluateBinary
+        // Ghidra: opbehavior.cc:197 OpBehaviorIntSless::evaluateBinary
         // Compares sign bits first; falls back to unsigned compare if equal.
         OpCode::CPUI_INT_SLESS => {
             if size_in == 0 {
@@ -280,7 +280,7 @@ pub fn evaluate_binary(
                 }
             }
         }
-        // Ghidra: opbehavior.cc:231 OpBehaviorIntSlessEqual::evaluateBinary
+        // Ghidra: opbehavior.cc:217 OpBehaviorIntSlessEqual::evaluateBinary
         OpCode::CPUI_INT_SLESSEQUAL => {
             if size_in == 0 {
                 0
@@ -295,11 +295,11 @@ pub fn evaluate_binary(
                 }
             }
         }
-        // Ghidra: opbehavior.cc:339 OpBehaviorIntCarry::evaluateBinary
+        // Ghidra: opbehavior.cc:323 OpBehaviorIntCarry::evaluateBinary
         OpCode::CPUI_INT_CARRY => {
             u64::from(in1 > (in1.wrapping_add(in2) & calc_mask(size_in)))
         }
-        // Ghidra: opbehavior.cc:346 OpBehaviorIntScarry::evaluateBinary
+        // Ghidra: opbehavior.cc:330 OpBehaviorIntScarry::evaluateBinary
         // a = sign(in1), b = sign(in2), r = sign(sum); res = (r^a) & (a^b^1).
         OpCode::CPUI_INT_SCARRY => {
             if size_in == 0 {
@@ -315,7 +315,7 @@ pub fn evaluate_binary(
             r &= a;
             r as u64
         }
-        // Ghidra: opbehavior.cc:362 OpBehaviorIntSborrow::evaluateBinary
+        // Ghidra: opbehavior.cc:346 OpBehaviorIntSborrow::evaluateBinary
         // a = sign(in1), b = sign(in2), r = sign(diff); res = (a^r) & (r^b^1).
         OpCode::CPUI_INT_SBORROW => {
             if size_in == 0 {
@@ -331,11 +331,11 @@ pub fn evaluate_binary(
             a &= r;
             a as u64
         }
-        // Ghidra: opbehavior.cc:577 OpBehaviorBoolXor::evaluateBinary
+        // Ghidra: opbehavior.cc:548 OpBehaviorBoolXor::evaluateBinary
         OpCode::CPUI_BOOL_XOR => in1 ^ in2,
-        // Ghidra: opbehavior.cc:584 OpBehaviorBoolAnd::evaluateBinary
+        // Ghidra: opbehavior.cc:555 OpBehaviorBoolAnd::evaluateBinary
         OpCode::CPUI_BOOL_AND => in1 & in2,
-        // Ghidra: opbehavior.cc:591 OpBehaviorBoolOr::evaluateBinary
+        // Ghidra: opbehavior.cc:562 OpBehaviorBoolOr::evaluateBinary
         OpCode::CPUI_BOOL_OR => in1 | in2,
         // Ghidra: opbehavior.cc:752 OpBehaviorPiece::evaluateBinary
         // (in1<<((sizeout-sizein)*8)) | in2. Note Ghidra assumes sizein is the
@@ -386,7 +386,7 @@ pub fn evaluate_ternary(
 /// Recover the input for a unary op given its output (inverse of
 /// `evaluate_unary`). Returns `None` if recovery is not defined (lossy ops) or
 /// if the output is out of range.
-// Ghidra: opbehavior.cc:165 OpBehavior::recoverInputUnary + per-class overrides
+// Ghidra: opbehavior.cc:151 OpBehavior::recoverInputUnary + per-class overrides
 pub fn recover_input_unary(
     opc: OpCode,
     size_out: usize,
@@ -395,9 +395,9 @@ pub fn recover_input_unary(
 ) -> Option<u64> {
     let in_mask = calc_mask(size_in);
     let result = match opc {
-        // Ghidra: opbehavior.cc:191 OpBehaviorCopy::recoverInputUnary
+        // Ghidra: opbehavior.cc:177 OpBehaviorCopy::recoverInputUnary
         OpCode::CPUI_COPY => out,
-        // Ghidra: opbehavior.cc:271 OpBehaviorIntZext::recoverInputUnary
+        // Ghidra: opbehavior.cc:257 OpBehaviorIntZext::recoverInputUnary
         // Throws if (mask&out)!=out; surfaced as None.
         OpCode::CPUI_INT_ZEXT => {
             if (in_mask & out) != out {
@@ -405,7 +405,7 @@ pub fn recover_input_unary(
             }
             out
         }
-        // Ghidra: opbehavior.cc:287 OpBehaviorIntSext::recoverInputUnary
+        // Ghidra: opbehavior.cc:273 OpBehaviorIntSext::recoverInputUnary
         OpCode::CPUI_INT_SEXT => {
             let mask_long = calc_mask(size_out);
             let mask_short = calc_mask(size_in);
@@ -420,9 +420,9 @@ pub fn recover_input_unary(
             }
             out & mask_short
         }
-        // Ghidra: opbehavior.cc:401 OpBehaviorIntNegate::recoverInputUnary
+        // Ghidra: opbehavior.cc:383 OpBehaviorIntNegate::recoverInputUnary
         OpCode::CPUI_INT_NEGATE => uintb_negate(out, size_in),
-        // Ghidra: opbehavior.cc:386 OpBehaviorInt2Comp::recoverInputUnary
+        // Ghidra: opbehavior.cc:369 OpBehaviorInt2Comp::recoverInputUnary
         OpCode::CPUI_INT_2COMP => uintb_negate(out.wrapping_sub(1), size_in),
         // BOOL_NEGATE has no recoverInputUnary override in Ghidra; the base
         // class throws. Recovering input from `out^1` is technically sound for
@@ -440,7 +440,7 @@ pub fn recover_input_unary(
 /// `slot` selects which input to recover (0 = first, 1 = second). Returns
 /// `None` if recovery is not defined for this opcode/slot or if the output is
 /// out of range.
-// Ghidra: opbehavior.cc:179 OpBehavior::recoverInputBinary + per-class overrides
+// Ghidra: opbehavior.cc:165 OpBehavior::recoverInputBinary + per-class overrides
 pub fn recover_input_binary(
     opc: OpCode,
     slot: usize,
@@ -451,9 +451,9 @@ pub fn recover_input_binary(
 ) -> Option<u64> {
     let in_mask = calc_mask(size_in);
     let result = match opc {
-        // Ghidra: opbehavior.cc:312 OpBehaviorIntAdd::recoverInputBinary
+        // Ghidra: opbehavior.cc:297 OpBehaviorIntAdd::recoverInputBinary
         OpCode::CPUI_INT_ADD => out.wrapping_sub(other) & calc_mask(size_out),
-        // Ghidra: opbehavior.cc:327 OpBehaviorIntSub::recoverInputBinary
+        // Ghidra: opbehavior.cc:311 OpBehaviorIntSub::recoverInputBinary
         // slot 0: in + out ; slot 1: in - out
         OpCode::CPUI_INT_SUB => {
             let r = if slot == 0 {
@@ -463,7 +463,7 @@ pub fn recover_input_binary(
             };
             r & calc_mask(size_out)
         }
-        // Ghidra: opbehavior.cc:443 OpBehaviorIntLeft::recoverInputBinary
+        // Ghidra: opbehavior.cc:421 OpBehaviorIntLeft::recoverInputBinary
         // slot 0 (value): out >> sa, after verifying no high bits were lost.
         // slot 1 (shift amount): base class throws (return None).
         OpCode::CPUI_INT_LEFT => {
@@ -476,7 +476,7 @@ pub fn recover_input_binary(
             }
             out >> sa
         }
-        // Ghidra: opbehavior.cc:465 OpBehaviorIntRight::recoverInputBinary
+        // Ghidra: opbehavior.cc:442 OpBehaviorIntRight::recoverInputBinary
         // slot 0 (value): out << sa, after verifying no low bits were lost.
         // slot 1 (shift amount): base class throws (return None).
         OpCode::CPUI_INT_RIGHT => {
@@ -489,7 +489,7 @@ pub fn recover_input_binary(
             }
             out << sa
         }
-        // Ghidra: opbehavior.cc:498 OpBehaviorIntSright::recoverInputBinary
+        // Ghidra: opbehavior.cc:474 OpBehaviorIntSright::recoverInputBinary
         // slot 0 (value): out << sa, after verifying the top (sa+1) bits are
         // all 1s (negative) — i.e. the output really is a sign-extending shift.
         // slot 1 (shift amount): base class throws (return None).
@@ -610,7 +610,7 @@ pub trait OpBehavior {
 
     /// Emulate the unary op-code on an input value (opbehavior.hh:65).
     /// Base class throws (opbehavior.cc:128).
-    // Ghidra: opbehavior.cc:128 OpBehavior::evaluateUnary
+    // Ghidra: opbehavior.cc:114 OpBehavior::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, _sizein: usize, _in1: u64) -> u64 {
         let name = self.opcode().name();
         panic!("Unary emulation unimplemented for {}", name);
@@ -618,7 +618,7 @@ pub trait OpBehavior {
 
     /// Emulate the binary op-code on input values (opbehavior.hh:68).
     /// Base class throws (opbehavior.cc:140).
-    // Ghidra: opbehavior.cc:140 OpBehavior::evaluateBinary
+    // Ghidra: opbehavior.cc:126 OpBehavior::evaluateBinary
     fn evaluate_binary(&self, _sizeout: usize, _sizein: usize, _in1: u64, _in2: u64) -> u64 {
         let name = self.opcode().name();
         panic!("Binary emulation unimplemented for {}", name);
@@ -626,7 +626,7 @@ pub trait OpBehavior {
 
     /// Emulate the ternary op-code on input values (opbehavior.hh:71).
     /// Base class throws (opbehavior.cc:153).
-    // Ghidra: opbehavior.cc:153 OpBehavior::evaluateTernary
+    // Ghidra: opbehavior.cc:139 OpBehavior::evaluateTernary
     fn evaluate_ternary(
         &self,
         _sizeout: usize,
@@ -641,7 +641,7 @@ pub trait OpBehavior {
 
     /// Reverse the binary op-code, recovering an input value (opbehavior.hh:74).
     /// Base class throws (opbehavior.cc:179).
-    // Ghidra: opbehavior.cc:179 OpBehavior::recoverInputBinary
+    // Ghidra: opbehavior.cc:165 OpBehavior::recoverInputBinary
     fn recover_input_binary(
         &self,
         _slot: usize,
@@ -655,7 +655,7 @@ pub trait OpBehavior {
 
     /// Reverse the unary op-code, recovering the input value (opbehavior.hh:77).
     /// Base class throws (opbehavior.cc:165).
-    // Ghidra: opbehavior.cc:165 OpBehavior::recoverInputUnary
+    // Ghidra: opbehavior.cc:151 OpBehavior::recoverInputUnary
     fn recover_input_unary(&self, _sizeout: usize, _out: u64, _sizein: usize) -> u64 {
         panic!("Cannot recover input parameter without loss of information");
     }
@@ -746,11 +746,11 @@ impl OpBehavior for OpBehaviorCopy {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_COPY, true)
     }
-    // Ghidra: opbehavior.cc:185 OpBehaviorCopy::evaluateUnary
+    // Ghidra: opbehavior.cc:171 OpBehaviorCopy::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, _sizein: usize, in1: u64) -> u64 {
         in1
     }
-    // Ghidra: opbehavior.cc:191 OpBehaviorCopy::recoverInputUnary
+    // Ghidra: opbehavior.cc:177 OpBehaviorCopy::recoverInputUnary
     fn recover_input_unary(&self, _sizeout: usize, out: u64, _sizein: usize) -> u64 {
         out
     }
@@ -876,11 +876,11 @@ impl OpBehavior for OpBehaviorIntZext {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_ZEXT, true)
     }
-    // Ghidra: opbehavior.cc:265 OpBehaviorIntZext::evaluateUnary
+    // Ghidra: opbehavior.cc:251 OpBehaviorIntZext::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, _sizein: usize, in1: u64) -> u64 {
         in1
     }
-    // Ghidra: opbehavior.cc:271 OpBehaviorIntZext::recoverInputUnary
+    // Ghidra: opbehavior.cc:257 OpBehaviorIntZext::recoverInputUnary
     fn recover_input_unary(&self, _sizeout: usize, out: u64, sizein: usize) -> u64 {
         let m = calc_mask(sizein);
         if (m & out) != out {
@@ -904,11 +904,11 @@ impl OpBehavior for OpBehaviorIntSext {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SEXT, true)
     }
-    // Ghidra: opbehavior.cc:280 OpBehaviorIntSext::evaluateUnary
+    // Ghidra: opbehavior.cc:266 OpBehaviorIntSext::evaluateUnary
     fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
         sign_extend_size(in1, sizein, sizeout)
     }
-    // Ghidra: opbehavior.cc:287 OpBehaviorIntSext::recoverInputUnary
+    // Ghidra: opbehavior.cc:273 OpBehaviorIntSext::recoverInputUnary
     fn recover_input_unary(&self, sizeout: usize, out: u64, sizein: usize) -> u64 {
         let masklong = calc_mask(sizeout);
         let maskshort = calc_mask(sizein);
@@ -941,11 +941,11 @@ impl OpBehavior for OpBehaviorIntAdd {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_ADD, false)
     }
-    // Ghidra: opbehavior.cc:304 OpBehaviorIntAdd::evaluateBinary
+    // Ghidra: opbehavior.cc:290 OpBehaviorIntAdd::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         (in1.wrapping_add(in2)) & calc_mask(sizeout)
     }
-    // Ghidra: opbehavior.cc:312 OpBehaviorIntAdd::recoverInputBinary
+    // Ghidra: opbehavior.cc:297 OpBehaviorIntAdd::recoverInputBinary
     fn recover_input_binary(
         &self,
         _slot: usize,
@@ -972,11 +972,11 @@ impl OpBehavior for OpBehaviorIntSub {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SUB, false)
     }
-    // Ghidra: opbehavior.cc:319 OpBehaviorIntSub::evaluateBinary
+    // Ghidra: opbehavior.cc:304 OpBehaviorIntSub::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         (in1.wrapping_sub(in2)) & calc_mask(sizeout)
     }
-    // Ghidra: opbehavior.cc:327 OpBehaviorIntSub::recoverInputBinary
+    // Ghidra: opbehavior.cc:311 OpBehaviorIntSub::recoverInputBinary
     fn recover_input_binary(
         &self,
         slot: usize,
@@ -1067,11 +1067,11 @@ impl OpBehavior for OpBehaviorInt2Comp {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_2COMP, true)
     }
-    // Ghidra: opbehavior.cc:378 OpBehaviorInt2Comp::evaluateUnary
+    // Ghidra: opbehavior.cc:362 OpBehaviorInt2Comp::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, sizein: usize, in1: u64) -> u64 {
         uintb_negate(in1.wrapping_sub(1), sizein)
     }
-    // Ghidra: opbehavior.cc:386 OpBehaviorInt2Comp::recoverInputUnary
+    // Ghidra: opbehavior.cc:369 OpBehaviorInt2Comp::recoverInputUnary
     fn recover_input_unary(&self, _sizeout: usize, out: u64, sizein: usize) -> u64 {
         uintb_negate(out.wrapping_sub(1), sizein)
     }
@@ -1091,11 +1091,11 @@ impl OpBehavior for OpBehaviorIntNegate {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_NEGATE, true)
     }
-    // Ghidra: opbehavior.cc:393 OpBehaviorIntNegate::evaluateUnary
+    // Ghidra: opbehavior.cc:376 OpBehaviorIntNegate::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, sizein: usize, in1: u64) -> u64 {
         uintb_negate(in1, sizein)
     }
-    // Ghidra: opbehavior.cc:401 OpBehaviorIntNegate::recoverInputUnary
+    // Ghidra: opbehavior.cc:383 OpBehaviorIntNegate::recoverInputUnary
     fn recover_input_unary(&self, _sizeout: usize, out: u64, sizein: usize) -> u64 {
         uintb_negate(out, sizein)
     }
@@ -1156,7 +1156,7 @@ impl OpBehavior for OpBehaviorIntLeft {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_LEFT, false)
     }
-    // Ghidra: opbehavior.cc:432 OpBehaviorIntLeft::evaluateBinary
+    // Ghidra: opbehavior.cc:411 OpBehaviorIntLeft::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 >= (sizeout * 8) as u64 {
             0
@@ -1164,7 +1164,7 @@ impl OpBehavior for OpBehaviorIntLeft {
             (in1 << in2) & calc_mask(sizeout)
         }
     }
-    // Ghidra: opbehavior.cc:443 OpBehaviorIntLeft::recoverInputBinary
+    // Ghidra: opbehavior.cc:421 OpBehaviorIntLeft::recoverInputBinary
     fn recover_input_binary(
         &self,
         slot: usize,
@@ -1198,7 +1198,7 @@ impl OpBehavior for OpBehaviorIntRight {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_RIGHT, false)
     }
-    // Ghidra: opbehavior.cc:454 OpBehaviorIntRight::evaluateBinary
+    // Ghidra: opbehavior.cc:432 OpBehaviorIntRight::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 >= (sizeout * 8) as u64 {
             0
@@ -1206,7 +1206,7 @@ impl OpBehavior for OpBehaviorIntRight {
             (in1 & calc_mask(sizeout)) >> in2
         }
     }
-    // Ghidra: opbehavior.cc:465 OpBehaviorIntRight::recoverInputBinary
+    // Ghidra: opbehavior.cc:442 OpBehaviorIntRight::recoverInputBinary
     fn recover_input_binary(
         &self,
         slot: usize,
@@ -1240,7 +1240,7 @@ impl OpBehavior for OpBehaviorIntSright {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SRIGHT, false)
     }
-    // Ghidra: opbehavior.cc:477 OpBehaviorIntSright::evaluateBinary
+    // Ghidra: opbehavior.cc:454 OpBehaviorIntSright::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 >= (8 * sizeout) as u64 {
             if signbit_negative(in1, sizein) {
@@ -1258,7 +1258,7 @@ impl OpBehavior for OpBehaviorIntSright {
             in1 >> in2
         }
     }
-    // Ghidra: opbehavior.cc:498 OpBehaviorIntSright::recoverInputBinary
+    // Ghidra: opbehavior.cc:474 OpBehaviorIntSright::recoverInputBinary
     fn recover_input_binary(
         &self,
         slot: usize,
@@ -1321,7 +1321,7 @@ impl OpBehavior for OpBehaviorIntDiv {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_DIV, false)
     }
-    // Ghidra: opbehavior.cc:524 OpBehaviorIntDiv::evaluateBinary
+    // Ghidra: opbehavior.cc:499 OpBehaviorIntDiv::evaluateBinary
     // Throws EvaluationError on divide-by-zero in Ghidra; here we panic to
     // match the trait contract (use evaluate_binary_no_exc for safe access).
     fn evaluate_binary(&self, _sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
@@ -1346,7 +1346,7 @@ impl OpBehavior for OpBehaviorIntSdiv {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SDIV, false)
     }
-    // Ghidra: opbehavior.cc:534 OpBehaviorIntSdiv::evaluateBinary
+    // Ghidra: opbehavior.cc:507 OpBehaviorIntSdiv::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 == 0 {
             panic!("Divide by 0");
@@ -1372,7 +1372,7 @@ impl OpBehavior for OpBehaviorIntRem {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_REM, false)
     }
-    // Ghidra: opbehavior.cc:548 OpBehaviorIntRem::evaluateBinary
+    // Ghidra: opbehavior.cc:519 OpBehaviorIntRem::evaluateBinary
     fn evaluate_binary(&self, _sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 == 0 {
             panic!("Remainder by 0");
@@ -1395,7 +1395,7 @@ impl OpBehavior for OpBehaviorIntSrem {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SREM, false)
     }
-    // Ghidra: opbehavior.cc:558 OpBehaviorIntSrem::evaluateBinary
+    // Ghidra: opbehavior.cc:529 OpBehaviorIntSrem::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 == 0 {
             panic!("Remainder by 0");
@@ -1425,7 +1425,7 @@ impl OpBehavior for OpBehaviorBoolNegate {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_BOOL_NEGATE, true)
     }
-    // Ghidra: opbehavior.cc:570 OpBehaviorBoolNegate::evaluateUnary
+    // Ghidra: opbehavior.cc:541 OpBehaviorBoolNegate::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, _sizein: usize, in1: u64) -> u64 {
         in1 ^ 1
     }
@@ -1604,7 +1604,7 @@ impl OpBehavior for OpBehaviorFloatInt2Float {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_INT2FLOAT, true)
     }
-    // Ghidra: opbehavior.cc:718 OpBehaviorFloatInt2Float::evaluateUnary
+    // Ghidra: opbehavior.cc:689 OpBehaviorFloatInt2Float::evaluateUnary
     fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
         match float_format(sizeout) {
             Some(fmt) => fmt.op_int2float(in1, sizein),
@@ -1631,7 +1631,7 @@ impl OpBehavior for OpBehaviorFloatFloat2Float {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_FLOAT2FLOAT, true)
     }
-    // Ghidra: opbehavior.cc:728 OpBehaviorFloatFloat2Float::evaluateUnary
+    // Ghidra: opbehavior.cc:699 OpBehaviorFloatFloat2Float::evaluateUnary
     fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
         let name = self.opcode().name();
         let formatout = match float_format(sizeout) {
@@ -1660,7 +1660,7 @@ impl OpBehavior for OpBehaviorFloatTrunc {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_TRUNC, true)
     }
-    // Ghidra: opbehavior.cc:741 OpBehaviorFloatTrunc::evaluateUnary
+    // Ghidra: opbehavior.cc:712 OpBehaviorFloatTrunc::evaluateUnary
     fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
         match float_format(sizein) {
             Some(fmt) => fmt.op_trunc(in1, sizeout),
@@ -1816,7 +1816,7 @@ impl OpBehavior for OpBehaviorLzcount {
 
 /// A registry of opcode behaviors, indexed by opcode. Mirrors the
 /// `vector<OpBehavior*> inst` populated by `OpBehavior::registerInstructions`.
-// Ghidra: opbehavior.cc:38 OpBehavior::registerInstructions
+// Ghidra: opbehavior.cc:24 OpBehavior::registerInstructions
 pub struct OpBehaviorFactory {
     table: Vec<Option<Box<dyn OpBehavior>>>,
 }
@@ -1824,7 +1824,7 @@ pub struct OpBehaviorFactory {
 impl OpBehaviorFactory {
     /// Build the registry. Equivalent to a one-shot
     /// `OpBehavior::registerInstructions(inst, trans)` (opbehavior.cc:38-122).
-    // Ghidra: opbehavior.cc:38 OpBehavior::registerInstructions
+    // Ghidra: opbehavior.cc:24 OpBehavior::registerInstructions
     pub fn new() -> Self {
         let mut f = Self {
             table: (0..OpCode::CPUI_MAX as usize).map(|_| None).collect(),
@@ -1881,7 +1881,7 @@ impl OpBehaviorFactory {
 
     /// Register all behaviors, in the exact order of registerInstructions
     /// (opbehavior.cc:43-121).
-    // Ghidra: opbehavior.cc:43 OpBehavior::registerInstructions body
+    // Ghidra: opbehavior.cc:24 OpBehavior::registerInstructions body
     fn register_all(&mut self) {
         // Ghidra: opbehavior.cc:43-52 — control-flow specials
         self.register_special(OpCode::CPUI_LOAD);

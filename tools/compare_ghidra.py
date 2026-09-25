@@ -89,7 +89,21 @@ def match_functions(rugra_funcs, ghidra_funcs, base_offset=0x100000):
     matched = []
     for addr, name, size, body in rugra_funcs:
         key = strip_gcc_suffix(name)
-        ghidra = by_addr.get(addr) or by_name.get(key)
+        # Probe algebra (base = base_offset, keys stored as golden_addr - base):
+        #   G1 golden image-based / R2 rugra base-0  -> probe 1 (addr == key)
+        #   G1 golden image-based / R1 rugra image  -> probe 2 (addr-base == key)
+        #   G2 golden base-0     / R2 rugra base-0  -> probe 2 (both negative keys)
+        #   G2 golden base-0     / R1 rugra image  -> probe 4 (addr-2*base == key),
+        #     the direct-runner mirror convention pair (golden headers base-0,
+        #     Rugra mirror headers image-based): without probe 4 every lookup
+        #     falls through to by_name, whose last-wins dict mispairs duplicate
+        #     stripped names (e.g. SetHTTPrequest.part.0 vs SetHTTPrequest).
+        # Probe 4 is a provable no-op for the other three combos (its key is
+        # either negative where G1 keys are >= 0, or off by one base), so
+        # existing pairings cannot drift.
+        ghidra = (by_addr.get(addr) or by_addr.get(addr - base_offset)
+                  or by_addr.get(addr + base_offset)
+                  or by_addr.get(addr - 2 * base_offset) or by_name.get(key))
         if ghidra:
             matched.append((addr, name, body, ghidra[0], ghidra[1]))
     return matched
@@ -416,6 +430,10 @@ def main():
           f'(in {funcs_with_defects}/{len(matched)} functions)')
     print(f'Total Rugra numbering issues: {total_numbering}')
     print(f'\nNOTE: skeleton diff > 0 不一定是对齐缺陷 (for↔while 等价变换).')
+    print(f'      判定口径 (MSTRUCT 2026-09-25): 对 canon/headless golden (桥接层富化),')
+    print(f'      for↔while 拆分等形态差可为 HEAD 伪差; 对 direct-runner mirror golden')
+    print(f'      (tests/golden/*_1204.direct-runner.c, 同输入 oracle 真值), 形态差')
+    print(f'      = 真实输出差 (库侧修复, 不做工具归一化 — 见 MSTRUCT-FORMDIFF-BOUNDARY-0001).')
     print(f'      defects > 0 是真实质量缺陷 (空else/寄存器泄漏/调用丢失).')
     print(f'      numbering issues > 0 是 181538f 类编号 bug (per-prefix 计数器 / 重复声明).')
 

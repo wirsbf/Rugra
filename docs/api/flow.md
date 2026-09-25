@@ -293,7 +293,11 @@ fd、锁定 git archive、isolated Cargo.lock vendor 和 byte diff 起草，但 
 - **`generateOps`** 头部补 `clearProperties()`（flow.cc:790）。
 - **新增 `FlowInfoSnapshot`**（`snapshot()`）：为 oracle fixture 克隆 post-
   emission 的 op/time、VisitStat 值、relative 解析与 raw edge Arc；不缓存
-  SLEIGH callback `VarnodeData*` 身份，不改变生产 CFG。
+  SLEIGH callback `VarnodeData*` 身份，不改变生产 CFG。2026-09-25
+  （CURLWIRE-CR-F1-A1，LOCKFIX 修法）：relative 遍历的 opcode 过滤与
+  `inrefs[0]` 提升收进单一短守卫块，守卫在 `find_rel_target`（内部再锁
+  同一 op）之前释放——std RwLock 读读重入不对写者公平；同输入同输出，
+  双语料字节恒等验证。
 
 真实 `0f a2 c3`（CPUID; RET）门禁结果：`tools/run_sleigh_flow_relative_oracle.sh`
 差分 Rust 与锁定 Ghidra capture（sha256 `7490edf5…`）**逐字节一致**（81 ops /
@@ -638,7 +642,8 @@ curl 小范围 A/B 的生产收益是：`hugehelp` callspec/puts `5 -> 6`，
   `fc.set_no_return(true)`（flow.cc:747）+ "Does not return" warning
   （flow.cc:748）；三条 warning 从 eprintln! 改 `fd.warning`（commentdb，与
   Ghidra data.warning 同通道）。残差：noParams 臂 setInternal/defaultfp
-  （flow.cc:757-762）与 setBadJumpTable（flow.cc:754）仍归 CALLSPEC-0001。
+  （flow.cc:757-762）仍归 CALLSPEC-0001；setBadJumpTable（flow.cc:754）已由
+  FLOWSET 车道接线（见 2026-09-25 节），输出消费者归 coreaction 车道。
 - **恒 false stub 清理**：扩展 trait `is_inline`/`is_no_return` 删除（fspec.rs
   继承面已提供同名 inherent 委托，原实现已被遮蔽为死代码），过时 RUGRA-GLUE
   注释一并修正；`test_hard_inline_restrictions` 的
@@ -689,3 +694,175 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   `ActionDefaultParams` coreaction.cc:2311）。
 - 既有登记的 "CALLIND spec 名继承 caller funcp 名" 构造 quirk 随本修复消解
   （默认构造 name 为空，setFuncdata/queryCall 边界另案 CALLSPEC-0001）。
+- 2026-08-30 CALLSPEC-DRIVER-0001：`default_call_spec_proto()` 提升为 `pub(crate)`——
+  `Funcdata::inject_raw_ops` 的 linear-scan driver 路径 flow-time callspec 锚定
+  （见 docs/api/funcdata.md 的 inject_raw_ops 条目）复用同一默认构造态，避免出现
+  第二份 FuncProto::new 副本漂移。
+
+## 2026-09-22（RUGRA-FLOW-MIRROR-0001）：`follow_flow_range` 完整形参入口
+
+- 新增 `pub fn follow_flow_range(fd, lifter, baddr, eaddr, callee_protos)`：
+  镜像 `Funcdata::followFlow` 的完整 `(baddr, eaddr)` 形参形态
+  （funcdata_op.cc:756-783）——调用方给出约束范围，walk 本身永远从函数自身
+  entry 播种（flow.cc:791 `addrlist.push_back(data.getAddress()`），
+  baddr 只约束 `new_address` 目标（flow.cc:222）。oracle 单函数 harness 与
+  regen_ghidra_golden.py:388 传 `(code:0, code:highest)`——x86-64 默认 ram
+  space 即 `(0, u64::MAX)`——尾跳进低地址 code space 区（PLT）被跟入函数,
+  随后 BRANCHIND 经 fail_thunk 路径（jumptable.cc:2304-2320 → flow.cc:727/735）
+  截断为 CALLIND + artificial halt。
+- `follow_flow_with_callee_protos` 保留原签名并委托
+  `follow_flow_range(baddr=entry)`：历史驱动有界形态,既有调用点
+  （curl_decompile 默认路径、getstr_stage_snapshot）行为逐字节不变。
+- 消费方:curl driver 在 `RUGRA_FLOW_MIRROR=1` 时走
+  `follow_flow_range(0, u64::MAX)`（examples 级 env 门控,默认 off）;
+  stage projection 的 META `load_mode` 在同一门下发 `single_function_bfd`
+  （STAGE_BISECT_SPEC_1204.md D10）。
+
+## 2026-09-22：follow_flow_range 尾部接线 switchOverJumpTables
+
+- `follow_flow_range` 在 `flow.generate_blocks()` 成功后调用
+  `Funcdata::switch_over_jump_tables(&*flow.fd, &flow)`（funcdata_op.cc:777-778：
+  `flags |= blocks_generated; switchOverJumpTables(flow);` 同位同序）。恢复出的
+  跳表地址→出边槽映射（block2addr）在 FlowInfo 借用结束前完成；此后
+  ActionSwitchNorm 的 default_block 派生、BlockStruct 阶段的
+  `switch_case_basic_coords` isdefault 判定与 label 管道
+  （BlockSwitch::finalizePrinting）均消费该数据。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— PIC 警告 printRaw 拼写 + partial 克隆基址继承
+
+- flow.cc:1380-1384 的 "Possible PIC construction at <opaddr>: Changing call
+  to branch" 警告：op 地址改经 `Funcdata::print_raw_code_addr` 渲染
+  （oracle `Address::printRaw`，space.cc:206），替换旧的 spaceless Display
+  十六进制形；经 `display_image_base` 传输 canon 驱动的 0x100000 基址差。
+- `FlowInfo::clone_function`（partial 克隆）继承源函数的 `display_image_base`：
+  partial 的 jumptable LowlevelError 文本（recover_addresses_classified，
+  jumptable.cc:2629）与父函数保持同一 oracle printRaw 拼写。
+
+## 2026-09-24（HTTPD-MAIN-WARNUNREACH-JTEDGE-0001）：`recover_jump_tables_injected` —— 线性注入库的后置跳表恢复
+
+- 新增 `pub fn recover_jump_tables_injected(fd) -> Result<usize>`（Ghidra:
+  flow.cc:785 `FlowInfo::generateOps`）：为"批量线性注入整库后建块"的驱动
+  路径（`Funcdata::inject_raw_ops` + `build_blocks_from_ops`）补上
+  followFlow 在 oracle 里内联完成的 generateOps 第二阶段——跳表恢复
+  （flow.cc:796-821）以及融合加载无法产生的两个 generateBlocks 尾部可观
+  测：BRANCHIND 的逐 case 出边（collectEdges BRANCHIND 臂，flow.cc:933-957）
+  与 switchOver 映射（funcdata_op.cc:777-778 → jumptable.cc:2528）。
+- 适配差异（全部源自调用方预提升的线性库，逐条注明在函数 doc 注释）：
+  - 恢复前把 op 库 mark_dead 进 dead list、恢复后按 dead list 顺序
+    mark_alive 复原——`Funcdata::truncatedFlow` 以 `obank.beginDead()` 为
+    partial 克隆源（funcdata.cc:797-799），oracle 恢复时点全部 raw p-code
+    在 dead list、alivelist 为空；
+  - 各基本块首 op 补 STARTBASIC（xref 走查的终态，flow.cc:469-477/570-572；
+    `clone_op` 复制该旗标，funcdata_op.cc:621-622），partial 克隆的
+    generateBlocks 得以复现源分区；
+  - `newAddress`/`fallthru` 提升为 no-op（case 体已在线性库中；oracle 由
+    flow.cc:804-809 后置提升）；
+  - 恢复 partial 挂载 commentdb 剥离的 Architecture 克隆：coreaction.cc:5490
+    把首个 `ActionUnreachable("base")` 注册进 base 组（"jumptable" 组也含
+    base），oracle 的 partial 不含 case 体（恢复先于提升）故该动作从不触发；
+    线性库的 partial 携带孤儿 case 体，其删块警告会经共享 commentdb（同
+    入口地址）泄漏进真实函数输出——剥离恰好中和这一适配伪影通道；真实 fd
+    警告（truncateIndirectJump 等）仍走真实 arch；
+  - truncateIndirectJump 的人工 halt 以 dead list 位置（insert_after_dead
+    的落点）补插进前驱 CALLIND 所在块尾——oracle 由 splitBasic
+    （flow.cc:996-1013）完成的块归属；
+  - 表目的地无 p-code（越出符号窗）时跳过该出边并整表跳过 switchOver
+    （oracle 不可达形态：恢复后目的地必然在库）。
+- 新增私有构造 `FlowInfo::from_injected`（lifter=None，同截断克隆构造形态；
+  visited 由 op 库合成，baddr/eaddr=(0,u64::MAX) 为 oracle harness 的
+  followFlow(code:0, code:highest) 契约）。
+- 驱动接线：`examples/httpd_decompile.rs` 默认路径在 `inject_raw_ops` 后、
+  action 管线前调用（httpd main 警告 30→0，switch case 体恢复）；MIRROR
+  路径与其余驱动不变（curl 字节恒等实测）。
+
+## 2026-09-25（JTEDGE-FUSED-DEST-SPLIT-0001）：case 目的地块中分裂 —— `split_block_at_case_dest`
+
+- 新增私有 `fn split_block_at_case_dest(fd, targ_op, switch_block)`（Ghidra:
+  flow.cc:219 `FlowInfo::newAddress`）：`recover_jump_tables_injected` 的
+  collectEdges 等价段在逐 case 出边前，对落点不在块首的目的地 op 执行
+  oracle 的 newAddress→splitBasic 等价块外科——
+  - 目的地 op 补 STARTBASIC（flow.cc:230 `data.opMarkStartBasic(op)`）；
+  - `[targ_op..]` 移入新尾块（`create_new_block`，即 `newBlockBasic`），
+    尾块 cover=`[dest_addr..尾 op 地址]`、父块 cover 收缩到
+    `[原 start..保留尾 op 地址]`（splitBasic 的 per-block range，flow.cc:
+    999-1016）；
+  - 父块 out-edges 整体移交尾块，配对 incoming 半边原地改指（slot/顺序
+    全保——connectBasic 对 oracle 边表的等价终态，flow.cc:1021-1037）；
+  - 尾块插到父块后一位保持块表地址序（splitBasic 的 dead-list walk 序）；
+  - 出边顺序：先 switch→尾（BRANCHIND 臂表序），后 父→尾 fall-through
+    （collectEdges nextstart 臂在死表走查中晚于 BRANCHIND，flow.cc:952-956）；
+  - 去重从 per-block 改为 per-op（flow.cc:941-946 的 setMark 语义；分裂后
+    每目的地 op 即块首，两级去重等价）。
+- 观测（默认脸，本 worktree）：httpd main 的 5 个块中目的地
+  （0x2ba9f/0x2bafc/0x2bb0b/0x2bdbe/0x2bdf7）全部分裂，`case 0x45:` 空
+  标签消失、case 体与 canon 同形（0x4c 直落 0x45 族见 printc 侧）；其余
+  函数零分裂（默认驱动语料）。curl/mirror 不经此路径（0 分裂实测）。
+- 修订注记:本节初版提交的 doc 恢复脚本曾引入 follow_flow_range 尾部的
+  重复片段(纯注释性死码,同 commit 内已清除;可执行语义零变化——双语料
+  输出 cmp 恒等复证)。
+
+## 2026-09-25（FLOWSET / CALLSPEC-0001 移交项 (b)）：truncate `_` 臂 setBadJumpTable 接线
+
+- **Ghidra 锚点**：`FlowInfo::truncateIndirectJump`（flow.cc:727-769）`else`
+  默认臂（捕获 `fail_normal`，jumptable.hh:545）在 warning 前执行
+  `fc->setBadJumpTable(true)`（flow.cc:754）——"Consider using special name
+  for switch variable"。`fc` 来自 flow.cc:736-737 的
+  `setupCallindSpecs(op,0)` + `getCallSpecs(op)`，与本函数 Rust 形既有的
+  `setup_callind_specs(op, None)` + `find_callspec_for_op` 链同源。
+- **接线形态**（src/flow.rs `truncate_indirect_jump` `_` 臂）：`fc_owner`
+  解析 `Some` 时 `fc.write().set_bad_jump_table(true)`，随后照 Ghidra
+  754→755 顺序发 warning；`None` 守卫沿用 fail_callother 臂先例（Rugra
+  Option owner 形态的等价守卫，oracle 侧 fc 经 736 行必然存在）。字段/
+  访问器/ctor 初值/clone 携带四件 = CALLSPEC 车道 fspec 数据面
+  （fspec.hh:1660/1701-1702、fspec.cc:4945/4974，commit deb2b09b）。
+- **触发实证**（httpd 默认脸 MAX_FUNCS=30，基 2008b8e0）：`[JUMPTABLE]
+  recovery failed at 0x2daeb mode=FailNormal → truncate`（ap_vhost_
+  iterate_given_conn 内 BRANCHIND）→ 临时探针亲证 callspec 解析 `Some`
+  且 flag 置位成功后移除；stdout 恰 1 条 "Treating indirect jump as call"
+  warning。curl 语料 0 次触发（`Lowlevel` 失败族缺席）。
+- **行为面**：`isbadjumptable` 在主管线暂无读者——唯一消费者
+  `ActionNameVars::lookForBadJumpTables`（coreaction.cc:2779-2803，
+  UNRECOVERED_JUMPTABLE 命名）归 coreaction 域并行车道。故本接线为
+  数据流打通件：httpd/curl E2E cmp 亲基线字节恒等（1141/0/0 与
+  577/0/0 保持，双跑确定性）、投影银行 391/391、cargo test 1712P/1F
+  预存同败、annotations/refs 绿、gcc 审计 104OK/20FAIL=基线。
+- **CALLSPEC-0001 ② 桶状态**：ap_vhost 站点（0x2da50 函数、0x2daeb 跳转）
+  的 `void(*)()param_2` → canon `code *UNRECOVERED_JUMPTABLE` 改名链现在
+  只差 coreaction 消费者（lookForBadJumpTables 读 `isBadJumpTable()`）。
+
+## 2026-09-25（BLOCKSTRUCT-TRUNC-SWITCHEMPTY-0001）：truncate 后重算残块 SWITCH_OUT —— 恢复 oracle 建序终态
+
+- **根因**：oracle 契约里 `truncateIndirectJump`（flow.cc:727-769，跑在
+  generateOps 内）**先于** `generateBlocks`，故 splitBasic 的
+  `BlockBasic::insert`（block.cc:2285-2288）看到的是截断后 opcode
+  （CALLIND/RETURN）——`f_switch_out` 从未置位。结构化期
+  `ruleBlockSwitch` 的 cc:1652 `isSwitchOut()` 门拒绝该块，
+  `ruleBlockIfNoExit`（cc:1481-1512，子句门 cc:1497 通过）把它吸收为
+  无出口 if 子句——canon 因此印 `if (c) { …; return; }` 而无 switch 骨架
+  （**机制=容器未建**，非建后清除）。线性注入路径（inject_raw_ops +
+  build_blocks_from_ops）先建块后恢复：`insert_op`（block.rs，镜像
+  block.cc:2258）在 op 仍为 BRANCHIND 时置位 SWITCH_OUT，truncate 的
+  `op_set_opcode`（与 oracle 的 changeOpcode 一样）不触块旗标——残旗标
+  存活到 build_copy，`try_rule_switch` 对 sizeout==0 的 Copy 块构造空
+  BlockSwitch，打印侧漏出 `switch() {\n}` 空残片（httpd 默认脸唯一站点
+  = ap_vhost_iterate_given_conn 0x2da50/0x2daeb，curl 0 触发）。
+- **接线形态**（src/flow.rs `recover_jump_tables_injected` truncate 臂后，
+  即 2026-09-24 节适配差异清单的新增一条）：truncate 返回后按块内**当前**
+  opcode 重算父块 SWITCH_OUT（块内仍有 BRANCHIND → 置位；否则清除）——
+  与 `split_block_at_case_dest` 的分裂后重算同形。oracle 语义锚点 =
+  block.cc:2285-2288 建序时点读数：mirror 路径（follow_flow_range）截断
+  先于建块，本重算不改变其终态（无父块=天然 no-op）；仅注入路径的顺序
+  倒置由该重算补偿。
+- **验收**（默认脸，基=master c18a4110 亲测）：残片行 `switch() {` 计数
+  1→**0**（ap_vhost 函数体 == canon 同形，`--func` 骨架 9→7，余 7 行全为
+  PRINTC-BADJT-PARAMSYM-0001 渲染族+while 花括号形态，零 switch 行）；
+  httpd **1141→1139**/0/0（−2=残片两行）；curl **577/0/0 字节恒等**（0
+  触发路径）；httpd/curl 双跑 stdout cmp 恒等；bank 391/391；cargo test
+  --lib 与预存基线同集；annotations/refs 绿。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

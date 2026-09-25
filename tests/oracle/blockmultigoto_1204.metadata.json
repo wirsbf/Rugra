@@ -1,0 +1,44 @@
+{
+ "capture": {
+  "cases": [
+   "switch_double_back_multigoto",
+   "loop_exit_conflict",
+   "direct_newblockmultigoto",
+   "copy_switch_consumption"
+  ],
+  "runner": "tools/run_blockmultigoto_oracle.sh (pinned: oracle-commit gate, dirty-oracle-file gate, metadata comparand gate, libdecomp.a reuse)",
+  "verdict": "blockmultigoto_1204: MATCH (diff lines 0)"
+ },
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "d0104bbcb64f05cec4e8934a6bb25782c579a38e3fdcadf534c88ecfecb24bcd",
+  "rugra_block_sha256": "f4481aefb8d2ba689d4f1f2161480d10d1a12a70a1f0d4c54027a696a1ef14bf",
+  "rugra_blockaction_sha256": "3937ccb29fa179e4f04d1affc5b6a2de478e0c3d8282bc6271cd49d8c20fff0a",
+  "rust_fixture_sha256": "2816d7475ac8d95e24fb53c0ce4ff155072cde2ab9c56978395f2d33b21c7e61"
+ },
+ "covered_projection_status": "MATCH",
+ "fixture_id": "BLOCKSTRUCT-MULTIGOTO-0001",
+ "oracle": {
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38 (machine-local, rebuild per AGENTS.md oracle note)",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "overall_status": "MATCH (all four families, bilateral oracle run on locked 12.0.4)",
+ "registered_normalizations": [
+  "observation lines sorted before printing (factory append vs slot-install order is order-free per-block facts)",
+  "canonical root list arranged explicitly after construction (production orderBlocks intent)",
+  "residual-multigoto walk skips the BlockSwitch's cs[0] dispatch root on the oracle side (Rugra keeps it in BlockSwitch::control outside the walked component list \u2014 a multigoto consumed as cs[0] is not residual)",
+  "loop_exit_conflict and copy_switch_consumption observations are name-based (no raw composite indexes printed): scopeBreak's promotion compares an index threaded from the very block it is compared against, so the observable facts are index-value independent",
+  "copy_switch_consumption case_values stay basic out-edge-slot placeholders on the Rust side (oracle labels stay 0 with the hollow jumptable) \u2014 the real label sort is JUMPTABLE-TABLEAPI-0001 on both sides"
+ ],
+ "residuals": [
+  "switch case real labels (recoverLabels + finalizePrinting label sort) remain JUMPTABLE-TABLEAPI-0001 (P0-A lane)",
+  "B2-MG-RESID-3 glob_set +5 curl skeleton residual: function-level token attribution recorded on the TODO board (same-mechanism neighborhood restructure vs real divergence)"
+ ],
+ "rugra_source": {
+  "base_commit": "dff36e7 (master, lane wt/sb-mgresid)",
+  "note": "worktree /home/ls/Rugra-wt-sb-mgresid; live tree at fixture run"
+ },
+ "schema": 2,
+ "status_note": "Pinned runner landed from lane wt/sb-multigoto (root integration of the B2-MG-RESID-1/2/3 closure lane wt/sb-mgresid). Families: (A) rule-driven switch_double_back_multigoto \u2014 production collapseAll + scopeBreak over a buildCopy graph with f_switch_out set, observing the formed BlockSwitch's case facts recursively; (A2) loop_exit_conflict \u2014 B2-MG-RESID-2 same-shape closure: WhileDo[cond=h, body=List[mg(s), gt(t\u2192e)]] roots [wd, e] built through production factories over a production newBlockMultiGoto peel; scopeBreak promotes ONLY the contrast BlockGoto to f_break_goto (block.cc:2872-2873) while the multigoto's gotoedge exiting the same loop is never reclassified (block.cc:2918-2922 discards curexit, never consults gotoedges) \u2014 the withdrawn collapse-driven variant diverged in the legacy cascade domain (not newBlockMultiGoto), registered at withdrawal; (B) direct new_block_multigoto \u2014 peel1 fresh wrap (identifyInternal self-edge absorption + forceOutputNum(sizeOut()+1) restore, loopouts=1, bilateral t1_sizein=0), peel2 already-t_multigoto branch (addEdge + removeEdge + setDefaultGoto with pre-mutation isDefaultBranch capture), after_scopebreak (curesxit discarded, gotoedges untouched); (C) copy_switch_consumption \u2014 B2-MG-RESID-1 same-shape closure: buildCopy graph, production multigoto peel over the switch-out head, then newBlockSwitch's recording calls (grabCaseBasic before identifyInternal + addBlock) consume the multigoto as cs[0]; the peeled gotoedge target re-appears as the APPENDED case with gototype f_goto_goto (block.cc:3548-3553); roots [switch, after, gotoedge-target] keep the raw f_goto_goto through scopeBreak (cc:3620-3623 does not fire \u2014 the target is not the immediate switch exit). The withdrawn rule-pipeline variant lost the pre-collapse goto mark on the oracle side (synthetic-graph rule interaction, not a newBlockMultiGoto defect); the real-input consumption path is covered by the curl gp E2E evidence."
+}

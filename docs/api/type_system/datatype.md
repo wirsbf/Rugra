@@ -1,5 +1,15 @@
 # `type_system/datatype.rs` API Reference
 
+**2026-09-26（UNIONRESOLVE-PKG-A-0001 / lane PKGA）**: `TypeStruct::score_single_component`
+（`// Ghidra: type.cc:1893`）签名改收 `(parent, fd, op_ref, slot)`（原
+`(parent, &PcodeOp, slot)` 视图形）——LOAD/STORE 指针臂 cc:1908
+`vn->getTypeReadFacing(op)` 换 `crate::unionresolve::vn_type_read_facing`
+（fd-aware consult，slot 1 键 = 地址输入真实槽位）。union-ptr 地址 resolved 为
+field 指针时，oracle 比较 FIELD 的 pointee 与 `parent`（指针相等即 -1 整结构），
+退化形比较 raw union-ptr 的 pointee——此臂直接决定 `resolve_in_flow` Array/Struct
+臂的 field 选择正确性。唯一调用点 unionresolve.rs `resolve_in_flow`（Array/Struct
+共享臂）同步传 `(fd, op, slot)`。
+
 **2026-08-23 新增**: `Datatype::type_equal`——Ghidra interned TypeFactory 指针比较（如 castOutput 的 `tokenct == outHighType` coreaction.cc:2544）的 Rust 等价：Base 型按 (name,size,metatype) 结构比较，其余形状退回 Arc 同一性。
 
 
@@ -103,9 +113,11 @@ stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
 同输入观察仍在最终 series D fixture 前保持 `NO_ORACLE`。模块整体因已登记
 残差保持 **L2 / MISMATCH**，不能把本片的 Rust 回归测试解释为行为对齐证据。
 
-### `pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64)`
+### `pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64)`
 对应 `Datatype::getSubType` (type.hh:247, type.cc:174)。
-返回包含 `off` 的一级组件类型及组件内偏移。
+返回包含 `off` 的一级组件类型及组件内偏移。组件以 canonical factory/scope-owned
+`Arc<Datatype>` 返回——这是 Ghidra 虚函数 `Datatype*` 返回值的 Rust 所有权镜像
+（TypeSpacebase 覆写的结果由 Scope 拥有，不在本对象内部，借用签名无法表达）。
 - Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter` 的原始
   binary-search midpoint 顺序；重叠/同 offset 字段不会退化为线性“最后命中”。
   `getFieldIter` 的参数是 `int4`，所以 `getSubType(int8)` / `findTruncation(int8)`
@@ -119,15 +131,24 @@ stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
   `alignSize`，`newoff = off % elem.alignSize`；不会调用 legacy constructor
   的 layout fallback
 - PartialStruct: 保持 `do/while` 覆盖语义；较深一层失败会把先前成功结果覆盖为 null
-- 其他: 返回 `(None, off)`。Pointer truncate、带 factory 的 TypeCode，以及
-  Spacebase 的 unknown1 回退仍是已登记 residual。
+- **Spacebase: `TypeSpacebase::getSubType` (type.cc:2947) 虚分派**——通用 match
+  臂路由到覆写：`get_map()` 取 global/local scope，byte→address 换算后
+  `queryContainer` 查最小包含 SymbolEntry，命中返回符号类型 +
+  `(addr - entry.addr) + entry.offset` 的 renormalized newoff。这正是
+  `TypePointer::isPtrsubMatching` SPACEBASE 臂 (type.cc:1129) 在 C++ 中经虚调用
+  观察到的路径，`RulePtrsubUndo` (ruleaction.cc:7138) 与 `ActionSetCasts`
+  (coreaction.cc:2748) 两个消费门禁因此读到同一结果。
+  miss（无 container）时 Ghidra 返回 `getBase(1,TYPE_UNKNOWN)` + newoff 0，
+  Rugra 类型层没有 TypeFactory 句柄，返回 `(None, 0)` —— 已由
+  `tests/oracle/type_spacebase_subtype_1204` 真实 oracle 固定为
+  `TYPE-SPACEBASE-MISSFALLBACK-0001`（7/10 记录 MATCH，3 条 miss 记录 MISMATCH）。
+- 其他: 返回 `(None, off)`。Pointer truncate、带 factory 的 TypeCode 仍是已登记 residual。
 
-`Datatype::get_sub_type_arc` 是 Rust 所有权胶水：它在 Struct、Array 与
-PartialStruct 的 covered projection 中保留 canonical `Arc`，供
-`TypeFactory::get_exact_piece` 使用。Spacebase 的 borrowed API 无法借出 scope-owned
-symbol type，而 Arc helper 会走 Rugra 当前的 symbol lookup，因此两路并非完整同输出。
-Pointer truncate、TypeCode factory attachment，以及 Spacebase 的 byte/address-unit
-换算、`resolveConstant`、scope query 与 miss→unknown1 均未完整表示，整体继续绑定
+`Datatype::get_sub_type_arc` 是 Rust 所有权胶水的薄委托：现在直接调用
+`Datatype::get_sub_type`（签名已携带 canonical Arc），`TypeFactory::get_exact_piece`
+等持有 `Arc<Datatype>` 的调用点行为不变。Pointer truncate 与 TypeCode factory
+attachment 未表示，Spacebase 的 miss→unknown1 回退绑定
+`TYPE-SPACEBASE-MISSFALLBACK-0001`；整体 residual 集保持
 `TYPE-0001`、`DATATYPE-SPACEBASE-SPACEID-0001`、`ARCH-0001`、`ADDRESS-0001`、
 `DATABASE-0001`，状态为 MISMATCH/UNTESTED。
 
@@ -301,11 +322,39 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 ### `TypeSpacebase` 完整方法（type.hh:721-746, type.cc:2935-3098）
 将一个 `AddrSpace` 视作按指针偏移索引的"结构体"，用于栈帧/全局变量类型传播。
 - 结构体新增字段 `spaceid: Option<AddressSpace>`、`localframe: Address`、`scope: Option<Arc<Scope>>`。
-- `get_map(off)`（type.cc:2996）— 委托 `Scope::map_addr(localframe, off, ...)`；
-  无 scope 时返回空（对应 Ghidra "no map ⇒ TYPE_UNKNOWN" 回退）。
-- `get_sub_type(off)`（type.cc:3040）— 经 `get_map` 取组件。
-- `get_address(off, sz)`（type.cc:3060）— 构造目标 `Address`。
-- `compare` / `compare_dependency`（type.cc:3085/3092）— 比 spaceid/localframe。
+- `fd: Option<Arc<RwLock<ScopeLocal>>>`（2026-09-24 VARMAP-STACKBOUNDARY-0001 起，
+  替换原 `stubs::Funcdata` 占位）——local-frame spacebase 的**活跃局部 scope 通道**：
+  Ghidra `getMap` (type.cc:2938-2944) 每次查询动态解析
+  `queryFunction(localframe)->fd->getScopeLocal()`；Rust 所有权上 Funcdata 持有
+  ScopeLocal、工厂缓存的 spacebase 类型持共享句柄（构造时由
+  `TypeFactory::live_local_scopes` registry 立即挂接，初值=空 ScopeLocal=
+  oracle 首趟 restructure 前的可观察态），`ActionRestructureVarnode` 每趟把
+  重构后的 scope 发布进句柄内容。全局 spacebase 恒 None。
+- `get_map()`（type.cc:2935-2945）— 返回 `Option<SpacebaseMap>`（新枚举：
+  `Local(RwLockReadGuard<ScopeLocal>)` 或 `Global(&Scope)`）。local-frame
+  判定用 `!localframe.is_null()`（Rugra legacy `Address::new(frame)` 无 space，
+  `is_invalid()` 对真实函数入口也为真；工厂的 global spacebase 恒 frame 0，
+  故以非零偏移为准）。localframe 非零而无句柄读（首趟前/锁中毒）落 None
+  → `get_sub_type` 回 oracle 空 ScopeLocal 的 miss 答案，**不**回落全局 scope
+  （oracle 对有效 local frame 从不回落）。
+- `get_sub_type(off)`（type.cc:2947）— 经 `get_map` 的 `find_container`
+  （queryContainer）取最小包含 SymbolEntry 的符号类型与 renormalized offset；
+  Local 臂用 `ScopeLocal::find_container_entry(space, off, 1, None)`——
+  `queryContainer(addr,1,nullPoint)` 的忠实移植（null usepoint 只收 addrtied
+  entry）；Global 臂保持快照 scope 查询（全局符号图反编译期间稳定）。
+  2026-09-22 起 `Datatype::get_sub_type` 通用 match 臂**虚分派路由到此覆写**
+  （`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 修复）。2026-09-23 起 miss 回退
+  （type.cc:2964-2966）返回 `getBase(1,TYPE_UNKNOWN)` 语义——即 1 字节匿名
+  UNKNOWN 基类型 + `newoff=0`，**恒非 None**（无 scope 接线时同答案，对应
+  Ghidra getMap 的全局 scope 查空路径），关闭
+  `TYPE-SPACEBASE-MISSFALLBACK-0001`（双侧 fixture
+  `tests/oracle/type_spacebase_subtype_1204` 10/10 记录字节一致，
+  ghidra/rugra stdout sha256 相同；下游 `AddTreeState::calc_subtype` 的
+  TYPE_SPACEBASE 臂因此对 `RSP+const`/pushptr 后形态保持 valid 并产出
+  PTRSUB 链，恢复 oppool2 ptrarith 的 spacebase fire——match_url Phase 2
+  首分歧 191→317，Lane DG `SB-MATCHURL-ORD191-0001`）。
+- `get_address(off, sz)`（type.cc:3063）— 构造目标 `Address`。
+- `compare` / `compare_dependency`（type.cc:3039/3045）— 比 spaceid/localframe。
 - `new_global(address)` 便捷构造全局 spacebase；`is_invalid()` 判定 localframe 是否 INVALID。
 
 ### 依赖范围与工厂（见 `typefactory.md` / `typefactory.rs`）
@@ -368,3 +417,104 @@ core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
 克隆 `Arc`，保留原返回 Datatype 身份，不再构造深拷贝对象。这是调用约定模型
 carrier 的身份修正；完整 TypeCode prototype、null output 和 dependency 行为
 没有新增双侧门禁，整体仍为 L2/MISMATCH。
+
+## 2026-09-24：TypeSpacebase 数组吸附 walk + live map 查询族（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+- 新增 `SpacebaseMap<'a>`（getMap 动态投影：`Local(Option<&ScopeLocal>)`/
+  `Global(Option<&Arc<Scope>>)`）与 `ArrayedComponent`（newoff/elSize 全精度
+  结果对象）。
+- `TypeSpacebase::get_sub_type_in_map`/`nearest_arrayed_component_forward_in_map`
+  /`nearest_arrayed_component_backward_in_map`：type.cc:2947/2971/3020 的
+  live-map 形式。forward 三分支（miss/偏移非 0 片段→addr+32；struct 符号先走
+  自身 forward walk；否则跳容器末=addr+byteToAddressInt(size,ws)）+ 回绕检查
+  + 第二查询必须整符号（getOffset()==0）且类型为数组或前向含数组的结构体。
+- `spacebase_local_query_container`（database.cc:2250
+  ScopeInternal::findContainer 的 ScopeLocal 静态日志形态）：最小包含条目、
+  严格小于的尺寸竞争、尺寸恰等早退、null usepoint 仅放行 addrtied 符号
+  （database.cc:117-118）；Ghidra 父 scope walk 对 stack 地址在全局 maptable
+  必 miss，仅查本地日志观察等价。
+- 自由函数 `nearest_arrayed_component_forward/backward`（type.cc:188/201 基类
+  +1698/1669 TypeStruct 覆写的虚分派形态，newoff/elSize 全精度；与
+  ruleaction.rs RulePtrsubUndo 的同名布尔版（testForArraySlack 专用）不同）。
+- `get_sub_type` 的 byte→address 换算由乘改除（space.hh:523
+  byteToAddress=val/ws；ws=1 恒等，无行为变化）。
+
+## 2026-09-24：SPACEBASE 臂 byteToAddress 无符号除镜像（wt/postadsorb，R2）
+
+- `AddrSpace::byteToAddress(uintb val, uint4 ws) { return val/ws; }`
+  （space.hh:522-524）是 **uintb（无符号 64 位）除法**。Rugra 三处
+  `off.wrapping_div(wordsize) as u64`（`get_sub_type`/`get_sub_type_in_map`/
+  `nearest_arrayed_component_forward_in_map`）原为 i64 有符号除法后再转
+  u64——对负栈偏移（如 -0x4e8）在 ws>1 时会得到与 oracle 不同的商
+  （有符号负商 vs 无符号巨大正商）。三处改为
+  `(off as u64).wrapping_div(wordsize as u64)`，按补码位型做无符号除。
+- ws=1（当前 x86-64 全部空间）下逐位恒等，E2E 双语素逐字节不变；
+  wordsize>1 空间进入 TypeSpacebase 查询前为不可达分支（fixture 缺口
+  登记 TODO `RULEARITH-SPACEBASE-USDIV-0001`，P3 latent）。
+- 单测：test_spacebase_nearest_arrayed_walks_live_map（FG 反推的 oppool2
+  ScopeLocal 形态 [8B 单元素数组@-0x4f8][8B 标量@-0x4f0][数组@-0x4e8]：
+  backward@-0x4f8 命中 newoff=0、forward@-0x4f0 吸附 newoff=-8、远距 miss
+  (undefined1,0)）+ test_struct_nearest_arrayed_component_walks（结构体
+  字段 walk 的 newoff/elSize 精度与基类 null walk）。
+
+## 2026-09-25：is_primitive_whole 1:1 重写（CR-PJOINS M1，wt/pjoins）
+
+`is_primitive_whole`（type.cc:501-513）从 metatype 白名单
+{Int,Uint,Bool,Float} 改为 oracle 三段结构：
+
+1. `!is_piece_structured()` → **true**（type.hh:929
+   `metatype <= TYPE_ARRAY(7)` 的补集=Pointer/PtrRel/Code/Float/Bool/
+   Uint/Int/Unknown/Spacebase/Void——旧白名单漏掉的全部为 TRUE）；
+2. Array/Struct 且 `numDepend()>0`、首组件尺寸==整体尺寸 → 递归
+   `component->isPrimitiveWhole()`（退化 `T[1]` 数组与单满尺寸字段
+   结构体；TypeArray::getDepend type.hh:455-456、TypeStruct::getDepend
+   type.hh:526-527）；
+3. 其余（Union/PartialUnion/PartialStruct/非退化 Array/Struct）→ false。
+
+**枚举上报口径注记（CR 裁定核实项）**：oracle `TypeEnum` 构造器把存储
+metatype 无条件归一为 TYPE_INT/TYPE_UINT（type.hh:489-490 三元式，
+`TypePartialEnum` 经 type.cc:2255-2256 同落 TYPE_UINT），故 oracle 枚举
+实例恒 `!isPieceStructured()` → isPrimitiveWhole=true。Rugra 枚举可能存
+折叠变体 `TypeMetatype::Enum`（oracle 存储空间不存在的上报分歧，另行
+登记域）——但 `is_piece_structured` 显式集同时排除 Enum 与 Int/Uint 两
+形态，两谓词在枚举上均与 oracle 一致，该分歧对本谓词无可观察影响。
+
+**染及面与触发声明**：消费者=heritage split 族 isPrimitive 臂
+（heritage.rs split_join_read/write——join_db 恒空，生产零触发）+
+double_precis RuleDoubleIn/Out attemptMarking 的 typelock 守卫
+（double.cc:3222-3224/3299-3302——仅 typelocked 非基础 metatype 的
+PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 终报），
+激活面现语料 0 触发；旧白名单 TRUE 集是 oracle TRUE 集的真子集，修复
+方向单调扩 TRUE（Pointer/Unknown/退化 wrapper 族由 FALSE→TRUE）。
+
+## 2026-09-25（Lane MIRROR2）：spacebase/untyped-symbol miss 臂改走工厂命名 1 字节 unknown（MIRROR2-UNKBYTE-0001）
+
+- `TypeSpacebase::get_sub_type`/`get_sub_type_in_map`/`query_container_in_map`
+  的 miss 臂与 `spacebase_local_query_container`/全局臂的 untyped-symbol
+  fallback，此前构造裸匿名 `TypeBase::new(String::new(), 1, Unknown)`，
+  输出面拼成 `unkbyte1 *`（printc.cc:3383 genericTypeName）。oracle 对应
+  臂全部经 `glb->types->getBase(1,TYPE_UNKNOWN)`（type.cc:2965-2967；
+  database.cc:629/681/731）返回命名核心类型。六处改调
+  `TypeFactory::canonical_unknown_base_1()`（锁安全设计见 typefactory.md
+  同日条目：OnceLock 无租约急切填充 + 零锁读取；死锁根因=down_chain_pointer
+  写租约重入，eu-stack 亲证）。
+- 效果：镜面口径 `(unkbyte1 *)`/`unkbyte1 *` 拼写族清零；canon 档
+  undefined1 命名通道同步受益；AVERSE 档位行为不变（explicit new_flavor
+  oracle fixtures 不经过这些 miss 臂）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+### 2026-09-26：TypePartialUnion 方法形 resolve_in_flow/find_resolve 删除（UNIONRESOLVE-PKG-G-0001）
+`TypePartialUnion::resolve_in_flow(_op,_slot)` 与
+`TypePartialUnion::find_resolve(_op,_slot)`（原 type.cc:2498/2517 的
+方法形镜像）已删除：零生产/测试调用方；且为无 Funcdata union-field
+缓存的退化实现（oracle type.cc:2505 走 `resolveTruncation`、:2524 走
+`findResolve` 缓存），与 unionresolve.rs 的 fd-aware 自由函数
+`resolve_in_flow` / `find_resolve` / `union_resolve_truncation` 重名，
+构成误用陷阱。基类 `Datatype::find_resolve`（type.cc:586，return
+self）保留不变。PartialUnion 的流内解析一律走 unionresolve.rs 自由
+函数。

@@ -299,14 +299,17 @@ pub mod display_format {
     pub const CHAR: u32 = 5;
 }
 
-// RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
-fn sanitize_c_ident(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }
-        })
-        .collect()
-}
+// RUGRA-GLUE: sanitize_c_ident — RETIRED (STUBLEAK-DOTNAME-SANITIZE-0001).
+// The oracle emits symbol/function names VERBATIM: the declaration site is
+// `emit->tagFuncName(fd->getDisplayName(),...)` (printc.cc:2592) and call
+// sites resolve through the FuncCallSpecs display name — no C-identifier
+// scrubbing exists anywhere in printc.cc. The former `.`→`_` rewrite broke
+// the direct-runner mirror face, where the bare-BFD loader hands the ELF
+// name `parseconfig.constprop.0` (GCC clone suffix) through to the printer
+// and the locked golden prints the dotted form at the header and every
+// call site. Canon faces feed plain DWARF spellings (no dots), so removal
+// is byte-neutral there. The `:` passthrough note (DRIVER-SWITCHD-DEFFN-0001)
+// is superseded by full passthrough.
 
 // Ghidra: printc.cc:1426 PrintC::printUnicode (char-constant escapes)
 /// Escape one char-codepoint body for a character constant, faithful to
@@ -400,6 +403,221 @@ fn local_maptable_space_rank(space: crate::space::AddressSpace) -> u8 {
     }
 }
 
+/// One disjoint sub-range of the rangemap common refinement
+/// (rangemap.hh:76-93 `AddrRange`): `[first, last]` inclusive offsets of the
+/// sub-range, the owning record's EntrySubsort, and the owner's index into
+/// the entry slice. The Vec position among equal `(last, sub)` keys mirrors
+/// the C++ multiset placement rules (plain insert lands after existing
+/// equal keys; the piece-loop hint insert lands before the hinted element
+/// when its key is equal — rangemap.hh:253/259 vs :207).
+#[derive(Clone, Copy)]
+struct ScopeMapPiece {
+    id: u64,
+    first: u64,
+    last: u64,
+    /// (useindex, useoffset) projection; (0, 0) is the minimal subsort
+    /// (database.hh:107-134 EntrySubsort, database.cc:97-109 getSubsort).
+    sub: (u32, u64),
+    owner: usize,
+}
+
+// Ghidra: rangemap.hh:223 rangemap<_recordtype>::insert
+/// Emulate the `std::list<SymbolEntry>` order that ScopeInternal's per-space
+/// EntryMap maintains (database.hh:164 `rangemap<SymbolEntry>`, storage
+/// `std::list<_recordtype> record` rangemap.hh:130), which is the order
+/// `MapIterator` walks in `PrintC::emitScopeVarDecls` (printc.cc:2535,
+/// database.cc:1889-1919 `ScopeInternal::begin` -> `begin_list()`).
+///
+/// `rangemap::insert(data, a, b)` (rangemap.hh:221-277) splices each newly
+/// inserted record immediately BEFORE the list node of the owner of the
+/// first tree AddrRange whose key `(last, subsort)` is >= the new record's
+/// full-range key `(b, subsort)`; with no such AddrRange the record is
+/// appended at the list end. Tree AddrRange keys are the inclusive ends of
+/// the disjoint refinement pieces, so an enclosing record's split piece can
+/// be the splice target and the resulting list order is NOT in general a
+/// pure `(end, subsort)` sort of the full ranges.
+///
+/// `entries` carries `(a, b_inclusive, subsort, payload)` per record in the
+/// scope's entry-creation order; returns the payloads in emulated list
+/// order.
+///
+/// RUGRA-GLUE: C++ list/multiset iterators are stable across inserts; this
+/// emulation tracks pieces by `id` and re-finds Vec positions instead, and
+/// represents the EntrySubsort as `(0,0)` for address-tied entries and
+/// `(1, first-use offset)` otherwise (all local-scope uselimits share the
+/// code address space, so the shared useindex collapses to a constant).
+fn scope_rangemap_list_order(entries: &[(u64, u64, (u32, u64), usize)]) -> Vec<usize> {
+    let mut next_id: u64 = 0;
+    // Sorted by (last, sub) with Vec position as the equal-key placement.
+    let mut tree: Vec<ScopeMapPiece> = Vec::new();
+    let mut list: Vec<usize> = Vec::new();
+
+    let find = |tree: &Vec<ScopeMapPiece>, id: u64| -> usize {
+        tree.iter().position(|p| p.id == id).expect("piece id")
+    };
+    // First element with (last, sub) >= key (C++ multiset lower_bound).
+    let lower_bound_key =
+        |tree: &Vec<ScopeMapPiece>, last: u64, sub: (u32, u64)| -> Option<usize> {
+            tree.iter().position(|p| (p.last, p.sub) >= (last, sub))
+        };
+    // First element with last >= point (AddrRange(point) carries the minimal
+    // subsort, so the subsort never decides this bound — rangemap.hh:85/228).
+    let lower_bound_point = |tree: &Vec<ScopeMapPiece>, point: u64| -> Option<usize> {
+        tree.iter().position(|p| p.last >= point)
+    };
+    // Plain multiset insert: sorted position, after existing equal keys.
+    let insert_plain = |tree: &mut Vec<ScopeMapPiece>, piece: ScopeMapPiece| {
+        let idx = tree
+            .iter()
+            .position(|p| (p.last, p.sub) > (piece.last, piece.sub))
+            .unwrap_or(tree.len());
+        tree.insert(idx, piece);
+    };
+
+    for &(a, b, sub, payload) in entries.iter() {
+        // rangemap.hh:226-233: refine the partition at the left boundary.
+        // `low` tracks the C++ iterator by piece id (stable across inserts).
+        let mut low = lower_bound_point(&tree, a).map(|p| tree[p].id);
+        if let Some(l) = low {
+            if tree[find(&tree, l)].first < a {
+                scope_rangemap_unzip(&mut tree, a - 1, l, &mut next_id);
+            }
+        }
+        // rangemap.hh:238-245: splice before the owner of the first
+        // AddrRange with key >= (b, sub); append at the end otherwise.
+        let spot = lower_bound_key(&tree, b, sub);
+        match spot {
+            None => list.push(payload),
+            Some(s) => {
+                let owner = tree[s].owner;
+                let pos = list.iter().position(|&r| r == owner).expect("owner in list");
+                list.insert(pos, payload);
+            }
+        }
+        // rangemap.hh:247-274: insert the new record's refinement pieces.
+        let mut f = a;
+        while let Some(l) = low {
+            let piece = tree[find(&tree, l)];
+            if piece.first > b {
+                break;
+            }
+            if f <= piece.last {
+                if f < piece.first {
+                    insert_plain(
+                        &mut tree,
+                        ScopeMapPiece {
+                            id: next_id,
+                            first: f,
+                            last: piece.first - 1,
+                            sub,
+                            owner: payload,
+                        },
+                    );
+                    next_id += 1;
+                    f = piece.first;
+                }
+                let piece = tree[find(&tree, l)];
+                if piece.last <= b {
+                    let new_piece = ScopeMapPiece {
+                        id: next_id,
+                        first: f,
+                        last: piece.last,
+                        sub,
+                        owner: payload,
+                    };
+                    next_id += 1;
+                    // tree.insert(low, addrrange): the hinted insert lands
+                    // immediately before the hinted element on an equal key,
+                    // at the sorted after-equals position otherwise.
+                    if (piece.last, piece.sub) == (new_piece.last, new_piece.sub) {
+                        let lpos = find(&tree, l);
+                        tree.insert(lpos, new_piece);
+                    } else {
+                        insert_plain(&mut tree, new_piece);
+                    }
+                    if piece.last == b {
+                        break;
+                    }
+                    f = piece.last + 1;
+                } else {
+                    // b < piece.last: refine at b and stop.
+                    scope_rangemap_unzip(&mut tree, b, l, &mut next_id);
+                    break;
+                }
+            }
+            // ++low (rangemap.hh:268).
+            let lpos = find(&tree, l);
+            low = if lpos + 1 < tree.len() {
+                Some(tree[lpos + 1].id)
+            } else {
+                None
+            };
+        }
+        if f <= b {
+            insert_plain(
+                &mut tree,
+                ScopeMapPiece {
+                    id: next_id,
+                    first: f,
+                    last: b,
+                    sub,
+                    owner: payload,
+                },
+            );
+            next_id += 1;
+        }
+    }
+    list
+}
+
+// Ghidra: rangemap.hh:196 rangemap<_recordtype>::unzip
+/// Split every refinement sub-range that contains the boundary point `i`
+/// (first <= i < last), starting the walk at piece `start_id`, into a
+/// `[first..i]` piece (inserted at its sorted after-equals position) and the
+/// original element shrunk to `[i+1..last]` (its `(last, sub)` key — and so
+/// its multiset position — is unchanged; only `first` moves, which is why
+/// the C++ iterator at the split element stays valid).
+fn scope_rangemap_unzip(
+    tree: &mut Vec<ScopeMapPiece>,
+    i: u64,
+    start_id: u64,
+    next_id: &mut u64,
+) {
+    let mut cur = match tree.iter().position(|p| p.id == start_id) {
+        Some(p) => p,
+        None => return,
+    };
+    // rangemap.hh:200: boundary already present -> nothing to split.
+    if tree[cur].last == i {
+        return;
+    }
+    while cur < tree.len() && tree[cur].first <= i {
+        let f = tree[cur].first;
+        tree[cur].first = i + 1;
+        let new_piece = ScopeMapPiece {
+            id: *next_id,
+            first: f,
+            last: i,
+            sub: tree[cur].sub,
+            owner: tree[cur].owner,
+        };
+        *next_id += 1;
+        // The new (i, sub) key sorts strictly before the split element's
+        // (last, sub); the hinted multiset placement reduces to the sorted
+        // after-equals position among foreign pieces with the same key.
+        let idx = tree
+            .iter()
+            .position(|p| (p.last, p.sub) > (new_piece.last, new_piece.sub))
+            .unwrap_or(tree.len());
+        debug_assert!(idx <= cur);
+        // The insert lands at or before the split element, shifting it (and
+        // everything after it) one slot right; the walk continues at the
+        // element that followed the split element (C++ ++iter).
+        tree.insert(idx, new_piece);
+        cur += 2;
+    }
+}
+
 /// Represents a detected struct on the stack frame.
 /// When a stack address is passed to a function call (via lea reg, [rsp+X]),
 /// it indicates a struct/buffer at that offset.
@@ -425,6 +643,47 @@ pub struct PrintC {
     symbol_table: HashMap<u64, String>,
     /// Address → string literal lookup (borrowed from Funcdata during doc_function)
     string_table: HashMap<u64, String>,
+    /// Front-end code-label layer: address → label symbol display name
+    /// (`LAB_<image-based addr>`). Transport of the local scope's mapped
+    /// `LabSymbol`s that `PrintC::emitLabel` finds via
+    /// `Scope::queryCodeLabel(addr)` (printc.cc:3176, database.cc:1301):
+    /// in the oracle these live in the function's local ScopeGhidra,
+    /// populated lazily by the remote `getCodeLabel` query
+    /// (database_ghidra.cc:308-325) against the front-end program DB
+    /// (default `LAB_` labels at referenced code addresses, absent at
+    /// function entries where a FUNCTION symbol is primary). Rugra's driver
+    /// installs the equivalent layer per function before printing; the
+    /// raw-BFD mirror environment (no analyzers, no reference-driven
+    /// default labels) keeps it empty, matching the oracle single-function
+    /// harness whose labels all render through the generic arm.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    code_labels: HashMap<u64, String>,
+    /// Image-base delta the front-end loader applied to code addresses
+    /// before the label strings render (analyzeHeadless default 0x100000;
+    /// 0 for the raw-BFD mirror whose `Address::printRaw` output
+    /// (space.cc:206-222) shows ELF-relative offsets). Added when
+    /// `code_label` formats the generic/joined/dup arms so the digits
+    /// match the oracle's front-end address space.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    code_label_base: u64,
+    /// Entry addresses of `f_joined_block` (block.hh:105) basics.
+    /// `emitLabel`'s `hasSpecialLabel()` gate (block.hh:291,
+    /// printc.cc:3173) makes joined blocks skip the queryCodeLabel lookup
+    /// and print the `joined_` prefix unconditionally.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    joined_label_addrs: std::collections::HashSet<u64>,
+    /// Entry addresses of `f_duplicate_block` (block.hh:106) basics —
+    /// the `dup_` arm of the same hasSpecialLabel gate.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    dup_label_addrs: std::collections::HashSet<u64>,
+    /// Suffix appended to an integer constant flagged `longprint`
+    /// (`push_integer` printc.cc:1364-1365 `t << sizeSuffix`), set by
+    /// `PrintC::initializeFromArchitecture` (printc.cc:2332-2340): `"LL"`
+    /// when the type factory's long size equals the int size, `"L"`
+    /// otherwise. Rugra's corpus is x86-64 gcc (long=8, int=4), so the
+    /// constructor pins `"L"`; re-pin when the printlanguage-side
+    /// architecture hookup lands.
+    size_suffix: &'static str,
     /// Function address range for local label detection
     func_start: u64,
     func_end: u64,
@@ -451,10 +710,38 @@ pub struct PrintC {
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
     call_targets: HashSet<u64>,
+    /// CALL instruction addresses whose callee FuncProto is output-locked
+    /// VOID (PRINTC-VOIDCALL-0001). Ghidra's
+    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1521-1541) removes any
+    /// CALL output and re-creates one only for a locked NON-void callee, so
+    /// the oracle's print layer never sees an output varnode on a locked-void
+    /// call: `PrintC::emitExpression` (printc.cc:2471-2476) prints no
+    /// assignment LHS (`free(p);` statement form) and `PrintC::opReturn`
+    /// (printc.cc:754-763) prints a bare `return;`. Rugra's action layer
+    /// removes the output on the same conditions, but any call site whose
+    /// output survived (action ordering noise) must still render with the
+    /// oracle's no-output bytes: the print layer projects the
+    /// `funcLinkOutput` no-output state keyed on the callee's FuncProto,
+    /// replacing the retired P13 hardcoded 13-libc-name text split.
+    void_callee_call_addrs: HashSet<u64>,
     /// Varnode Arc pointers that are used as pointers (LOAD/STORE address
     /// or INT_ADD input feeding LOAD/STORE). Precomputed in doc_function
     /// for usage-based type inference in Hungarian naming.
     pointer_varnodes: HashSet<(crate::space::AddressSpace, u64)>,
+    /// Subset of `pointer_varnodes` that are DIRECT LOAD/STORE address
+    /// inputs. Only these may receive the pre-print pointer fallback stamp:
+    /// the pointer↔address-slot edge is the one direction Ghidra types
+    /// (TypeOpLoad::propagateType typeop.cc:487-502, in/out slot 1), while
+    /// flowing a pointer from an INT_ADD output BACK into its inputs is
+    /// explicitly forbidden (TypeOpIntAdd::propagateType typeop.cc:1197
+    /// `inslot == -1 → 0`). Membership is by VARNODE IDENTITY
+    /// (`create_index`), never by the (space,offset) key: register-space SSA
+    /// keeps a whole family of overlapping varnodes at one offset (RAX/EAX/
+    /// AL all at register 0, one object per SSA rename), so key-based
+    /// matching stamped unrelated sub-register and extension/truncation
+    /// outputs and poisoned the SUBPIECE/ZEXT/SEXT cast decisions (WIDTHOP
+    /// family root cause).
+    load_addr_direct: HashSet<u32>,
     /// Inline candidates: Unique-space (space, offset) → defining PcodeOp Arc
     /// Only populated for single-use Unique outputs of non-COPY, non-STORE ops.
     inline_candidates: HashMap<(crate::space::AddressSpace, u64), Arc<RwLock<PcodeOp>>>,
@@ -469,6 +756,19 @@ pub struct PrintC {
     /// Parameter register offset → parameter name mapping
     /// Populated from fd.funcp.parameters in doc_function
     param_names: HashMap<u64, String>,
+    /// Local-scope name occupancy for the MINIMAL_NAMESPACES shadowing
+    /// check (Symbol::getResolutionDepth, database.cc:323-359 ->
+    /// ScopeInternal::isNameUsed, database.cc:2417-2432). In the oracle
+    /// the function's local nametree holds every named local Symbol —
+    /// parameters, restructured stack symbols, and ActionNameVars-named
+    /// highs — and a global reference whose base name is occupied prints
+    /// with one `::` scope element (PrintC::pushSymbolScope, printc.cc:
+    /// 202-228, printing the global scope's empty display name under the
+    /// binary `::` scope operator; witness: `::config.outfile` in
+    /// main/getparameter where a local `config` shadows the global, vs
+    /// bare `config.<field>` in unshadowed functions). Built once per
+    /// doc_function (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ③).
+    local_scope_names: HashSet<String>,
     /// True when currently emitting an output (LHS) varnode — skip def chain resolution
     is_lhs: bool,
     /// Global set of varnode Arc pointers used as input across ALL blocks
@@ -555,6 +855,13 @@ pub struct PrintC {
     /// reject) — names a label no block can ever define
     /// (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001).
     code_block_starts: HashSet<u64>,
+    /// Per-case exit-statement ledger (RETIRED reader with
+    /// BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001's structuring-side fix: the
+    /// cc:3342 break decision now reads the oracle's own captured
+    /// `BlockSwitch::case_isexit` flag, and the A/B retirement test showed
+    /// zero residue with this ledger's consumer removed). The writes are
+    /// kept as the discharge record for future re-derivations.
+    case_exit_stmt_printed: bool,
     /// Restructured local-variable scope (faithful port of varmap.cc). Built
     /// once per doc_function from the function's stack varnodes. When a symbol
     /// covers a stack offset, get_stack_variable_name prefers its name over the
@@ -729,6 +1036,44 @@ pub struct PrintC {
     rpn_enabled: bool,
 }
 
+// Ghidra: printc.cc:1666-1687 PrintC::pushEnumConstant (matches-driven representation core)
+fn enum_match_text(val: u64, e: &crate::type_system::datatype::TypeEnum) -> Option<String> {
+    let mut rep = crate::type_system::datatype::EnumRepresentation::default();
+    e.get_matches(val, &mut rep);
+    enum_rep_text(&rep)
+}
+
+// RUGRA-GLUE: the representation-to-text half of pushEnumConstant's match
+// branch — pure string assembly, split out so the shift form (which
+// TypeEnum::getMatches itself never produces — its Representation keeps
+// the ctor's shiftAmount=0, same as type.cc:1370's rep) is still unit-
+
+fn enum_rep_text(rep: &crate::type_system::datatype::EnumRepresentation) -> Option<String> {
+    if rep.match_name.is_empty() {
+        return None;
+    }
+    let joined = rep.match_name.join("|");
+    let multi = rep.match_name.len() > 1;
+    let base = if rep.complement {
+        if multi {
+            format!("~({joined})")
+        } else {
+            format!("~{joined}")
+        }
+    } else if multi && rep.shift_amount != 0 {
+        format!("({joined})")
+    } else {
+        joined
+    };
+    Some(if rep.shift_amount != 0 {
+        format!("{base} >> {}", rep.shift_amount)
+    } else {
+        base
+    })
+}
+
+// RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
+
 impl PrintC {
     // Ghidra: printc.cc:123 PrintC::new
     /// Create a new PrintC instance
@@ -738,6 +1083,13 @@ impl PrintC {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
+            code_labels: HashMap::new(),
+            code_label_base: 0,
+            joined_label_addrs: std::collections::HashSet::new(),
+            dup_label_addrs: std::collections::HashSet::new(),
+            // printc.cc:2336-2339: long(8) != int(4) on the x86-64 gcc
+            // corpus, so the sized-constant suffix is "L" (see field doc).
+            size_suffix: "L",
             union_resolutions: std::collections::BTreeMap::new(),
             func_start: 0,
             func_end: 0,
@@ -752,11 +1104,14 @@ impl PrintC {
             used_varnode_types: HashMap::new(),
             discovery_pass: false,
             call_targets: HashSet::new(),
+            void_callee_call_addrs: HashSet::new(),
         pointer_varnodes: HashSet::new(),
+            load_addr_direct: HashSet::new(),
             inline_candidates: HashMap::new(),
             inline_depth: 0,
             cast_strategy: CastStrategyC::new(4), // promote_size = 4 (x86/x64 int)
             param_names: HashMap::new(),
+            local_scope_names: HashSet::new(),
             is_lhs: false,
             global_used_outputs: HashSet::new(),
             comparison_def_map: HashMap::new(),
@@ -773,6 +1128,7 @@ impl PrintC {
             discovery_block_starts: HashSet::new(),
             pending_goto_labels: HashSet::new(),
             code_block_starts: HashSet::new(),
+            case_exit_stmt_printed: false,
             discovery_emit_id: 0,
             main_emit_id,
             scope: None,
@@ -994,6 +1350,171 @@ impl PrintC {
         self.union_resolutions = fd.union_map.clone();
     }
 
+    // Ghidra: type.cc:586 Datatype::findResolve (snapshot-backed transport)
+    /// The virtual-dispatch mirror of `crate::unionresolve::find_resolve`,
+    /// consulting the doc_function-time `union_resolutions` snapshot
+    /// instead of a live `Funcdata` (the printer holds no fd back-pointer;
+    /// the snapshot is semantically equivalent to `fd.union_map` because
+    /// the map is frozen once printing starts — UNIONRESOLVE-PKG-C-0001).
+    /// Arm-for-arm faithful to the unionresolve twin (type.cc:1192-1202
+    /// Pointer-to-union, type.cc:2137-2145 Union, type.cc:1298-1306 Array,
+    /// type.cc:1944-1952 Struct, type.cc:2517-2534 PartialUnion, base
+    /// type.cc:586-590): the consult key is the same ResolveEdge
+    /// (parent, op-time, slot) the live map uses.
+    fn find_resolve_snap(
+        &self,
+        ct: &Arc<crate::type_system::datatype::Datatype>,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Arc<crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::Datatype;
+        let consulted = |snap: &Self| -> Option<Arc<Datatype>> {
+            snap.union_resolutions
+                .get(&crate::unionresolve::ResolveEdge::new(ct.as_ref(), op, slot))
+                .map(|res| res.get_datatype().clone())
+        };
+        match ct.as_ref() {
+            // type.cc:1192-1202 TypePointer::findResolve
+            Datatype::Pointer(p)
+                if p.ptr_to.get_metatype() == crate::type_system::TypeMetatype::Union =>
+            {
+                consulted(self).unwrap_or_else(|| ct.clone())
+            }
+            // type.cc:2137-2145 TypeUnion::findResolve
+            Datatype::Union(_) => consulted(self).unwrap_or_else(|| ct.clone()),
+            // type.cc:1298-1306 TypeArray::findResolve
+            Datatype::Array(a) => consulted(self).unwrap_or_else(|| a.array_of.clone()),
+            // type.cc:1944-1952 TypeStruct::findResolve
+            Datatype::Struct(s) => consulted(self).unwrap_or_else(|| {
+                s.fields
+                    .first()
+                    .map(|f| f.type_ptr.clone())
+                    .unwrap_or_else(|| ct.clone())
+            }),
+            // type.cc:2517-2534 TypePartialUnion::findResolve
+            Datatype::PartialUnion(pu) => {
+                let size = pu.base.size;
+                let mut cur_type: Option<Arc<Datatype>> = Some(pu.container.clone());
+                let mut cur_off = pu.offset;
+                while let Some(c) = cur_type.clone() {
+                    if c.get_size() <= size {
+                        break;
+                    }
+                    if c.get_metatype() == crate::type_system::TypeMetatype::Union {
+                        // cc:2524-2525: newType = curType->findResolve(op,slot);
+                        //   curType = (newType == curType) ? null : newType;
+                        let new_type = self.find_resolve_snap(&c, op, slot);
+                        if Arc::ptr_eq(&new_type, &c) {
+                            cur_type = None;
+                        } else {
+                            cur_type = Some(new_type);
+                        }
+                    } else {
+                        let (sub, new_off) = c.get_sub_type(cur_off);
+                        cur_off = new_off;
+                        cur_type = sub;
+                    }
+                }
+                if let Some(c) = cur_type {
+                    if c.get_size() == size {
+                        return c;
+                    }
+                }
+                // cc:2533: return stripped;
+                pu.stripped.clone().unwrap_or_else(|| ct.clone())
+            }
+            // type.cc:586-590 Datatype::findResolve (base): return this.
+            _ => ct.clone(),
+        }
+    }
+
+    // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_type_read_facing_op`
+    /// (varnode.rs degenerate form) and `crate::unionresolve::
+    /// vn_type_read_facing` (fd-aware form): `ct->findResolve(op, slot)`
+    /// when the instance type needs resolution (varnode.cc:639-645),
+    /// consulting `self.union_resolutions` (UNIONRESOLVE-PKG-C-0001).
+    fn vn_type_read_facing_snap(
+        &self,
+        vn: &Varnode,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let ct = vn.get_type()?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(self.find_resolve_snap(&ct, op, slot))
+    }
+
+    // Ghidra: varnode.cc:626 Varnode::getTypeDefFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_type_def_facing`:
+    /// `ct->findResolve(def, -1)` when the instance type needs resolution
+    /// (varnode.cc:626-632). A varnode with no defining op keeps the
+    /// fd-aware twin's None degradation (the oracle would pass a null def
+    /// into findResolve, which is unreachable for the resolution-needing
+    /// types the printer consults).
+    fn vn_type_def_facing_snap(
+        &self,
+        vn: &Varnode,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let (ct, def) = {
+            let rg = vn;
+            (rg.get_type(), rg.get_def())
+        };
+        let ct = ct?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        let def = def?;
+        let def_guard = def.read().unwrap();
+        Some(self.find_resolve_snap(&ct, &def_guard, -1))
+    }
+
+    // Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_high_type_read_facing`:
+    /// `ct->findResolve(op, slot)` when the high type needs resolution
+    /// (varnode.cc:665-672).
+    fn vn_high_type_read_facing_snap(
+        &self,
+        vn: &Varnode,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let ct = vn
+            .high
+            .as_ref()
+            .map(|h| h.read().unwrap().get_type())?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(self.find_resolve_snap(&ct, op, slot))
+    }
+
+    // Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_high_type_def_facing`:
+    /// `ct->findResolve(def, -1)` when the high type needs resolution
+    /// (varnode.cc:651-658).
+    fn vn_high_type_def_facing_snap(
+        &self,
+        vn: &Varnode,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let (ct, def) = {
+            let rg = vn;
+            (
+                rg.high.as_ref().map(|h| h.read().unwrap().get_type()),
+                rg.get_def(),
+            )
+        };
+        let ct = ct?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        let def = def?;
+        let def_guard = def.read().unwrap();
+        Some(self.find_resolve_snap(&ct, &def_guard, -1))
+    }
+
     /// First index of the binary-token block appended by build_rpn_token_table
     /// (indices 11..=30, in optoken::BINARY_TOKENS order — printc.cc:36-55).
     const RPN_TOK_BINARY_BASE: usize = 11;
@@ -1135,6 +1656,44 @@ impl PrintC {
             self.mods = np.vnmod;
             // printlanguage.cc:523: pending -= 1
             self.rpn_pending -= 1;
+            // CALLIND calltarget transport (PRINTC-CALLIND-CODECAST-0001,
+            // print-layer half): the oracle IR carries a setcasts CAST on
+            // the CALLIND slot-0 input (TypeOpCallind::getInputLocal types
+            // slot 0 as the code pointer, typeop.cc:752-755; castInput
+            // inserts the CAST, coreaction.cc:2704+), and that CAST's
+            // dispatch (opTypeCast, printc.cc:459-462: pushOp(&typecast) +
+            // pushType) fires at exactly this drain point, wrapping
+            // whatever expression the target varnode holds. Rugra's IR
+            // carries the code* type directly on the input varnode instead
+            // of a CAST op, so the same two pushes are transported here —
+            // before the implied-def dispatch or the leaf atom — for both
+            // the leaf (GOT-slot symbol) and implied (LOAD-chain) forms.
+            // PRINTC-BADJT-PARAMSYM-0001: ActionSetCasts never inserts the
+            // CAST when the target's read-facing type already equals the
+            // code pointer (castStandard identity, cast.cc:303) — the
+            // symbol-backed renamed-param case prints
+            // `(*UNRECOVERED_JUMPTABLE)(...)` with no cast — so the
+            // transport is gated on the same structural condition here.
+            let is_callind_target = op_guard.opcode == OpCode::CPUI_CALLIND
+                && op_guard
+                    .get_in(0)
+                    .is_some_and(|in0| std::sync::Arc::ptr_eq(&in0, &np.vn));
+            let callind_target_keeps_cast = is_callind_target && {
+                let curtype = vn_guard
+                    .get_high_type_read_facing(&op_guard, 0)
+                    .or_else(|| vn_guard.v_type.clone());
+                !Self::is_code_pointer_dt(curtype.as_ref())
+            };
+            if callind_target_keeps_cast {
+                self.rpn_push_op(self.rpn_tok_typecast);
+                let type_atom = crate::printlanguage::Atom::with_type(
+                    "code *",
+                    crate::printlanguage::TagType::TypeToken,
+                    crate::printlanguage::SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
             let is_implied = vn_guard.is_implied();
             // printlanguage.cc:525-534: implied-vs-explicit dispatch.
             if is_implied {
@@ -1300,6 +1859,14 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_CEIL
             | OpCode::CPUI_FLOAT_FLOOR
             | OpCode::CPUI_FLOAT_ROUND => has(0),
+            // printc.cc:830 opFloatInt2Float (absorbZext + typecast form)
+            // and printc.hh:326-327 opFloatFloat2Float/opFloatTrunc →
+            // opTypeCast: all three have total unary emitting arms, so an
+            // implied conversion output inlines as `(float)x` instead of
+            // leaking its register temp as an unnamed-location token.
+            OpCode::CPUI_FLOAT_INT2FLOAT
+            | OpCode::CPUI_FLOAT_FLOAT2FLOAT
+            | OpCode::CPUI_FLOAT_TRUNC => has(0),
             OpCode::CPUI_LOAD => has(1),
             OpCode::CPUI_STORE
             | OpCode::CPUI_CALL
@@ -1317,6 +1884,12 @@ impl PrintC {
             // Both arms are total (like Ghidra's virtual dispatch) when the
             // destructured inputs exist, so mirror the binary-arm guard.
             OpCode::CPUI_PTRADD => has(0) && has(1),
+            // printc.cc:673 opCallother: every display arm emits (functional
+            // name + parens at minimum, cc:678-692; the literal/assignment/
+            // bare-operand arms cc:693-714 likewise), so an implied
+            // STRINGDATA output feeding a strncpy CALLOTHER slot inlines as
+            // the string literal instead of leaking its unique temp.
+            OpCode::CPUI_CALLOTHER => true,
             OpCode::CPUI_PIECE => has(0) && has(1),
             // printc.hh:292-294 opIntCarry/opIntScarry/opIntSborrow → opFunc
             // (printc.cc:424-441): binary functional syntax; the dispatch arm
@@ -1389,9 +1962,16 @@ impl PrintC {
             }
         }
         // cc:272+280-289: the base type's identifier — displayName when
-        // named, genericTypeName when anonymous.
+        // named, genericTypeName when anonymous. PRINTC-BADJT-PARAMSYM-0001:
+        // the anonymous proto-less Code base spells "code" (the findNoName
+        // coretype fold — see build_type_stack), so a code-pointer cast
+        // spells `(code *)` instead of `(BADTYPE *)`.
         let base_name = if cur.get_name().is_empty() {
-            Self::generic_type_name(cur)
+            if matches!(cur, Datatype::Code(c) if c.proto.is_none()) {
+                "code".to_string()
+            } else {
+                Self::generic_type_name(cur)
+            }
         } else {
             cur.get_display_name().to_string()
         };
@@ -1413,12 +1993,57 @@ impl PrintC {
         if !layers.is_empty() {
             spelling.push(' ');
         }
+        // cc:292-302 pushTypeStart pushes the declarator ops base-side
+        // first (for a pointer-to-array: array_expr, THEN ptr_expr), and
+        // the RPN nesting rules (printlanguage.cc:286 postsurround case —
+        // array_expr prec 66 > ptr_expr prec 62, printc.cc:75/78; and the
+        // unary_prefix case cc:291-293 — a second `*` under a pending `*`
+        // takes NO parens) parenthesize the RUN of `*` layers starting at
+        // the first star pushed while an array_expr is still pending: the
+        // paren opens at that star, every later consecutive star joins
+        // inside (unary-under-unary), and the closeParen fires when the
+        // run completes at the abstract-identifier EMPTY atom (pushType
+        // printc.cc:1477). Text forms: Pointer(Array) → `t (*) [N]`
+        // (golden `(xunknown1 (*) [16])`); Pointer(Pointer(Array)) →
+        // `t (**) [N]` (golden `(xunknown1 (**) [16])`); an array layer
+        // interrupts the run (Pointer(Array(Pointer)) → `*(*) [N]`);
+        // stars emit innermost-first and each bracket follows with its
+        // spacing=1 space (cc:78). MIRATTR-F-ARRCAST-0001: the former flat
+        // ` [N]*` chain rendered the illegal-C `t [N]*`.
+        let mut runs: Vec<(String, bool)> = Vec::new(); // (stars, paren)
+        let mut run_open = false;
+        let mut brackets: Vec<String> = Vec::new();
+        let mut array_pending = false;
         for layer in layers.iter().rev() {
+            // Innermost-first: an array layer closes the current star run
+            // and marks every later (outer) run as parenthesized.
             match layer {
-                Datatype::Pointer(_) => spelling.push('*'),
-                Datatype::Array(a) => spelling.push_str(&format!(" [{}]", a.num_elements)),
+                Datatype::Pointer(_) => {
+                    if !run_open {
+                        runs.push((String::new(), array_pending));
+                        run_open = true;
+                    }
+                    runs.last_mut().unwrap().0.push('*');
+                }
+                Datatype::Array(a) => {
+                    run_open = false;
+                    brackets.push(format!(" [{}]", a.num_elements));
+                    array_pending = true;
+                }
                 _ => unreachable!("only pointer/array layers are stacked"),
             }
+        }
+        for (stars, paren) in &runs {
+            if *paren {
+                spelling.push('(');
+                spelling.push_str(stars);
+                spelling.push(')');
+            } else {
+                spelling.push_str(stars);
+            }
+        }
+        for bracket in &brackets {
+            spelling.push_str(bracket);
         }
         spelling
     }
@@ -1446,14 +2071,46 @@ impl PrintC {
     fn constant_leaf_text(&mut self, vn: &Varnode, op: Option<&PcodeOp>) -> String {
         use crate::type_system::TypeMetatype;
         let val = vn.get_offset();
+        // printc.cc:1296-1312: the explicit-print suffix flags travel with
+        // the varnode into every push_integer leaf dispatch below
+        // (unsignedprint/longprint, set by ActionSetCasts via
+        // cast.cc:38-108; annotation constants never read them).
+        let (force_unsigned, force_sized) = Self::constant_print_flags(vn);
         let read_facing = op.and_then(|read_op| {
             let slot = vn
                 .self_arc()
                 .and_then(|vn_arc| read_op.slot_of_input(&vn_arc))?;
-            vn.get_high_type_read_facing(read_op, slot as i32)
+            self.vn_high_type_read_facing_snap(vn, read_op, slot as i32)
         });
-        let Some(ct) = read_facing else {
-            return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
+        // HTTPD-CODEREF-SYMBOLIZE-0001 transport: Ghidra's constants always
+        // carry a HighVariable whose type ActionInferTypes seeded
+        // (coreaction.cc:5016-5036); Rugra's leaf chase can bypass the high
+        // (no HighVariable on the const), so the driver's param-lock
+        // annotation lands in v_type — consult it when the high answered
+        // nothing.
+        let ct = read_facing.or_else(|| vn.v_type.clone());
+        let Some(ct) = ct else {
+            // HTTPD-CODEREF-SYMBOLIZE-0001: untyped constant that resolves
+            // to a function entry in the global scope prints as the
+            // function's display name — the oracle form produced when the
+            // Parameter ID analyzer's locked function-pointer param type
+            // reaches pushConstant's TYPE_PTR->TYPE_CODE arm
+            // (printc.cc:1786-1788 -> pushPtrCodeConstant, cc:1730). The
+            // oracle's type transport is ActionInferTypes through the
+            // HighVariable (coreaction.cc:5016-5036); Rugra's print-side
+            // leaf chase bypasses the annotated SSA varnode (legacy
+            // value_def_map side tables), so the resolution happens here
+            // on the untyped leaf. Only function-ENTRY addresses resolve,
+            // so integer constants keep their hex/decimal form.
+            if let Some(name) = self.code_entry_constant_text(val) {
+                return name;
+            }
+            // printc.cc:1766-1768 TYPE_UNKNOWN: push_integer(val, sz,
+            // false, tag, vn, op) — the vn flags still reach the suffix.
+            return self.integer_text_flagged(
+                val, vn.get_size(), false, display_format::DEFAULT,
+                force_unsigned, force_sized,
+            );
         };
         let sz = ct.get_size();
         match ct.get_metatype() {
@@ -1463,7 +2120,10 @@ impl PrintC {
                 } else if ct.is_enum_type() {
                     self.enum_constant_text(val, &ct)
                 } else {
-                    self.integer_text(val, sz, false, display_format::DEFAULT)
+                    self.integer_text_flagged(
+                        val, sz, false, display_format::DEFAULT,
+                        force_unsigned, force_sized,
+                    )
                 }
             }
             TypeMetatype::Int => {
@@ -1472,10 +2132,43 @@ impl PrintC {
                 } else if ct.is_enum_type() {
                     self.enum_constant_text(val, &ct)
                 } else {
-                    self.integer_text(val, sz, true, display_format::DEFAULT)
+                    self.integer_text_flagged(
+                        val, sz, true, display_format::DEFAULT,
+                        force_unsigned, force_sized,
+                    )
                 }
             }
-            TypeMetatype::Unknown => self.integer_text(val, sz, false, display_format::DEFAULT)
+            // Ghidra stores enums as TYPE_INT/TYPE_UINT + the enumtype flag
+            // (TypeEnum ctor/decode, type.hh:490-494 / type.cc:1475), so its
+            // TYPE_UINT/TYPE_INT arms reach pushEnumConstant
+            // (printc.cc:1756/1763). Rugra's Enum metatype IS that
+            // enum-int/uint collapse, so it takes the same named path: the
+            // getMatches representation (enum_match_text — `A`, `A|B`,
+            // `~(A|B)`, `... >> n`), else the unsigned integer
+            // (printc.cc:1684-1686). Locked witnesses: `return CURLE_OK;`
+            // (main_init), `*store != HTTPREQ_UNSPEC` (SetHTTPrequest).
+            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm
+            // (printc.cc:1801 break).
+            // (TypeEnum ctor/decode, type.hh:487-491 + type.cc:1475), so its
+            // TYPE_UINT/TYPE_INT arms reach pushEnumConstant (printc.cc
+            // 1756/1763). Rugra's Enum metatype IS that enum-int/uint
+            // collapse, so it takes the same named path: the getMatches
+            // representation (enum_match_text), else the unsigned integer
+            // TYPE_PARTIALENUM keeps Ghidra's default-cast arm (printc.cc
+            // 1801 -> 1806-1815).
+            TypeMetatype::Enum => self.enum_constant_text(val, &ct),
+            TypeMetatype::Unknown => {
+                // HTTPD-CODEREF-SYMBOLIZE-0001: same function-entry
+                // resolution as the untyped arm (see the None arm comment).
+                if let Some(name) = self.code_entry_constant_text(val) {
+                    return name;
+                }
+                // printc.cc:1766-1768: push_integer carries the vn flags.
+                self.integer_text_flagged(
+                    val, sz, false, display_format::DEFAULT,
+                    force_unsigned, force_sized,
+                )
+            }
             ,
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
@@ -1514,12 +2207,19 @@ impl PrintC {
                         }
                     }
                 }
-                // break; -> default cast (printc.cc:1790 + 1806-1815).
-                self.default_cast_constant_text(val, &ct)
+                // break; -> default cast (printc.cc:1790 + 1806-1815);
+                // cc:1814's push_integer passes vn, so the suffix flags
+                // apply on this arm too.
+                self.default_cast_constant_text_flagged(
+                    val, &ct, force_unsigned, force_sized,
+                )
             }
             _ => {
-                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
-                self.default_cast_constant_text(val, &ct)
+                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast
+                // (cc:1814 push_integer with vn — flags apply).
+                self.default_cast_constant_text_flagged(
+                    val, &ct, force_unsigned, force_sized,
+                )
             }
         }
     }
@@ -1531,18 +2231,15 @@ impl PrintC {
     /// `TypeEnum::getMatches`).
     fn enum_constant_text(&self, val: u64, ct: &Datatype) -> String {
         if let Datatype::Enum(e) = ct {
-            if let Some(name) = e.values.get(&val) {
-                return name.clone();
+            if let Some(text) = enum_match_text(val, e) {
+                return text;
             }
         }
         self.integer_text(val, ct.get_size(), false, display_format::DEFAULT)
     }
 
     // Ghidra: printc.cc:1730 PrintC::pushPtrCodeConstant
-    /// The text core of the function-name constant: resolve the pointer
-    /// value in the default code space and look up the function's display
-    /// name through the global scope (`Scope::queryFunction`,
-    /// printc.cc:1736). Returns `None` when no function sits at the address.
+
     fn ptr_code_constant_text(&self, val: u64, ct: &Datatype) -> Option<String> {
         // printc.cc:1733: AddrSpace *spc = glb->getDefaultCodeSpace();
         let spc = self
@@ -1560,6 +2257,28 @@ impl PrintC {
                 let _ = ct;
                 name
             })
+    }
+
+    // RUGRA-GLUE: code_entry_constant_text (driver-transport wrapper of
+    // PrintC::pushPtrCodeConstant, printc.cc:1730). The oracle reaches that
+    // method with the Parameter-ID-locked pointer-to-code type on the
+    // constant (via TypeOpCall::getInputLocal, typeop.cc:703-708, and
+    // ActionInferTypes, coreaction.cc:5016-5036). Rugra's print-side leaf
+    // can arrive untyped (the legacy side-table chase bypasses the SSA
+    // varnode carrying the annotation), so the untyped/Unknown constant
+    // arms call this wrapper: same resolution chain (default code space →
+    // global-scope queryFunction → display name), no cast prefix.
+    fn code_entry_constant_text(&self, val: u64) -> Option<String> {
+        let sentinel = std::sync::Arc::new(crate::type_system::datatype::Datatype::Pointer(
+            crate::type_system::datatype::TypePointer::new(
+                8,
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Code(
+                    crate::type_system::datatype::TypeCode::new(),
+                )),
+                1,
+            ),
+        ));
+        self.ptr_code_constant_text(val, &sentinel)
     }
 
     // RUGRA-GLUE: make_atom_for_vn (RPN leaf atom construction; mirrors the
@@ -1601,12 +2320,12 @@ impl PrintC {
         if name.is_empty() {
             // pushUnnamedLocation fallback (printlanguage.cc:244 ->
             // printc.cc:1938-1945): space name + printRaw of the high name
-            // representative's address, one oracle form for every space
-            // (PRINTC-UNLINKED-REF-FAMILY slice A merges this RPN ladder
-            // into the single helper).
-            name = Self::unnamed_location_token(
-                vn.get_space(),
-                Self::unnamed_location_offset(vn));
+            // representative's FULL address — both halves from the rep
+            // (PRINTC-AFINI-UNIQUELOC-0001) — one oracle form for every
+            // space (PRINTC-UNLINKED-REF-FAMILY slice A merges this RPN
+            // ladder into the single helper).
+            let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+            name = Self::unnamed_location_token(rep_space, rep_offset);
         }
         self.mark_varnode_used(name.clone(), vn);
         Atom::with_op_vn(
@@ -1619,6 +2338,19 @@ impl PrintC {
     }
 
     // ---- Step 3: emit_expression_rpn (printc.cc:2468 emitExpression) ----
+
+    // Ghidra: coreaction.cc:1539-1541 ActionFuncLink::funcLinkOutput (print-side projection, PRINTC-VOIDCALL-0001)
+    /// Whether this CALL's callee FuncProto is output-locked VOID, i.e. the
+    /// oracle IR state in which the CALL has NO output varnode
+    /// (`ActionFuncLink::funcLinkOutput` unsets the output and re-creates one
+    /// only for locked non-void callees, coreaction.cc:1521-1541). The print
+    /// layer projects that state: no assignment LHS
+    /// (printc.cc:2471-2476 `outvn != 0` test), statement form for the call,
+    /// and a bare `return;` when a RETURN consumes the surviving output.
+    fn callee_returns_void(&self, op: &PcodeOp) -> bool {
+        op.opcode == OpCode::CPUI_CALL
+            && self.void_callee_call_addrs.contains(&op.get_addr().as_u64())
+    }
 
     // Ghidra: printc.cc:2468 PrintC::emitExpression
     /// Emit a single PcodeOp as an expression via the RPN stack. Faithful to
@@ -1634,16 +2366,22 @@ impl PrintC {
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
     ) {
-        // printc.cc:2471-2476: assignment LHS.
+        // printc.cc:2471-2476: assignment LHS — guarded by `outvn != 0`. A
+        // locked-void callee CALL has NO output in the oracle IR
+        // (funcLinkOutput, coreaction.cc:1539-1541); Rugra projects the same
+        // no-output bytes when the action layer left the output in place
+        // (PRINTC-VOIDCALL-0001): the statement renders as `f(args);`.
         if let Some(out) = op.get_out() {
-            // pushOp(&assignment, op)
-            self.rpn_push_op(self.rpn_tok_assignment);
-            // pushSymbolDetail(outvn, op, false) -> atom on the stack.
-            // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
-            let out_vn = out.read().unwrap();
-            let atom = self.make_atom_for_vn(&out_vn, op);
-            drop(out_vn);
-            self.rpn_push_atom(&atom);
+            if !self.callee_returns_void(op) {
+                // pushOp(&assignment, op)
+                self.rpn_push_op(self.rpn_tok_assignment);
+                // pushSymbolDetail(outvn, op, false) -> atom on the stack.
+                // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
+                let out_vn = out.read().unwrap();
+                let atom = self.make_atom_for_vn(&out_vn, op);
+                drop(out_vn);
+                self.rpn_push_atom(&atom);
+            }
         }
         // printc.cc:2493: op->getOpcode()->push(this, op, 0) — readOp is null
         // from emitExpression.
@@ -1662,6 +2400,109 @@ impl PrintC {
     /// (*addr = value), CALL (name(args)), RETURN (return ...), CBRANCH
     /// (condition). Everything else is a no-op (BRANCH targets are rendered
     /// by the structurer; MULTIEQUAL/INDIRECT are internal).
+    // Ghidra: printc.cc:353 PrintC::checkArrayDeref
+    /// Decide whether a LOAD/STORE address Varnode can render in array-use
+    /// (subscript) form. Mirrors `bool PrintC::checkArrayDeref(const Varnode *vn) const`
+    /// (printc.cc:355-369): the address must be \e implied (printed inline as
+    /// an expression, never as a named variable) and written; a SEGMENTOP
+    /// wrapper is unwrapped to its pointer input (in(2)); the defining op must
+    /// then be a PTRSUB or PTRADD. Any other shape (leaf symbol, CAST, other
+    /// arithmetic) forces the `*(addr)` dereference form.
+    fn check_array_deref(vn: &crate::varnode::Varnode) -> bool {
+        // cc:358-359: if (!vn->isImplied()) return false;
+        //             if (!vn->isWritten()) return false;
+        if !vn.is_implied() {
+            return false;
+        }
+        let mut def_arc = match vn.get_def() {
+            Some(d) => d,
+            None => return false,
+        };
+        let mut code = {
+            let d = def_arc.read().unwrap();
+            d.opcode
+        };
+        // cc:361-366: unwrap SEGMENTOP — the real address is in(2).
+        if code == OpCode::CPUI_SEGMENTOP {
+            let inner = {
+                let d = def_arc.read().unwrap();
+                d.get_in(2).cloned()
+            };
+            let Some(inner) = inner else { return false };
+            {
+                let v = inner.read().unwrap();
+                if !v.is_implied() {
+                    return false;
+                }
+            }
+            let next_def = {
+                let v = inner.read().unwrap();
+                v.get_def()
+            };
+            let Some(next) = next_def else { return false };
+            def_arc = next;
+            code = def_arc.read().unwrap().opcode;
+        }
+        // cc:367-368: PTRSUB/PTRADD are the array-use shapes.
+        code == OpCode::CPUI_PTRSUB || code == OpCode::CPUI_PTRADD
+    }
+
+    // Ghidra: printc.cc:895 isValueFlexible
+    /// Whether an (implied, written) Varnode's defining op is a PTRSUB or
+    /// PTRADD — possibly through one COPY whose input is itself implied and
+    /// written — so `PrintC::opPtrsub` can flip its member syntax from `->`
+    /// to `.` and absorb the dereference into the base expression
+    /// (`pushVn(in0,op,m | print_load_value)`, printc.cc:1039-1041/1047-1049;
+    /// the base's own spacebase PTRSUB then drops its `&` and its PTRADD
+    /// renders as an array subscript). PRINTC-C3FLEX-DOTFORM-0001: this is
+    /// the flex decision behind the canon `glob.pattern[iVar5].type` dot
+    /// forms. Guard order is faithful to cc:898-904: the COPY arm returns
+    /// false unless the input is implied AND written (checking
+    /// `invn->getDef()` before the `isWritten` guard would be a null deref
+    /// in the oracle — the guards at cc:899-901 return first).
+    fn is_value_flexible(vn: &crate::varnode::Varnode) -> bool {
+        // cc:895-897: only implied, written varnodes can absorb a
+        // dereference; everything else flexes to false.
+        if !vn.is_implied() || !vn.is_written() {
+            return false;
+        }
+        let def_arc = match vn.get_def() {
+            Some(d) => d,
+            None => return false,
+        };
+        let opc = def_arc.read().unwrap().opcode;
+        // cc:898-904: look through one COPY to the input's defining op.
+        if opc == OpCode::CPUI_COPY {
+            let invn_arc = {
+                let def = def_arc.read().unwrap();
+                let invn = def.get_in(0).cloned();
+                invn
+            };
+            match invn_arc {
+                Some(a) => {
+                    let invn = a.read().unwrap();
+                    if !invn.is_implied() || !invn.is_written() {
+                        return false;
+                    }
+                    match invn.get_def() {
+                        Some(indef) => {
+                            let code = indef.read().unwrap().opcode;
+                            // cc:905-906: only PTRSUB/PTRADD defs flex.
+                            return code == OpCode::CPUI_PTRSUB
+                                || code == OpCode::CPUI_PTRADD;
+                        }
+                        None => return false,
+                    }
+                }
+                None => return false,
+            }
+        }
+        // cc:905-906
+        opc == OpCode::CPUI_PTRSUB || opc == OpCode::CPUI_PTRADD
+    }
+
+    // Ghidra: typeop.hh:170 TypeOp::push (virtual dispatch — the per-opcode
+    // PrintC::opXxx bodies are printc.cc:481+; see each arm's own anchor)
     fn dispatch_op_rpn(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -1839,10 +2680,42 @@ impl PrintC {
                 // leaf atoms via pushVnExplicit (byte-identical text).
                 self.rpn_push_in(op_arc, op, 0, self.mods);
             }
+            // printc.cc:486-498 opLoad: usearray = checkArrayDeref(in1);
+            //   if (usearray && !isSet(force_pointer)) m |= print_load_value
+            //   else pushOp(&dereference,op);
+            //   pushVn(op->getIn(1),op,m);
+            // printc.cc:830 PrintC::opFloatInt2Float: absorb an implied
+            // INT_ZEXT input (TypeOpFloatInt2Float::absorbZext,
+            // typeop.cc:1864-1880) and print the float typecast presurround
+            // + the (possibly skipped-through) input: `(float)x`.
+            OpCode::CPUI_FLOAT_INT2FLOAT => {
+                self.rpn_op_float_int2float(op_arc, op);
+            }
+            // printc.hh:326-327: PrintC::opFloatFloat2Float and
+            // PrintC::opFloatTrunc both forward to opTypeCast — a plain
+            // `(type)input` cast (widening/narrowing float conversions and
+            // float→int truncation are all C-convertible).
+            OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_TRUNC => {
+                self.rpn_op_type_cast(op_arc, op);
+            }
             // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
             OpCode::CPUI_LOAD => {
-                self.rpn_push_op(self.rpn_tok_dereference);
-                self.rpn_push_in(op_arc, op, 1, self.mods);
+                // cc:490-496: array-use form lets the implied PTRADD/PTRSUB
+                // address def render `p[i]` (opPtradd printval branch).
+                let mut m = self.mods;
+                let usearray = op
+                    .get_in(1)
+                    .map(|vn| {
+                        let v = vn.read().unwrap();
+                        Self::check_array_deref(&v)
+                    })
+                    .unwrap_or(false);
+                if usearray && !self.is_set(crate::printlanguage::modifiers::FORCE_POINTER) {
+                    m |= print_mods::PRINT_LOAD_VALUE;
+                } else {
+                    self.rpn_push_op(self.rpn_tok_dereference);
+                }
+                self.rpn_push_in(op_arc, op, 1, m);
             }
             // STORE has no outvn; render *(addr) = value inline.
             // printc.cc:500-518 opStore: pushOp(assignment); [pushOp(deref)];
@@ -1853,8 +2726,28 @@ impl PrintC {
             // PTRSUB write address or an implied value expression) inline at
             // the use site exactly as printlanguage.cc:526-536 prescribes.
             OpCode::CPUI_STORE => {
-                // Check INT_ADD(struct_ptr, field_offset) -> ptr->field
+                // printc.cc:506-513: m = mods; usearray = checkArrayDeref(in1);
+                //   if (usearray && !isSet(force_pointer)) m |= print_store_value;
+                //   else pushOp(&dereference,op);
+                // The subscript path renders the STORE address as `p[i]`
+                // (opPtradd's printval branch, printc.cc:885-886) instead of
+                // prefixing `*` — this is the oracle's array-use emission arm.
+                let mut m = self.mods;
+                let usearray = op
+                    .get_in(1)
+                    .map(|vn| {
+                        let v = vn.read().unwrap();
+                        Self::check_array_deref(&v)
+                    })
+                    .unwrap_or(false);
+                let deref_form = !usearray || self.is_set(crate::printlanguage::modifiers::FORCE_POINTER);
+                if !deref_form {
+                    m |= print_mods::PRINT_STORE_VALUE;
+                }
+                // Legacy substitute (pre-dates the checkArrayDeref port):
+                // INT_ADD(struct_ptr, field_offset) -> `ptr->field` write.
                 let mut field_access = false;
+                if deref_form {
                 if let Some(in1) = op.get_in(1) {
                     let addr_vn = in1.read().unwrap();
                     if let Some(ref def_weak) = addr_vn.def {
@@ -1914,14 +2807,102 @@ impl PrintC {
                         }
                     }
                 }
+                } // end deref_form field_access substitute guard
                 if !field_access {
-                    self.emit.tag_op("*");
-                    self.rpn_push_in(op_arc, op, 1, self.mods);
+                    // printc.cc:508-513: exactly ONE address emission — the
+                    // unary dereference TOKEN in the deref form (token
+                    // protocol paren decision, printlanguage.cc:287-292,
+                    // makes `*(puVar4 + 3)` a legal lvalue), or no token at
+                    // all in the subscript form (m|print_store_value lets
+                    // the implied PTRADD/PTRSUB def emit `p[i]` itself; its
+                    // ` = ` RHS follows below). The 33418058 merge kept BOTH
+                    // the pre-merge hand-emitted `*` + pushVn pair and the
+                    // token-protocol pair, printing every STORE address
+                    // twice (`*ADDR*ADDR = v`); the cc:512 single pushOp is
+                    // restored here.
+                    if deref_form {
+                        self.rpn_push_op(self.rpn_tok_dereference);
+                    }
+                    self.rpn_push_in(op_arc, op, 1, m);
                     self.rpn_recurse();
                 }
                 self.emit.tag_op(" = ");
                 self.rpn_push_in(op_arc, op, 2, self.mods);
                 self.rpn_recurse();
+            }
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // Faithful token-protocol port (PRINTC-CALLIND-RPN-ASSIGN-0001,
+            // unblocked by the P6 callind analysis in prettyprint.rs). The
+            // oracle pushes
+            //   cc:640 pushOp(&function_call,op)
+            //   cc:641 pushOp(&dereference,op)
+            //   cc:642-648 skip = getHiddenThisSlot(op,fc); count = numInput()-1
+            //     (minus one more when a C++ `this` is hidden)
+            //   cc:649-658 count>1: pushVn(in0); count-1 commas; args in
+            //     reverse (numInput-1 .. 1), skipping `skip`
+            //   cc:660-665 count==1: pushVn(arg); pushVn(in0)
+            //   cc:667-669 count==0: pushVn(in0); pushAtom(EMPTY_STRING)
+            // All through the RPN stack, so the pending assignment token
+            // pushed by emit_expression_rpn (cc:2474) completes exactly as
+            // in the oracle: rpn_push_op's emitOp(revpol.back()) fires the
+            // ` = ` separator before the call text and the postsurround
+            // token wraps the callable+args in `(...)` — matching
+            // printlanguage.cc:142-148/165-185. The previous direct-print
+            // arm bypassed the stack, leaking the assignment separator past
+            // the statement boundary (observed thunks:
+            // `uVar1(*(code *)PTR_00116e98)();` + `return = uVar1;`).
+            //
+            // The `(code *)` facing cast on the target is NOT pushed here:
+            // in the oracle it comes from the setcasts CAST that inlines at
+            // pushVn(in0) drain time (see rpn_recurse's calltarget
+            // transport, PRINTC-CALLIND-CODECAST-0001 print-layer half).
+            OpCode::CPUI_CALLIND => {
+                // cc:640-641: pushOp(&function_call,op); pushOp(&dereference,op)
+                self.rpn_push_op(self.rpn_tok_function_call);
+                self.rpn_push_op(self.rpn_tok_dereference);
+                // cc:642-645: fc = fd->getCallSpecs(op) (a missing callspec
+                // is an oracle LowlevelError; Rugra's driver always installs
+                // one with the op). cc:646: skip = getHiddenThisSlot(op,fc)
+                // — not ported (returns -1, matching Ghidra's own opCall
+                // TODO, printc.cc:619-623).
+                let skip = self.get_hidden_this_slot(op);
+                // cc:647-648: count = numInput()-1, minus 1 when a `this`
+                // slot is hidden.
+                let n_inputs = op.num_input();
+                let mut count = n_inputs.saturating_sub(1);
+                if skip >= 0 {
+                    count = count.saturating_sub(1);
+                }
+                if count > 1 {
+                    // cc:650-658: callable first, then count-1 comma ops,
+                    // then the implied args in reverse (numInput-1..=1),
+                    // skipping `skip`.
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    for _ in 0..(count - 1) {
+                        self.rpn_push_op(self.rpn_tok_comma);
+                    }
+                    for i in (1..n_inputs).rev() {
+                        if i as i32 == skip {
+                            continue;
+                        }
+                        self.rpn_push_in(op_arc, op, i, self.mods);
+                    }
+                } else if count == 1 {
+                    // cc:660-665: the single arg (in(2) when the hidden
+                    // `this` occupies slot 1, else in(1)), then the callable.
+                    let arg_slot = if skip == 1 { 2 } else { 1 };
+                    self.rpn_push_in(op_arc, op, arg_slot, self.mods);
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                } else {
+                    // cc:667-669: void call — callable + EMPTY_STRING blank.
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    let blank = crate::printlanguage::Atom::new(
+                        "",
+                        crate::printlanguage::TagType::BlankToken,
+                        crate::printlanguage::SyntaxHighlight::NoColor,
+                    );
+                    self.rpn_push_atom(&blank);
+                }
             }
             // printc.cc:596 opCall: pushOp(&function_call) then the name
             // atom and the implied parameters; the postsurround token's
@@ -1929,38 +2910,59 @@ impl PrintC {
             // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
             // is what arms the pretty printer's wrap indent around the
             // argument group.
-            // Ghidra: printc.cc:637 PrintC::opCallind
-            // Indirect calls retain the target expression and dereference it;
-            // they must not resolve the target offset as a named CALL.
-            OpCode::CPUI_CALLIND => {
-                self.emit.print("(*(code *)");
-                if let Some(in0) = op.get_in(0) {
-                    let target = in0.read().unwrap();
-                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
-                        self.emit.print(&name);
-                    } else {
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
-                        self.rpn_recurse();
-                    }
-                }
-                self.emit.print(")(");
-                for i in 1..op.num_input() {
-                    if i > 1 { self.emit.print(", "); }
-                    self.rpn_push_in(op_arc, op, i, self.mods);
-                    self.rpn_recurse();
-                }
-                self.emit.print(")");
-            }
-            // Ghidra: printc.cc:596 PrintC::opCall
             OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
-                    let v0 = in0.read().unwrap();
-                    let off = v0.get_offset();
-                    drop(v0);
+                    // printc.cc:597-602: the unnamed-callee arm reads
+                    // fc->getEntryAddress() — the callspec's entry address,
+                    // whose space is the CALL's pre-annotation in(0)
+                    // address space (fspec.cc:4934 ctor). Rugra's Iop
+                    // annotation mirrors only the offset
+                    // (new_varnode_call_specs compatibility_offset), so the
+                    // space rides the callspec channel: get_call_spec() ->
+                    // entry_addr. Lock order follows the fspec.rs:2470-2477
+                    // snapshot pattern — the varnode guard is dropped
+                    // before the callspec is locked.
+                    let (off, fc) = {
+                        let v0 = in0.read().unwrap();
+                        (v0.get_offset(), v0.get_call_spec())
+                    };
+                    let entry = fc.and_then(|fc| fc.read().unwrap().entry_addr);
+                    let (addr_size, word_size) = Self::entry_addr_dims(entry.as_ref());
                     self.symbol_table
                         .get(&off)
                         .cloned()
-                        .unwrap_or_else(|| format!("FUN_{:x}", off))
+                        .unwrap_or_else(|| {
+                            // printc.cc:596-605 opCall's unnamed-callee arm:
+                            // genericFunctionName(fc->getEntryAddress())
+                            // (cc:3359-3366) = "func_" + addr.printRaw —
+                            // AddrSpace::printRaw (space.cc:206-222) zero-
+                            // pads to 2*addrsize (sz shrunk to 4 below
+                            // 2^32), so the direct-runner golden spells
+                            // `func_0x00003190`. The `FUN_` face is the
+                            // headless FRONTEND's database name (analyzeHeadless
+                            // symbol manager), which the decompiler library
+                            // never generates — Rugra's canon-tier fallback
+                            // keeps it for the headless golden, spelled with
+                            // the same printRaw digit rule (`FUN_00102020`),
+                            // and the direct-runner tier (GENSMOKE-S3 /
+                            // MIRROR2-S3 callee-naming family) takes the
+                            // oracle's generic name (tier probe:
+                            // typefactory direct_runner_tier_active, the
+                            // MIRROR-ENVS-CANONICAL-0001 bundle). Both faces
+                            // take (addrsize, wordsize) from the entry
+                            // space channel, not a hardwired Ram.
+                            if crate::type_system::typefactory::direct_runner_tier_active() {
+                                format!(
+                                    "func_{}",
+                                    Self::addr_space_print_raw_dims(addr_size, word_size, off)
+                                )
+                            } else {
+                                format!(
+                                    "FUN_{}",
+                                    Self::print_raw_zero_pad_digits(addr_size, word_size, off)
+                                )
+                            }
+                        })
                 } else {
                     "FUN_unknown".to_string()
                 };
@@ -1972,7 +2974,21 @@ impl PrintC {
                 self.emit.tag_op("return");
                 // printc.cc:754 opReturn plain arm: pushVn(in1) — record +
                 // drain so an implied return-value expression inlines.
-                if op.get_in(1).is_some() {
+                // PRINTC-VOIDCALL-0001: a RETURN whose value is a locked-void
+                // callee CALL's output would carry numInput()==1 in the
+                // oracle IR (funcLinkOutput kept the CALL output-free,
+                // coreaction.cc:1539-1541), printing a bare `return;`. Project
+                // that state here so a surviving output cannot render the
+                // illegal-C `return free(p);` form.
+                let return_value_is_void_call = op
+                    .get_in(1)
+                    .and_then(|in1| in1.read().unwrap().get_def())
+                    .map(|def| {
+                        let d = def.read().unwrap();
+                        self.callee_returns_void(&d)
+                    })
+                    .unwrap_or(false);
+                if op.get_in(1).is_some() && !return_value_is_void_call {
                     self.emit.print(" ");
                     self.rpn_push_in(op_arc, op, 1, self.mods);
                     self.rpn_recurse();
@@ -2011,8 +3027,8 @@ impl PrintC {
                     let in0 = op.get_in(0).map(|a| a.read().unwrap());
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                         ),
                         _ => (None, None),
                     }
@@ -2049,8 +3065,8 @@ impl PrintC {
                     let in0 = op.get_in(0).map(|a| a.read().unwrap());
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                         ),
                         _ => (None, None),
                     }
@@ -2096,7 +3112,7 @@ impl PrintC {
                     // printc.cc:847-848: vn = in(0); ct = read-facing type.
                     if let Some(in0_arc) = op.get_in(0) {
                         let vn = in0_arc.read().unwrap();
-                        if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                        if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
                             if ct.is_piece_structured() {
                                 // printc.cc:851: byte offset into composite.
                                 let mut byte_off = Self::compute_byte_offset_for_composite(op);
@@ -2189,8 +3205,8 @@ impl PrintC {
                         .unwrap_or(0);
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                             off as u32,
                         ),
                         _ => (None, None, off as u32),
@@ -2271,6 +3287,19 @@ impl PrintC {
             // addressof tokens defined above.
             OpCode::CPUI_PTRSUB => {
                 use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                // printc.cc:929 opPtrsub: struct/union field access
+                // `ptr->field`/`ptr.field`, array element pointer `*ptr`/
+                // `ptr[0]`, or `&ptr->field`. Port of `PrintC::opPtrsub`
+                // (printc.cc:929-1143): the flex decision (cc:958,
+                // isValueFlexible cc:894-911 — PRINTC-C3FLEX-DOTFORM-0001)
+                // selects object_member (`.`) + the base load-value flip;
+                // Rugra has no TypePointerRel, so the `ptrel` branches
+                // (cc:946-950/966-976) collapse to the plain
+                // `ct = ptype->getPtrTo()` arm. The four struct/union emit
+                // shapes (printc.cc:1018-1055) and the four array shapes
+                // (1098-1141) are reproduced via the RPN stack using the
+                // pointer_member/object_member/dereference/addressof/
+                // subscript tokens.
                 // printc.cc:940-942: in0 = op->getIn(0); in1const = in1 offset.
                 let in1const: u64 = op
                     .get_in(1)
@@ -2279,10 +3308,20 @@ impl PrintC {
                 // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
                 let ptype = op
                     .get_in(0)
-                    .and_then(|a| a.read().unwrap().get_high_type_read_facing(op, 0));
+                    .and_then(|a| self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0));
                 // printc.cc:955-956: valueon = (mods & (load|store value)) != 0.
                 let valueon = self.is_set(
                     print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+                // printc.cc:957: m = mods & ~(print_load_value|
+                // print_store_value) — the mod word the base operands see.
+                let m = self.mods
+                    & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+                // printc.cc:958: flex = isValueFlexible(in0) — PRINTC-
+                // C3FLEX-DOTFORM-0001 (printc.cc:894-911 port above).
+                let flex = op
+                    .get_in(0)
+                    .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                    .unwrap_or(false);
                 // printc.cc:951-954: ct = ptype->getPtrTo() (no TypePointerRel).
                 let ct = ptype.as_ref().and_then(|pt| match &**pt {
                     Datatype::Pointer(p) => Some(p.ptr_to.clone()),
@@ -2292,13 +3331,66 @@ impl PrintC {
                 let meta = ct.as_ref().map(|c| c.get_metatype());
                 if let Some(meta) = meta {
                     if matches!(meta, TypeMetatype::Struct | TypeMetatype::Union) {
-                        // printc.cc:991-1010: resolve the field name via
-                        // findTruncation(suboff,0). Rugra uses find_partial_field
-                        // (same offset/size containment test). Default fallback
-                        // name is "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                        let fieldname = Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
-                            .map(|(name, _, _)| name)
-                            .unwrap_or_else(|| format!("field_0x{:x}", in1const));
+                        // printc.cc:977-1010: the field-name resolution splits
+                        // on the pointee metatype. TYPE_UNION (cc:977-990):
+                        // a PTRSUB into a union must have suboff == 0 (else
+                        // the oracle throws LowlevelError) and takes the
+                        // field from the Funcdata union-resolution map —
+                        // `fd->getUnionField(ptype, op, -1)` keyed on the
+                        // POINTER type with slot -1 (the attach edge
+                        // ActionSetCasts::resolveUnion created in
+                        // coreaction.cc:2509), never findTruncation. Rugra
+                        // consults the doc_function-time snapshot
+                        // (union_resolutions) with the same ResolveEdge
+                        // key. The oracle's two LowlevelError arms
+                        // (non-zero suboff; missing/negative resolution)
+                        // are unreachable in a pipeline where resolveUnion
+                        // gated the insertion — and the printer has no
+                        // throw channel (same accommodation as the
+                        // cc:943-946 non-pointer arm above) — so both fall
+                        // through to the default field_0x name.
+                        let (fieldname, fieldtype) = if meta == TypeMetatype::Union {
+                            let resolved = ptype.as_ref().and_then(|pt| {
+                                self.union_resolutions
+                                    .get(&crate::unionresolve::ResolveEdge::new(pt, op, -1))
+                                    .filter(|res| res.get_field_num() >= 0)
+                                    .and_then(|res| {
+                                        match ct.as_ref().map(|c| c.as_ref()) {
+                                            Some(Datatype::Union(u)) => u
+                                                .fields
+                                                .get(res.get_field_num() as usize)
+                                                .map(|fld| (fld.name.clone(), Some(fld.type_ptr.clone()))),
+                                            _ => None,
+                                        }
+                                    })
+                            });
+                            resolved.unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                        } else {
+                            // printc.cc:991-1010 (TYPE_STRUCT): resolve the
+                            // field name via findTruncation(suboff,0). Rugra
+                            // uses find_partial_field (same offset/size
+                            // containment test). Default fallback name is
+                            // "field_0x<hex>"
+                            // (DataTypeComponent::getDefaultFieldName).
+                            Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
+                                .map(|(name, _, ftype)| (name, Some(ftype)))
+                                .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                        };
+                        // printc.cc:1011-1016: arrayvalue = false; if the
+                        // field's type is an ARRAY, the '&' is dropped (the
+                        // value form prints the array as `f[0]`).
+                        //   arrayvalue = valueon; // If printing value, use [0]
+                        //   valueon = true;       // Don't print &
+                        let mut valueon_here = valueon;
+                        let mut arrayvalue = false;
+                        if fieldtype
+                            .as_ref()
+                            .map(|ft| ft.get_metatype() == TypeMetatype::Array)
+                            .unwrap_or(false)
+                        {
+                            arrayvalue = valueon_here; // cc:1014
+                            valueon_here = true; // cc:1015
+                        }
                         let field_atom = Atom::with_field(
                             &fieldname,
                             TagType::FieldToken,
@@ -2307,40 +3399,91 @@ impl PrintC {
                             0,
                             -1,
                         );
-                        // printc.cc:1018-1034 (!valueon, !flex):
-                        //   pushOp(&addressof); pushOp(&pointer_member);
-                        //   pushVn(in0); pushAtom(fieldname)
-                        // printc.cc:1046-1052 (valueon, !flex):
-                        //   pushOp(&pointer_member); pushVn(in0); pushAtom(fieldname)
-                        // Rugra has no isValueFlexible; we treat flex as false
-                        // (the common case for typed pointer dereferences),
-                        // selecting the pointer_member (`->`) shape rather than
-                        // the object_member (`.`) shape.
-                        if !valueon {
+                        // printc.cc:1018-1055: the four emit shapes, selected
+                        // by valueon x flex (the doc table at cc:912-921):
+                        //   off+yes `&( ).name`  off+no `&( )->name`
+                        //   on+yes  `( ).name`   on+no  `( )->name`
+                        // flex flips the member op to object_member (`.`)
+                        // AND the base push to `m | print_load_value`
+                        // (cc:1039-1041/1047-1049) so the base's defining
+                        // op absorbs this dereference (spacebase arm drops
+                        // the `&`, opPtradd uses subscript); !valueon
+                        // prefixes addressof first. The base mods are the
+                        // STRIPPED `m` (cc:957) in the !flex arms — not
+                        // self.mods — so the load/store bit does not leak
+                        // into a non-flexible base.
+                        let base_mods = if flex {
+                            m | print_mods::PRINT_LOAD_VALUE
+                        } else {
+                            m
+                        };
+                        let member_tok = if flex {
+                            self.rpn_tok_object_member
+                        } else {
+                            self.rpn_tok_pointer_member
+                        };
+                        if !valueon_here {
+                            // cc:1018-1028: EMIT &( ).name / &( )->name.
                             self.rpn_push_op(self.rpn_tok_addressof);
+                            self.rpn_push_op(member_tok);
+                        } else {
+                            // cc:1044-1055: EMIT ( ).name / ( )->name. The
+                            // canon `if (arrayvalue) pushOp(&subscript)`
+                            // prefix and trailing `push_integer(0)` render
+                            // as the terminal literal `[0]` below (the
+                            // field atom is always last, so the postsurround
+                            // bracket pairing is byte-identical).
+                            self.rpn_push_op(member_tok);
                         }
-                        self.rpn_push_op(self.rpn_tok_pointer_member);
                         // pushVn(in0): record into nodepend so an implied in0
                         // (e.g. nested PTRSUB/CAST) is inlined by rpn_recurse.
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        self.rpn_push_in(op_arc, op, 0, base_mods);
                         // pushAtom(fieldname) drains the pending in0 first.
                         self.rpn_push_atom(&field_atom);
+                        if arrayvalue {
+                            // cc:1053-1054: push_integer(0,...) — the terminal
+                            // `[0]` of the array-value form (same suffix shape
+                            // as the spacebase arm's arrayvalue below).
+                            self.emit.print("[0]");
+                        }
                         return;
                     }
                     if meta == TypeMetatype::Array {
-                        // printc.cc:1098-1137: PTRSUB(*,0) switches to element-
-                        // pointer view. !valueon,!flex (printc.cc:1113-1117):
-                        //   pushOp(&dereference); pushVn(in0)
-                        // valueon,!flex (1129-1135):
-                        //   pushOp(&subscript); pushOp(&dereference);
-                        //   pushVn(in0); push_integer(0)
-                        // Rugra has no subscript token wired yet; for the common
-                        // !valueon case (a bare PTRSUB producing a pointer) we
-                        // emit `*in0` faithfully. The valueon arm falls back to
-                        // the same `*in0` shape to stay correct.
-                        self.rpn_push_op(self.rpn_tok_dereference);
-                        // pushVn(in0): record so implied in0 inlines.
-                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        // printc.cc:1098-1141: PTRSUB(*,0) switches to the
+                        // element-pointer view of the array. The four shapes
+                        // (doc table cc:912-921 array row):
+                        //   off+yes `( )`    off+no `*( )`
+                        //   on+yes  `( )[0]` on+no  `(* )[0]`
+                        // flex absorbs the dereference into in0's defining
+                        // op (base push `m | print_load_value`, cc:1113-
+                        // 1117/1128-1133); !flex prefixes the dereference
+                        // op and keeps the stripped `m`. The trailing
+                        // `push_integer(0,...)` renders as the terminal
+                        // literal `[0]` (nothing follows it in this arm).
+                        if !valueon {
+                            if !flex {
+                                // cc:1118-1122: EMIT *( ).
+                                self.rpn_push_op(self.rpn_tok_dereference);
+                            }
+                            // cc:1113-1117: EMIT ( ) — flex absorbs the
+                            // dereference into in0's defining op.
+                            self.rpn_push_in(op_arc, op, 0, if flex {
+                                m | print_mods::PRINT_LOAD_VALUE
+                            } else {
+                                m
+                            });
+                        } else {
+                            // cc:1125-1141: EMIT ( )[0] / (* )[0].
+                            if !flex {
+                                self.rpn_push_op(self.rpn_tok_dereference);
+                            }
+                            self.rpn_push_in(op_arc, op, 0, if flex {
+                                m | print_mods::PRINT_LOAD_VALUE
+                            } else {
+                                m
+                            });
+                            self.emit.print("[0]");
+                        }
                         return;
                     }
                     if meta == TypeMetatype::Spacebase {
@@ -2357,10 +3500,24 @@ impl PrintC {
                         let mut arrayvalue = false;
                         let mut symbol: Option<String> = None;
                         let mut symbol_type_array = false;
+                        let mut symbol_type_code = false;
+                        // printc.cc:1086 pushSymbol(symbol,...) → cc:1919
+                        // pushSymbolScope(sym): the spacebase-arm symbol hit
+                        // prints the MINIMAL_NAMESPACES scope elements before
+                        // its display name — `::` when the base name is
+                        // occupied in the function's local nametree
+                        // (database.cc:323-359 getResolutionDepth via
+                        // ScopeInternal::isNameUsed cc:2417). PRINTC-
+                        // SPACEBASE-SCOPEPREFIX-0001: the decision reuses the
+                        // landed `symbol_scope_prefix` helper (leaf-priority
+                        // paths); the stack-spacebase ScopeLocal fallback
+                        // below leaves this empty (database.cc:326: a symbol
+                        // used in its own scope resolves depth 0).
+                        let mut scope_prefix = String::new();
                         {
                             let hit = self.symboltab.as_ref().and_then(|db| {
                                 let db = db.read().unwrap();
-                                db.query_container(
+                                db.query_container_entry(
                                     db.global_scope_id,
                                     crate::address::Address::new(in1const),
                                     1,
@@ -2370,10 +3527,69 @@ impl PrintC {
                                     crate::address::Address::new(0),
                                 )
                             });
-                            if let Some(hit) = hit {
-                                symbol = Some(hit.symbol_name.clone());
-                                symbol_type_array =
-                                    hit.type_metatype == TypeMetatype::Array;
+                            if let Some((_hit_scope_id, entry_arc)) = hit {
+                                let sym_arc = entry_arc.read().unwrap().symbol.clone();
+                                let sym = sym_arc.read().unwrap();
+                                // container_hit parity: symbol_name =
+                                // getName, type_metatype falls out of the
+                                // same dtype (Unknown when unresolved — the
+                                // Array/Code tests read false).
+                                symbol = Some(sym.name.clone());
+                                symbol_type_array = sym
+                                    .dtype
+                                    .as_deref()
+                                    .map(|dt| dt.get_metatype() == TypeMetatype::Array)
+                                    .unwrap_or(false);
+                                symbol_type_code = sym
+                                    .dtype
+                                    .as_deref()
+                                    .map(|dt| dt.get_metatype() == TypeMetatype::Code)
+                                    .unwrap_or(false);
+                                scope_prefix =
+                                    self.symbol_scope_prefix(&sym, Some(&entry_arc));
+                            }
+                        }
+                        // Stack-spacebase fallback: for a STACK TypeSpacebase
+                        // the linked symbol is a function-local (ScopeLocal)
+                        // symbol, resolved in the oracle by the SAME
+                        // linkSymbolReference attachment (variable.cc:419-432
+                        // queries fd->getScopeLocal() for stack references).
+                        // Rugra's stand-in: query the print-time ScopeLocal
+                        // snapshot (`self.scope`, snapshot_local_scope) with
+                        // the same container semantics — find_container_entry
+                        // is the Scope::findContainer port (database.cc:2262-
+                        // 2282: whole-range containment, smallest entry wins).
+                        // Only whole-symbol hits print (cc:1084-1086
+                        // pushSymbol at symbol-offset 0); a mid-symbol offset
+                        // needs pushPartialSymbol (cc:1088-1093), still the
+                        // PRINTC-SPACEBASE-PARTIALSYM-0001 residual, so those
+                        // keep the unnamed-location form.
+                        if symbol.is_none() {
+                            let is_stack_spacebase = matches!(
+                                ct.as_ref().map(|c| &**c),
+                                Some(Datatype::Spacebase(
+                                    sb
+                                )) if sb.spaceid == Some(crate::space::AddressSpace::Stack)
+                            );
+                            if is_stack_spacebase {
+                                if let Some(scope) = self.scope.as_ref() {
+                                    if let Some(entry) = scope.find_container_entry(
+                                        crate::space::AddressSpace::Stack,
+                                        in1const,
+                                        1,
+                                        None,
+                                    ) {
+                                        if entry.offset == 0 && entry.start == in1const {
+                                            let sym = &scope.symbols[entry.sym];
+                                            symbol = Some(sym.display_name.clone());
+                                            symbol_type_array = sym
+                                                .dtype
+                                                .as_ref()
+                                                .map(|dt| dt.get_metatype() == TypeMetatype::Array)
+                                                .unwrap_or(false);
+                                        }
+                                    }
+                                }
                             }
                         }
                         if symbol.is_some() {
@@ -2383,14 +3599,19 @@ impl PrintC {
                                 arrayvalue = valueon_here;
                                 valueon_here = true;
                             }
-                            // TODO(PRINTC-SPACEBASE-TYPECODE-0001): oracle
-                            // cc:1068-1069's `TYPE_CODE → valueon = true`
-                            // (a function symbol drops the '&' as well) is
-                            // not implemented — the program-DB hit carries
-                            // only `type_metatype` and no CODE entries exist
-                            // in the driver's DAT layer, so the branch is
-                            // unreachable in this pipeline; registered in
-                            // ALIGNMENT_ROADMAP.md (printc module residuals).
+                            // cc:1068-1069: a CODE symbol (function entry)
+                            // also drops the '&' — `FUN_xxxxxxx` prints
+                            // bare in argument position (the canon golden's
+                            // `apr_pool_cleanup_kill(V,V,FUN_0012dc80)`).
+                            // PRINTC-SPACEBASE-TYPECODE-0001 resolved: the
+                            // driver now registers analyzer-discovered
+                            // functions in the symbol Database global scope
+                            // (Scope::add_function sets the FunctionSymbol's
+                            // code type, database.cc:514-520), so CODE hits
+                            // are reachable.
+                            else if symbol_type_code {
+                                valueon_here = true;
+                            }
                         }
                         // cc:1072-1076: EMIT &name / name.
                         if !valueon_here {
@@ -2398,8 +3619,28 @@ impl PrintC {
                         }
                         if symbol.is_none() {
                             // cc:1078-1082: pushUnnamedLocation(addr, ...) —
-                            // `0x<hex>` of the spacebase-resolved address.
-                            let addr_text = format!("0x{:x}", in1const);
+                            // addr = sb->getAddress(in1const, in0->getSize(),
+                            // op->getAddr()) (TypeSpacebase::getAddress
+                            // type.cc:3063-3073 → AddrSpaceManager::
+                            // resolveConstant translate.cc:628-642: the
+                            // spacebase's OWN spaceid with addressToByte +
+                            // wrapOffset, the identity for the wordsize-1
+                            // x86-64 spaces) → PrintC::pushUnnamedLocation
+                            // (printc.cc:1938-1945): space name +
+                            // AddrSpace::printRaw (space.cc:206-222 zero-
+                            // padded hex). PRINTC-C3-UNNAMED-SPACE-NAME-0001:
+                            // e.g. stack spacebase → `stack0xfffffffffffffc78`,
+                            // ram spacebase → `ram0x00023e00`. A spacebase
+                            // type without spaceid (decode-path sentinel,
+                            // type.cc:3090) keeps the identity degradation.
+                            let space = ct.as_ref().and_then(|c| match &**c {
+                                Datatype::Spacebase(sb) => sb.spaceid,
+                                _ => None,
+                            });
+                            let addr_text = match space {
+                                Some(sp) => Self::unnamed_location_token(sp, in1const),
+                                None => format!("0x{:x}", in1const),
+                            };
                             let unnamed = crate::printlanguage::Atom::with_field(
                                 &addr_text,
                                 crate::printlanguage::TagType::FieldToken,
@@ -2426,8 +3667,13 @@ impl PrintC {
                             // start), so the branch is unreachable in this
                             // pipeline; registered in ALIGNMENT_ROADMAP.md
                             // (printc module residuals).
+                            // cc:1086 pushSymbol → cc:1919 pushSymbolScope +
+                            // displayName: scope_prefix carries the `::`
+                            // element for a locally-shadowed global (empty
+                            // for unshadowed globals and for the stack
+                            // spacebase ScopeLocal hits, database.cc:326).
                             let sym_atom = crate::printlanguage::Atom::with_field(
-                                &symbol.unwrap(),
+                                &format!("{}{}", scope_prefix, symbol.as_ref().unwrap()),
                                 crate::printlanguage::TagType::FieldToken,
                                 crate::printlanguage::SyntaxHighlight::NoColor,
                                 0,
@@ -2480,6 +3726,16 @@ impl PrintC {
                 );
                 self.rpn_push_atom(&field_atom);
             }
+            // printc.cc:673 PrintC::opCallother — user-defined p-code ops.
+            // Functional syntax `name(in1,in2,...)` (display==0,
+            // cc:678-692), annotation assignment `in1 = in2`
+            // (cc:693-697), bare operand (cc:698-700), or the string-data
+            // literal arm (cc:701-714). The LHS assignment for a live
+            // output is pushed by emit_expression_rpn (cc:2471-2476),
+            // never here — opCallother itself never touches the out.
+            OpCode::CPUI_CALLOTHER => {
+                self.rpn_op_callother(op_arc, op);
+            }
             // Everything else (BRANCH, MULTIEQUAL, INDIRECT, ...):
             // print nothing - control flow is rendered by the structurer and
             // internal ops are not user-visible. Keeps the RPN path compiling.
@@ -2505,7 +3761,7 @@ impl PrintC {
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
         let out_dt = op
             .get_out()
-            .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+            .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
         // printc.cc:452-458: array-decay address-of shortcut.
         // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
         // does not port; we take the common case where in0 is itself an
@@ -2516,9 +3772,7 @@ impl PrintC {
                 let in0_is_array = op
                     .get_in(0)
                     .map(|a| {
-                    a.read()
-                            .unwrap()
-                            .get_high_type_read_facing(op, 0)
+                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
                 })
@@ -2569,6 +3823,75 @@ impl PrintC {
         self.rpn_push_in(op_arc, op, 0, self.mods);
     }
 
+    // Ghidra: printc.cc:830 PrintC::opFloatInt2Float
+    /// RPN-path port of `PrintC::opFloatInt2Float(const PcodeOp*)`
+    /// (printc.cc:830-842):
+    /// ```text
+    /// const PcodeOp *zextOp = TypeOpFloatInt2Float::absorbZext(op);
+    /// const Varnode *vn0 = (zextOp != 0) ? zextOp->getIn(0) : op->getIn(0);
+    /// Datatype *dt = op->getOut()->getHighTypeDefFacing();
+    /// if (!option_nocasts) { pushOp(&typecast,op); pushType(dt); }
+    /// pushVn(vn0,op,mods);
+    /// ```
+    /// The INT_ZEXT absorption (typeop.cc:1864-1880) treats an implied
+    /// INT_ZEXT feeding the conversion as part of the unsigned→float
+    /// conversion: the printed operand skips through to the zext's input.
+    fn rpn_op_float_int2float(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // typeop.cc:1865-1879 absorbZext: vn0 = op->getIn(0); if
+        // (vn0->isWritten() && vn0->isImplied()) { zextOp = vn0->getDef();
+        /// if (zextOp->code() == CPUI_INT_ZEXT) return zextOp; }
+        let vn0_arc = op.get_in(0).and_then(|in0_arc| {
+            let in0 = in0_arc.read().unwrap();
+            if in0.is_written() && in0.is_implied() {
+                let def = in0.get_def();
+                drop(in0);
+                if let Some(def_arc) = def {
+                    let def = def_arc.read().unwrap();
+                    if def.opcode == OpCode::CPUI_INT_ZEXT {
+                        return def.get_in(0).cloned();
+                    }
+                }
+            }
+            Some(in0_arc.clone())
+        });
+        // printc.cc:836: dt = op->getOut()->getHighTypeDefFacing().
+        let out_dt = op
+            .get_out()
+            .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
+        // printc.cc:837-839: pushOp(&typecast,op); pushType(dt).
+        if !self.option_nocasts {
+            self.rpn_push_op(self.rpn_tok_typecast);
+            if let Some(ref dt) = out_dt {
+                let type_name = Self::cast_type_string(dt);
+                let type_atom = Atom::with_type(
+                    &type_name,
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            } else {
+                let type_atom = Atom::with_type(
+                    "float",
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
+        }
+        // printc.cc:841: pushVn(vn0,op,mods) — the (possibly skipped-through)
+        // operand records into nodepend so implied defs inline on the drain.
+        if let Some(vn0) = vn0_arc {
+            self.rpn_push_vn(vn0, op_arc.clone(), self.mods);
+        }
+    }
+
     // Ghidra: printc.cc:424 PrintC::opFunc
     /// RPN-path port of `PrintC::opFunc(const PcodeOp*)` (printc.cc:424-442):
     /// functional syntax `name(arg0,arg1,...)` built from the function_call
@@ -2611,7 +3934,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:596 PrintC::opCall
+    // Ghidra: printc.cc:593 PrintC::opCall
     /// RPN-path port of `PrintC::opCall(const PcodeOp*)` (printc.cc:596-636):
     /// pushOp(&function_call,op), the fspec name atom (functoken /
     /// funcname_color), then count-1 comma tokens and the parameter
@@ -2653,6 +3976,125 @@ impl PrintC {
             // printc.cc:635-636: push empty token for void.
             let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
             self.rpn_push_atom(&blank);
+        }
+    }
+
+    // Ghidra: printc.cc:673 PrintC::opCallother
+    /// RPN-path port of `PrintC::opCallother(const PcodeOp*)`
+    /// (printc.cc:673-715). Resolves the UserPcodeOp by the CALLOTHER index
+    /// in in(0) (cc:676) and dispatches on its display flags
+    /// (userop.hh:51-53: 0=functional, 1=annotation_assignment,
+    /// 2=no_operator, 4=display_string):
+    /// - functional (cc:678-692): `pushOp(&function_call)` + the name atom
+    ///   (`nm = op->getOpcode()->getOperatorName(op)` — TypeOpCallother::
+    ///   getOperatorName typeop.cc:837-853 → UserPcodeOp::getOperatorName
+    ///   userop.hh:94 = the userop name, optoken/funcname_color), then
+    ///   numInput()-2 comma tokens and inputs in(1..) pushed in reverse
+    ///   for the LIFO nodepend drain (cc:683-689); numInput()==1 pushes
+    ///   the empty blank token (void, cc:690-691).
+    /// - annotation_assignment (cc:693-697): assignment token + in(2)
+    ///   then in(1) (RPN reverse: in(1) drains first → `in1 = in2`).
+    /// - no_operator (cc:698-700): bare pushVn(in(1)).
+    /// - display_string (cc:701-714): the output's raw type (cc:703
+    ///   `vn->getType()`, NOT the high/facing consult) must be TYPE_PTR;
+    ///   `ct = ptrTo`; `printCharacterConstant(str, op->getIn(1)->getAddr(),
+    ///   ct)` — in(1) is the STRINGDATA hash constant whose constant-space
+    ///   address is the string_manager read-back key (registerInternalString
+    ///   Data keys the entry at Address(hash), stringmanage.rs:817-818);
+    ///   failure (non-pointer out or empty manager data) falls to
+    ///   `"badstring"` (cc:707/713). The literal atom is vartoken/
+    ///   const_color (cc:715).
+    fn rpn_op_callother(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        use crate::userop::userop_flags;
+        // printc.cc:676: userop = glb->userops.getOp(op->getIn(0)->getOffset()).
+        let index = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_offset() as i32)
+            .unwrap_or(-1);
+        // Resolve the userop + its display flags, cloning out of the borrow
+        // before emitting (same lock protocol as the legacy op_callother).
+        let (display, name) = self
+            .userops
+            .as_ref()
+            .and_then(|uo| {
+                let guard = uo.read().unwrap();
+                guard
+                    .get_op(index)
+                    .map(|u| (u.get_display(), u.get_name().to_string()))
+            })
+            .unwrap_or((
+                0,
+                // Ghidra fallback (typeop.cc:848-852): "CALLOTHER[<index>]".
+                format!("CALLOTHER[{}]", index),
+            ));
+        if display == 0 {
+            // printc.cc:678-692: functional syntax nm(in1,in2,...).
+            // cc:679: nm = getOperatorName(op) = the userop name.
+            self.rpn_push_op(self.rpn_tok_function_call);
+            // cc:680: Atom(nm,optoken,funcname_color,op).
+            let name_atom =
+                Atom::with_op(&name, TagType::OpToken, SyntaxHighlight::FuncnameColor, -1);
+            self.rpn_push_atom(&name_atom);
+            let n = op.num_input();
+            if n > 1 {
+                // cc:683-684: numInput()-2 comma separators (slots 1..n-1).
+                for _ in 1..n.saturating_sub(1) {
+                    self.rpn_push_op(self.rpn_tok_comma);
+                }
+                // cc:687-689: inputs in(1..) pushed in reverse order for
+                // the LIFO nodepend drain.
+                for i in (1..n).rev() {
+                    self.rpn_push_in(op_arc, op, i, self.mods);
+                }
+            } else {
+                // cc:690-691: push empty token for void.
+                let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
+                self.rpn_push_atom(&blank);
+            }
+        } else if display == userop_flags::ANNOTATION_ASSIGNMENT {
+            // printc.cc:693-697: pushOp(&assignment); pushVn(in2);
+            // pushVn(in1) — reverse push so in(1) drains as the LHS.
+            self.rpn_push_op(self.rpn_tok_assignment);
+            self.rpn_push_in(op_arc, op, 2, self.mods);
+            self.rpn_push_in(op_arc, op, 1, self.mods);
+        } else if display == userop_flags::NO_OPERATOR {
+            // printc.cc:698-700: bare operand.
+            self.rpn_push_in(op_arc, op, 1, self.mods);
+        } else if display == userop_flags::DISPLAY_STRING {
+            // printc.cc:701-714: string-data literal arm.
+            let mut str = String::new();
+            // cc:703: ct = op->getOut()->getType() — the RAW varnode type.
+            let out_type = op.get_out().and_then(|o| o.read().unwrap().get_type());
+            let rendered = match out_type.as_deref() {
+                Some(crate::type_system::datatype::Datatype::Pointer(p)) => {
+                    // cc:705-706: ct = ptrTo; printCharacterConstant(str,
+                    //   op->getIn(1)->getAddr(), ct).
+                    let in1_addr = op
+                        .get_in(1)
+                        .map(|a| crate::address::Address::new(a.read().unwrap().get_offset()));
+                    match in1_addr {
+                        Some(addr) => {
+                            self.print_character_constant(&mut str, addr, p.ptr_to.as_ref())
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+            if !rendered {
+                // cc:707/713: failure fallback.
+                str.clear();
+                str.push_str("\"badstring\"");
+            }
+            // cc:715: Atom(str,vartoken,const_color,op,vn).
+            let literal_atom =
+                Atom::new(&str, TagType::VarToken, SyntaxHighlight::ConstColor);
+            self.rpn_push_atom(&literal_atom);
         }
     }
 
@@ -3269,9 +4711,26 @@ impl PrintC {
                 }
             }
             // printc.cc:2703-2705: skip ops whose output is implied.
+            // PRINTC-VOIDCALL-0001: a locked-void callee CALL is never
+            // implied in the oracle IR (it has no output at all,
+            // funcLinkOutput coreaction.cc:1539-1541) and must print as a
+            // statement (`f(args);`). Un-skip only when every consumer of the
+            // surviving output is a RETURN — the `return f();` tail-call form
+            // P13 used to split. A non-RETURN consumer keeps the legacy
+            // inline (skip) behavior so the call never prints twice.
             if let Some(out) = op_guard.get_out() {
                 if out.read().unwrap().is_implied() {
-                    continue;
+                    let only_returns = {
+                        let out_vn = out.read().unwrap();
+                        out_vn.descend.iter().all(|weak| {
+                            weak.upgrade()
+                                .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
+                                .unwrap_or(true)
+                        })
+                    };
+                    if !(self.callee_returns_void(&op_guard) && only_returns) {
+                        continue;
+                    }
                 }
             }
             if separator {
@@ -3334,11 +4793,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3472,7 +4941,17 @@ impl PrintC {
         if entry_read.get_type() != crate::block::BlockType::Basic {
             return None;
         }
-        Some(entry_read.get_start_addr().as_u64())
+        // printc.cc:3170 emitLabel uses bb->getEntryAddr() (block.cc:2291),
+        // NOT getStart(): with a multi-range (spliced) block the label keeps
+        // the entry chunk's address even though getStart reports the lowest
+        // cover range.
+        Some(
+            entry_read
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+                .map(|bb| bb.get_entry_addr().as_u64())
+                .unwrap_or_else(|| entry_read.get_start_addr().as_u64()),
+        )
     }
 
     // RUGRA-GLUE: transports Ghidra's PrintLanguage::no_branch modifier as an explicit boolean through Rugra's structured-block dispatcher
@@ -3509,15 +4988,57 @@ impl PrintC {
         // counting it here would wrongly suppress the never-emitted anchor.
         // The real pass does not re-insert — the set must stay the discovery
         // snapshot the defenses were specified against.
+        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001: a BlockGoto arc arriving
+        // here (a Goto-wrapped switch case body, emit_block_goto's
+        // Basic/Copy arm) emits the WRAPPED leaf's ops — the arc itself is
+        // not Basic/Copy — so the ledger must record the wrapped leaf's
+        // start. Without it the goto statement's never-emitted-target anchor
+        // (emit_goto_statement) misfires for a target whose body IS emitted
+        // by the tree: the anchor consumes printed_labels and the real
+        // label at the case head is suppressed (observed: httpd main
+        // `goto switchD_0012ba94_caseD_3f;` with the
+        // `switchD_0012ba94_caseD_3f:` label missing at case 0x3f's slot).
         if self.discovery_pass
             && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
-            && matches!(
-                block_arc.read().unwrap().get_type(),
-                crate::block::BlockType::Basic | crate::block::BlockType::Copy
-            )
         {
-            if let Some(start) = Self::flow_entry_address(block_arc) {
-                self.discovery_block_starts.insert(start);
+            let ledger_arc = {
+                let bt = block_arc.read().unwrap().get_type();
+                if bt == crate::block::BlockType::Goto {
+                    block_arc
+                        .read()
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockGoto>()
+                        .and_then(|g| g.wrapped.clone())
+                } else {
+                    None
+                }
+                .filter(|w| {
+                    matches!(
+                        w.read().unwrap().get_type(),
+                        crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                    )
+                })
+            };
+            let ledger_targets: Vec<&std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >> = match &ledger_arc {
+                Some(w) => vec![w],
+                None => {
+                    if matches!(
+                        block_arc.read().unwrap().get_type(),
+                        crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                    ) {
+                        vec![block_arc]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
+            for target_arc in ledger_targets {
+                if let Some(start) = Self::flow_entry_address(target_arc) {
+                    self.discovery_block_starts.insert(start);
+                }
             }
         }
         // GOTO-LABEL-UNPRINTED-0001 backpatch: a `goto` to this block's
@@ -3707,9 +5228,23 @@ impl PrintC {
             // An implied varnode's def expression is inlined at its read site
             // (push_varnode emits it), so the op is NOT emitted as a standalone
             // `lhs = expr` statement.
+            // PRINTC-VOIDCALL-0001 exception: a locked-void callee CALL whose
+            // output is consumed only by RETURN(s) keeps the statement form
+            // (the oracle IR has no output on such a call, funcLinkOutput
+            // coreaction.cc:1539-1541) — same guard as emit_block_basic_rpn.
             if let Some(ref out_arc) = op.output {
                 if out_arc.read().unwrap().is_implied() {
-                    continue;
+                    let only_returns = {
+                        let out_vn = out_arc.read().unwrap();
+                        out_vn.descend.iter().all(|weak| {
+                            weak.upgrade()
+                                .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
+                                .unwrap_or(true)
+                        })
+                    };
+                    if !(self.callee_returns_void(&op) && only_returns) {
+                        continue;
+                    }
                 }
             }
 
@@ -3818,11 +5353,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3977,8 +5522,47 @@ impl PrintC {
             ,
             BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted)
             ,
-            BlockType::Graph | BlockType::MultiGoto => {
-                self.emit_structured_basic(block_arc, graph, emitted)
+            BlockType::Graph => self.emit_structured_basic(block_arc, graph, emitted),
+            // Ghidra block.hh:588: BlockMultiGoto::emit is pure delegation —
+            // `getBlock(0)->emit(lng)` — and printc.cc has NO MultiGoto
+            // branch at all. The unstructured edges live in `gotoedges` and
+            // are consumed by an enclosing BlockSwitch (grabCaseBasic,
+            // block.cc:3548-3553), never emitted here.
+            BlockType::MultiGoto => self.emit_block_multigoto(block_arc, graph, emitted),
+        }
+    }
+
+    // Ghidra: block.hh:588 BlockMultiGoto::emit
+    /// `virtual void emit(PrintLanguage *lng) const { getBlock(0)->emit(lng); }`
+    /// — delegate to the wrapped component. Same wrapped-dispatch shape as
+    /// emit_block_goto's cc:2771 arm, minus the goto statement (the multigoto
+    /// emits no jump of its own; its peeled edges belong to the enclosing
+    /// switch's goto-typed cases).
+    fn emit_block_multigoto(
+        &mut self,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        let wrapped = {
+            let bl = block_arc.read().unwrap();
+            bl.as_any()
+                .downcast_ref::<crate::block::BlockMultiGoto>()
+                .and_then(|m| m.wrapped.clone())
+        };
+        match wrapped {
+            Some(inner)
+                if !matches!(
+                    inner.read().unwrap().get_type(),
+                    crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                ) =>
+            {
+                self.emit_block_structured(&inner, graph, emitted);
+            }
+            _ => {
+                self.emit_block_ops(block_arc, true);
             }
         }
     }
@@ -3987,8 +5571,35 @@ impl PrintC {
     fn emit_flow_basic(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+    >,
     ) {
+        // GOTO-LABEL-UNPRINTED-0001 discovery ledger (emit_block_ops sibling,
+        // printc.rs:3503-3522): emit_block_ops records only leaves dispatched
+        // through the FLAT paths; a leaf reached in a plain structured context
+        // (e.g. a goto target sitting at the function's top level after a
+        // loop, emitted below via emit_block_basic_rpn/legacy) went
+        // unrecorded, so emit_goto_statement's never-emitted-target anchor
+        // misfired and placed its label at the goto site — the `goto X; X:`
+        // self-pair (BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 residual,
+        // observed next_url code_r0x000050E7). Same gates as the sibling
+        // recorder: discovery pass + PRIMARY NullEmit + Basic/Copy leaf; the
+        // oracle counterpart is BlockGraph::emit totality — every tree block
+        // emits exactly once through the virtual dispatch (block.hh emit),
+        // so Ghidra's "is this target a live emitted block" question is
+        // answered by the tree itself, and this ledger merely mirrors that
+        // completeness across Rugra's two leaf emission paths.
+        if self.discovery_pass
+            && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
+            && matches!(
+                block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy
+            )
+        {
+            if let Some(start) = Self::flow_entry_address(block_arc) {
+                self.discovery_block_starts.insert(start);
+            }
+        }
         self.emit_any_label_statement(block_arc);
         if self.is_set(print_mods::ONLY_BRANCH) {
             let terminal = block_arc.read().unwrap().get_ops().last().cloned();
@@ -4212,16 +5823,23 @@ impl PrintC {
         // `else {` + condition statements + `if` on its own new line. It is
         // cancelled ONLY when the condition emitted nothing after the
         // parent's `else` (printc.cc:2900-2902), producing the merged
-        // `else if(...)`. MAIN-IVAR4-DUP fix: the previous static emulation
-        // decided the merge from the mod alone, so an else-if child whose
-        // condition block carried statements (main's fopen region) lost
-        // BOTH the brace and the `if` line break. option_brace_ifelse
-        // defaults to same_line (printc.cc:1591).
-        let installed_pending_brace = self.is_set(print_mods::PENDING_BRACE);
-        if installed_pending_brace {
-            self.emit
-                .set_pending_brace(crate::prettyprint::BraceStyle::SameLine);
-        }
+        // option_brace_ifelse defaults to same_line (printc.cc:1591).
+        // SQATTR-PENDINGBRACE-IDENTITY-0001: the oracle installs a FRESH
+        // `PendingBrace pendingBrace(...)` stack object per emitBlockIf
+        // call (printc.cc:2882) and all later questions — the cc:2900
+        // cancel/merge decision and the cc:2946 close — are answered from
+        // THAT object (pointer identity, prettyprint.hh:457; indentId,
+        // printc.hh:347-361). Rugra keeps the install's BraceId in this
+        // frame and asks per id; the inherited PENDING_BRACE mod alone is
+        // only the install trigger, never the fire/close state.
+        let installed_brace_id = if self.is_set(print_mods::PENDING_BRACE) {
+            Some(
+                self.emit
+                    .set_pending_brace(crate::prettyprint::BraceStyle::SameLine),
+            )
+        } else {
+            None
+        };
         self.push_mod();
         self.unset_mod(
             print_mods::NO_BRANCH
@@ -4244,7 +5862,11 @@ impl PrintC {
         // otherwise — the brace fired mid-condition, or none was installed —
         // the `if` starts on a new line.
         self.emit_comment_block_tree(&condition);
-        if self.emit.has_pending_print() {
+        // Identity-gated merge (prettyprint.hh:457 `pendPrint == pend`):
+        // only THIS frame's still-installed brace triggers the
+        // cancel+spaces(1) `else if` merge; a nested frame's leftover slot
+        // content must not (and cannot, post-resolution) be mistaken for it.
+        if installed_brace_id.is_some_and(|id| self.emit.has_pending_print_id(id)) {
             // printc.cc:2900-2902: cancelPendingPrint(); spaces(1);
             self.emit.cancel_pending_print();
             self.emit.spaces(1, 0);
@@ -4278,13 +5900,16 @@ impl PrintC {
             };
             self.emit.print(" ");
             self.emit_goto_statement(target_addr, branch_type);
-            // printc.cc:2917 falls through to popMod + the printc.cc:2946-2948
-            // deferred pending-brace close. Cancel any still-pending
-            // (un-fired) brace first: the oracle's PendPrint slot would
-            // dangle past the emitBlockIf stack frame here (printc.cc:2872),
-            // so an unconditional later fire is not an oracle behavior.
-            self.emit.cancel_pending_print();
-            if installed_pending_brace && self.emit.pending_brace_fired() {
+            // printc.cc:2914-2917 has NO cancelPendingPrint in the goto
+            // arm: the slot was already resolved above (the cc:2900-2905
+            // identity check either fired the brace — slot cleared by
+            // emitPending, prettyprint.hh:1129-1137 — or cancelled it), so
+            // nothing of this frame can remain installed. The cc:2946-2948
+            // close is the frame's own decision: only an install of THIS
+            // frame that FIRED gets a closeBraceIndent (identity-gated;
+            // SQATTR-PENDINGBRACE-IDENTITY-0001 — the old global-flag read
+            // double-closed a nested frame's fired brace here).
+            if installed_brace_id.is_some_and(|id| self.emit.pending_brace_fired_id(id)) {
                 self.emit.close_brace_indent("}");
             }
             self.pop_mod();
@@ -4333,14 +5958,24 @@ impl PrintC {
 
         // printc.cc:2946-2948: if (pendingBrace.getIndentId() >= 0)
         //   emit->closeBraceIndent(CLOSE_CURLY, pendingBrace.getIndentId());
-        // Close the brace a FIRED PendingBrace opened right after the
-        // parent's `else` (the else-arm child consumed it above).
-        if installed_pending_brace && self.emit.pending_brace_fired() {
+        // Close the brace a FIRED PendingBrace of THIS frame opened right
+        // after the parent's `else` (the else-arm child consumed it above).
+        // Identity-gated (the frame's own PendingBrace object, printc.hh:
+        // 347-361) — a nested frame's fire must not produce a second close
+        // here (SQATTR-PENDINGBRACE-IDENTITY-0001: the stale global flag
+        // did exactly that, popping the indentstack empty and panicking
+        // prettyprint.rs print_token's relative-break arm).
+        if installed_brace_id.is_some_and(|id| self.emit.pending_brace_fired_id(id)) {
             self.emit.close_brace_indent("}");
         }
         self.pop_mod();
     }
-    // RUGRA-GLUE: emit_structured_whiledo (no Ghidra counterpart found)
+    // Ghidra: printc.cc:3001 PrintC::emitBlockWhileDo
+    /// Emit a BlockWhileDo: for-loop dispatch (cc:3007-3009), overflow
+    /// `while( true ) { condbody; if (cond) break; }` (cc:3017-3044), or
+    /// `while (cond) { body }` (cc:3046-3064) with the full mod protocol
+    /// (entry pushMod/unset cc:3012-3013, comma_separate condition replay
+    /// cc:3053-3056, no_branch body cc:3060, popMod cc:3065).
     fn emit_structured_whiledo(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -4366,9 +6001,38 @@ impl PrintC {
                         // getIterateOp()!=0, dispatch to emitForLoop and return.
                         // The for-loop body + braces are emitted by emit_for_loop,
                         // so we must NOT fall through to the while-body path below.
-                        self.emit_for_loop(while_data, graph, emitted);
+                        self.emit_for_loop(block_arc, while_data, graph, emitted);
                         return;
-                    } else if overflow {
+                    }
+                    // cc:3012-3013: pushMod(); unsetMod(no_branch|only_branch) —
+                    // the whole construct emits with both branch mods cleared
+                    // (same entry protocol as emitBlockInfLoop cc:3102-3103).
+                    // Load-bearing for the condition dispatch below: an
+                    // inherited only_branch would hijack cc:3055's condBlock
+                    // emit into the lastOp-only path, an inherited no_branch
+                    // would skip the CBRANCH statement (empty while header).
+                    self.push_mod();
+                    self.unset_mod(
+                        print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+                    // cc:3014: emitAnyLabelStatement(bl) — the label for a
+                    // goto into this loop's header prints HERE, at the
+                    // construct entry (before the `while` keyword line),
+                    // never inside the condition/body: markLabelBumpUp
+                    // (block.cc:3316-3322 "whiledos steal lower blocks
+                    // labels") flagged the condition chain LABEL_BUMPUP, so
+                    // the leaf's own emission point is suppressed and this
+                    // call is the label's only print site
+                    // (MSTRUCT-WHILEDO-LABEL-PRINTC-0001). The call lives in
+                    // the construct emitter — not only in the dispatcher —
+                    // because emit_structured_list (cc:2795-2812 children)
+                    // and emit_switch_case_body (cc:3339-3341) dispatch
+                    // constructs via the type match directly, bypassing
+                    // emit_block_structured; the oracle's virtual emit has
+                    // the same per-construct call on every dispatch path.
+                    // Idempotent with the dispatcher's transport call via
+                    // the printed_labels once-guard.
+                    self.emit_any_label_statement(block_arc);
+                    if overflow {
                         // cc:3022: emit->tagLine();
                         self.emit.tag_line(0);
                         // cc:3023-3028: tagOp(KEYWORD_WHILE) + openParen +
@@ -4388,12 +6052,36 @@ impl PrintC {
                         self.emit.spaces(1, 0);
                         self.emit.close_paren(")", id1);
                     } else {
-                        // cc:3049: emit->tagLine();
+                        // cc:3048: emitCommentBlockTree(condBlock) — comments
+                        // attached to the condition subtree print before the
+                        // `while` header line.
+                        self.emit_comment_block_tree(&while_data.condition);
+                        // cc:3049-3052: tagLine + tagOp(KEYWORD_WHILE) +
+                        // spaces(1) + openParen — the while's own paren pair.
                         self.emit.tag_line(0);
-                        // Emit as while(cond)
-                        self.emit.print("while (");
-                        self.emit_block_condition(&while_data.condition);
-                        self.emit.print(")");
+                        self.emit.tag_op("while");
+                        self.emit.spaces(1, 0);
+                        let id1 = self.emit.open_paren("(");
+                        // cc:3053-3056: pushMod + setMod(comma_separate) +
+                        // condBlock->emit(this) + popMod — the condition
+                        // replays through the structured virtual dispatch,
+                        // never the expression channel: emitBlockBasic walks
+                        // ALL printed ops of the cond block comma-separated
+                        // (`while (a = f(x), a != 0)` — the golden line form,
+                        // ghidra_curl_1204.c:1592/1601/2523), a BlockCondition
+                        // composes `(A && (B))` (cc:2846-2868), and the
+                        // COMMA_SEPARATE mod suppresses opCbranch's own parens
+                        // (cc:541 yesparen=false → openGroup, no text).
+                        // Insert-first: this visit owns the condition block's
+                        // emission.
+                        self.push_mod();
+                        self.set_mod(print_mods::COMMA_SEPARATE);
+                        emitted.insert(
+                            std::sync::Arc::as_ptr(&while_data.condition)
+                                as *const () as usize);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
+                        self.emit.close_paren(")", id1);
                     }
 
                     self.emit.begin_block();
@@ -4403,13 +6091,43 @@ impl PrintC {
                     // (cc:3030-3043: condBlock emit with no_branch, then
                     // only_branch condition, then break).
                     if overflow {
-                        // Emit condition block's non-branch ops (no_branch).
-                        self.emit_block_ops(&while_data.condition, true);
-                        // cc:3035-3043: if (<condition>) break;
+                        // cc:3030-3033: pushMod(); setMod(no_branch);
+                        // condBlock->emit(this); popMod() — the condition
+                        // subtree dispatches through the structured virtual
+                        // emit, never a flat op walk. Insert-first mirrors the
+                        // emit_structured_if double-visit pattern: this visit
+                        // owns the emission; the `if (cond) break;` replay
+                        // below runs through the expression channel, which
+                        // does not consult the once-guard.
+                        self.push_mod();
+                        self.set_mod(print_mods::NO_BRANCH);
+                        emitted.insert(
+                            std::sync::Arc::as_ptr(&while_data.condition)
+                                as *const () as usize);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
+                        // cc:3035-3043: tagLine + tagOp(KEYWORD_IF) +
+                        // spaces(1) + pushMod + setMod(only_branch) +
+                        // condBlock->emit(this) + popMod + spaces(1) +
+                        // `break;` (emitGotoStatement f_break_goto,
+                        // cc:2309-2311 + SEMICOLON cc:2321). The condition
+                        // parens come from opCbranch (cc:554-555, yesparen —
+                        // comma_separate is NOT set on this replay), never
+                        // from hard-coded `if (` text. The only_branch replay
+                        // re-dispatches the cond block through the structured
+                        // virtual channel; the no_branch visit above inserted
+                        // its identity, and emit_flow_block does not consult
+                        // the once-guard.
                         self.emit.tag_line(0);
-                        self.emit.print("if (");
-                        self.emit_block_condition(&while_data.condition);
-                        self.emit.print(") break;");
+                        self.emit.tag_op("if");
+                        self.emit.spaces(1, 0);
+                        self.push_mod();
+                        self.set_mod(print_mods::ONLY_BRANCH);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
+                        self.emit.spaces(1, 0);
+                        self.emit.print("break");
+                        self.emit.print(";");
                     }
                     // A loop body is an independent control-flow path: a RETURN
                     // seen before the loop (or in a sibling branch) must NOT
@@ -4429,17 +6147,28 @@ impl PrintC {
                     // re-gated.
                     let saved = self.seen_return;
                     self.seen_return = false;
+                    // cc:3060: setMod(no_branch) — dont print goto at bottom of
+                    // clause; the body dispatch runs with the branch mod set so
+                    // the latch CBRANCH never prints as a raw statement.
+                    self.set_mod(print_mods::NO_BRANCH);
                     self.emit_block_structured(&while_data.body, graph, emitted);
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
+                    // cc:3065: popMod() — closes the cc:3012 pushMod.
+                    self.pop_mod();
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
     }
 
 
-    // RUGRA-GLUE: emit_structured_dowhile (no Ghidra counterpart found)
+    // Ghidra: printc.cc:3068 PrintC::emitBlockDoWhile
+    /// Emit a BlockDoWhile as `do { body } while (cond);` with the full mod
+    /// protocol: entry pushMod/unset (cc:3074-3075), no_branch body visit
+    /// (cc:3080-3085), ` while` + spaces (cc:3087-3090), ONLY_BRANCH body
+    /// replay for the tail condition (cc:3091-3092 — the parens come from
+    /// opCbranch, not from this emitter), SEMICOLON + popMod (cc:3093-3094).
     fn emit_structured_dowhile(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -4452,6 +6181,19 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
                 if let Some(dowhile_data) = dowhile_block {
+                    // cc:3074-3075: pushMod(); unsetMod(no_branch|only_branch) —
+                    // entry protocol (same as emitBlockWhileDo cc:3012-3013 /
+                    // emitBlockInfLoop cc:3102-3103): the construct's emission
+                    // never inherits branch mods from an enclosing context.
+                    self.push_mod();
+                    self.unset_mod(
+                        print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+                    // cc:3076: emitAnyLabelStatement(bl) — construct-entry
+                    // label print site (same per-construct placement as the
+                    // whiledo sibling; see the cc:3014 note). Idempotent
+                    // with the dispatcher's transport call via the
+                    // printed_labels once-guard.
+                    self.emit_any_label_statement(block_arc);
                     self.emit.tag_line(0);
                     // cc:3078: print(KEYWORD_DO) — bare keyword, no trailing
                     // space; the brace emitter supplies " {" (same_line
@@ -4487,59 +6229,38 @@ impl PrintC {
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
-                    
-                    self.emit.print(" while (");
-                    let ops = block.get_ops();
-                    if let Some(last_op_ref) = ops.last() {
-                        let last_op = last_op_ref.0.read().unwrap();
-                        if let Some(cond_vn) = last_op.get_in(1) {
-                            // Capture the condition into a throwaway buffer first so
-                            // we can apply the same malformed-condition guard used
-                            // by emit_block_condition / emit_cbranch_condition
-                            // (cast-concat, varname-concat, degenerate self-compare
-                            // `X == X`/`X != X`). The do-while CBRANCH's condition
-                            // varnode can lose its SSA def under Rugra's x86-flags
-                            // recovery, leaving a tautology like `local_0 == local_0`
-                            // — fold it to `1` rather than emitting a nonsense
-                            // `while (X == X);`. (Audit: R50.)
-                            let cond_vn = cond_vn.clone();
-                            drop(last_op);
-                            let orig_emit = std::mem::replace(
-                        &mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()),
-                    );
-                            self.emit_condition(&cond_vn);
-                            let text = {
-                                let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any()
-                            .downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output())
-                            .unwrap_or_default()
-                            };
-                            let t = text.trim();
-                            let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
-                                + t.matches("(char)").count() + t.matches("(bool)").count()
-                                + t.matches("(short)").count();
-                            let has_bool_op = t.contains(" || ") || t.contains(" && ")
-                                || t.contains(" == ") || t.contains(" != ")
-                                || t.contains(" < ") || t.contains(" > ")
-                                || t.contains(" <= ") || t.contains(" >= ");
-                            let has_concat_cast = cast_count >= 2 && !has_bool_op;
-                            let has_concat_varname = Self::regex_concat_varname(t);
-                            let has_self_comparison = Self::is_self_comparison(t);
-                            let looks_valid = !t.is_empty()
-                                && t.chars().any(|c| c.is_alphanumeric() || c == '_')
-                                && !has_concat_cast
-                                && !has_concat_varname
-                                && !has_self_comparison;
-                            if looks_valid {
-                                self.emit.print(&text);
-                            } else {
-                                self.emit.print("1");
-                            }
-                        }
-                    }
-                    self.emit.print(");");
+
+                    // cc:3086-3087: closeBraceIndent + spaces(1) — end_block
+                    // supplies `}`, then the single space before `while`.
+                    self.emit.spaces(1, 0);
+                    // cc:3088-3090: op = getBlock(0)->lastOp();
+                    // tagOp(KEYWORD_WHILE) + spaces(1). emitBlockDoWhile opens
+                    // NO paren of its own — the `while (cond)` parens come
+                    // from opCbranch's yesparen (cc:554-555; comma_separate is
+                    // NOT set on this replay), matching the golden
+                    // `} while (iVar16 < argc);` byte form.
+                    self.emit.tag_op("while");
+                    self.emit.spaces(1, 0);
+                    // cc:3091-3092: setMod(only_branch) +
+                    // bl->getBlock(0)->emit(this) — the body block REPLAYS
+                    // through the structured virtual dispatch, never a
+                    // throwaway text buffer: emitBlockLs collapses to its
+                    // final child under only_branch (cc:2787-2791), and the
+                    // basic block's only_branch path prints just lastOp's
+                    // expression via emitExpression (cc:2686-2690) → opCbranch.
+                    // The former buffer channel ran the LEGACY value-scan
+                    // emitter plus Rugra-side textual malformed-guards (R50
+                    // folds) that have no oracle counterpart; the missing-in(1)
+                    // case is handled at the op layer (op_cbranch_rpn R50
+                    // transport). emit_flow_block does not consult the
+                    // once-guard, so the first body visit's insert does not
+                    // suppress this replay.
+                    self.set_mod(print_mods::ONLY_BRANCH);
+                    self.emit_flow_block(&dowhile_data.condition.clone(), graph, emitted);
+                    // cc:3093: emit->print(SEMICOLON)
+                    self.emit.print(";");
+                    // cc:3094: popMod() — closes the cc:3074 pushMod.
+                    self.pop_mod();
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
@@ -4547,18 +6268,35 @@ impl PrintC {
 
     // Ghidra: printc.cc:3097 PrintC::emitBlockInfLoop
     /// Emit a BlockInfLoop as `do { <body> } while(true);`. Faithful to
-    /// emitBlockInfLoop (printc.cc:3097-3122): emitAnyLabelStatement, `do`,
-    /// open brace, emit body, close brace, ` while ( true );`.
+    /// emitBlockInfLoop (printc.cc:3097-3122): pushMod + unset
+    /// (no_branch|only_branch), emitAnyLabelStatement, `do`, open brace,
+    /// recursive body emission, close brace, ` while ( true );`, popMod.
     fn emit_structured_infloop(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
-        _graph: &crate::block::BlockGraph,
-        _emitted: &mut std::collections::HashSet<usize>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::BlockInfLoop;
         let block = block_arc.read().unwrap();
         let inf_block = block.as_any().downcast_ref::<BlockInfLoop>();
         if let Some(inf_data) = inf_block {
+            // cc:3102-3103: pushMod(); unsetMod(no_branch|only_branch) — the
+            // whole construct (header, body, trailer) emits with both branch
+            // mods cleared, regardless of the caller's state (e.g. an if-body
+            // context that set no_branch at cc:2919 must not bleed into the
+            // loop body's emission).
+            self.push_mod();
+            self.unset_mod(
+                print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+            // cc:3104: emitAnyLabelStatement(bl) — construct-entry label
+            // print site (same per-construct placement as the whiledo
+            // sibling; see the cc:3014 note). Load-bearing for infloops
+            // dispatched as switch case bodies: emit_switch_case_body
+            // (cc:3339-3341) bypasses emit_block_structured, so without
+            // this call the label for a goto into the `do {` header has no
+            // print site (glob_word 0x4d0e).
+            self.emit_any_label_statement(block_arc);
             self.emit.tag_line(0);
             // cc:3106: print(KEYWORD_DO) — bare keyword (same one-space
             // brace contract as emit_structured_dowhile cc:3078).
@@ -4569,15 +6307,27 @@ impl PrintC {
             // iteration; a prior RETURN must not suppress it.
             let saved = self.seen_return;
             self.seen_return = false;
-            // Emit the body block's ops.
-            self.emit_block_ops(&inf_data.body, true);
+            // cc:3108-3110: beginBlock(getBlock(0)); getBlock(0)->emit(this);
+            // endBlock(id1) — the body dispatches through the structured
+            // virtual emit, never a flat op walk. PRINTC-SWITCH-EMIT-0001
+            // core: a flat emit_block_ops(body) collapses every structured
+            // child — an InfLoop-wrapped switch (the gp switch-in-do-while
+            // topology) plus all nested loops/ifs were flattened to bare
+            // statements, hiding the Switch entirely. Same recursive channel
+            // as the whiledo/dowhile/for siblings (cc:3062/3083/2995).
+            self.emit_block_structured(&inf_data.body, graph, emitted);
             self.seen_return = saved;
             self.loop_depth -= 1;
             self.emit.end_block();
-            // cc:3112-3120: ` while ( true );`
-            self.emit.print(" while (");
-            self.emit.print(" true");
+            // cc:3112-3120: spaces(1) + KEYWORD_WHILE + openParen +
+            // spaces(1) + KEYWORD_TRUE + spaces(1) + closeParen + SEMICOLON
+            // -> ` while( true );` (no space between while and the paren,
+            // one space inside the parens on both sides of `true`).
+            self.emit.print(" while(");
+            self.emit.print(" true ");
             self.emit.print(");");
+            // cc:3121: popMod()
+            self.pop_mod();
         } else {
             self.emit_block_ops(block_arc, false);
         }
@@ -4713,6 +6463,127 @@ impl PrintC {
         self.pop_mod();
         self.emit.close_paren(")", outer);
     }
+    // RUGRA-GLUE: emit_switch_head_expr — verbatim extraction of the switch
+    // index-expression resolution that emit_structured_switch's header
+    // previously carried inline (index_varnode → inline_candidates/value_def_map
+    // COPY chase → BRANCHIND in0 → CBRANCH-compare fallback). Pure refactor of
+    // the printc.cc:588 `pushVn(op->getIn(0),op,mods); recurse();` head
+    // channel so the ONLY_BRANCH expression path (opBranchind,
+    // printc.cc:582-591) and the full emitBlockSwitch header
+    // (printc.cc:3325-3327) render the identical expression text.
+    fn emit_switch_head_expr(&mut self, switch_data: &crate::block::BlockSwitch) {
+        // Ghidra opBranchind (printc.cc:582-591): `pushVn(op->getIn(0),op,mods)`
+        // reads the BRANCHIND's LIVE input varnode at print time, so the head
+        // renders whatever the final IR feeds the dispatch — after
+        // ActionSwitchNorm's foldInNormalization (jumptable.cc:1546-1553)
+        // rewired it, that is the switchvn normalization expression
+        // (e.g. `AND(SUB(x,min),mask)`), which ActionMarkImplied marks
+        // implied and pushVn therefore inlines as an expression tree.
+        // Rugra's BlockSwitch captured `index_varnode` during
+        // ActionBlockStructure — BEFORE switchnorm/deadcode rewrite the
+        // input — so the snapshot goes stale and printed the pre-rewrite
+        // varnode's name (PRINTC-SWITCH-EMIT-0001 head-shape residual:
+        // `switch(iVar31)` vs oracle `switch((int)pCVar10 - 0x23U & 0xff)`).
+        // Resolve the control block's BRANCHIND op fresh and push its current
+        // input through the normal varnode channel (implied inlining, casts,
+        // constants) exactly like pushVn.
+        let live_input = {
+            let ctrl = switch_data.control.read().unwrap();
+            ctrl.get_ops().iter().find_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_BRANCHIND {
+                    op.get_in(0).cloned()
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(vn_arc) = live_input {
+            let vn = vn_arc.read().unwrap();
+            self.push_varnode(&vn, None);
+            return;
+        }
+        // Fallback (control block holds no live BRANCHIND — e.g. a dispatch
+        // consumed by a later restructure): legacy snapshot channel below.
+        if let Some(ref idx_vn_arc) = switch_data.index_varnode {
+            let idx_vn = idx_vn_arc.read().unwrap();
+            let key = (idx_vn.get_space(), idx_vn.get_offset());
+            drop(idx_vn);
+            // If this varnode is in inline_candidates, emit its defining expression
+            // instead of the inlined-away name (which would be empty)
+            if let Some(def_op_arc) = self
+                .inline_candidates
+                .get(&key)
+                .cloned()
+                .or_else(|| self.value_def_map.get(&key).cloned())
+            {
+                // Chase through COPY to the real expression
+                let def_op = def_op_arc.read().unwrap();
+                if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
+                    // COPY from something — push the source
+                    let src = def_op.inrefs[0].clone();
+                    drop(def_op);
+                    self.push_varnode(&src.read().unwrap(), None);
+                } else {
+                    // Non-trivial expression — inline it
+                    let seq = *def_op.get_seq_num();
+                    drop(def_op);
+                    self.inlined_ops.insert(seq);
+                    let def_op2 = def_op_arc.read().unwrap();
+                    self.emit_inline_expr(&def_op2);
+                }
+            } else {
+                // Not in inline_candidates — emit normally
+                let idx_vn = idx_vn_arc.read().unwrap();
+                self.push_varnode(&idx_vn, None);
+            }
+        } else {
+            // Fallback 1: search for BRANCHIND's input
+            let mut found_var = false;
+            {
+                let ctrl = switch_data.control.read().unwrap();
+                let ops = ctrl.get_ops();
+                if let Some(last_op_ref) = ops.last() {
+                    let last_op = last_op_ref.0.read().unwrap();
+                    if last_op.opcode == OpCode::CPUI_BRANCHIND && !last_op.inrefs.is_empty() {
+                        self.push_varnode(&last_op.inrefs[0].read().unwrap(), Some(&last_op));
+                        found_var = true;
+                    }
+                }
+                // Fallback 2: for CBRANCH cascade, find the compared non-const operand
+                if !found_var {
+                    for op_ref in ops.iter().rev() {
+                        let op = op_ref.0.read().unwrap();
+                        if matches!(
+                            op.opcode,
+                            OpCode::CPUI_INT_EQUAL
+                                | OpCode::CPUI_INT_NOTEQUAL
+                                | OpCode::CPUI_INT_LESS
+                                | OpCode::CPUI_INT_SLESS
+                                | OpCode::CPUI_INT_LESSEQUAL
+                                | OpCode::CPUI_INT_SLESSEQUAL
+                        )
+                        && op.inrefs.len() >= 2
+                        {
+                            let in0 = op.inrefs[0].read().unwrap();
+                            let in1 = op.inrefs[1].read().unwrap();
+                            if in1.get_space() == crate::space::AddressSpace::Const && in0.get_space() != crate::space::AddressSpace::Const {
+                                drop(in0); drop(in1);
+                                self.push_varnode(&op.inrefs[0].read().unwrap(), Some(&op));
+                                break;
+                            } else if in0.get_space() == crate::space::AddressSpace::Const && in1.get_space() != crate::space::AddressSpace::Const {
+                                drop(in0); drop(in1);
+                                self.push_varnode(&op.inrefs[1].read().unwrap(), Some(&op));
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Ghidra: printc.cc:3313 PrintC::emitBlockSwitch
     fn emit_structured_switch(
         &mut self,
@@ -4725,8 +6596,52 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let switch_block = block.as_any().downcast_ref::<BlockSwitch>();
                 if let Some(switch_data) = switch_block {
-                    // Emit the control block's non-branch ops (e.g. index computation)
-                    self.emit_block_ops(&switch_data.control, true);
+                    // printc.cc:2911-2913 (emitBlockIf) re-emits the condition
+                    // block under only_branch to render the branch expression,
+                    // and emitBlockLs's only_branch arm (printc.cc:2790-2794)
+                    // forwards to the list's LAST child. Ghidra's structurer
+                    // keeps that terminal a CBRANCH basic block, so this
+                    // channel only ever meets opBranchind (printc.cc:582-591),
+                    // which renders a switch dispatch as its HEAD expression —
+                    // `switch(<expr>)` — with no brace and no case replay.
+                    // Rugra's structurer can park the formed BlockSwitch as an
+                    // if-condition list's last child (the dispatcher becomes
+                    // absorbable once new_block_switch clears f_switch_out,
+                    // block.cc:1917), and the full replay here reprinted every
+                    // case label with already-emitted bodies: the
+                    // SWITCH-BRIDGE-DUP-0001 artifact (48 empty `case N:
+                    // break;` labels plus an orphan `} {` block — illegal C).
+                    // Route the mod through the oracle's expression channel:
+                    // head only. The preceding no_branch visit of the same
+                    // condition already printed the control statements and the
+                    // full case bodies; the head text mirrors opBranchind
+                    // byte-for-byte (keyword, open paren, index expression,
+                    // close paren — no tagLine: expression slots such as the
+                    // `if ` / `while (` prefix join with spaces, printc.cc:2909
+                    // / 3033).
+                    if self.is_set(print_mods::ONLY_BRANCH) {
+                        self.emit.print("switch");
+                        self.emit.print("(");
+                        self.emit_switch_head_expr(switch_data);
+                        self.emit.print(")");
+                        return;
+                    }
+                    // cc:3320-3323: pushMod(); setMod(no_branch);
+                    // bl->getSwitchBlock()->emit(this); popMod() — the
+                    // switch control block emits through the structured
+                    // virtual dispatch, never a flat op walk. Today the
+                    // control is the BRANCHIND basic block (leaf walk is
+                    // byte-identical); the dispatch keeps the channel correct
+                    // for any structured control. Insert-first mirrors the
+                    // emit_structured_if double-visit pattern: this visit
+                    // owns the emission and is not skipped by the once-guard.
+                    self.push_mod();
+                    self.set_mod(print_mods::NO_BRANCH);
+                    emitted.insert(
+                        std::sync::Arc::as_ptr(&switch_data.control)
+                            as *const () as usize);
+                    self.emit_flow_block(&switch_data.control, graph, emitted);
+                    self.pop_mod();
 
                     // Print switch header.
                     // Ghidra emitBlockSwitch (printc.cc:3313) emits `switch (<expr>)`
@@ -4744,84 +6659,7 @@ impl PrintC {
                     //   pushVn(in0); recurse(); closeParen
                     self.emit.print("switch");
                     self.emit.print("(");
-                    if let Some(ref idx_vn_arc) = switch_data.index_varnode {
-                        let idx_vn = idx_vn_arc.read().unwrap();
-                        let key = (idx_vn.get_space(), idx_vn.get_offset());
-                        drop(idx_vn);
-                        // If this varnode is in inline_candidates, emit its defining expression
-                        // instead of the inlined-away name (which would be empty)
-                        if let Some(def_op_arc) = self
-                    .inline_candidates
-                    .get(&key)
-                    .cloned()
-                            .or_else(|| self.value_def_map.get(&key).cloned())
-                        {
-                            // Chase through COPY to the real expression
-                            let def_op = def_op_arc.read().unwrap();
-                            if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
-                                // COPY from something — push the source
-                                let src = def_op.inrefs[0].clone();
-                                drop(def_op);
-                                self.push_varnode(&src.read().unwrap(), None);
-                            } else {
-                                // Non-trivial expression — inline it
-                                let seq = *def_op.get_seq_num();
-                                drop(def_op);
-                                self.inlined_ops.insert(seq);
-                                let def_op2 = def_op_arc.read().unwrap();
-                                self.emit_inline_expr(&def_op2);
-                            }
-                        } else {
-                            // Not in inline_candidates — emit normally
-                            let idx_vn = idx_vn_arc.read().unwrap();
-                            self.push_varnode(&idx_vn, None);
-                        }
-                    } else {
-                        // Fallback 1: search for BRANCHIND's input
-                        let mut found_var = false;
-                        {
-                            let ctrl = switch_data.control.read().unwrap();
-                            let ops = ctrl.get_ops();
-                            if let Some(last_op_ref) = ops.last() {
-                                let last_op = last_op_ref.0.read().unwrap();
-                                if last_op.opcode == OpCode::CPUI_BRANCHIND && !last_op.inrefs.is_empty() {
-                                    self.push_varnode(&last_op.inrefs[0].read().unwrap(), Some(&last_op));
-                                    found_var = true;
-                                }
-                            }
-                            // Fallback 2: for CBRANCH cascade, find the compared non-const operand
-                            if !found_var {
-                                for op_ref in ops.iter().rev() {
-                                    let op = op_ref.0.read().unwrap();
-                                    if matches!(
-                                op.opcode,
-                                        OpCode::CPUI_INT_EQUAL
-                                        | OpCode::CPUI_INT_NOTEQUAL
-                                        | OpCode::CPUI_INT_LESS
-                                        | OpCode::CPUI_INT_SLESS
-                                        | OpCode::CPUI_INT_LESSEQUAL
-                                        | OpCode::CPUI_INT_SLESSEQUAL
-                            )
-                                        && op.inrefs.len() >= 2
-                                    {
-                                        let in0 = op.inrefs[0].read().unwrap();
-                                        let in1 = op.inrefs[1].read().unwrap();
-                                        if in1.get_space() == crate::space::AddressSpace::Const && in0.get_space() != crate::space::AddressSpace::Const {
-                                            drop(in0); drop(in1);
-                                            self.push_varnode(&op.inrefs[0].read().unwrap(), Some(&op));
-                                            break;
-                                        } else if in0.get_space() == crate::space::AddressSpace::Const && in1.get_space() != crate::space::AddressSpace::Const {
-                                            drop(in0); drop(in1);
-                                            self.push_varnode(&op.inrefs[1].read().unwrap(), Some(&op));
-                                            break;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // cc:3327: closeParen of opBranchind (printc.cc:590).
+                    self.emit_switch_head_expr(switch_data);
                     self.emit.print(")");
 
                     // cc:3329: emit->openBrace(OPEN_CURLY,option_brace_switch);
@@ -4865,9 +6703,43 @@ impl PrintC {
                     });
 
                     // cc:3331-3349: emit one label group + body per case block.
+                    // cc:3140-3145 + cc:3331-3332: the default case — part of
+                    // caseblocks in Ghidra (tagged isdefault, addCase
+                    // cc:3515), placed at its label rank by the cc:3591 sort
+                    // (oracle gp prints it 2nd, ghidra_curl_1204.c:1769).
+                    // Rugra stores it separately; default_label (computed in
+                    // finalize_case_labels, block.cc:3573-3576 recipe) now
+                    // restores the oracle rank: first slot whose case label
+                    // exceeds the default's. None (no table index for the
+                    // default basic block) keeps the legacy last position.
+                    let def_pos: usize = match switch_data.default_label {
+                        Some(dl)
+                            if switch_data.case_order.len()
+                                == switch_data.cases.len() =>
+                        {
+                            switch_data
+                                .case_order
+                                .iter()
+                                .filter(|co| co.label < dl)
+                                .count()
+                        }
+                        _ => switch_data.cases.len(),
+                    };
                     let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
                     let has_default = switch_data.default_case.is_some();
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
+                        // cc:3331-3332 iterates the merged sorted caseblocks;
+                        // the default interleaves at def_pos.
+                        if idx == def_pos && has_default {
+                            let def_block = switch_data.default_case.as_ref().unwrap();
+                            self.emit_switch_default_slot(
+                                switch_data,
+                                def_block,
+                                graph,
+                                emitted,
+                                false,
+                            );
+                        }
                         let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
                         let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
@@ -4893,6 +6765,41 @@ impl PrintC {
 
                         // cc:3333: int4 id = emit->startIndent();
                         self.emit.bump_indent();
+                        // cc:3334-3337: `if (bl->getGotoType(i)!=0) {
+                        //   emit->tagLine(); emitGotoStatement(bl->getBlock(0),
+                        //   bl->getCaseBlock(i), bl->getGotoType(i)); }` — a
+                        // goto-typed case (a dispatch edge peeled into the
+                        // BlockMultiGoto and re-added by grabCaseBasic,
+                        // block.cc:3548-3553) has NO body and NO break: the
+                        // goto/break statement IS the case. The statement
+                        // prints regardless of the body-emitted gate — it is
+                        // a jump, not a body, and the target block is emitted
+                        // separately at its own place in the tree.
+                        let case_gt = switch_data
+                            .case_gototypes
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(0);
+                        // Per-case ledger reset: the body below (or the
+                        // goto-typed statement arm) may discharge the exit.
+                        self.case_exit_stmt_printed = false;
+                        if case_gt != 0 {
+                            self.emit.tag_line(0);
+                            let target_addr =
+                                crate::block::front_leaf_start_addr(case_block);
+                            let bt = match case_gt {
+                                crate::block::goto_type::BREAK_GOTO => {
+                                    crate::op::branch_type::BREAK
+                                }
+                                crate::block::goto_type::CONTINUE_GOTO => {
+                                    crate::op::branch_type::CONTINUE
+                                }
+                                _ => crate::op::branch_type::GOTO,
+                            };
+                            self.emit_goto_statement(target_addr, bt);
+                            // cc:3336 discharged the case's exit flow.
+                            self.case_exit_stmt_printed = true;
+                        } else {
                         if !body_already_emitted {
                             // cc:3339-3341: bl2->emit(this) — direct type
                             // dispatch with no dead/consumed guard (see
@@ -4905,50 +6812,70 @@ impl PrintC {
                             self.seen_return = saved_seen_return;
                         }
 
-                        // cc:3342-3345: isExit(i)&&(i!=numCaseBlocks-1) →
-                        // tagLine + break. isExit(i) (block.hh:791) is the
-                        // per-case "flows to the exit block" flag; Rugra's
-                        // BlockSwitch does not track per-case exits, so a
-                        // RETURN-terminated case (provably not flowing to the
-                        // exit block) suppresses the break, every other case
-                        // is treated as exiting. The last label (including a
-                        // trailing default) never gets a break — falling out
-                        // of the closing brace is legal and matches Ghidra.
-                        let ends_with_return = {
-                            let cb = case_block.read().unwrap();
-                            (cb.get_flags() & crate::block::block_flags::RETURN_TERMINAL) != 0
-                                || cb
-                            .get_ops()
-                            .last()
-                            .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
-                                )
+                        // cc:3342-3345: `bl->isExit(i)&&(i!=bl->getNumCaseBlocks()
+                        // -1)` → tagLine + break. isExit(i) (block.hh:791)
+                        // reads the per-case `isexit` flag set by
+                        // BlockSwitch::addCase (block.cc:3511-3514):
+                        // `gt != 0 → false; else isexit = (bl->sizeOut()==1)`,
+                        // captured at grabCaseBasic time (before the
+                        // components' external out edges are half-deleted)
+                        // and carried on BlockSwitch::case_isexit.
+                        //
+                        // BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001: the
+                        // emission-side ledger adapter that used to live
+                        // here (needs_switch_break re-derivation) is
+                        // RETIRED with this lane — the structuring side now
+                        // transports the oracle's own isexit flag, and the
+                        // A/B retirement test (both corpora byte-identical
+                        // with the guard dead) confirmed zero residue.
+                        // cc:3513-3514 (addCase): isexit = (bl->sizeOut()==1)
+                        // captured at grabCaseBasic time — BEFORE
+                        // identifyInternal's selfIdentify half-deletes the
+                        // case components' external out edges — and carried
+                        // on the CaseOrder (block.hh:763). Post-collapse
+                        // sizeOut()==0 for every component, so the captured
+                        // flag is the oracle's only transport (isExit(i),
+                        // block.hh:791); re-deriving from size_out() here
+                        // always read false (BLOCKACTION-SWITCH-CASE-GOTO-
+                        // WRAP-0001 symptom ①: case 0x4d's missing break).
+                        let oracle_case_isexit = {
+                            let gt = switch_data.case_gototypes.get(idx).copied().unwrap_or(0);
+                            gt == 0
+                                && switch_data
+                                    .case_isexit
+                                    .get(idx)
+                                    .copied()
+                                    .unwrap_or(false)
                         };
+                        // cc:3342 `i!=bl->getNumCaseBlocks()-1`: the FINAL
+                        // label in the merged emission order (cases + the
+                        // default at its sorted rank, block.cc:3591) never
+                        // takes a break. With no default — or with the
+                        // default placed before the last case (def_pos<len)
+                        // — the last case IS that final label.
                         let is_last_label =
-                            !has_default && idx + 1 == switch_data.cases.len();
-                        if !ends_with_return && !is_last_label {
+                            idx + 1 == switch_data.cases.len() && (!has_default || def_pos < switch_data.cases.len());
+                        if oracle_case_isexit && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
+                        }
                         }
                         // cc:3348: emit->stopIndent(id);
                         self.emit.drop_indent();
                     }
 
-                    // cc:3140-3145: the default case (part of caseblocks in
-                    // Ghidra, tagged isdefault; Rugra stores it separately and
-                    // emits it after the regular cases). As the final label it
-                    // never takes a break (cc:3342 i != numCaseBlocks-1).
-                    if let Some(ref def_block) = switch_data.default_case {
-                        let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
-                        if !emitted.contains(&def_idx) {
-                            self.emit.tag_line(0);
-                            self.emit.print("default:");
-                            self.emit.bump_indent();
-                            let saved_seen_return = self.seen_return;
-                            self.seen_return = false;
-                            self.emit_switch_case_body(def_block, graph, emitted);
-                            self.seen_return = saved_seen_return;
-                            self.emit.drop_indent();
-                        }
+                    // cc:3140-3145 + cc:3331-3332: trailing default — the
+                    // label-rank slot fell at/after the last case, so the
+                    // default emits as the final label (no break per cc:3342).
+                    if def_pos >= switch_data.cases.len() && switch_data.default_case.is_some() {
+                        let def_block = switch_data.default_case.as_ref().unwrap();
+                        self.emit_switch_default_slot(
+                            switch_data,
+                            def_block,
+                            graph,
+                            emitted,
+                            true,
+                        );
                     }
 
                     // cc:3350-3351: emit->tagLine(); emit->print(CLOSE_CURLY);
@@ -4957,6 +6884,63 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
+    }
+
+    // Ghidra: printc.cc:3140-3145 PrintC::emitSwitchCase default arm
+    /// Emit the formal default case: `default:` + goto statement (peeled
+    /// goto-arm default, cc:3334-3337) or `default:` + body (+ trailing
+    /// break per cc:3342-3345 isExit semantics). `is_last_label` carries the
+    /// merged-order finality (the cc:3342 `i != numCaseBlocks-1` test) since
+    /// the default now interleaves at its label rank.
+    fn emit_switch_default_slot(
+        &mut self,
+        switch_data: &crate::block::BlockSwitch,
+        def_block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+        is_last_label: bool,
+    ) {
+        let def_idx = std::sync::Arc::as_ptr(def_block) as *const () as usize;
+        // cc:3334-3337 via addCase's isdefault tag: a default
+        // edge peeled into the BlockMultiGoto prints `default:`
+        // followed by the goto statement only — no body (the
+        // target block is emitted separately at its own place
+        // in the tree).
+        if switch_data.default_gototype != 0 {
+            let def_gt = switch_data.default_gototype;
+            self.emit.tag_line(0);
+            self.emit.print("default:");
+            self.emit.bump_indent();
+            self.emit.tag_line(0);
+            let target_addr = crate::block::front_leaf_start_addr(def_block);
+            let bt = match def_gt {
+                crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
+                crate::block::goto_type::CONTINUE_GOTO => crate::op::branch_type::CONTINUE,
+                _ => crate::op::branch_type::GOTO,
+            };
+            self.emit_goto_statement(target_addr, bt);
+            self.emit.drop_indent();
+        } else if !emitted.contains(&def_idx) {
+            self.emit.tag_line(0);
+            self.emit.print("default:");
+            self.emit.bump_indent();
+            let saved_seen_return = self.seen_return;
+            self.seen_return = false;
+            self.emit_switch_case_body(def_block, graph, emitted);
+            self.seen_return = saved_seen_return;
+            // cc:3342-3345: `bl->isExit(i)&&(i!=bl->getNumCaseBlocks()-1)`
+            // — a non-final default whose case block flows to the switch
+            // exit takes an explicit break; one that exits via
+            // goto/return (sizeOut()!=1, addCase cc:3514) does not
+            // (oracle gp: default body ends `goto LAB_0010404b`, no break;
+            // oracle httpd 0x12f92a default mid-list WITH break).
+            let def_isexit = switch_data.default_isexit;
+            if !is_last_label && def_isexit {
+                self.emit.tag_line(0);
+                self.emit.print("break;");
+            }
+            self.emit.drop_indent();
+        }
     }
 
     // RUGRA-GLUE: emit_switch_case_body — dispatch shim for FlowBlock::emit
@@ -4991,6 +6975,19 @@ impl PrintC {
             BlockType::List => self.emit_structured_list(case_block, graph, emitted),
             BlockType::Condition => self.emit_structured_condition(case_block, graph, emitted),
             BlockType::Switch => self.emit_structured_switch(case_block, graph, emitted),
+            // printc.cc:3339-3341: `bl2->emit(this)` — virtual dispatch, so a
+            // t_goto case component routes to PrintC::emitBlockGoto
+            // (printc.cc:2769-2778: wrapped body under no_branch, then the
+            // formal goto statement when gotoPrints()). A fall-thru chain
+            // member (grabCaseBasic, block.cc:3536-3546) prints nothing
+            // extra when the chained case follows — the oracle's switch
+            // fall-through form.
+            BlockType::Goto => self.emit_block_goto(case_block, graph, emitted),
+            // Ghidra block.hh:588: delegation to getBlock(0) (the multigoto
+            // is never itself a switch case body — nested switches resolve
+            // first, blockaction.cc:1707 — but the dispatch is cheap to keep
+            // faithful if topology ever produces one).
+            BlockType::MultiGoto => self.emit_block_multigoto(case_block, graph, emitted),
             _ => self.emit_structured_basic(case_block, graph, emitted),
         }
     }
@@ -5185,28 +7182,68 @@ impl PrintC {
     fn unset_mod(&mut self, m: u32) { self.mods &= !m; }
 
     // Ghidra: printc.cc:3164 PrintC::emitLabel
-    /// Build a Ghidra-style code label string for a code address.
+    /// Build the label string for a code address.
     /// Faithful to `emitLabel` (printc.cc:3164-3193):
-    ///   - prefix: "joined_" (joined block) / "dup_" (duplicated block) /
-    ///     "code_" (normal). Rugra does not currently track joined/duplicated
-    ///     block state, so "code_" is used (the normal case).
+    ///   - `hasSpecialLabel()` gate (block.hh:291): joined blocks print
+    ///     "joined_", duplicated blocks print "dup_" — and these skip the
+    ///     label-symbol lookup entirely. Rugra transports the flag state as
+    ///     the `joined_label_addrs`/`dup_label_addrs` entry-address sets
+    ///     snapshotted from the final block graph.
+    ///   - otherwise `queryCodeLabel(addr)` (database.cc:1301): a mapped
+    ///     LabSymbol's display name wins (the front-end `LAB_` labels).
+    ///     Rugra consults the driver-installed `code_labels` layer.
+    ///   - generic arm: "code_" + shortcut char + printRaw.
     ///   - shortcut char: space-name first char lowercased (translate.cc:529-533).
-    ///     For x86 RAM space ("ram"), this is 'r'. Rugra hardcodes 'r' for
-    ///     code addresses (the only space that holds goto targets in practice).
-    ///   - printRaw (space.cc:206-222): "0x" + zero-padded hex, shrunk to
-    ///     4/6/8 bytes based on high-zero content. For typical small code
-    ///     addresses (high 32 bits zero), this is 8 hex digits.
+    ///     For x86 RAM space ("ram"), this is 'r'.
+    ///   - printRaw (space.cc:206-222): "0x" + zero-padded hex (C++ `hex`
+    ///     stream = lowercase), shrunk to 4/6/8 bytes based on high-zero
+    ///     content of the FRONT-END address. `code_label_base` transports
+    ///     the loader's image-base delta so the digits match the oracle's
+    ///     address space (golden witness `code_r0x0012ba77`).
     fn code_label(&self, addr: u64) -> String {
+        // printc.cc:3170: emitLabel formats bb->getEntryAddr() — the
+        // front-end address. Rugra's Funcdata keeps ELF-relative offsets,
+        // so the driver's image-base delta is added here.
+        let display = addr.wrapping_add(self.code_label_base);
         // printRaw size selection (space.cc:210-215): if offset>>32 == 0, sz=4.
-        let sz = if addr >> 32 == 0 {
+        let sz = if display >> 32 == 0 {
             4
-        } else if addr >> 48 == 0 {
+        } else if display >> 48 == 0 {
             6
         } else {
             8
         };
-        // code_ prefix + 'r' shortcut (RAM space) + 0x + zero-padded hex.
-        format!("code_r0x{:0width$X}", addr, width = 2 * sz)
+        // printc.cc:3173 hasSpecialLabel gate: joined/duplicated blocks
+        // never consult queryCodeLabel (printc.cc:3184-3189 prefixes).
+        if self.joined_label_addrs.contains(&addr) {
+            return format!("joined_r0x{:0width$x}", display, width = 2 * sz);
+        }
+        if self.dup_label_addrs.contains(&addr) {
+            return format!("dup_r0x{:0width$x}", display, width = 2 * sz);
+        }
+        // printc.cc:3176-3180: queryCodeLabel hit — the LabSymbol's display
+        // name replaces the whole generic construction.
+        if let Some(name) = self.code_labels.get(&addr) {
+            return name.clone();
+        }
+        // code_ prefix + 'r' shortcut (RAM space) + 0x + zero-padded
+        // lowercase hex (printRaw's `<< hex`).
+        format!("code_r0x{:0width$x}", display, width = 2 * sz)
+    }
+
+    // RUGRA-GLUE: set_code_label_layer (front-end data handoff; no single
+    // Ghidra counterpart — the oracle receives this data through the
+    // Architecture's remote-query channel, database_ghidra.cc:308-325)
+    /// Install the front-end code-label layer: address → label display
+    /// name plus the loader image-base delta the generic arms add when
+    /// formatting. Mirrors what the oracle's ScopeGhidra would serve from
+    /// `getCodeLabel` remote queries against the program DB. The raw-BFD
+    /// mirror environment passes an empty layer with base 0 (the
+    /// single-function oracle harness has no analyzer labels and its
+    /// addresses are ELF-relative).
+    pub fn set_code_label_layer(&mut self, labels: HashMap<u64, String>, base: u64) {
+        self.code_labels = labels;
+        self.code_label_base = base;
     }
 
     // RUGRA-GLUE: push_goto_target (no Ghidra counterpart found)
@@ -5292,29 +7329,34 @@ impl PrintC {
     /// 2. cat < 0 (cc:2535-2553): iterate the full `MapIterator` — Ghidra's
     ///    `ScopeInternal::maptable` is a vector of per-address-space entry
     ///    rangemaps (database.hh:810) walked in address-space-index order
-    ///    (database.cc:1889-1919/826-836), each rangemap sorted by entry
-    ///    start address with the use-point `EntrySubsort` as tie-break
-    ///    (database.hh:103-134, getSubsort database.cc:97-107: addrtied
-    ///    entries sort earliest, others by first uselimit address).
-    ///    Filters per entry: isPiece (cc:2539), category != cat (cc:2541),
-    ///    empty name (cc:2542), FunctionSymbol/LabSymbol (cc:2543-2546),
-    ///    multi-entry symbols declared once at their first whole map
-    ///    (cc:2547-2550).
+    ///    (database.cc:1889-1919/1940-1954). The iterator dereferences the
+    ///    per-space `std::list<SymbolEntry>` (database.hh:379-401 MapIterator,
+    ///    `begin_list()`), NOT the sorted AddrRange multiset: the list order
+    ///    is the `rangemap::insert` splice order (rangemap.hh:221-277) — each
+    ///    record is spliced immediately before the owner of the first
+    ///    AddrRange (keyed by inclusive refinement-piece end + EntrySubsort,
+    ///    rangemap.hh:88-91) whose key is >= the new record's full-range key
+    ///    (b, subsort), or appended at the list end. Emulated exactly by
+    ///    `scope_rangemap_list_order`. Filters per entry: isPiece (cc:2539),
+    ///    category != cat (cc:2541), empty name (cc:2542),
+    ///    FunctionSymbol/LabSymbol (cc:2543-2546), multi-entry symbols
+    ///    declared once at their first whole map (cc:2547-2550).
     /// 3. Dynamic entries (cc:2554-2572): the `dynamicentry` list in
     ///    insertion order (database.cc:1921-1931), same filters.
     ///
     /// Rugra adaptation: each `varmap::LocalSymbol` models a symbol plus its
     /// single whole SymbolEntry (space/start/usepoint/dyn/hash fields,
-    /// varmap.rs:1444-1490), so the MapIterator walk is emulated by sorting
-    /// non-dynamic symbols by (space rank, start, usepoint) — the space rank
-    /// reproduces the x86-64 maptable order Unique < Register < Stack
-    /// observed in the locked-oracle golden decl blocks (e.g.
-    /// tests/golden/ghidra_curl_1204.c `helpf`: `lVar1` unique-space temp
-    /// before `in_AL..in_XMM7_Qa` register entries before `ap`/`local_*`
-    /// stack entries). `usepoint: None` models the invalid usepoint of an
-    /// addrtied entry, which sorts earliest exactly like Ghidra's minimal
-    /// EntrySubsort. Rugra LocalSymbols are single-entry (no `wholeCount`),
-    /// cannot be FunctionSymbol/LabSymbol (no such creation path in
+    /// varmap.rs:1444-1490), so the MapIterator walk is emulated by the
+    /// per-space `scope_rangemap_list_order` replay of the insertion
+    /// sequence — the space rank reproduces the x86-64 maptable order
+    /// Unique < Register < Stack observed in the locked-oracle golden decl
+    /// blocks (e.g. tests/golden/ghidra_curl_1204.c `helpf`: `lVar1`
+    /// unique-space temp before `in_AL..in_XMM7_Qa` register entries before
+    /// `ap`/`local_*` stack entries). `usepoint: None` models the invalid
+    /// usepoint of an addrtied entry, whose EntrySubsort (0,0) sorts
+    /// earliest exactly like Ghidra's minimal subsort (database.cc:100).
+    /// Rugra LocalSymbols are single-entry (no `wholeCount`), cannot be
+    /// FunctionSymbol/LabSymbol (no such creation path in
     /// `varmap::ScopeLocal`), and never carry `precislo/precishi` piece
     /// flags, so those three Ghidra filters reduce to no-ops here.
     ///
@@ -5322,12 +7364,19 @@ impl PrintC {
     /// - References/output params: `sym_scope` borrowed read-only; emits via
     ///   `&mut self.emit`. Returns `notempty` (cc:2521/2574).
     /// - Loop bounds/order: address-map walk first, dynamic list second
-    ///   (cc:2535 then cc:2554); map order = (space index, start offset,
-    ///   usepoint subsort); category branch in category slot order (cc:2525).
+    ///   (cc:2535 then cc:2554); map order = (space index, per-space
+    ///   `std::list` order from rangemap::insert splices) per MapIterator
+    ///   over the per-space EntryMap list (database.hh:377-401) — the list
+    ///   is NOT the sorted AddrRange multiset; category branch in category
+    ///   slot order (cc:2525).
     /// - Counter/accumulator: single `bool notempty`, set once per emitted
     ///   decl, never reset inside the walk (cc:2521/2530/2551).
-    /// - Sort/compare key: rangemap (first offset, EntrySubsort usepoint);
-    ///   symbol identity for multi-entry dedup = first whole map only.
+    /// - Sort/compare key: splice target = first AddrRange key
+    ///   (inclusive piece end, EntrySubsort usepoint) >= the new record's
+    ///   (b, subsort); equal multiset keys keep insertion order (after
+    ///   existing equals for plain inserts, before the hinted element for
+    ///   the piece-loop hint insert); symbol identity for multi-entry dedup
+    ///   = first whole map only.
     pub fn emit_scope_local_var_decls(
         &mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32,
     ) -> bool {
@@ -5337,15 +7386,61 @@ impl PrintC {
         if cat >= 0 {
             return notempty;
         }
-        // cc:2535-2553: full MapIterator walk, emulated as a stable sort of
-        // the scope's non-dynamic symbols by (space rank, start, usepoint).
+        // cc:2535-2553: full MapIterator walk. MapIterator dereferences the
+        // per-space EntryMap's std::list<SymbolEntry> in list order
+        // (database.hh:379-401), which is the rangemap::insert splice order
+        // (rangemap.hh:221-277): each record lands immediately before the
+        // owner of the first AddrRange whose (inclusive piece end, subsort)
+        // key is >= its own (b, subsort) key, else at the list end. The
+        // AddrRange keys are refinement-piece ends, so among overlapping
+        // entries the one whose range ENDS sooner is visited sooner
+        // (iVar1=EAX[0,4) before sVar2=RAX[0,8) in glob_url's block), and
+        // an enclosing record's split piece can capture a later small
+        // record behind an interior one (list order is not a pure
+        // (end, subsort) sort in that morphology). Replayed exactly by
+        // scope_rangemap_list_order over the creation-order entries.
         let mut statics: Vec<&crate::varmap::LocalSymbol> = sym_scope
             .symbols
             .iter()
             .filter(|s| !s.is_dynamic)
             .collect();
-        statics.sort_by_key(|s| (local_maptable_space_rank(s.space), s.start, s.usepoint));
-        for sym in statics {
+        // MapIterator concatenates the per-space EntryMap lists in address
+        // space index order (database.cc:1940-1954 operator++); Rugra groups
+        // by local_maptable_space_rank. Within one space the list order is
+        // the rangemap::insert splice order — see scope_rangemap_list_order.
+        // EntrySubsort projection (database.cc:97-109 getSubsort): the
+        // minimal (0,0) for address-tied entries, else (1, first-use offset)
+        // (all local-scope uselimits live in the one code space, so the
+        // shared useindex collapses to the constant 1). Entry bounds are
+        // inclusive [a, b] (database.cc:84-93 SymbolEntry a/b constructor).
+        // Entries carry the owning statics index: a space group is not
+        // contiguous in creation order (e.g. ap_fini_vhost_config's stack
+        // entries at creation indexes 0-6 and 30).
+        let mut grouped: Vec<(u8, Vec<(u64, u64, (u32, u64), usize)>)> = Vec::new();
+        for (i, s) in statics.iter().enumerate() {
+            let rank = local_maptable_space_rank(s.space);
+            let a = s.start;
+            let size = if s.size >= 1 { s.size as u64 } else { 1 };
+            let b = a + size - 1;
+            let sub = if s.addrtied {
+                (0u32, 0u64)
+            } else {
+                (1u32, s.usepoint.unwrap_or(0))
+            };
+            match grouped.iter_mut().find(|(r, _)| *r == rank) {
+                Some((_, v)) => v.push((a, b, sub, i)),
+                None => grouped.push((rank, vec![(a, b, sub, i)])),
+            }
+        }
+        // maptable vector order = address space index order
+        // (database.cc:1952 maptable.resize + ScopeInternal::begin walk).
+        grouped.sort_by_key(|(r, _)| *r);
+        let mut order: Vec<usize> = Vec::with_capacity(statics.len());
+        for (_, entries) in &grouped {
+            order.extend(scope_rangemap_list_order(entries));
+        }
+        for si in order {
+            let sym = statics[si];
             // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
             if sym.category != cat {
                 continue;
@@ -5375,7 +7470,7 @@ impl PrintC {
         notempty
     }
 
-    // Ghidra: printc.cc:2656 PrintC::docFunction (emitLocalVarDecls scope source)
+    // Ghidra: printc.cc:2641 PrintC::docFunction (emitLocalVarDecls scope source)
     /// Snapshot the Action-phase local-variable scope (cloned, since the
     /// printer borrows the Funcdata read-only). Ghidra's printer is a pure
     /// consumer of the persistent ScopeLocal built by
@@ -5539,6 +7634,28 @@ impl PrintC {
         vn.get_offset()
     }
 
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
+    /// The FULL address (space AND offset) of the high name representative —
+    /// what `pushUnnamedLocation(high->getNameRepresentative()->getAddr(),
+    /// vn, op)` passes at the sym==null fallback. PRINTC-AFINI-UNIQUELOC-
+    /// 0001: the label's space previously followed the printing INSTANCE
+    /// (`vn.get_space()`), splitting UNIQUE-space COPY outputs from their
+    /// RAM-space name representatives (`unique0x<rep-off>` where the oracle
+    /// prints `ram0x<rep-off>`); both halves of the address now come from
+    /// the representative, with the instance's own address as the no-high
+    /// degradation (same shape as [`Self::unnamed_location_offset`]).
+    fn unnamed_location_space_offset(
+        vn: &Varnode,
+    ) -> (crate::space::AddressSpace, u64) {
+        if let Some(high_arc) = vn.high.as_ref() {
+            if let Some(rep_arc) = high_arc.read().unwrap().get_name_representative() {
+                let rep = rep_arc.read().unwrap();
+                return (rep.get_space(), rep.get_offset());
+            }
+        }
+        (vn.get_space(), vn.get_offset())
+    }
+
     // Ghidra: space.cc:206 AddrSpace::printRaw
     /// `printRaw` of an offset in an address space — the exact transport
     /// `PrintC::pushUnnamedLocation` appends after the space name
@@ -5571,33 +7688,83 @@ impl PrintC {
             // OtherSpace::printRaw (space.cc:410-414): plain hex.
             AddressSpace::Other(_) => format!("0x{:x}", offset),
             // Base AddrSpace::printRaw (space.cc:206-222).
-            _ => {
-                let mut sz = space.addr_size();
-                if sz > 4 {
-                    if (offset >> 32) == 0 {
-                        // Don't print a bunch of zeroes at front of address
-                        sz = 4;
-                    } else if (offset >> 48) == 0 {
-                        sz = 6;
-                    }
-                }
-                let wordsize = space.word_size() as u64;
-                // byteToAddress (space.hh:523-525): byte units -> addressable
-                // units.
-                let addr_units = if wordsize > 1 {
-                    offset / wordsize
-                } else {
-                    offset
-                };
-                let mut text = format!("0x{:0width$x}", addr_units, width = 2 * sz);
-                if wordsize > 1 {
-                    let cut = offset % wordsize;
-                    if cut != 0 {
-                        text.push_str(&format!("+{}", cut));
-                    }
-                }
-                text
+            _ => Self::addr_space_print_raw_dims(
+                space.addr_size(),
+                space.word_size() as u64,
+                offset,
+            ),
+        }
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Digit core of the base `AddrSpace::printRaw` (space.cc:209-216): the
+    /// sz shrink (`sz > 4` → 4 when `offset>>32==0`, else 6 when
+    /// `offset>>48==0`), then `setfill('0') << setw(2*sz) << hex <<
+    /// byteToAddress(offset, wordsize)` — digits only, without the `"0x"`
+    /// prefix and the `+cut` suffix. This digit face is what the headless
+    /// FRONTEND's database name `FUN_<digits>` carries (golden witnesses
+    /// `FUN_00102020` / `FUN_0012c520`: shrunk width 8), the shared rule
+    /// behind both unnamed-callee faces (PRINTC-FUN-PAD-0001).
+    fn print_raw_zero_pad_digits(addr_size: usize, word_size: u64, offset: u64) -> String {
+        let mut sz = addr_size;
+        if sz > 4 {
+            if (offset >> 32) == 0 {
+                // Don't print a bunch of zeroes at front of address
+                sz = 4;
+            } else if (offset >> 48) == 0 {
+                sz = 6;
             }
+        }
+        // byteToAddress (space.hh:523-525): byte units -> addressable units.
+        let addr_units = if word_size > 1 {
+            offset / word_size
+        } else {
+            offset
+        };
+        format!("{:0width$x}", addr_units, width = 2 * sz)
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Base-space transport form of `AddrSpace::printRaw` (space.cc:206-222)
+    /// parameterized by the space's own `(addrsize, wordsize)`: `"0x"` +
+    /// [`Self::print_raw_zero_pad_digits`] + `+cut` (decimal) when
+    /// `wordsize > 1` and `offset % wordsize != 0`. The entry-space channel
+    /// (printc.cc:602 `fc->getEntryAddress()`) resolves dims through the
+    /// registry handle, which has no flat-enum arm in
+    /// [`Self::addr_space_print_raw`], so the base form is built directly
+    /// from the dims here (PRINTC-OPCALL-ENTRYSPACE-0001).
+    fn addr_space_print_raw_dims(addr_size: usize, word_size: u64, offset: u64) -> String {
+        let mut text = format!(
+            "0x{}",
+            Self::print_raw_zero_pad_digits(addr_size, word_size, offset)
+        );
+        if word_size > 1 {
+            let cut = offset % word_size;
+            if cut != 0 {
+                text.push_str(&format!("+{}", cut));
+            }
+        }
+        text
+    }
+
+    // Ghidra: fspec.hh:1686 FuncCallSpecs::getEntryAddress
+    /// `(addrsize, wordsize)` of a callspec entry address (printc.cc:602
+    /// `fc->getEntryAddress()`; that address is the CALL's pre-annotation
+    /// in(0) address per the fspec.cc:4934 ctor, so the space is the
+    /// callee's own). An entry address carrying a registry space
+    /// (ADDRESS-0001 `Address::with_space` form) contributes its true dims;
+    /// `FuncCallSpecs::new_for_op` (fspec.rs) still builds the legacy
+    /// spaceless `Address::new(offset)` form, whose dims fall back to the
+    /// flat Ram defaults (addrsize 8, wordsize 1 — the effective space of
+    /// every direct CALL target in the production corpora; the fspec-side
+    /// space population is PRINTC-OPCALL-ENTRYSPACE-0001's fspec half).
+    fn entry_addr_dims(entry: Option<&crate::address::Address>) -> (usize, u64) {
+        match entry.and_then(crate::address::Address::get_space) {
+            Some(spc) => (spc.get_addr_size() as usize, spc.get_word_size() as u64),
+            None => (
+                crate::space::AddressSpace::Ram.addr_size(),
+                crate::space::AddressSpace::Ram.word_size() as u64,
+            ),
         }
     }
 
@@ -5622,9 +7789,273 @@ impl PrintC {
         )
     }
 
+    // Ghidra: database.hh:742 Scope::isGlobal (ownership stand-in)
+    /// Whether `sym` is a global-scope symbol the Database actually owns
+    /// (`Symbol::getScope()->isGlobal()`). Two Rugra-specific shapes make
+    /// a bare scope_id test wrong: ScopeLocal bridges
+    /// (`Funcdata::symbol_entry_for`) hardcode scope_id 0, which collides
+    /// with the worker Database's default global_scope_id (0) —
+    /// function-local dynamic uVarN symbols would otherwise look global
+    /// and self-shadow into `::uVarN` — and, conversely, a symbol-bearing
+    /// high's UNIQUE-space COPY outputs must qualify as global references
+    /// exactly like their RAM-space inputs (the oracle prints both through
+    /// the same pushSymbolDetail). The ownership query resolves both:
+    /// oracle global symbols are address-mapped statics seeded into the
+    /// global scope (db_symbol_entries / DWARF layer / mapGlobals),
+    /// dynamic entries are function-local hashes, and stack locals query
+    /// their (non-global) stack address to a miss.
+    fn symbol_is_global(
+        &self,
+        sym: &crate::database::Symbol,
+        entry: Option<&std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>>,
+    ) -> bool {
+        let Some(entry_arc) = entry else {
+            return false;
+        };
+        let entry_guard = entry_arc.read().unwrap();
+        if entry_guard.is_dynamic() {
+            return false;
+        }
+        let entry_addr = entry_guard.get_addr();
+        drop(entry_guard);
+        self.symboltab
+            .as_ref()
+            .and_then(|t| {
+                let db = t.read().unwrap();
+                db.query_container(
+                    db.global_scope_id,
+                    entry_addr,
+                    1,
+                    // The empty usepoint convention of the other
+                    // print-side queries (printc.rs spacebase arm;
+                    // mapGlobals cc:1697).
+                    crate::address::Address::new(0),
+                )
+            })
+            .map(|hit| hit.symbol_name == sym.name)
+            .unwrap_or(false)
+    }
+
+    // Ghidra: printc.cc:202 PrintC::pushSymbolScope (MINIMAL_NAMESPACES)
+    /// The scope-element prefix `pushSymbol` prints before a symbol's
+    /// display name (printc.cc:1919 `pushSymbolScope(sym)`): under the
+    /// default MINIMAL_NAMESPACES strategy (printlanguage.cc:581)
+    /// `Symbol::getResolutionDepth(curscope)` (database.cc:323-359)
+    /// returns 1 for a global-scope symbol whose base name is occupied
+    /// in the function's local nametree
+    /// (`ScopeInternal::isNameUsed`, database.cc:2417-2432 — parameters,
+    /// restructured stack symbols, and ActionNameVars-named highs), and
+    /// `pushSymbolScope` then prints that one scope element: the global
+    /// scope's EMPTY display name (database.cc:2951 "Global scope does
+    /// not have empty name") under the binary `::` operator
+    /// (`PrintC::scope`, printc.cc:24) — `::config.outfile` in
+    /// main/getparameter where a local `config` shadows the global.
+    /// Unshadowed globals (golden witnesses `stderr`, bare `config.<f>`
+    /// in unshadowed functions) get depth 0 and no prefix.
+    ///
+    /// Non-global symbols print no prefix (their scope is curscope:
+    /// database.cc:326 `if (scope == useScope) return 0`). Rugra's
+    /// precomposed function-namespace names (`my_get_token::save`,
+    /// driver DWARF merge) already carry their scope elements, so they
+    /// take no additional prefix either.
+    fn symbol_scope_prefix(
+        &self,
+        sym: &crate::database::Symbol,
+        entry: Option<&std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>>,
+    ) -> String {
+        if !self.symbol_is_global(sym, entry) {
+            return String::new();
+        }
+        if sym.name.contains("::") {
+            return String::new();
+        }
+        if self.local_scope_names.contains(&sym.name) {
+            return "::".to_string();
+        }
+        String::new()
+    }
+
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
+    /// The `sym != (Symbol *)0` arm of `pushSymbolDetail`
+    /// (printlanguage.cc:246-261) as a leaf TEXT resolver
+    /// (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ①/③): given a varnode whose
+    /// HighVariable carries a Symbol, produce the exact atom string the
+    /// oracle prints:
+    /// - `symboloff == -1` and the symbol type does not need resolution
+    ///   -> `pushSymbol` form: scope prefix + display name
+    ///   (printc.cc:1905-1936);
+    /// - `symboloff + vn->getSize() <= sym->getType()->getSize()` ->
+    ///   `pushPartialSymbol` (printc.cc:1947-2065): scope prefix +
+    ///   display name + the type-tree entry chain `.field[idx]...` via
+    ///   [`Self::partial_symbol_walk`] (witness `::config.outfile`);
+    /// - else -> `pushMismatchSymbol` (printc.cc:2067-2083): `_name`
+    ///   when off==0, else `pushUnnamedLocation` of the VN's own address
+    ///   (printc.cc:2082).
+    /// Returns `None` when the varnode has no symbol-bearing high — the
+    /// caller then runs its legacy fallback ladder (the oracle's sole
+    /// sym==null arm is `pushUnnamedLocation`; Rugra's address proxy is
+    /// the demoted stand-in for symbol-less globals).
+    ///
+    /// `allow_cast` is the oracle call-site's `isRead`
+    /// (printlanguage.cc:256-257): true for read leaves
+    /// (`pushVnExplicit` -> `pushSymbolDetail(vn,op,true)`), false for
+    /// assignment LHS atoms (`emitExpression` -> `...,false`),
+    /// gating the walk's SUBPIECE-cast arm (printc.cc:2018-2029).
+    /// The cast arm's `outtype` is `vn->getHigh()->getType()`
+    /// (printc.cc:2019); `out_space_bigend` degrades to false (x86-64
+    /// little-endian is the only production target; the oracle reads
+    /// `sym->getFirstWholeMap()->getAddr().getSpace()->isBigEndian()`).
+    fn push_symbol_detail_leaf(
+        &self,
+        vn: &Varnode,
+        allow_cast: bool,
+    ) -> Option<String> {
+        let high_arc = vn.high.as_ref()?;
+        let high = high_arc.read().unwrap();
+        let sym_arc = high.get_symbol()?;
+        let sym = sym_arc.read().unwrap();
+        // The symbol's mapping entry (HighVariable::getSymbolEntry,
+        // variable.cc:537-546: the member instance's ptr-equal entry) —
+        // the scope-prefix ownership test reads its mapped address.
+        let sym_entry = high.get_symbol_entry();
+        // printlanguage.cc:243-261: the local/global distinction does NOT
+        // gate the partial walk — oracle ScopeLocal Symbols walk the same
+        // symboloff/partial/mismatch ladder as globals (the
+        // `UVar3.pattern[0].type` / `auVar21._0_4_` / `in_stack_..._80_24_`
+        // forms all come from LOCAL symbols). The previous local-symbol
+        // bare-name degrade (documented against approximate ScopeLocal
+        // bridge sizing) is superseded by the persistent-ScopeLocal symbol
+        // layer (ActionRestructureVarnode reuse + ActionRestrictLocal
+        // markNotMapped, VARGROUP-ABSORB-0001 §4-4): entries now come from
+        // the real restructure with exact sizes, so the bound check and
+        // the `._off_sz_` arms produce the oracle forms. The mismatch arm
+        // (`_name` / unnamed-location) still guards the oversize-read
+        // case exactly as printc.cc:2067-2083 does.
+        // printlanguage.cc:247-254: symboloff resolution. -1 = perfect
+        // symbol match (HighVariable::setSymbol, variable.cc:258-270);
+        // a resolution-needing type forces off 0 so the partial walk can
+        // resolve the union field.
+        let mut symboloff = high.get_symbol_offset();
+        let sym_type = sym.get_type();
+        if symboloff == -1 {
+            let needs_resolution = sym_type
+                .as_ref()
+                .map(|t| t.needs_resolution())
+                .unwrap_or(false);
+            if !needs_resolution {
+                // pushSymbol (printc.cc:1905-1936): pushSymbolScope +
+                // displayName, verbatim.
+                return Some(format!(
+                    "{}{}",
+                    self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                    sym.get_display_name()
+                ));
+            }
+            symboloff = 0;
+        }
+        let Some(symt) = sym_type else {
+            // RUGRA-GLUE degradation: oracle Symbols always carry a type;
+            // an untyped Rugra symbol cannot evaluate the 255 bound nor
+            // walk fields, so degrade to the pushSymbol form (the
+            // pre-fix observable for symbol-backed highs was the plain
+            // display name too).
+            return Some(format!(
+                "{}{}",
+                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                sym.get_display_name()
+            ));
+        };
+        // printlanguage.cc:255-260.
+        if symboloff + vn.get_size() as i32 <= symt.get_size() as i32 {
+            let outtype = vn
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type());
+            let outtype_ref = outtype.as_deref();
+            let name = format!(
+                "{}{}",
+                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                sym.get_display_name()
+            );
+            Some(self.partial_symbol_text(
+                &name,
+                symboloff as i64,
+                vn.get_size() as i64,
+                Some(symt.as_ref()),
+                outtype_ref,
+                false,
+                allow_cast,
+            ))
+        } else {
+            // pushMismatchSymbol (printc.cc:2067-2083): off==0 -> '_' +
+            // displayName; else pushUnnamedLocation(vn->getAddr()) —
+            // the VN's OWN address, not the name representative
+            // (printc.cc:2082).
+            if symboloff == 0 {
+                Some(format!("_{}", sym.get_display_name()))
+            } else {
+                Some(Self::unnamed_location_token(
+                    vn.get_space(),
+                    vn.get_offset(),
+                ))
+            }
+        }
+    }
+
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
+
+        // Priority 0.4: Parameter names for Register-space INPUT varnodes,
+        // AHEAD of the symbol branch. In the oracle a param read resolves
+        // through pushSymbolDetail to the ScopeLocal param Symbol whose
+        // displayName IS the proto name (param_N) — ActionParameterSymbols
+        // keeps scope symbols and the FuncProto name-synced, so param_names
+        // and the symbol form are the same text. Rugra's ScopeLocal bridge
+        // (Funcdata::symbol_entry_for) does not carry that sync: param
+        // symbols keep buildVariableName auto names
+        // (`in_register_00000288`), so the symbol branch must not preempt
+        // the proto name for actual register INPUTS. Gate identical to the
+        // P0.5 ladder below (is_input; a shared-storage phi keeps its own
+        // high's name).
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
+            // PRINTC-BADJT-PARAMSYM-0001: the oracle determination order is
+            // symbol-first — pushVnExplicit -> pushSymbolDetail
+            // (printlanguage.cc:218-262) reads the HighVariable's symbol,
+            // which for a param INPUT is the ProtoStoreSymbol category
+            // symbol (attached by linkSymbol -> queryProperties at the
+            // input's entry-1 usepoint), and a whole-map symbol whose type
+            // needs no resolution prints `pushSymbol` displayName
+            // (printlanguage.cc:241-245). Renames through that Symbol
+            // (lookForBadJumpTables -> UNRECOVERED_JUMPTABLE,
+            // coreaction.cc:2799-2801) therefore own the call-site text.
+            // The category gate below is the Rust twin of that channel: it
+            // matches ONLY function_parameter slot symbols (param_N,
+            // platform names, or renames thereof — never the unsynced
+            // `in_register_` auto names, which are no_category creations),
+            // so the P0.4 proto-name compensation below stays authoritative
+            // for every unsynced flow.
+            if let Some(sym) = self.param_backing_symbol_for_vn(vn) {
+                return sym.display_name.clone();
+            }
+            if let Some(pname) = self.param_names.get(&vn.get_offset()) {
+                return pname.clone();
+            }
+        }
+
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ①: symbol detail PRECEDES
+        // every address-proxy form. The oracle leaf path
+        // (pushVnExplicit, printlanguage.cc:218-230) goes annotation ->
+        // constant -> pushSymbolDetail — there is NO address-keyed name
+        // proxy anywhere in it, so a varnode whose high carries a Symbol
+        // prints the symbol's scope-qualified whole/partial/mismatch
+        // form (`::config.outfile`) regardless of what the proxy tables
+        // hold at that address. The Ram|Const proxy below is demoted to
+        // the symbol-miss fallback (Rugra's stand-in for the oracle's
+        // global-scope Data symbols reaching symbol-less varnodes).
+        if let Some(text) = self.push_symbol_detail_leaf(vn, true) {
+            return text;
+        }
 
         let addr = vn.get_offset();
         let space = vn.get_space();
@@ -5703,16 +8134,15 @@ impl PrintC {
                     return pname.clone();
                 }
                 // pushUnnamedLocation (printc.cc:1938-1945): space name +
-                // printRaw of the representative address.
-                Self::unnamed_location_token(
-                    AddressSpace::Register,
-                    Self::unnamed_location_offset(vn),
-                )
+                // printRaw of the representative's FULL address
+                // (printlanguage.cc:244 — PRINTC-AFINI-UNIQUELOC-0001:
+                // the space half follows the rep too).
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Stack => {
-                Self::unnamed_location_token(
-                AddressSpace::Stack,
-                Self::unnamed_location_offset(vn))
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Unique => {
                 // Inline candidacy stays keyed on the current instance
@@ -5722,12 +8152,13 @@ impl PrintC {
                 if self.inline_candidates.contains_key(&key) {
                     return String::new();
                 }
-                Self::unnamed_location_token(
-                    AddressSpace::Unique,
-                    Self::unnamed_location_offset(vn),
-                )
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
-            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
+            _ => {
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
+            }
         }
     }
 
@@ -5909,7 +8340,7 @@ impl PrintC {
     /// `Merge::assign_names` (merge.rs:560-574); stripping it recovers the
     /// underlying register name, matching Ghidra's one-name-per-HighVariable
     /// model (the SSA instance count is irrelevant to the printed name).
-    // Ghidra: database.cc:2501 ScopeInternal::buildVariableName (local-var branch: ct->printNameBase; "Var" << index++)
+    // Ghidra: database.cc:2434 ScopeInternal::buildVariableName (local-var branch: ct->printNameBase; "Var" << index++)
     fn is_raw_register_name(name: &str) -> bool {
         // Strip a trailing `_<digits>` SSA disambiguation suffix, so `RAX_7`
         // is recognised the same as `RAX`. A suffix is only `_<digits>`; names
@@ -6673,13 +9104,46 @@ impl PrintC {
                             .v_type
                             .as_ref()
                             .and_then(|t| {
-                                if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(t.get_name().to_string()) } else { None }
+                                if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(Self::cast_type_string(t)) } else { None }
                             });
                         if let Some(ref ptr_name) = addr_type_name {
-                            self.emit
-                                .print(&format!("*(({} *)", ptr_name.trim_end_matches(" *")));
-                            self.push_input(def_op, 1);
-                            self.emit.print(")");
+                            // HTTPDMAIN-F3-DOUBLECAST-0001: fold the arm's
+                            // typed wrapper when the address input is an
+                            // implied CPUI_CAST — the inlined def already
+                            // prints the same `(T *)` prefix (the address
+                            // varnode IS the CAST's output, so the wrapper
+                            // type and the inlined cast type are the same
+                            // text by dataflow). The oracle's opLoad
+                            // (printc.cc:486-498) pushes only the
+                            // dereference token — every cast in the golden
+                            // comes from a CAST op, exactly one each
+                            // (printc.cc:448 opTypeCast); the double
+                            // `(T *)(T *)` switch-head form was this
+                            // transport's wrapper stacking on the inlined
+                            // cast. `*` + the cast expression is legal C
+                            // (`*(T *)expr`).
+                            let addr_inline_casts = {
+                                let addr_vn = def_op.inrefs[1].read().unwrap();
+                                addr_vn.is_implied()
+                                    && addr_vn
+                                        .get_def()
+                                        .map(|d| {
+                                            d.read().unwrap().opcode
+                                                == OpCode::CPUI_CAST
+                                        })
+                                        .unwrap_or(false)
+                            };
+                            if addr_inline_casts {
+                                self.emit.print("*");
+                                self.push_input(def_op, 1);
+                            } else {
+                                self.emit.print(&format!(
+                                    "*(({} *)",
+                                    ptr_name.trim_end_matches(" *")
+                                ));
+                                self.push_input(def_op, 1);
+                                self.emit.print(")");
+                            }
                         } else {
                             // *(long *)addr — default cast so *addr is legal C even
                             // when addr was inferred as a non-pointer scalar.
@@ -6698,8 +9162,23 @@ impl PrintC {
             // token, then dereference, then the target Varnode (cc:640-650),
             // yielding `(*(code *)target)(args)`. In particular, a GOT-slot
             // target keeps its PTR_ symbol instead of becoming FUN_<offset>.
+            // PRINTC-BADJT-PARAMSYM-0001: the `(code *)` cast transport is
+            // dropped for a target whose read-facing type already IS the
+            // code pointer (castStandard identity outcome, cast.cc:303) —
+            // same gate as op_callind's direct dispatch.
             OpCode::CPUI_CALLIND => {
-                self.emit.print("(*(code *)");
+                let target_is_code_ptr = def_op.get_in(0).is_some_and(|in0| {
+                    let target = in0.read().unwrap();
+                    let curtype = target
+                        .get_high_type_read_facing(def_op, 0)
+                        .or_else(|| target.v_type.clone());
+                    Self::is_code_pointer_dt(curtype.as_ref())
+                });
+                if target_is_code_ptr {
+                    self.emit.print("(*");
+                } else {
+                    self.emit.print("(*(code *)");
+                }
                 if let Some(in0) = def_op.get_in(0) {
                     let target = in0.read().unwrap();
                     if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
@@ -6716,7 +9195,7 @@ impl PrintC {
                 self.emit.print(")");
                 return;
             }
-            // Ghidra: printc.cc:596 PrintC::opCall
+            // Ghidra: printc.cc:593 PrintC::opCall
             OpCode::CPUI_CALL => {
                 if let Some(in0) = def_op.get_in(0) {
                     let target_vn = in0.read().unwrap();
@@ -6752,21 +9231,65 @@ impl PrintC {
             // inserts these (coreaction.cc:2702) when an op's expected input
             // type differs from the feeding varnode's high type.
             OpCode::CPUI_CAST => {
-                // Emit "(typename)". The output varnode's v_type (set by
-                // castInput to reqtype) is the cast target type.
-                let type_name = def_op
+                // Emit "(typename)". printc.cc:448-464 opTypeCast reads the
+                // output varnode's DEF-FACING high type (getHighTypeDefFacing)
+                // and renders it through pushType's structural spelling —
+                // never the raw v_type name. The pre-PRINTC-CASTDEF-0001 arm
+                // printed v_type.get_name(), which surfaced the print-time
+                // "int *" fallback-stamp name (printc.rs load_addr_direct
+                // glue) as `(int *)` on SP-alias address chains where the
+                // real cast target is a different pointer — semantically
+                // wrong element arithmetic in the printed C. The RPN arm
+                // (rpn_op_type_cast) already used the def-facing consult;
+                // this legacy inline channel now does the same through
+                // cast_type_string (printc.cc:2013 pushType spelling).
+                let out_dt = def_op
                     .output
                     .as_ref()
-                    .and_then(|o| {
-                        let guard = o.read().unwrap();
-                        guard.v_type.as_ref().map(|t| t.get_name().to_string())
-                    })
-                    .unwrap_or_else(|| "long".to_string());
+                    .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
+                let type_name = match out_dt {
+                    Some(ref dt) => Self::cast_type_string(dt),
+                    None => "long".to_string(),
+                };
                 if !self.discovery_pass {
                     self.emit.print(&format!("({})", type_name));
                 }
                 if !def_op.inrefs.is_empty() {
-                    self.push_input(def_op, 0);
+                    // printlanguage.cc:277 (parentheses): a binary child under
+                    // the typecast presurround (prec 62, printc.cc:35) takes
+                    // operand parens — the RPN transport gets this from the
+                    // token machinery (canon `apr_ctime((undefined1 *)
+                    // ((long)plVar12 + 0x60), ...)`), the legacy inline
+                    // channel mirrors the same nesting rule here so the
+                    // switch-head form keeps the oracle's operand parens
+                    // (golden main: `*(undefined1 *)((long)plVar12 + 0x33)`).
+                    let child_needs_parens = {
+                        let in_vn = def_op.inrefs[0].read().unwrap();
+                        if in_vn.is_implied() {
+                            in_vn
+                                .get_def()
+                                .map(|d| {
+                                    let dg = d.read().unwrap();
+                                    !dg.is_dead()
+                                        && optoken::binary_token(dg.opcode)
+                                            .map(|t| {
+                                                t.precedence
+                                                    < optoken::CAST_PRECEDENCE
+                                            })
+                                            .unwrap_or(false)
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    };
+                    if child_needs_parens && !self.discovery_pass {
+                        self.emit.print("(");
+                        self.push_input(def_op, 0);
+                        self.emit.print(")");
+                    } else {
+                        self.push_input(def_op, 0);
+                    }
                 }
                 return;
             }
@@ -6790,6 +9313,70 @@ impl PrintC {
                 self.emit.print(")");
                 return;
             }
+            // Ghidra: printc.cc:843/872-877 PrintC::opSubpiece — the
+            // non-special-printing fall-thru: isSubpieceCast(outDef,inRead,
+            // offset) renders as a type cast `(int)x` (opTypeCast,
+            // printc.cc:451-462: dt = out getHighTypeDefFacing), anything
+            // else stays functional `SUB81(x,0)` (opFunc + typeop.cc:2127
+            // "SUB"+insize+outsize). Mirrors the RPN dispatch arm's
+            // cc:2244-2272 logic in the inline channel: without it the
+            // implied SUBPIECE leaf of the switch head normalization chain
+            // (e.g. AND(SUB(SUBPIECE(param),0x23),0xff)) hit the `_ =>`
+            // unnamed-location fallback and printed `unique0x1000026e`
+            // instead of the oracle's `(int)pCVar10` cast form
+            // (PRINTC-SWITCH-EMIT-0001 head-shape family).
+            OpCode::CPUI_SUBPIECE => {
+                // cc:872-874: isSubpieceCast(outDef, inRead, offset).
+                let (out_dt, in_dt, offset) = {
+                    let out = def_op.get_out().map(|a| a.read().unwrap());
+                    let in0 = def_op.get_in(0).map(|a| a.read().unwrap());
+                    let off = def_op
+                        .get_in(1)
+                        .map(|a| a.read().unwrap().get_offset())
+                        .unwrap_or(0);
+                    match (out, in0) {
+                        (Some(o), Some(i)) => (
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, def_op, 0),
+                            off as u32,
+                        ),
+                        _ => (None, None, off as u32),
+                    }
+                };
+                let is_sub = match (&out_dt, &in_dt) {
+                    (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset),
+                    _ => false,
+                };
+                if is_sub && !self.option_nocasts {
+                    // pushOp(&typecast,op); pushType(dt); pushVn(in0) —
+                    // inline-channel spelling: `(<type>)` + operand.
+                    if let Some(dt) = &out_dt {
+                        self.emit.print(&format!("({})", dt.get_name()));
+                    }
+                    self.push_input(def_op, 0);
+                } else {
+                    // typeop.cc:2127: "SUB" + dec(insize) + dec(outsize).
+                    let insz = def_op
+                        .get_in(0)
+                        .map(|a| a.read().unwrap().get_size())
+                        .unwrap_or(0);
+                    let outsz = def_op
+                        .get_out()
+                        .map(|a| a.read().unwrap().get_size())
+                        .unwrap_or(0);
+                    let nm = format!("SUB{}{}", insz, outsz);
+                    self.emit.print(&nm);
+                    self.emit.print("(");
+                    for i in 0..def_op.num_input() {
+                        if i > 0 {
+                            self.emit.print(",");
+                        }
+                        self.push_input(def_op, i);
+                    }
+                    self.emit.print(")");
+                }
+                return;
+            }
             _ => {
                 // Fallback: emit as variable name (don't inline unknown ops).
                 // Unnamed-location fallback address = the high's name
@@ -6799,12 +9386,15 @@ impl PrintC {
                 if let Some(ref out_arc) = def_op.output {
                     let out_vn = out_arc.read().unwrap();
                     // pushUnnamedLocation (printc.cc:1938-1945): space name +
-                    // printRaw of the high name representative's address
-                    // (PRINTC-UNLINKED-REF-FAMILY slice A token form).
-                    let name = Self::unnamed_location_token(
-                        out_vn.get_space(),
-                        Self::unnamed_location_offset(&out_vn),
-                    );
+                    // printRaw of the high name representative's FULL
+                    // address (printlanguage.cc:244;
+                    // PRINTC-AFINI-UNIQUELOC-0001: the space half follows
+                    // the rep — PRINTC-UNLINKED-REF-FAMILY slice A token
+                    // form).
+                    let (rep_space, rep_offset) =
+                        Self::unnamed_location_space_offset(&out_vn);
+                    let name =
+                        Self::unnamed_location_token(rep_space, rep_offset);
                     self.mark_varnode_used(name.clone(), &out_vn);
                     if !self.discovery_pass {
                         self.emit.tag_variable(&name, 0);
@@ -7015,58 +9605,6 @@ impl PrintC {
             .downcast::<crate::prettyprint::EmitNoMarkup>()
             .map(|b| b.get_output())
             .unwrap_or_default()
-    }
-
-    /// Render an op's inline expression (RHS, no `out =`) to a String by
-    /// swapping in a capture emit buffer. Used by op_return's RAX-writer
-    /// reconstruction to inspect the inlined return-value text.
-    // RUGRA-GLUE: Rust-side capture helper (capture-emit-swap pattern).
-    fn capture_inline_expr_text(&mut self, op: &PcodeOp) -> String {
-        // Save the emit buffer AND inline-state that emit_inline_expr mutates
-        // (inline_depth, inlined_ops), so this dry-run capture has no visible
-        // side effects on the main emission pass. Without restoring these, a
-        // capture here would leave inlined_ops populated / inline_depth bumped
-        // and corrupt subsequent varnode rendering (observed: bVarbVar2 name
-        // concatenation in next_url).
-        let orig_emit = std::mem::replace(
-            &mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()),
-        );
-        let saved_depth = self.inline_depth;
-        let saved_inlined_ops = self.inlined_ops.clone();
-        let saved_lhs = self.is_lhs;
-        self.is_lhs = false;
-        self.emit_inline_expr(op);
-        let buf = std::mem::replace(&mut self.emit, orig_emit);
-        self.inline_depth = saved_depth;
-        self.inlined_ops = saved_inlined_ops;
-        self.is_lhs = saved_lhs;
-        buf.into_any()
-            .downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output())
-            .unwrap_or_default()
-    }
-
-    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
-    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
-    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
-    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
-    // because Rugra's late/dead self-XORs escape op-layer folding and reach
-    // print, where text-level detection is the practical equivalent.
-    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
-    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
-    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
-    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
-    // because Rugra's late/dead self-XORs escape op-layer folding and reach
-    // print, where text-level detection is the practical equivalent.
-    fn is_textual_self_xor(text: &str) -> bool {
-        let t = text.trim();
-        if let Some(idx) = t.find(" ^ ") {
-            let lhs = t[..idx].trim();
-            let rhs = t[idx + 3..].trim();
-            return !lhs.is_empty() && lhs == rhs;
-        }
-        false
     }
 
     /// Detect a degenerate textual self-comparison `X == X`, `X != X`,
@@ -7865,11 +10403,15 @@ impl PrintLanguage for PrintC {
         // findTruncation consults (see field doc).
         self.snapshot_union_resolutions(fd);
 
-        // Load symbol and string tables from Funcdata, sanitizing C identifiers
+        // Load symbol and string tables from Funcdata. Names are kept RAW:
+        // the oracle emits symbol names verbatim (printc.cc:2592 tagFuncName,
+        // call sites via the FuncCallSpecs display name), so ELF names like
+        // `parseconfig.constprop.0` keep their dots in the mirror face.
+        // STUBLEAK-DOTNAME-SANITIZE-0001.
         self.symbol_table = fd
             .symbol_table
             .iter()
-            .map(|(k, v)| (*k, sanitize_c_ident(v)))
+            .map(|(k, v)| (*k, v.clone()))
             .collect();
         self.string_table = fd.string_table.clone();
 
@@ -7889,11 +10431,100 @@ impl PrintLanguage for PrintC {
         // LOAD/STORE. Full coverage needs type propagation.
         self.snapshot_local_scope(fd);
 
+        // PRINTC-LABSPELL-LABSYMS-0001: snapshot the special-label block
+        // flags for emitLabel's hasSpecialLabel gate (block.hh:291 via
+        // printc.cc:3173). Oracle reads `bb->isJoined()/isDuplicated()`
+        // (block.hh:292-293) on the BlockBasic under the front leaf at emit
+        // time; Rugra's label emission sites are address-keyed (some have
+        // no block handle), so the f_joined_block/f_duplicate_block state
+        // (block.hh:105-106) is projected here into entry-address sets.
+        use crate::block::FlowBlock as _;
+        self.joined_label_addrs.clear();
+        self.dup_label_addrs.clear();
+        for i in 0..fd.bblocks.get_size() {
+            let Some(blk) = fd.bblocks.get_block(i) else {
+                continue;
+            };
+            let blk_r = blk.read().unwrap();
+            let Some(bb) = blk_r.as_any().downcast_ref::<crate::block::BlockBasic>()
+            else {
+                continue;
+            };
+            let flags = bb.get_flags();
+            if flags & crate::block::block_flags::JOINED_BLOCK != 0 {
+                self.joined_label_addrs.insert(bb.get_entry_addr().as_u64());
+            }
+            if flags & crate::block::block_flags::DUPLICATE_BLOCK != 0 {
+                self.dup_label_addrs.insert(bb.get_entry_addr().as_u64());
+            }
+        }
+
         // Populate parameter name mapping from function prototype
         self.param_names.clear();
         for param in &fd.funcp.parameters {
             self.param_names
                 .insert(param.address.as_u64(), param.name.clone());
+        }
+
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ③: local-scope name
+        // occupancy for the MINIMAL_NAMESPACES `::` shadowing check.
+        // Oracle model (printc.cc:2597 pushScope(fd->getScopeLocal) in
+        // emitFunctionDeclaration; curscope for the whole body):
+        // `Symbol::getResolutionDepth(curscope)` (database.cc:323-359)
+        // returns 1 for a global-scope Symbol when
+        // `useScope->isNameUsed(name, global)` (database.cc:2417-2432)
+        // finds the base name in the function scope's nametree, and
+        // `PrintC::pushSymbolScope` (printc.cc:202-228) then prints the
+        // global scope's EMPTY display name under the `::` operator
+        // (`PrintC::scope`, printc.cc:24) — `::config.outfile`. The
+        // nametree holds every named local Symbol: parameters, the
+        // Action-built ScopeLocal symbols, and ActionNameVars-named
+        // highs (each print-named high is a local Symbol in the oracle).
+        // Rugra's stand-in set collects exactly those three channels;
+        // highs carrying a GLOBAL symbol are global-scope business and
+        // must not self-shadow their own name.
+        {
+            let mut local_scope_names: HashSet<String> = HashSet::new();
+            for param in &fd.funcp.parameters {
+                if !param.name.is_empty() {
+                    local_scope_names.insert(param.name.clone());
+                }
+            }
+            if let Some(scope) = self.scope.as_ref() {
+                for sym in &scope.symbols {
+                    if !sym.name.is_empty() {
+                        local_scope_names.insert(sym.name.clone());
+                    }
+                }
+            }
+            let global_scope_id = self
+                .symboltab
+                .as_ref()
+                .map(|t| t.read().unwrap().global_scope_id);
+            let mut seen_highs: HashSet<usize> = HashSet::new();
+            for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+                let Some(high_arc) = vn_arc.read().unwrap().high.clone() else {
+                    continue;
+                };
+                let ptr = std::sync::Arc::as_ptr(&high_arc) as usize;
+                if !seen_highs.insert(ptr) {
+                    continue;
+                }
+                let high = high_arc.read().unwrap();
+                let is_global = high
+                    .symbol
+                    .as_ref()
+                    .map(|s| Some(s.read().unwrap().scope_id) == global_scope_id)
+                    .unwrap_or(false);
+                if is_global {
+                    continue;
+                }
+                let name = high.get_name();
+                if !name.is_empty() {
+                    local_scope_names.insert(name.to_string());
+                }
+            }
+            self.local_scope_names = local_scope_names;
         }
 
         // Collect function call target addresses so we don't declare them as variables
@@ -7909,6 +10540,26 @@ impl PrintLanguage for PrintC {
         }
         self.call_targets = call_targets;
 
+        // PRINTC-VOIDCALL-0001: snapshot the output-locked-void callee CALL
+        // sites. The judgment mirrors ActionFuncLink::funcLinkOutput
+        // (coreaction.cc:1539-1541): only a LOCKED void output keeps the CALL
+        // output-free; an unlocked void-default proto leaves the output to
+        // trial recovery and must NOT project the no-output form. The key is
+        // the callspec's `op_addr` — the CALL instruction address
+        // (FuncCallSpecs::new_for_op stores op->get_addr()) — matched against
+        // PcodeOp::get_addr() by the print-time predicate below.
+        self.void_callee_call_addrs = fd
+            .callspecs
+            .iter()
+            .filter(|spec| {
+                let spec = spec.read().unwrap();
+                spec.prototype.output_type_locked
+                    && spec.prototype.return_type.get_metatype()
+                        == crate::type_system::datatype::TypeMetatype::Void
+            })
+            .map(|spec| spec.read().unwrap().op_addr.as_u64())
+            .collect();
+
         // Precompute pointer varnodes for usage-based type inference.
         self.pointer_varnodes.clear();
         use crate::space::AddressSpace;
@@ -7918,8 +10569,53 @@ impl PrintLanguage for PrintC {
             match op.opcode {
                 OpCode::CPUI_LOAD | OpCode::CPUI_STORE if op.inrefs.len() > 1 => {
                     let vn = op.inrefs[1].read().unwrap();
-                    self.pointer_varnodes
-                        .insert((vn.get_space(), vn.get_offset()));
+                    let key = (vn.get_space(), vn.get_offset());
+                    self.pointer_varnodes.insert(key);
+                    // Direct address-slot membership (by varnode identity):
+                    // the only varnodes the fallback stamp below may type.
+                    // Ghidra types exactly this edge (TypeOpLoad::
+                    // propagateType typeop.cc:487-502, slot-1 <-> output)
+                    // with a pointer sized to the address varnode
+                    // (propagateToPointer(..., outvn->getSize(), ws)); an
+                    // INT_ADD output's pointer NEVER flows back into the
+                    // add's inputs (typeop.cc:1197). The extension/
+                    // truncation family (ZEXT/SEXT/SUBPIECE/PIECE/INSERT)
+                    // is excluded as the address side too: Ghidra's
+                    // out→addr-slot propagation only fires when the loaded
+                    // value already carries a concrete type (propagateType
+                    // needs the opposite edge's alttype), which the corpus
+                    // goldens never show on an extension output — stamping
+                    // them typed the extension output itself, flipping
+                    // isZextCast/isSextCast false (functional ZEXT48/SEXT48
+                    // where the oracle prints the cast/hidden form).
+                    // PRINTC-PTRSTAMP-CAST-OVERWRITE-0001: a varnode whose
+                    // def is a CPUI_CAST already carries the FINALIZED cast
+                    // target that ActionSetCasts installed (coreaction.cc:
+                    // 2702-2712 sets vnout's type to the getInputCast ct;
+                    // Ghidra has no print-side type writer after that — the
+                    // oracle's cast spelling is exactly this terminal
+                    // value). Stamping it with the synthetic "int *" below
+                    // overwrote `long` into `int *`, printing
+                    // `(int *)puVar10 - 8` — a 4x-offset semantic error and
+                    // a non-oracle cast form. Exclude CAST defs from the
+                    // stamp alongside the extension/truncation family.
+                    let def_is_ext = vn
+                        .get_def()
+                        .map(|d| {
+                            matches!(
+                                d.read().unwrap().opcode,
+                                OpCode::CPUI_CAST
+                                    | OpCode::CPUI_INT_ZEXT
+                                    | OpCode::CPUI_INT_SEXT
+                                    | OpCode::CPUI_SUBPIECE
+                                    | OpCode::CPUI_PIECE
+                                    | OpCode::CPUI_INSERT
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !def_is_ext {
+                        self.load_addr_direct.insert(vn.get_create_index());
+                    }
                 }
                 OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                     if let Some(ref out) = op.output {
@@ -7939,8 +10635,37 @@ impl PrintLanguage for PrintC {
                         for in_arc in &op.inrefs {
                             let in_vn = in_arc.read().unwrap();
                             if in_vn.get_space() != AddressSpace::Const {
+                                let key = (in_vn.get_space(), in_vn.get_offset());
                                 self.pointer_varnodes
-                                    .insert((in_vn.get_space(), in_vn.get_offset()));
+                                    .insert(key);
+                                // CASTFUSE-C ZEXT subfamily (VZEXT lane):
+                                // the former addinput stamp membership is
+                                // removed wholesale. Instrumented survey of
+                                // all 200 failing ZEXT sites in the sq
+                                // corpus (2026-09-26): every leak is
+                                // out=Pointer/sz8 — the ZEXT OUTPUT's
+                                // HighVariable merged a member whose type
+                                // was stamped on this edge
+                                // (Pointer/MULTIEQUAL 324,
+                                // Pointer/CALLIND 12, Pointer/INDIRECT 6,
+                                // Pointer/CALL=strtol 2 member hits). The
+                                // addinput path typed an INT_ADD/SUB input
+                                // from the add OUTPUT's address use — the
+                                // exact out->in direction
+                                // TypeOpIntAdd::propagateType forbids
+                                // (typeop.cc:1196-1197 `inslot == -1 ->
+                                // newtype = 0`), for ALL input defs, not
+                                // just the extension/truncation/CAST family
+                                // the WIDTHOP (867bce7a) and
+                                // PTRSTAMP-CAST-OVERWRITE scopes excluded.
+                                // Ghidra never builds this state; the
+                                // remaining stamp domain is the direct
+                                // LOAD/STORE slot-1 edge
+                                // (TypeOpLoad::propagateType typeop.cc:
+                                // 487-502) plus this naming-only
+                                // pointer_varnodes set. REALPTR-ADDRSLOT
+                                // (TYPEPROP-ADDRSLOT-PERSIST-0001) tracks
+                                // the legitimate ActionInferTypes lever.
                             }
                         }
                     }
@@ -7948,36 +10673,70 @@ impl PrintLanguage for PrintC {
             }
         }
 
-        // Directly stamp Pointer type on all varnodes identified as pointers.
+        // Fallback pointer stamp for direct LOAD/STORE address varnodes only.
         // This runs AFTER the full pipeline (heritage, type inference, copy
         // propagation, dead code) so the varnodes in loc_tree are the final
-        // surviving ones that PrintC will encounter. This is the approach
-        // Ghidra uses: type information is applied to display-level varnodes
-        // just before printing, not deferred to a separate propagation pass.
-        if !self.pointer_varnodes.is_empty() {
+        // surviving ones that PrintC will encounter. The stamp is restricted
+        // to `load_addr_direct` membership (the address-slot edge Ghidra
+        // types via TypeOpLoad::propagateType typeop.cc:487-502) and the
+        // pointer is sized to the varnode (propagateToPointer sizes to the
+        // address varnode, typeop.cc:497-498). The former blanket stamp over
+        // `pointer_varnodes` also typed INT_ADD input varnodes from the add
+        // OUTPUT's pointer use — the exact out→in direction Ghidra forbids
+        // (TypeOpIntAdd::propagateType typeop.cc:1197 `inslot == -1 → 0`) —
+        // which put an 8-byte `int *` onto 1/4/8-byte SUBPIECE/ZEXT/SEXT
+        // outputs, flipped isSubpieceCast/isZextCast/isSextCast false, and
+        // printed functional `SUB81(x,0)`/`ZEXT18(x)` where the oracle prints
+        // `(char)x`/hidden-extension casts (WIDTHOP family root cause).
+        // `pointer_varnodes` (naming-only superset) is untouched.
+        if !self.load_addr_direct.is_empty() {
             use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
             let int_type = std::sync::Arc::new(Datatype::Base(
                 TypeBase::new(
                 "int".to_string(), 4, TypeMetatype::Int,
             )));
-            let int_ptr = std::sync::Arc::new(Datatype::Pointer(TypePointer {
-                base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
-                ptr_to: int_type,
-                wordsize: 1,
-            }));
             for vn_ref in &fd.vbank.loc_tree {
                 let vn = vn_ref.0.read().unwrap();
-                if self
-                    .pointer_varnodes
-                    .contains(&(vn.get_space(), vn.get_offset())) {
+                if self.load_addr_direct.contains(&vn.get_create_index()) {
                     let needs_update = vn
                         .v_type
                         .as_ref()
                         .map_or(true, |t| t.get_metatype() != TypeMetatype::Pointer
                     );
                     if needs_update {
+                        let vn_size = vn.get_size();
+                        // CR-VZEXT F1: the read guard must be released
+                        // before the write below — std::sync::RwLock on the
+                        // same thread deadlocks deterministically if the
+                        // guard is still held (baseline d0e27c14 had this
+                        // drop; the VZEXT probe cycle accidentally removed
+                        // it). Same-shape minimal repro: read-hold + write
+                        // hangs (timeout 124), restored drop passes.
                         drop(vn);
-                        vn_ref.0.write().unwrap().v_type = Some(int_ptr.clone());
+                        // Pointer sized to the address varnode, pointing at
+                        // int (the previous fallback pointee), wordsize 1
+                        // (ram) — propagateToPointer's sizing per
+                        // typeop.cc:497-498.
+                        // (PRINTC-ADDRSTAMP-VALTYPE-0001: pointing the stamp
+                        // at the edge's value type instead — the oracle
+                        // TypeOpLoad/Store::propagateType quantity — was
+                        // measured and left the gate totals unchanged: the
+                        // `(int *)` SP-alias prints do not read this stamp.
+                        // The real lever is the value→address type
+                        // PROPAGATION in ActionInferTypes, registered as
+                        // TYPEPROP-ADDRSLOT-PERSIST-0001.)
+                        let sized_ptr = std::sync::Arc::new(Datatype::Pointer(
+                            TypePointer {
+                                base: TypeBase::new(
+                                    "int *".to_string(),
+                                    vn_size,
+                                    TypeMetatype::Pointer,
+                                ),
+                                ptr_to: int_type.clone(),
+                                wordsize: 1,
+                            },
+                        ));
+                        vn_ref.0.write().unwrap().v_type = Some(sized_ptr);
                     }
                 }
             }
@@ -8721,6 +11480,15 @@ impl PrintLanguage for PrintC {
         // fresh `PrintC` per function, so an instance field could not enforce
         // "once per file"; instead a process-wide AtomicBool guarantees the
         // typedefs are emitted exactly once across the whole decompile run.
+        // GENSMOKE-T1 note: the preamble is a canon-tier self-containment
+        // artifact with no oracle counterpart (direct-runner goldens carry
+        // zero typedef lines), but it CANNOT be tier-gated here: the curl
+        // driver's multi-process worker protocol reconstructs the latch at
+        // the process boundary and requires every worker document to start
+        // with this exact preamble (TYPEDEF_PREAMBLE +
+        // normalize_worker_typedefs, examples/curl_decompile.rs:5974-5990).
+        // compare_ghidra.py:109/141 normalizes typedef lines out of every
+        // diff face, so the preamble is invisible to all four gates.
         if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
             // Ghidra: printc.cc:2621-2628 PrintC::docAllGlobals — document-
             // level declarations ride inside beginDocument .. endDocument
@@ -8802,7 +11570,7 @@ impl PrintLanguage for PrintC {
         // position (last line before the declaration) is unchanged.
         self.emit.tag_line(0);
 
-        // Ghidra: printc.cc:2661 PrintC::docFunction delegates the complete
+        // Ghidra: printc.cc:2641 PrintC::docFunction delegates the complete
         // declaration to emitFunctionDeclaration. Parameter recovery and
         // return-type decisions are finalized in FuncProto before printing;
         // the print phase must not invent a main signature, infer return type
@@ -8902,7 +11670,10 @@ impl PrintLanguage for PrintC {
     /// printc.hh:242 `setCommentDelimeter("/* "," */",false)`), so
     /// `commentstart == "/* "` and `commentend == " */"` are PrintC
     /// invariants here. `indent < 0` selects `line_commentindent`
-    /// (cc:595-596; value 20 per printlanguage.cc:580).
+    /// (cc:595-596; value 20 per printlanguage.cc:580). The body is
+    /// bracketed by `startComment`/`stopComment` (cc:598/647), which on
+    /// EmitPrettyPrint gate the 3-space comment fill on forced breaks
+    /// inside the comment (prettyprint.cc:690-693).
     fn emit_line_comment(&mut self, indent: i32, text: &str) {
         // cc:595-596: if (indent <0) indent = line_commentindent;
         let indent = if indent < 0 {
@@ -8930,10 +11701,24 @@ impl PrintLanguage for PrintC {
             false
         };
         if !emitted_absolute_indent {
-            self.emit.tag_line(indent);
+            // printlanguage.cc:597 emit->tagLine(indent) — the ONE-ARGUMENT
+            // absolute virtual for every emitter that is not EmitNoMarkup
+            // (the NoMarkup bytes were reproduced in the branch above):
+            // line_t token, column = indent regardless of nesting depth.
+            self.emit.tag_line_indent(indent);
         }
-        // cc:598-602: startComment + the opening delimiter. Markup calls are
-        // no-ops for the plain-text emitter; only the delimiter prints.
+        // cc:598: int4 id = emit->startComment(); — NOT a markup-only call:
+        // on the oracle's EmitPrettyPrint (the PrintLanguage emitter,
+        // printlanguage.cc:69) the begin_comment token flips commentmode on
+        // (prettyprint.cc:630-631), so every forced break inside the comment
+        // body (cc:616-617 '\n' -> tagLine()) prints the comment fill after
+        // the new indent (prettyprint.cc:689-693), yielding the canon 23-col
+        // continuation (20-col indent + 3-space fill armed by
+        // setCStyleComments -> setCommentDelimeter, printlanguage.cc:98-110).
+        // For a bare EmitNoMarkup emitter — never the oracle's PrintLanguage
+        // configuration — the trait call is a no-op and the absolute-indent
+        // bytes above already reproduce the lowlevel stream.
+        let comment_id = self.emit.start_comment();
         // cc:601: emit->tagComment(commentstart, comment_color, spc, off);
         self.emit.tag_comment("/* ");
         // cc:603-644: byte token walk over the comment text.
@@ -8958,7 +11743,8 @@ impl PrintLanguage for PrintC {
                 self.emit.print(&" ".repeat(count));
             } else if tok == '\n' {
                 // cc:616-617: a newline inside the comment body breaks the line.
-                self.emit.tag_line(indent);
+                // (Absolute one-argument virtual, same as the entry break.)
+                self.emit.tag_line_indent(indent);
             } else if tok == '\r' {
                 // cc:618-619: carriage returns are dropped.
             } else if tok == '{' && pos < chars.len() && chars[pos] == '@' {
@@ -8994,7 +11780,10 @@ impl PrintLanguage for PrintC {
         }
         // cc:645-646: if (commentend.size() != 0) tagComment(commentend, ...).
         self.emit.tag_comment(" */");
-        // cc:647: stopComment — markup only, no plain-text bytes.
+        // cc:647: emit->stopComment(id); — closes the comment group: the
+        // end_comment token clears commentmode (prettyprint.cc:652-653), so
+        // forced breaks after this comment get no fill.
+        self.emit.stop_comment(comment_id);
     }
 
     // Ghidra: printc.cc:123 PrintC::docAllProto
@@ -9505,11 +12294,18 @@ impl PrintLanguage for PrintC {
 
     // Ghidra: printc.cc:593 PrintC::opCall
     fn op_call(&mut self, op: &PcodeOp) {
+        // PRINTC-VOIDCALL-0001: emitExpression's `outvn != 0` LHS test
+        // (printc.cc:2471-2476) — a locked-void callee CALL carries NO output
+        // in the oracle IR (funcLinkOutput, coreaction.cc:1539-1541), so the
+        // statement renders `f(args);` with no assignment LHS. Project the
+        // same bytes when the action layer left the output in place.
         if let Some(out) = op.get_out() {
-            self.is_lhs = true;
-            self.push_varnode(&out.read().unwrap(), Some(op));
-            self.is_lhs = false;
-            self.emit.tag_op(" = ");
+            if !self.callee_returns_void(op) {
+                self.is_lhs = true;
+                self.push_varnode(&out.read().unwrap(), Some(op));
+                self.is_lhs = false;
+                self.emit.tag_op(" = ");
+            }
         }
         if let Some(in0) = op.get_in(0) {
             let target_vn = in0.read().unwrap();
@@ -9557,59 +12353,44 @@ impl PrintLanguage for PrintC {
 
 
     // Ghidra: printc.cc:754 PrintC::opReturn
+    /// Legacy direct-emit twin of the RPN CPUI_RETURN arm (dispatch_op_rpn).
+    /// Mirrors the oracle's plain-return arm (printc.cc:758-766): print
+    /// `return`; the value is printed ONLY when numInput()>1 — the oracle
+    /// clips void returns in the IR (ActionReturnRecovery::buildReturnOutput
+    /// strips unused trials, coreaction.cc:1836-1906), never at print time.
+    /// RETURNVOID-PRINTC-0001 audit: oracle opReturn has NO output-type
+    /// branch; the residual `return LIT;` on void functions is the IR-side
+    /// input surviving (upstream trial-verdict domain).
+    /// The halt/noreturn/baddata/missing arms (printc.cc:767-783) are tracked
+    /// by PRINT-RPN-0001 for both transports.
     fn op_return(&mut self, op: &PcodeOp) {
         self.emit.print("return");
         if op.num_input() > 1 {
-            self.emit.print(" ");
-            if let Some(in1) = op.get_in(1) {
-                self.push_varnode(&in1.read().unwrap(), Some(op));
-            }
-        } else {
-            // No explicit return value on the RETURN op. Check if RAX/EAX (offset 0x0)
-            // was written by an op just before this RETURN in the same block. If so,
-            // emit that value as the return — mirrors how Ghidra reconstructs
-            // 'xor eax,eax; ret' into 'return 0'.
-            use crate::space::AddressSpace;
-            if let Some(ref parent_arc) = op.parent {
-                if let Some(ref parent_dyn) = parent_arc.upgrade() {
-                    let block = parent_dyn.read().unwrap();
-                    let ops = block.get_ops();
-                    for op_ref in ops.iter().rev() {
-                        let o = op_ref.0.read().unwrap();
-                        if o.start == op.start { continue; }
-                        if let Some(ref out_arc) = o.output {
-                            let out_vn = out_arc.read().unwrap();
-                            if out_vn.get_space() == AddressSpace::Register
-                                && out_vn.get_offset() == 0x0
-                                && out_vn.get_size() >= 4
-                            {
-                                drop(out_vn);
-                                // `xor eax,eax; ret` is the canonical zero-return
-                                // idiom. The comment above promises to reconstruct
-                                // it as `return 0`. Ghidra's RuleTrivialArith folds
-                                // INT_XOR(x,x)->COPY(0) before print, but Rugra's
-                                // XOR may be dead by cleanup-pool time while its
-                                // expression still inlines here (via COPY chains /
-                                // copy-prop). Capture the inlined return-value text;
-                                // if it is a self-XOR `X ^ X` (syntactically), emit
-                                // 0 — matching Ghidra's fold and avoiding the
-                                // illegal-on-pointers `piVar ^ piVar` gcc error.
-                                let o2 = op_ref.0.read().unwrap();
-                                let inline_text = self.capture_inline_expr_text(&o2);
-                                drop(o2);
-                                self.emit.print(" ");
-                                if Self::is_textual_self_xor(&inline_text) {
-                                    self.emit.print("0");
-                                } else {
-                                    self.emit.print(&inline_text);
-                                }
-                                return;
-                            }
-                        }
-                    }
+            // PRINTC-VOIDCALL-0001: a locked-void callee CALL output feeding
+            // RETURN implies numInput()==1 in the oracle IR (the CALL is
+            // output-free, coreaction.cc:1539-1541) — print the bare
+            // `return;` instead of the illegal-C `return free(p);` value.
+            let return_value_is_void_call = op
+                .get_in(1)
+                .and_then(|in1| in1.read().unwrap().get_def())
+                .map(|def| {
+                    let d = def.read().unwrap();
+                    self.callee_returns_void(&d)
+                })
+                .unwrap_or(false);
+            if !return_value_is_void_call {
+                self.emit.print(" ");
+                if let Some(in1) = op.get_in(1) {
+                    self.push_varnode(&in1.read().unwrap(), Some(op));
                 }
             }
         }
+        // printc.cc:762 `if (op->numInput()>1)` — no else arm exists. The
+        // former RAX-writer block-scan reconstruction (commit 5542b507) was
+        // print-time IR recovery with no oracle counterpart and is removed
+        // (RETURNVOID-PRINTC-0001); Ghidra reconstructs `xor eax,eax; ret`
+        // purely in the IR (RuleTrivialArith fold + ActionReturnRecovery
+        // attach), leaving opReturn to print whatever inputs remain.
     }
 
     // Ghidra: printc.cc:536 PrintC::opCbranch
@@ -9725,8 +12506,29 @@ impl PrintLanguage for PrintC {
     }
 
     // Ghidra: printc.cc:1472 PrintC::pushType
-    fn push_type(&mut self, dt: &Datatype) {
-        self.emit.tag_type(dt.get_name(), dt.get_id());
+    /// Faithful port of `PrintC::pushType(const Datatype*)` (printc.cc:
+    /// 1472-1478): `pushTypeStart(ct,true)` + EMPTY_STRING blank atom +
+    /// `pushTypeEnd(ct)` — the full declarator-stack render (base name plus
+    /// the PTR/ARRAY/CODE modifier chain), NOT a bare name print. A bare
+    /// `get_name()` print renders factory-built anonymous pointer types
+    /// (empty names — e.g. the `char *` return of a locked libc PLT-import
+    /// signature) as zero text, which is how the PLT stub family lost its
+    /// signature return type (` strcpy(...)` vs canon `char * strcpy(...)`,
+    /// RESIDMAP-PLTSTUB-EMITSHAPE-0001 ①).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `dt` borrowed read-only; emits only.
+    /// - Loop/order: none here — the walk lives in pushTypeStart/End.
+    /// - Counter: none.
+    /// - Sort key: none.
+    fn push_type(&mut self, dt: &Arc<Datatype>) {
+        // cc:1475: pushTypeStart(ct,true) — declarator stack, no identifier.
+        self.push_type_start_opt(Some(dt), true);
+        // cc:1476: pushAtom(Atom(EMPTY_STRING,blanktoken,no_color)) — zero
+        // text; its RPN role (completing the stack entry) is vacuous on the
+        // direct-print transport.
+        // cc:1477: pushTypeEnd(ct) — array/code suffix layers + parens.
+        self.push_type_end_opt(Some(dt));
     }
 
     // Ghidra: printc.cc:123 PrintC::pushVarnode
@@ -9750,6 +12552,41 @@ impl PrintLanguage for PrintC {
                     return;
                 }
             }
+        }
+
+        // Priority 0.4: Parameter names for Register-space INPUT varnodes,
+        // ahead of the symbol branch — the oracle's ScopeLocal param Symbol
+        // carries the proto name (ActionParameterSymbols sync), Rugra's
+        // bridge does not (auto `in_register_...` names), so the proto name
+        // must win for actual register INPUTS (same gate as the P0.5 ladder
+        // below). PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ① httpd regression
+        // guard (`*param_2 + 0xa11b8` must not become
+        // `*in_register_00000288 + 0xa11b8`).
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
+            if let Some(pname) = self.param_names.get(&vn.get_offset()) {
+                self.used_varnode_names.insert(pname.clone());
+                if !self.discovery_pass {
+                    self.emit.tag_variable(pname, 0);
+                }
+                return;
+            }
+        }
+
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ① (legacy emit path):
+        // symbol detail precedes the address proxy, mirroring the oracle
+        // leaf order (pushVnExplicit -> pushSymbolDetail,
+        // printlanguage.cc:218-262 — no address-keyed proxy exists
+        // there). Emits the scope-qualified whole/partial/mismatch form
+        // (`::config.outfile`) directly; the proxy below remains only
+        // for symbol-less varnodes. allow_cast is the oracle call-site's
+        // isRead: true for reads (pushVnExplicit), false on assignment
+        // LHS (emitExpression's pushSymbolDetail(outvn,op,false)).
+        if let Some(text) = self.push_symbol_detail_leaf(vn, !self.is_lhs) {
+            self.used_varnode_names.insert(text.clone());
+            if !self.discovery_pass {
+                self.emit.tag_variable(&text, 0);
+            }
+            return;
         }
 
         // Priority 0: Resolve known symbols/strings by address (overrides any auto-generated name)
@@ -10073,10 +12910,8 @@ impl PrintLanguage for PrintC {
                             return;
                         }
                     }
-                    Self::unnamed_location_token(
-                        AddressSpace::Register,
-                        Self::unnamed_location_offset(vn),
-                    )
+                    let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                    Self::unnamed_location_token(rep_space, rep_offset)
                 }
             }
             AddressSpace::Const => {
@@ -10116,9 +12951,13 @@ impl PrintLanguage for PrintC {
                                 == crate::type_system::TypeMetatype::Int;
                             if !ct.is_char_print() {
                                 if !self.discovery_pass {
-                                    self.emit.print(&self.integer_text(
+                                    // printc.cc:1750-1764 push_integer with
+                                    // the vn's explicit-print flags
+                                    // (cc:1296-1312/1362-1365).
+                                    let (fu, fs) = Self::constant_print_flags(vn);
+                                    self.emit.print(&self.integer_text_flagged(
                                         val, ct.get_size(), signed,
-                                        display_format::DEFAULT,
+                                        display_format::DEFAULT, fu, fs,
                                     ));
                                 }
                                 return;
@@ -10172,9 +13011,8 @@ impl PrintLanguage for PrintC {
                 }
             }
             AddressSpace::Stack => {
-                Self::unnamed_location_token(
-                AddressSpace::Stack,
-                Self::unnamed_location_offset(vn))
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Unique => {
                 let key = (AddressSpace::Unique, vn.get_offset());
@@ -10202,25 +13040,27 @@ impl PrintLanguage for PrintC {
                     }
                 }
                 // Unnamed-location fallback (printc.cc:1938-1945): space
-                // name + printRaw of the high name representative's address
-                // — every instance of one HighVariable prints the same
-                // label (slice B1 address source + slice A token form).
-                // Inline candidacy above stays keyed on the current
+                // name + printRaw of the high name representative's FULL
+                // address — every instance of one HighVariable prints the
+                // same label (slice B1 address source + slice A token form;
+                // PRINTC-AFINI-UNIQUELOC-0001: the space half follows the
+                // rep). Inline candidacy above stays keyed on the current
                 // instance.
-                Self::unnamed_location_token(
-                    AddressSpace::Unique,
-                    Self::unnamed_location_offset(vn),
-                )
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
             AddressSpace::Ram => {
                 // Symbol/string lookups are handled at Priority 0 above.
                 // If we reach here, it's an unresolved RAM address:
-                // pushUnnamedLocation prints "ram" + printRaw.
-                Self::unnamed_location_token(
-                    AddressSpace::Ram,
-                    Self::unnamed_location_offset(vn))
+                // pushUnnamedLocation prints "ram" + printRaw of the
+                // representative's full address.
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
             }
-            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
+            _ => {
+                let (rep_space, rep_offset) = Self::unnamed_location_space_offset(vn);
+                Self::unnamed_location_token(rep_space, rep_offset)
+            }
         };
 
         self.mark_varnode_used(name.clone(), vn);
@@ -10509,6 +13349,36 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: is_code_pointer_dt (print-side projection of
+    //   ActionSetCasts::castInput's no-cast outcome, coreaction.cc:2655-2671
+    //   + cast.cc:300 castStandard identity check)
+    /// Whether `dt` is the code-pointer type a CALLIND slot-0 expects —
+    /// `Pointer` over a proto-less `Code` base (`TypeOpCallind::getInputLocal`
+    /// builds `getTypePointer(size, getTypeCode(), wordsize)`, typeop.cc:
+    /// 752-756). The oracle inserts the CALLIND CAST unless
+    /// `castStandard(reqtype, curtype)` returns non-null, and its first
+    /// identity check (`curtype == reqtype`, cast.cc:303) holds exactly when
+    /// the target's read-facing type IS the factory code-pointer — the same
+    /// Arc the inputLocal channel mints, which type propagation carries
+    /// whole (both symbol dtype and proto param dtype hold one Arc —
+    /// PRINTC-BADJT-PARAMSYM-0001 probe). A structural match on Rugra's
+    /// alias (anonymous proto-less Code base) reproduces that outcome: the
+    /// code*-typed target prints `(*sym)(...)` with no `(code *)` cast
+    /// (`(*UNRECOVERED_JUMPTABLE)(...)`, ghidra_httpd_1204.c:4927), every
+    /// other target keeps the cast (`(*(code *)PTR_...)()`, canon line 7).
+    fn is_code_pointer_dt(dt: Option<&Arc<Datatype>>) -> bool {
+        dt.is_some_and(|d| {
+            matches!(
+                d.as_ref(),
+                Datatype::Pointer(p)
+                    if matches!(
+                        p.ptr_to.as_ref(),
+                        Datatype::Code(c) if c.proto.is_none()
+                    )
+            )
+        })
+    }
+
     // Ghidra: printc.cc:637 PrintC::opCallind
     /// Emit an indirect CALL op. Faithful port of `PrintC::opCallind(const
     /// PcodeOp*)` (printc.cc:637-671).
@@ -10563,7 +13433,30 @@ impl PrintC {
         let mut count = n_inputs.saturating_sub(1);
         if skip >= 0 { count = count.saturating_sub(1); }
         // printc.cc:649-670: three-way dispatch on count.
-        self.emit.print("(*(code *)");
+        // PRINTC-CALLIND-CODECAST-0001 / PRINTC-BADJT-PARAMSYM-0001: the
+        // `(code *)` text is the transport of the oracle's setcasts CAST on
+        // the CALLIND slot-0 input (TypeOpCallind::getInputLocal types slot
+        // 0 as the code pointer, typeop.cc:752-756; castInput inserts the
+        // CAST, coreaction.cc:2704+). ActionSetCasts SKIPS that CAST when
+        // the target's read-facing type already IS the code pointer
+        // (castStandard's identity check `curtype == reqtype`, cast.cc:303),
+        // which is the symbol-backed renamed-param case — the oracle prints
+        // `(*UNRECOVERED_JUMPTABLE)(...)` (ghidra_httpd_1204.c:4927) with
+        // NO cast. The same structural condition drops the transport here;
+        // every other target (GOT-slot globals, LOAD results) keeps it,
+        // matching the canon `(*(code *)PTR_...)()` sites.
+        let target_is_code_ptr = op.get_in(0).is_some_and(|in0| {
+            let target = in0.read().unwrap();
+            let curtype = target
+                .get_high_type_read_facing(op, 0)
+                .or_else(|| target.v_type.clone());
+            Self::is_code_pointer_dt(curtype.as_ref())
+        });
+        if target_is_code_ptr {
+            self.emit.print("(*");
+        } else {
+            self.emit.print("(*(code *)");
+        }
         if let Some(in0) = op.get_in(0) {
             let target = in0.read().unwrap();
             // A resolved GOT-slot symbol is already the oracle's printable
@@ -10701,10 +13594,32 @@ impl PrintC {
         } else if display == userop_flags::DISPLAY_STRING {
             // printc.cc:701-714: string-data rendering. Ghidra looks up the
             // output's pointed-to char type and emits the literal via
-            // printCharacterConstant; on failure it emits "\"badstring\"".
-            // Rugra's printCharacterConstant (audit P2-2) is not ported; we
-            // emit the faithful fallback "\"badstring\"" string literal token.
-            self.emit.print("\"badstring\"");
+            // printCharacterConstant (the STRINGDATA in(1) hash constant's
+            // constant-space address is the string_manager read-back key,
+            // stringmanage.rs register_internal_string_data); on failure
+            // (non-pointer out, missing in(1), or empty manager data) it
+            // emits the "\"badstring\"" fallback (cc:707/713).
+            let mut str = String::new();
+            let out_type = op.get_out().and_then(|o| o.read().unwrap().get_type());
+            let rendered = match out_type.as_deref() {
+                Some(crate::type_system::datatype::Datatype::Pointer(p)) => {
+                    let in1_addr = op
+                        .get_in(1)
+                        .map(|a| crate::address::Address::new(a.read().unwrap().get_offset()));
+                    match in1_addr {
+                        Some(addr) => {
+                            self.print_character_constant(&mut str, addr, p.ptr_to.as_ref())
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+            if !rendered {
+                str.clear();
+                str.push_str("\"badstring\"");
+            }
+            self.emit.print(&str);
         }
     }
 
@@ -10752,7 +13667,7 @@ impl PrintC {
                 // outvn = newop->getOut(); dt = outvn->getTypeDefFacing().
                 newop
                     .get_out()
-                    .and_then(|o| o.read().unwrap().get_type_def_facing())
+                    .and_then(|o| self.vn_type_def_facing_snap(&o.read().unwrap()))
             } else {
                 None
             }
@@ -11059,7 +13974,7 @@ impl PrintC {
                 .get_out()
                 .and_then(|o| {
                 let o_vn = o.read().unwrap();
-                o_vn.get_type_def_facing().map(|dt| {
+                self.vn_type_def_facing_snap(&o_vn).map(|dt| {
                     let mut cur = dt;
                     while let Datatype::Pointer(p) = &*cur {
                         cur = p.ptr_to.clone();
@@ -11150,7 +14065,7 @@ impl PrintC {
             // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
             let ptype = in0
                 .as_ref()
-                .and_then(|v| v.get_high_type_read_facing(op, 0));
+                .and_then(|v| self.vn_high_type_read_facing_snap(v, op, 0));
             (ptype, in1const)
         };
         // printc.cc:943-946: if (ptype->meta != TYPE_PTR) throw.
@@ -11184,38 +14099,100 @@ impl PrintC {
                 let is_struct = meta == TypeMetatype::Struct || meta == TypeMetatype::Union;
                 let is_array = meta == TypeMetatype::Array;
                 if is_struct {
-                    // printc.cc:1018-1034 (!valueon) / 1036-1052 (valueon):
-                    // struct/union -> `&in0->field` (!valueon) or `in0->field`.
+                    // printc.cc:1018-1052: struct/union — `&in0->field`
+                    // (!valueon) or `in0->field`; flex (printc.cc:894-911,
+                    // PRINTC-C3FLEX-DOTFORM-0001) selects object_member
+                    // (`.`) and flips the base push to load-value form
+                    // (cc:1039-1041/1047-1049) so the base's defining
+                    // spacebase PTRSUB drops its `&` — expressed on this
+                    // legacy direct-emit path by temporarily setting the
+                    // print_load_value mod around push_varnode (the RPN
+                    // path passes it per-push as `m | print_load_value`).
+                    let flex = op
+                        .get_in(0)
+                        .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                        .unwrap_or(false);
                     if !valueon {
                         self.emit.print("&");
                     }
                     if let Some(in0) = op.get_in(0) {
+                        let saved_mods = self.mods;
+                        if flex {
+                            self.mods |= print_mods::PRINT_LOAD_VALUE;
+                        }
                         self.push_varnode(&in0.read().unwrap(), Some(op));
+                        self.mods = saved_mods;
                     }
-                    // printc.cc:991-1010: field lookup via findTruncation.
-                    let fieldname = Self::find_partial_field(&ct, in1const as usize, 0)
-                        .map(|(name, _, _)| name)
-                        .unwrap_or_else(|| {
-                            // printc.cc:999-1001: default field name
-                            // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                            format!("field_0x{:x}", in1const)
-                        });
-                    self.emit.print("->");
+                    // printc.cc:977-1010: field lookup. TYPE_UNION takes the
+                    // field from the union-resolution map (cc:979-990,
+                    // `fd->getUnionField(ptype, op, -1)` — the attach edge
+                    // from ActionSetCasts::resolveUnion, coreaction.cc:2509),
+                    // never findTruncation; Rugra reads the doc_function-time
+                    // snapshot with the same ResolveEdge key (the oracle's
+                    // LowlevelError arms are unreachable in a resolveUnion-
+                    // gated pipeline and the printer cannot throw — the
+                    // field_0x default stands in, cf. cc:943-946). TYPE_STRUCT
+                    // keeps the findTruncation walk (cc:991-1010).
+                    let fieldname = if meta == TypeMetatype::Union {
+                        in0_type
+                            .as_ref()
+                            .and_then(|pt| {
+                                self.union_resolutions
+                                    .get(&crate::unionresolve::ResolveEdge::new(pt, op, -1))
+                                    .filter(|res| res.get_field_num() >= 0)
+                                    .and_then(|res| match ct.as_ref() {
+                                        Datatype::Union(u) => u
+                                            .fields
+                                            .get(res.get_field_num() as usize)
+                                            .map(|fld| fld.name.clone()),
+                                        _ => None,
+                                    })
+                            })
+                            .unwrap_or_else(|| format!("field_0x{:x}", in1const))
+                    } else {
+                        Self::find_partial_field(&ct, in1const as usize, 0)
+                            .map(|(name, _, _)| name)
+                            .unwrap_or_else(|| {
+                                // printc.cc:999-1001: default field name
+                                // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
+                                format!("field_0x{:x}", in1const)
+                            })
+                    };
+                    self.emit.print(if flex { "." } else { "->" });
                     self.emit.print(&fieldname);
                 } else if is_array {
-                    // printc.cc:1098-1137: array — PTRSUB(*,0) switches to
-                    // element-pointer view. valueon: `in0[0]`; !valueon: `*in0`
-                    // (the !flex arms; Rugra has no isValueFlexible).
+                    // printc.cc:1098-1141: array — PTRSUB(*,0) switches to
+                    // element-pointer view. valueon: `in0[0]`; !valueon:
+                    // `*in0` (the !flex arms). flex (PRINTC-C3FLEX-
+                    // DOTFORM-0001) absorbs the dereference into in0's
+                    // defining op (cc:1113-1117/1128-1133): no `*` prefix
+                    // and the load-value mod flip around the base push.
+                    let flex = op
+                        .get_in(0)
+                        .map(|a| Self::is_value_flexible(&a.read().unwrap()))
+                        .unwrap_or(false);
                     if valueon {
                         if let Some(in0) = op.get_in(0) {
+                            let saved_mods = self.mods;
+                            if flex {
+                                self.mods |= print_mods::PRINT_LOAD_VALUE;
+                            }
                             self.push_varnode(&in0.read().unwrap(), Some(op));
+                            self.mods = saved_mods;
                         }
                         self.emit.print("[0]");
                     } else {
-                        // EMIT *(in0)
-                        self.emit.print("*");
+                        // EMIT *(in0) — !flex; flex emits (in0) bare.
+                        if !flex {
+                            self.emit.print("*");
+                        }
                         if let Some(in0) = op.get_in(0) {
+                            let saved_mods = self.mods;
+                            if flex {
+                                self.mods |= print_mods::PRINT_LOAD_VALUE;
+                            }
                             self.push_varnode(&in0.read().unwrap(), Some(op));
+                            self.mods = saved_mods;
                         }
                     }
                 } else if meta == TypeMetatype::Spacebase {
@@ -11228,8 +14205,8 @@ impl PrintC {
                     // varnode's SymbolEntry (variable.cc:419-432 updateSymbol),
                     // so the Rust form consults the high's symbol field and
                     // falls back to the in(1) mapentry.
-                    let (symbol, sym_off) = match op.get_in(1) {
-                        None => (None, -1),
+                    let (symbol, sym_entry, sym_off) = match op.get_in(1) {
+                        None => (None, None, -1),
                         Some(a) => {
                             let in1_vn = a.read().unwrap();
                             let sym = in1_vn
@@ -11240,11 +14217,12 @@ impl PrintC {
                                         .get_symbol_entry()
                                         .map(|e| e.read().unwrap().get_symbol())
                                 });
+                            let entry = in1_vn.get_symbol_entry();
                             let off = in1_vn
                                 .get_high()
                                 .map(|h| h.read().unwrap().get_symbol_offset())
                                 .unwrap_or(-1);
-                            (sym, off)
+                            (sym, entry, off)
                         }
                     };
                     let mut valueon_arm = valueon;
@@ -11277,13 +14255,26 @@ impl PrintC {
                         // 1084-1093: off = high->getSymbolOffset();
                         //   off==0 -> pushSymbol; else pushPartialSymbol
                         //   (allowCast=false at this call site, printc.cc:1092).
+                        // Both oracle paths open with pushSymbolScope
+                        // (cc:1919 / the 1947 partial walk), so the display
+                        // name carries the same MINIMAL_NAMESPACES prefix
+                        // decision (PRINTC-SPACEBASE-SCOPEPREFIX-0001,
+                        // legacy sync of the RPN arm).
                         if sym_off == 0 {
-                            let name = sym.get_display_name().to_string();
+                            let name = format!(
+                                "{}{}",
+                                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                                sym.get_display_name()
+                            );
                             drop(sym);
                             self.push_symbol(&name, false, true, false, false);
                         } else {
                             let sym_type = sym.get_type().map(|t| t.as_ref().clone());
-                            let name = sym.get_display_name().to_string();
+                            let name = format!(
+                                "{}{}",
+                                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                                sym.get_display_name()
+                            );
                             drop(sym);
                             self.push_partial_symbol(
                                 &name,
@@ -11416,7 +14407,7 @@ impl PrintC {
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing();
         let out_dt = op
             .get_out()
-            .and_then(|a| a.read().unwrap().get_high_type_def_facing());
+            .and_then(|a| self.vn_high_type_def_facing_snap(&a.read().unwrap()));
         // printc.cc:452-458: if (dt->isPointerToArray()) { if (checkAddressOfCast(op)) {...} }
         if let Some(ref dt) = out_dt {
             if Self::is_pointer_to_array(dt) {
@@ -11427,9 +14418,7 @@ impl PrintC {
                 let in0_is_array = op
                     .get_in(0)
                     .map(|a| {
-                    a.read()
-                            .unwrap()
-                            .get_high_type_read_facing(op, 0)
+                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
                 })
@@ -11472,33 +14461,48 @@ impl PrintC {
             match ct.get_metatype() {
                 crate::type_system::TypeMetatype::Int
                 | crate::type_system::TypeMetatype::Uint if !ct.is_char_print() => {
-                    self.emit.print(&self.integer_text(
+                    // printc.cc:1750-1764 push_integer with the vn's
+                    // explicit-print flags (cc:1296-1312/1362-1365).
+                    let (fu, fs) = Self::constant_print_flags(vn);
+                    self.emit.print(&self.integer_text_flagged(
                         val, ct.get_size(),
                         ct.get_metatype() == crate::type_system::TypeMetatype::Int,
-                        display_format::DEFAULT,
+                        display_format::DEFAULT, fu, fs,
                     ));
                     return;
                 }
                 _ => {}
             }
+        } else {
+            // printc.cc:1766-1768: TYPE_UNKNOWN → push_integer(val,
+            // ct->getSize(), false, ...) — an untyped constant NEVER takes
+            // a character literal; 0x26 renders as `0x26` (hex via
+            // mostNaturalBase, printc.cc:1325-1337). The vn flags still
+            // reach push_integer's suffix decision.
+            // STUBLEAK-CHARPRINT-LOOPCONST-0001.
+            let (fu, fs) = Self::constant_print_flags(vn);
+            self.emit.print(&self.integer_text_flagged(
+                val, sz, false, display_format::DEFAULT, fu, fs,
+            ));
+            return;
         }
         if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else if val > 0x1000 { self.emit.print(&format!("0x{:x}", val)); }
         else { self.emit.print(&format!("{}", val)); }
     }
 
-    // Ghidra: printc.cc:820 PrintC::pushCharConstant
+    // Ghidra: printc.cc:1606 PrintC::pushCharConstant
     pub fn push_char_constant(&mut self, val: u64, _vn: &Varnode) {
         if (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else { self.emit.print(&format!("0x{:x}", val)); }
     }
 
-    // Ghidra: printc.cc:850 PrintC::pushEnumConstant
+    // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
     pub fn push_enum_constant(&mut self, val: u64, _vn: &Varnode) {
         self.emit.print(&format!("0x{:x}", val));
     }
 
-    // Ghidra: printc.cc:880 PrintC::pushBoolConstant
+    // Ghidra: printc.cc:1488 PrintC::pushBoolConstant
     pub fn push_bool_constant(&mut self, val: u64, _vn: &Varnode) {
         self.emit.print(if val != 0 { "true" } else { "false" });
     }
@@ -11821,7 +14825,7 @@ impl PrintC {
             .unwrap_or(false)
     }
 
-    // Ghidra: printc.cc:920 PrintC::pushEquate
+    // Ghidra: printc.cc:1818 PrintC::pushEquate
     pub fn push_equate(&mut self, val: u64, sz: usize, vn: &Varnode) {
         self.push_constant(val, sz, vn);
     }
@@ -11873,20 +14877,36 @@ impl PrintC {
             return;
         }
         // printc.cc:3211-3213: tagLine(0); emitLabel(bl); print(COLON).
-        self.emit.tag_line(0);
+        // tagLine(0) is the ONE-ARGUMENT absolute virtual (hh:180): the
+        // label lands at column 0 regardless of nesting depth — NOT the
+        // relative tagLine() break at the current indent level.
+        self.emit.tag_line_indent(0);
         self.emit.print(&format!("{}:", self.code_label(addr)));
     }
 
-    // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement
+    // Ghidra: printc.cc:3219 PrintC::emitAnyLabelStatement
     pub fn emit_any_label_statement(
         &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
+        // printc.cc:3222: if (bl->isLabelBumpUp()) return; // Label printed
+        // by someone else — the f_label_bumpup walk (markLabelBumpUp,
+        // blockaction.cc:2195 call site → block.cc:3316/3426/3454 loop
+        // overrides) flags every loop's front chain, so the label for a goto
+        // into a loop header prints at the enclosing loop construct's entry
+        // call, never at the flagged leaf's own emission point.
+        if block_arc.read().unwrap().get_flags()
+            & crate::block::block_flags::LABEL_BUMPUP
+            != 0
+        {
+            return;
+        }
         // printc.cc:3219-3226 emitAnyLabelStatement:
-        //   if (bl->isLabelBumpUp()) return;   — Rugra transport:
-        //   printed_labels (address-keyed) suppresses re-prints of a shared
-        //   leaf (Rugra duplicates Basics, not BlockCopies).
         //   bl = bl->getFrontLeaf(); if (bl == 0) return;
         //   emitLabelStatement(bl);
+        //   (printed_labels: Rugra's address-keyed transport suppressing
+        //   re-prints of a shared leaf — Rugra duplicates Basics, not
+        //   BlockCopies — layered on top of the oracle's structural
+        //   once-only guarantee.)
         // printc.cc:3198-3214 emitLabelStatement (structured arm):
         //   if (isSet(only_branch)) return;
         //   if (!bl->isUnstructuredTarget()) return;
@@ -11931,7 +14951,9 @@ impl PrintC {
                     return;
                 }
                 if self.printed_labels.insert(addr) {
-                    self.emit.tag_line(0);
+                    // printc.cc:3211 tagLine(0) — absolute column 0 (the
+                    // one-argument virtual), not the relative tagLine().
+                    self.emit.tag_line_indent(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             } else if matches!(
@@ -11962,7 +14984,9 @@ impl PrintC {
                     && self.pending_goto_labels.contains(&addr)
                     && self.printed_labels.insert(addr)
                 {
-                    self.emit.tag_line(0);
+                    // printc.cc:3211 tagLine(0) — absolute column 0 (the
+                    // one-argument virtual), not the relative tagLine().
+                    self.emit.tag_line_indent(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             }
@@ -12034,6 +15058,7 @@ impl PrintC {
     /// `while(...)` branch instead; we defensively no-op here.
     pub fn emit_for_loop(
         &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         bl: &crate::block::BlockWhileDo,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
@@ -12041,10 +15066,15 @@ impl PrintC {
         // cc:2963-2964: pushMod(); unsetMod(no_branch|only_branch);
         self.push_mod();
         self.unset_mod(print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
-        // cc:2965: emitAnyLabelStatement(bl);
-        // (label emission requires the block Arc; Rugra's WhileDo label path
-        // is handled by emit_block_structured before dispatching here, so we
-        // skip the redundant label emission to avoid double-printing.)
+        // cc:2965: emitAnyLabelStatement(bl) — construct-entry label print
+        // site (same per-construct placement as the whiledo sibling; see
+        // the cc:3014 note). The former skip assumed the dispatcher's
+        // transport call covered the WhileDo, but emit_structured_list
+        // (cc:2795-2812) and emit_switch_case_body (cc:3339-3341) dispatch
+        // constructs directly, bypassing emit_block_structured — the label
+        // for a goto into a for-loop header needs this call. Idempotent
+        // with the dispatcher call via the printed_labels once-guard.
+        self.emit_any_label_statement(block_arc);
         // cc:2966-2967: emitCommentBlockTree(condBlock); emit->tagLine();
         self.emit_comment_block_tree(&bl.condition);
         self.emit.tag_line(0);
@@ -12482,14 +15512,25 @@ impl PrintC {
         }
         // cc:2772: popMod();
         self.pop_mod();
-        // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine(); emitGotoStatement(...); }
+        // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine();
+        // emitGotoStatement(bl->getGotoTarget(),bl->gototype); }
+        // PRINTC-GOTOPRINTS-0001 target switch: emitGotoStatement receives
+        // the live FlowBlock target and emitLabel resolves
+        // getFrontLeaf()->subBlock(0)->getEntryAddr (printc.cc:3167-3170).
+        // The legacy typed `goto_target` projection is always None (the
+        // collapse graph's leaves are dyn-coerced BlockCopys; see the field
+        // doc, block.rs BlockGoto::goto_target), so reading it produced
+        // addr=0 and the zero-addr defense suppressed the goto statement
+        // (observed: my_get_token `goto joined_r0x001037b2;` label-only).
+        // `target_dyn` is Ghidra's gototarget pointer (block.hh:548) and
+        // flow_entry_address is the emitLabel address chain.
         let (prints, target_addr, gt) = {
             let bl = block_arc.read().unwrap();
             if let Some(g) = bl.as_any().downcast_ref::<crate::block::BlockGoto>() {
                 let addr = g
-                    .goto_target
+                    .target_dyn
                     .as_ref()
-                    .map(|t| t.read().unwrap().start_addr.as_u64())
+                    .and_then(|t| Self::flow_entry_address(t))
                     .unwrap_or(0);
                 // block.cc:2884-2888 parent-present comparison vs the
                 // cc:2889 null-parent false.
@@ -12512,10 +15553,12 @@ impl PrintC {
                 _ => crate::op::branch_type::GOTO,
             };
             self.emit_goto_statement(target_addr, bt);
+            // cc:2775-2778 discharged: the component expressed its own exit.
+            self.case_exit_stmt_printed = true;
         }
     }
 
-    // Ghidra: printc.cc:2650 PrintC::docFunction comment setup
+    // Ghidra: printc.cc:2641 PrintC::docFunction comment setup
     /// Load the function's comments into the sorter. Faithful to the
     /// `commsorter.setupFunctionList(instr_comment_type|head_comment_type,
     /// fd, *fd->getArch()->commentdb, option_unplaced)` step of
@@ -12543,7 +15586,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:2684 PrintC::emitBlockBasic setupBlockList
+    // Ghidra: printc.cc:2678 PrintC::emitBlockBasic setupBlockList
     /// Open a basic block's comment window (`commsorter.setupBlockList(bl)`,
     /// printc.cc:2684 / comment.cc:379-390). Exposed for the
     /// printc_warning oracle fixture, which drives the emitBlockBasic
@@ -12993,16 +16036,23 @@ impl PrintC {
     /// the parameter list (emitPrototypeInputs), closes the paren, closes the
     /// group, ends the func proto.
     ///
-    /// Rugra adaptation: there is no `option_convention` field / no OpToken
-    /// `function_call` spacing struct on the Rust PrintC (the calling-
-    /// convention printing is gated on `option_convention` which defaults to
-    /// false in Ghidra's PrintC::resetDefaultsPrintC). We faithfully preserve
-    /// the branch (it's just unreachable until option_convention is wired),
-    /// and use literal spacing for `function_call.spacing/bump` (0 indent).
+    /// Rugra adaptation: the calling-convention printing is gated on
+    /// `option_convention` (which defaults to true in Ghidra's
+    /// PrintC::resetDefaultsPrintC, printc.cc:1584; `printModelInDecl` is
+    /// false for unknown models, so the token rarely appears). The
+    /// `function_call.spacing/bump` values come from the RPN token-table
+    /// entry mirroring printc.cc:28 (postsurround, spacing 0, bump 10);
+    /// both `emit->spaces` calls (printc.cc:2594/2596) are emitted as
+    /// tokenbreaks exactly as the oracle does — under EmitPrettyPrint they
+    /// carry the signature wrap break points (PROTOWRAP-PRINTC-0001),
+    /// under EmitNoMarkup spaces(0,·) folds to nothing (prettyprint.cc:46).
     ///
     /// Alignment Evidence:
     /// - References/output params: `fd` borrowed read-only (const Funcdata*).
-    ///   `proto` is `&fd.getFuncProto()`. No mutation of fd.
+    ///   `proto` is `&fd.getFuncProto()`. No mutation of fd. `id1`/`id2`
+    ///   group ids flow open→close unmodified (closeParen internally
+    ///   closeGroup(id2), printc.cc:1104-1109; the outer closeGroup(id1)
+    ///   pairs the openGroup at cc:2590).
     /// - Loop bounds/order: parameter list order is `proto.parameters[i]`
     ///   for i in 0..numParams() (emitPrototypeInputs, printc.cc:2222-2255);
     ///   comma-separated, `void` when sz==0, `...` appended if isDotdotdot.
@@ -13033,21 +16083,41 @@ impl PrintC {
             }
         }
         // int4 id1 = emit->openGroup();
+        let id1 = self.emit.open_group();
         // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
         // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
-        let display_name = sanitize_c_ident(fd.get_name());
+        // The name is emitted VERBATIM (printc.cc:2592) — no identifier
+        // scrubbing, so `parseconfig.constprop.0` keeps its dots.
+        // STUBLEAK-DOTNAME-SANITIZE-0001.
+        let display_name = fd.get_name().to_string();
         self.emit.tag_func_name(&display_name, 0);
-        // emit->spaces(function_call.spacing, function_call.bump);
-        // function_call.spacing==0, so no spaces between name and '('.
+        // emit->spaces(function_call.spacing,function_call.bump);
+        // printc.cc:2594: the tokenbreak between funcname and '('.
+        // function_call (printc.cc:28) = { spacing=0, bump=10 }. Under
+        // EmitPrettyPrint spaces(0,10) is NOT a no-op: it is a tokenbreak
+        // (prettyprint.hh:914 spac_t/tokenbreak) — zero mandatory spaces
+        // with an optional line break indenting +10. Reading spacing==0 as
+        // "no spaces, skip" dropped the break point and let signature wrap
+        // collapse onto the parameter type_expr_space breaks (5 params/line,
+        // continuation indent 0) instead of the golden form (break at the
+        // open-paren column) — PROTOWRAP-PRINTC-0001.
+        let (fc_spacing, fc_bump) = {
+            let fc = &self.rpn_token_table[self.rpn_tok_function_call];
+            (fc.spacing, fc.bump)
+        };
+        self.emit.spaces(fc_spacing, fc_bump);
         // int4 id2 = emit->openParen(OPEN_PAREN);
-        self.emit.open_paren("(");
-        // emit->spaces(0, function_call.bump);
+        let id2 = self.emit.open_paren("(");
+        // emit->spaces(0,function_call.bump);
+        // printc.cc:2596: the tokenbreak after '(' — same bump=10 form.
+        self.emit.spaces(0, fc_bump);
         // pushScope(fd->getScopeLocal());   // enter function's scope
         // emitPrototypeInputs(proto);
         self.emit_prototype_inputs(proto);
         // emit->closeParen(CLOSE_PAREN,id2);
-        self.emit.close_paren(")", 0);
+        self.emit.close_paren(")", id2);
         // emit->closeGroup(id1);
+        self.emit.close_group(id1);
         // emit->endFuncProto(id);
         self.emit.end_func_proto();
     }
@@ -13090,6 +16160,70 @@ impl PrintC {
         self.push_type(outtype);
         // emit->endReturnType(id);
         self.emit.end_return_type();
+    }
+
+    // RUGRA-GLUE: param_backing_symbol (print-side projection of
+    //   ProtoStoreSymbol::getInput, fspec.cc:3244-3255)
+    /// Fetch the print-time backing Symbol of prototype input slot `slot`.
+    ///
+    /// The decompiled function's FuncProto carries a ScopeLocal-backed
+    /// ProtoStoreSymbol (`FuncProto::setScope`, fspec.cc:3881-3885, wired at
+    /// funcdata.cc:69), whose `getInput(i)` freshly reads
+    /// `scope->getCategorySymbol(Symbol::function_parameter, i)`
+    /// (fspec.cc:3244-3255) — the SAME Symbol object
+    /// `ActionNameVars::lookForBadJumpTables` renames (coreaction.cc:2799,
+    /// `renameSymbol` mutates name+displayName in place, database.cc:2152),
+    /// so a rename is visible through the proto parameter at print time.
+    /// Rugra's FuncProto keeps only the flat parameter store; the folded
+    /// install (coreaction.rs store_install, fspec.cc:3147-3183) maintains
+    /// the same category slots on `varmap::ScopeLocal`, so this projection
+    /// reads the print snapshot (`self.scope`, cloned in doc_function after
+    /// all Actions) exactly like `ProtoStoreSymbol::getInput` reads the live
+    /// category table.
+    fn param_backing_symbol(
+        &self, slot: usize,
+    ) -> Option<&crate::varmap::LocalSymbol> {
+        let scope = self.scope.as_ref()?;
+        let idx = scope.get_category_symbol(
+            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+            slot as i32,
+        )?;
+        scope.symbols.get(idx)
+    }
+
+    // RUGRA-GLUE: param_backing_symbol_for_vn (storage-keyed twin of
+    //   param_backing_symbol for the leaf-name path)
+    /// Fetch the function_parameter-category Symbol whose static storage
+    /// whole-covers `vn` (same address space, `start <= offset` and
+    /// `offset + size <= start + size`, non-dynamic).
+    ///
+    /// The leaf-name oracle path (`pushVnExplicit` -> `pushSymbolDetail`,
+    /// printlanguage.cc:218-262) resolves through the HighVariable's symbol;
+    /// a register INPUT's high symbol is exactly the ProtoStoreSymbol
+    /// category symbol at that storage (attached via `linkSymbol` ->
+    /// `queryProperties` at the input's entry-1 usepoint). Gating on the
+    /// category (not the raw high->symbol channel) keeps Rugra's unsynced
+    /// auto-name symbols (`in_register_...`, no_category creations of the
+    /// linkSymbol bridge) OUT of this lookup — the P0.4 proto-name fallback
+    /// below still covers them.
+    fn param_backing_symbol_for_vn(
+        &self, vn: &Varnode,
+    ) -> Option<&crate::varmap::LocalSymbol> {
+        let scope = self.scope.as_ref()?;
+        let off = vn.get_offset();
+        let size = vn.get_size() as u64;
+        scope
+            .symbols
+            .iter()
+            .filter(|s| {
+                s.category == crate::varmap::symbol_category::FUNCTION_PARAMETER
+                    && !s.is_dynamic
+                    && s.space == vn.get_space()
+            })
+            .find(|s| {
+                let sym_size = if s.size >= 1 { s.size as u64 } else { 1 };
+                s.start <= off && off.saturating_add(size) <= s.start.saturating_add(sym_size)
+            })
     }
 
     // Ghidra: printc.cc:2222 PrintC::emitPrototypeInputs
@@ -13144,9 +16278,31 @@ impl PrintC {
                 // Symbol *sym = param->getSymbol();
                 // printComma = true;
                 print_comma = true;
-                // Rugra ProtoParameter has no backing Symbol yet; the
-                // sym!=null branch (emitVarDecl) is unreachable. We take the
-                // else branch: pushTypeStart + blank atom + pushTypeEnd.
+                // PRINTC-BADJT-PARAMSYM-0001: the backing-Symbol channel.
+                // ProtoStoreSymbol::getInput(i) reads the ScopeLocal's
+                // function_parameter slot-i Symbol (fspec.cc:3244-3255);
+                // emitPrototypeInputs prints THAT object — emitVarDecl uses
+                // the SYMBOL's type and the SYMBOL's displayName
+                // (printc.cc:2239-2240 -> 2497-2508), so an
+                // ActionNameVars rename (UNRECOVERED_JUMPTABLE,
+                // coreaction.cc:2799-2801) reaches the signature through
+                // the mutated Symbol. Rugra's flat FuncProto parameters
+                // never diverge observationally from the category symbols
+                // except through exactly those renames (the folded install
+                // names both sides param_N from the same commit,
+                // fspec.cc:3147-3215), so this branch changes output only
+                // where the oracle's render also changed — the renamed
+                // param slots.
+                if let Some(sym) = self.param_backing_symbol(i).cloned() {
+                    // emitVarDecl(sym) — pushTypeStart(sym->getType(),false)
+                    // + pushSymbol(sym,null,null) + pushTypeEnd + recurse.
+                    self.emit_local_symbol_decl(&sym);
+                    continue;
+                }
+                // Rugra ProtoParameter has no backing Symbol (no scope
+                // snapshot or empty category slot): the else branch
+                // (printc.cc:2242-2247) emits the proto type with a blank
+                // name atom.
                 // pushTypeStart(param->getType(),true);
                 self.push_type_start_opt(Some(&param.data_type), true);
                 // pushAtom(Atom(EMPTY_STRING,blanktoken,no_color));
@@ -13163,11 +16319,15 @@ impl PrintC {
                 // the base type and the next token, ptr_expr has spacing=0,
                 // so a trailing-`*` type renders `char *pattern` while a
                 // base type renders `int argc`.
-                let pname = sanitize_c_ident(&param.name);
+                // Parameter names pass through RAW like every other symbol
+                // name in the oracle (printc.cc:2222-2255
+                // emitPrototypeInputs → emitVarDecl(sym) at :2240 emits the
+                // backing Symbol's name verbatim).
+                let pname = &param.name;
                 if !Self::decl_prefix_ends_with_star(&param.data_type) {
                     self.emit.print(" ");
                 }
-                self.emit.tag_variable(&pname, 0);
+                self.emit.tag_variable(pname, 0);
             }
         }
         // if (proto->isDotdotdot()) { if (sz != 0) emit->print(COMMA); emit->print(DOTDOTDOT); }
@@ -13471,11 +16631,23 @@ impl PrintC {
                     // cc:155-157: ct = proto->getOutputType();
                     Some(proto) => Some(proto.return_type.clone()),
                     // cc:158-159: ct = glb->types->getTypeVoid();
-                    None => Some(Arc::new(Datatype::Void(TypeBase::new(
-                        "void".to_string(),
-                        0,
-                        TypeMetatype::Void,
-                    )))),
+                    // PRINTC-BADJT-PARAMSYM-0001: an ANONYMOUS proto-less
+                    // TypeCode breaks here instead of drilling to void. The
+                    // oracle's `TypeFactory::getTypeCode()` (type.cc:3692)
+                    // builds `TypeCode tmp` nameless, but `findAdd` ->
+                    // `findNoName` (type.cc:3454-3476) folds it onto the
+                    // spec coretype `<type name="code" metatype="code"/>`
+                    // (sleigh_arch.cc buildCoreTypes), so every oracle
+                    // code-pointer carries the NAMED "code" base and
+                    // buildTypeStack's named-break fires at cc:151 — the
+                    // oracle never renders pointer-to-code as
+                    // `void (*x)`. Rugra's factory instances can mint
+                    // anonymous proto-less Code layers (the inputLocal
+                    // code-pointer channel dedupes per-tree, and the fd-side
+                    // factory view bypasses the arch coretype table), so the
+                    // same fold is applied HERE: the anonymous proto-less
+                    // Code layer IS the core "code" base for stack purposes.
+                    None => break,
                 },
                 _ => None,
             };
@@ -13555,7 +16727,22 @@ impl PrintC {
         // printc.cc:280-289: anonymous base types spell genericTypeName;
         // named bases spell getDisplayName.
         let base_text = if base.get_name().is_empty() {
-            Self::generic_type_name(base)
+            // PRINTC-BADJT-PARAMSYM-0001: the anonymous proto-less Code
+            // base is the print alias of the oracle's named coretype
+            // "code" (findNoName fold, type.cc:3454-3476 vs
+            // sleigh_arch.cc buildCoreTypes) — build_type_stack breaks
+            // there, and the oracle base atom spells the coretype name
+            // `code` (e.g. `code *UNRECOVERED_JUMPTABLE`,
+            // ghidra_httpd_1204.c:4914). Every other anonymous metatype
+            // keeps genericTypeName.
+            if matches!(
+                base.as_ref(),
+                Datatype::Code(c) if c.proto.is_none()
+            ) {
+                "code".to_string()
+            } else {
+                Self::generic_type_name(base)
+            }
         } else {
             base.get_display_name().to_string()
         };
@@ -13736,22 +16923,18 @@ impl PrintC {
                         self.push_prototype_inputs(proto);
                         self.emit.print(")");
                     }
-                    // cc:337-339: an empty list of parameters — the
-                    // EMPTY_STRING blank atom prints nothing between the
-                    // function_call parens. DIVERGENCE: Ghidra 12.0.4's loop
-                    // does NOT advance `ct` on this arm, so a proto-less
-                    // ANONYMOUS TypeCode spins forever pushing blank atoms
-                    // (verified: the oracle fixture hangs). Rugra instead
-                    // walks buildTypeStack's stack, whose no-proto CODE layer
-                    // drills to the named `void` (cc:158-159) and terminates.
-                    // Conservative, documented divergence: the oracle has no
-                    // terminating output for this input, so no behavior can
-                    // be matched; production never renders declarations of
-                    // proto-less anonymous code types (function-pointer decls
-                    // always carry prototypes). Fixture coverage of the drill
-                    // itself is stage=startonly
-                    // (printc_anonymous_pointer_decl_1204).
-                    None => self.emit.print("()"),
+                    // cc:337-339 + PRINTC-BADJT-PARAMSYM-0001: a proto-less
+                    // Code layer is now always the stack BASE (the
+                    // findNoName fold in build_type_stack breaks there), so
+                    // this arm fires only in base position, where the
+                    // oracle's named-break at cc:322-324 (`getName().size()`)
+                    // emits NO suffix — `code *UNRECOVERED_JUMPTABLE`, no
+                    // `()`. The old "()" divergence arm (oracle hangs
+                    // spinning blank atoms on the anonymous no-proto Code
+                    // loop, verified by fixture) is unreachable: the
+                    // mid-stack anonymous no-proto Code layer that used to
+                    // reach it no longer exists.
+                    None => {}
                 },
                 _ => break,
             }
@@ -13968,10 +17151,46 @@ impl PrintC {
     /// builds them into its ostringstream before pushing the atom. Shared
     /// by the direct-emit helper and the RPN constant leaf
     /// (make_atom_for_vn's pushConstant dispatch) so both paths print one
-    /// form.
+    /// form. This vn-less form corresponds to the oracle call sites that
+    /// pass `vn == 0` (e.g. printc.cc:327/1054/1127) or whose types can
+    /// never carry the explicit-print flags (charPrint/enum constants —
+    /// cast.cc:50-51 rejects both in markExplicitUnsigned), so the
+    /// unsigned/long suffixes are provably absent and default to false.
     fn integer_text(&self, val: u64, sz: usize, sign: bool,
                     display_format: u32) -> String {
-        self.integer_text_with_mods(val, sz, sign, display_format, self.mods)
+        self.integer_text_flagged(val, sz, sign, display_format, false, false)
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// The vn-bearing form of [`Self::integer_text`]: `force_unsigned`/
+    /// `force_sized` are the constant varnode's `unsignedprint`/`longprint`
+    /// addlflags as read by push_integer at printc.cc:1296-1312 (null/annotation
+    /// vn ⇒ false). Only non-char, non-enum integer constants reach here with
+    /// a live flag (cast.cc:38-108 admission).
+    fn integer_text_flagged(&self, val: u64, sz: usize, sign: bool,
+                            display_format: u32,
+                            force_unsigned: bool, force_sized: bool) -> String {
+        self.integer_text_with_mods(
+            val, sz, sign, display_format, self.mods,
+            force_unsigned, force_sized,
+        )
+    }
+
+    // Ghidra: printc.cc:1296-1312 PrintC::push_integer
+    /// Read the explicit-print flags off a constant varnode:
+    /// `force_unsigned_token = vn->isUnsignedPrint()` /
+    /// `force_sized_token = vn->isLongPrint()` behind the
+    /// `vn != 0 && !vn->isAnnotation()` gate. ActionSetCasts is the only
+    /// writer (cast.cc:69/101 setUnsignedPrint/setLongPrint).
+    fn constant_print_flags(vn: &Varnode) -> (bool, bool) {
+        use crate::varnode::addl_flags;
+        if vn.is_annotation() {
+            return (false, false);
+        }
+        (
+            vn.addlflags & addl_flags::UNSIGNED_PRINT != 0,
+            vn.addlflags & addl_flags::LONG_PRINT != 0,
+        )
     }
 
     // Ghidra: printc.cc:1288 PrintC::push_integer
@@ -13979,14 +17198,25 @@ impl PrintC {
     /// the scoped modifier view (printlanguage.hh:283-289 pushMod/popMod
     /// semantics, e.g. the `force_hex unless force_dec` view the default
     /// cast arm of `pushConstant` installs at printc.cc:1810-1813).
+    /// `force_unsigned`/`force_sized` carry the varnode's
+    /// `unsignedprint`/`longprint` addlflags (printc.cc:1296-1297
+    /// `force_unsigned_token = vn->isUnsignedPrint()` /
+    /// `force_sized_token = vn->isLongPrint()`), which
+    /// `ActionSetCasts` set via `CastStrategy::markExplicitUnsigned` /
+    /// `markExplicitLongSize` (cast.cc:38-108 through coreaction.cc:2664-2665).
     fn integer_text_with_mods(
         &self, val: u64, sz: usize, sign: bool,
                               display_format: u32, mods: u32,
+                              force_unsigned: bool, force_sized: bool,
     ) -> String {
         use crate::printlanguage::{format_binary, most_natural_base};
         let mut v = val;
         let mut print_negsign = false;
-        if sign && display_format != display_format::CHAR {
+        // printc.cc:1313-1320: the signed print branch, whose closing
+        // statement resets force_unsigned_token to false — a signed
+        // rendering never carries the U suffix (the flip itself is
+        // cc:1314-1318).
+        let force_unsigned = if sign && display_format != display_format::CHAR {
             // uintb mask = calc_mask(sz);  (printc.cc:1314)
             let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
             let flip = v ^ mask;
@@ -13994,7 +17224,10 @@ impl PrintC {
             if print_negsign {
                 v = flip.wrapping_add(1);
             }
-        }
+            false
+        } else {
+            force_unsigned
+        };
         // displayFormat decision (printc.cc:1325-1337).
         let fmt = if display_format != display_format::DEFAULT {
             display_format
@@ -14030,6 +17263,15 @@ impl PrintC {
                 t.push_str("0b");
                 t.push_str(&format_binary(v));
             }
+        }
+        // printc.cc:1362-1365: the explicit-print suffixes, appended after
+        // the numeric/character text — 'U' for unsignedprint, sizeSuffix
+        // ("L" here, see the field doc) for longprint.
+        if force_unsigned {
+            t.push('U');
+        }
+        if force_sized {
+            t.push_str(self.size_suffix);
         }
         t
     }
@@ -14099,9 +17341,9 @@ impl PrintC {
         &mut self, val: u64,
                                     ct: &crate::type_system::datatype::TypeEnum,
     ) {
-        if let Some(name) = ct.values.get(&val) {
-            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)).
-            self.emit.print(name);
+        if let Some(text) = enum_match_text(val, ct) {
+            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)) etc.
+            self.emit.print(&text);
         } else {
             // printc.cc:1684-1686: no named match -> push_integer.
             self.push_integer(val, ct.base.size, false, display_format::DEFAULT);
@@ -14109,28 +17351,7 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1744 PrintC::pushConstant
-    /// Dispatch a typed constant to the right pusher based on the datatype's
-    /// metatype. Faithful port of `PrintC::pushConstant` (printc.cc:1744-1816)
-    /// — the master constant-dispatch method (audit P0-2).
-    ///
-    /// Ghidra's switch on `ct->getMetatype()`:
-    ///   - TYPE_UINT/INT: charPrint -> pushCharConstant; enumType ->
-    ///     pushEnumConstant; else push_integer (signed for INT).
-    ///   - TYPE_UNKNOWN: push_integer(unsigned).
-    ///   - TYPE_BOOL: pushBoolConstant.
-    ///   - TYPE_VOID: throw.
-    ///   - TYPE_PTR/TYPE_PTRREL: option_NULL && val==0 -> nullToken; else if
-    ///     ptr-to-char pushPtrCharConstant, else if ptr-to-code
-    ///     pushPtrCodeConstant; else fall through to default.
-    ///   - TYPE_FLOAT: push_float.
-    ///   - default (struct/union/array/...): cast `(type)0xVAL`.
-    ///
-    /// Alignment evidence:
-    /// - Sort key: the metatype switch (printc.cc:1748-1805) is the
-    ///   load-bearing decision; each arm either `return`s or breaks to the
-    ///   default cast.
-    /// - Counter: default cast path pushes `typecast` op + pushType, then
-    ///   pushMod/setMod(force_hex)/push_integer/popMod (printc.cc:1807-1815).
+
     pub fn push_constant_typed(
         &mut self,
         val: u64,
@@ -14140,6 +17361,21 @@ impl PrintC {
     ) {
         let mt = ct.get_metatype();
         let sz = ct.get_size();
+        // printc.cc:1296-1312: the vn's explicit-print flags feed every
+        // push_integer dispatch in this function (vn==0 ⇒ false).
+        let (force_unsigned, force_sized) = vn
+            .map(Self::constant_print_flags)
+            .unwrap_or((false, false));
+        // push_integer's mut emitter body (integer_text + emit.print) with
+        // the flags threaded (cc:1362-1365 suffixes).
+        macro_rules! push_int_flagged {
+            ($sgn:expr) => {
+                self.emit.print(&self.integer_text_flagged(
+                    val, sz, $sgn, display_format::DEFAULT,
+                    force_unsigned, force_sized,
+                ))
+            };
+        }
         match mt {
             TypeMetatype::Uint => {
                 if ct.is_char_print() {
@@ -14148,10 +17384,10 @@ impl PrintC {
                     if let Datatype::Enum(e) = ct {
                         self.push_enum_constant_named(val, e);
                     } else {
-                        self.push_integer(val, sz, false, display_format::DEFAULT);
+                        push_int_flagged!(false);
                     }
                 } else {
-                    self.push_integer(val, sz, false, display_format::DEFAULT);
+                    push_int_flagged!(false);
                 }
             }
             TypeMetatype::Int => {
@@ -14161,14 +17397,14 @@ impl PrintC {
                     if let Datatype::Enum(e) = ct {
                         self.push_enum_constant_named(val, e);
                     } else {
-                        self.push_integer(val, sz, true, display_format::DEFAULT);
+                        push_int_flagged!(true);
                     }
                 } else {
-                    self.push_integer(val, sz, true, display_format::DEFAULT);
+                    push_int_flagged!(true);
                 }
             }
             TypeMetatype::Unknown => {
-                self.push_integer(val, sz, false, display_format::DEFAULT);
+                push_int_flagged!(false);
             }
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
@@ -14202,17 +17438,39 @@ impl PrintC {
                         }
                     }
                 }
-                // break; -> default cast (printc.cc:1790 + 1806-1815).
-                self.emit_default_cast_constant(val, ct);
+                // break; -> default cast (printc.cc:1790 + 1806-1815);
+                // cc:1814's push_integer passes vn — flags apply.
+                let t = self.default_cast_constant_text_flagged(
+                    val, ct, force_unsigned, force_sized,
+                );
+                self.emit.print(&t);
             }
             TypeMetatype::Float => {
                 // push_float (printc.cc:1380-1424): Rugra has no FloatFormat;
                 // emit FLOAT_UNKNOWN (printc.cc:1386 sentinel).
                 self.emit.print("FLOAT_UNKNOWN");
             }
+            // Rugra's Enum metatype is Ghidra's enum-int/uint collapse
+            // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.hh:490-494),
+            // so pushConstant's TYPE_UINT/TYPE_INT arms reach
+            // pushEnumConstant (printc.cc:1756/1763) — the getMatches
+            // named representation (enum_match_text), else the unsigned
+            // integer (printc.cc:1684-1686, `false` for enum_int too).
+            // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.cc:1475),
+            // so printConstant's TYPE_UINT/TYPE_INT arms reach
+            // pushEnumConstant (printc.cc:1756/1763) — member name on exact
+            // match, unsigned integer otherwise (printc.cc:1666-1691).
+            TypeMetatype::Enum => {
+                let text = self.enum_constant_text(val, ct);
+                self.emit.print(&text);
+            }
             _ => {
-                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
-                self.emit_default_cast_constant(val, ct);
+                // Struct/Union/Array/Code/Spacebase/PartialEnum-meta:
+                // default cast (cc:1814 push_integer with vn — flags apply).
+                let t = self.default_cast_constant_text_flagged(
+                    val, ct, force_unsigned, force_sized,
+                );
+                self.emit.print(&t);
             }
         }
     }
@@ -14228,7 +17486,20 @@ impl PrintC {
     /// The text core of [`Self::emit_default_cast_constant`]: the optional
     /// `(type)` cast prefix (1807-1809) and the force-hex integer literal
     /// (1810-1815, `pushMod`/`force_hex` unless `force_dec` is set).
+    /// vn-less callers map to the oracle's `vn == 0` push_integer sites;
+    /// the vn-bearing leaf passes the explicit-print flags
+    /// (`push_integer(val, ct->getSize(), false, tag, vn, op)` at cc:1814
+    /// reads unsignedprint/longprint the same way).
     fn default_cast_constant_text(&self, val: u64, ct: &Datatype) -> String {
+        self.default_cast_constant_text_flagged(val, ct, false, false)
+    }
+
+    // Ghidra: printc.cc:1806-1815 PrintC::pushConstant default arm
+    /// The vn-bearing form of [`Self::default_cast_constant_text`].
+    fn default_cast_constant_text_flagged(
+        &self, val: u64, ct: &Datatype,
+        force_unsigned: bool, force_sized: bool,
+    ) -> String {
         let mut t = String::new();
         if !self.option_nocasts {
             // pushOp(&typecast,op); pushType(ct);
@@ -14247,7 +17518,10 @@ impl PrintC {
             mods |= crate::printlanguage::modifiers::FORCE_HEX;
         }
         // The scoped-mods view for the nested integer_text decision.
-        let text = self.integer_text_with_mods(val, ct.get_size(), false, display_format::DEFAULT, mods);
+        let text = self.integer_text_with_mods(
+            val, ct.get_size(), false, display_format::DEFAULT, mods,
+            force_unsigned, force_sized,
+        );
         t.push_str(&text);
         t
     }
@@ -14334,13 +17608,57 @@ impl PrintC {
     pub fn push_partial_symbol(
         &mut self,
         sym_name: &str,
+        off: i64,
+        sz: i64,
+        ct: Option<&Datatype>,
+        outtype: Option<&Datatype>,
+        out_space_bigend: bool,
+        allow_cast: bool,
+    ) {
+        // printc.cc:1954-2042: the PartialSymbolEntry collection walk,
+        // shared with the leaf-atom text form
+        // ([`Self::partial_symbol_text`], PRINTC-GLOBALSYM-LEAF-PRIORITY-0001).
+        let (finalcast, entries) =
+            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        // printc.cc:2044-2047: final cast prefix
+        //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
+        //    pushType(finalcast); }`.
+        if let Some(ft) = &finalcast {
+            if !self.option_nocasts {
+                self.emit.print(&format!("({})", ft));
+            }
+        }
+        // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
+        self.emit.tag_variable(sym_name, 0);
+        for e in &entries {
+            self.emit.print(e);
+        }
+    }
+
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol (type-tree walk)
+    /// The pure type-tree walk of `PrintC::pushPartialSymbol`
+    /// (printc.cc:1954-2042), shared by the emitting entry point above
+    /// and the leaf-atom text builder [`Self::partial_symbol_text`]:
+    /// descends `ct = sym->getType()` collecting PartialSymbolEntry
+    /// tokens — TYPE_STRUCT/UNION -> findTruncation field `.field`
+    /// (printc.cc:1966-1985/2001-2016), TYPE_ARRAY -> getSubEntry
+    /// element `[N]` (1986-2000), other metatype + allowCast -> the
+    /// SUBPIECE-style cast arm (2018-2029) capturing the final-cast type
+    /// name, no good subtype -> the synthetic `unnamedField(off,sz)`
+    /// entry `._<off>_<sz>_` (2030-2041, printlanguage.cc:719-727).
+    /// Off==0 with sz covering the whole type stops the walk (1960-1964;
+    /// needsResolution rejection waived for TYPE_PTR). Returns
+    /// `(finalcast, entries)`; the caller renders
+    /// `(<finalcast>)sym<entries...>` (2044-2064).
+    fn partial_symbol_walk(
+        &self,
         mut off: i64,
         mut sz: i64,
         ct: Option<&Datatype>,
         outtype: Option<&Datatype>,
         out_space_bigend: bool,
         allow_cast: bool,
-    ) {
+    ) -> (Option<String>, Vec<String>) {
         let mut entries: Vec<String> = Vec::new();
         // printc.cc:1955: Datatype *finalcast = (Datatype *)0;
         let mut finalcast: Option<String> = None;
@@ -14391,7 +17709,7 @@ impl PrintC {
                 if let Some(outtype) = outtype {
                     // castStrategy->isSubpieceCastEndian(outtype,ct,off,
                     //   spc->isBigEndian()) — cast.rs:141 is the 1:1 port of
-                    // cast.cc:436-455.
+                    //   cast.cc:436-455.
                     if self
                         .cast_strategy
                         .is_subpiece_cast_endian(
@@ -14416,19 +17734,39 @@ impl PrintC {
                 break;
             }
         }
-        // printc.cc:2044-2047: final cast prefix
-        //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
-        //    pushType(finalcast); }`.
+        (finalcast, entries)
+    }
+
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol (text form)
+    /// Leaf-atom text form of `pushPartialSymbol`: the `(<finalcast>)`
+    /// prefix (printc.cc:2044-2047, honoring option_nocasts) followed by
+    /// the base symbol name and the entry chain (2049-2064). The RPN
+    /// leaf path cannot push separate op/atom pairs for the chain, so
+    /// the same walk renders into one atom string
+    /// (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001).
+    fn partial_symbol_text(
+        &self,
+        sym_name: &str,
+        off: i64,
+        sz: i64,
+        ct: Option<&Datatype>,
+        outtype: Option<&Datatype>,
+        out_space_bigend: bool,
+        allow_cast: bool,
+    ) -> String {
+        let (finalcast, entries) =
+            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        let mut text = String::new();
         if let Some(ft) = &finalcast {
             if !self.option_nocasts {
-                self.emit.print(&format!("({})", ft));
+                text.push_str(&format!("({})", ft));
             }
         }
-        // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
-        self.emit.tag_variable(sym_name, 0);
+        text.push_str(sym_name);
         for e in &entries {
-            self.emit.print(e);
+            text.push_str(e);
         }
+        text
     }
 
     // Ghidra: printc.cc:1861 PrintC::pushAnnotation
@@ -14565,8 +17903,8 @@ impl PrintC {
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                 ),
                 _ => (None, None),
             }
@@ -14603,8 +17941,8 @@ impl PrintC {
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                 ),
                 _ => (None, None),
             }
@@ -14626,7 +17964,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:754 PrintC::opHiddenFunc  (referenced by opIntZext/Sext)
+    // Ghidra: printc.cc:474 PrintC::opHiddenFunc  (referenced by opIntZext/Sext)
     /// Suppress this op entirely - its output is rendered inline by the
     /// consumer. Faithful to `PrintC::opHiddenFunc` (printc.cc:754-760):
     /// Ghidra pushes nothing (the op is implied). Rugra marks the op as
@@ -14712,7 +18050,7 @@ impl PrintC {
             // Field extraction from a piece-structured composite.
             if let Some(in0) = op.get_in(0) {
                 let vn = in0.read().unwrap();
-                if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
                     if ct.is_piece_structured() {
                         // byteOff = TypeOpSubpiece::computeByteOffsetForComposite(op)
                         // (typeop.cc:2195) — endianness-aware; Rugra's x86/x64
@@ -14810,8 +18148,8 @@ impl PrintC {
                 .unwrap_or(0);
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                     offset,
                 ),
                 _ => (None, None, offset),
@@ -15073,8 +18411,8 @@ impl PrintC {
         // cast.cc:253-255: explicit output -> empty branch -> falls to return false
         if out.is_explicit() { return false; }
         // outVn metatype (read-facing, via readOp)
-        let out_meta = out
-            .get_high_type_read_facing(read_op, 0)
+        let out_meta = self
+            .vn_high_type_read_facing_snap(&out, read_op, 0)
             .map(|t| t.get_metatype());
         let out_meta = match out_meta { Some(m) => m, None => return false ,
         };
@@ -15118,8 +18456,8 @@ impl PrintC {
                     return false;
                 }
                 // cast.cc:289-290: other metatype must match output metatype
-                let other_meta = other_vn
-                    .get_high_type_read_facing(read_op, 1 - slot as i32)
+                let other_meta = self
+                    .vn_high_type_read_facing_snap(&other_vn, read_op, 1 - slot as i32)
                     .map(|t| t.get_metatype());
                 match other_meta {
                     Some(m) if m == out_meta => true,
@@ -15141,6 +18479,71 @@ mod tests {
     use crate::address::Address;
     use crate::opcodes::OpCode;
     use crate::prettyprint::EmitNoMarkup;
+
+    #[test]
+    fn test_scope_rangemap_list_order_vhost_register_block() {
+        // ap_fini_vhost_config register-space entries (creation order,
+        // inclusive a..b, subsort = first-use offset), traced against
+        // rangemap.hh:221-277 splice semantics on 2026-09-26: the 4-byte
+        // RAX-family entry ends sooner and splices ahead of every same-base
+        // 8-byte entry; equal-range 8-byte entries order by subsort; the
+        // params keep their slot ahead of the later-appended far registers.
+        let entries = vec![
+            (0x38, 0x3f, (1u32, 184351u64), 0), // param_1
+            (0x30, 0x37, (1u32, 184351u64), 1), // param_2
+            (0x00, 0x03, (1u32, 184649u64), 2), // iVar7 (int, EAX-sized)
+            (0x00, 0x07, (1u32, 184424u64), 3), // lVar8
+            (0x00, 0x07, (1u32, 184598u64), 4), // puVar9
+            (0x00, 0x07, (1u32, 184968u64), 5), // plVar10
+            (0x00, 0x07, (1u32, 185274u64), 6), // puVar11
+            (0x00, 0x07, (1u32, 185760u64), 7), // uVar12
+            (0x10, 0x17, (1u32, 184649u64), 8), // extraout_RDX
+            (0x10, 0x17, (1u32, 184843u64), 9), // uVar13
+            (0x10, 0x17, (1u32, 185395u64), 10), // extraout_RDX_00
+            (0x10, 0x17, (1u32, 185442u64), 11), // extraout_RDX_01
+            (0x10, 0x17, (1u32, 185474u64), 12), // extraout_RDX_02
+            (0x18, 0x1f, (1u32, 184752u64), 13), // plVar14
+            (0xb8, 0xbb, (1u32, 184522u64), 14), // uVar15
+            (0x110, 0x117, (1u32, 184351u64), 15), // in_FS_OFFSET
+            (0x288, 0x28f, (1u32, 184351u64), 16), // in_RIP
+        ];
+        assert_eq!(
+            scope_rangemap_list_order(&entries),
+            vec![
+                2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1, 0, 14, 15, 16
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scope_rangemap_list_order_enclosing_piece_capture() {
+        // Morphology where the list order is NOT a pure (end, subsort)
+        // sort: P=[5,6] inserted first, Q=[0,10] appended after it, then
+        // N=[0,3]: N's splice target is Q's split piece [0..4] (key
+        // (4,sQ)), so N lands between P and Q even though N ends soonest
+        // (rangemap.hh:242-245 lower_bound over piece keys).
+        let entries = vec![
+            (5u64, 6u64, (1u32, 1u64), 0),  // P
+            (0u64, 10u64, (1u32, 2u64), 1), // Q
+            (0u64, 3u64, (1u32, 3u64), 2),  // N
+        ];
+        assert_eq!(scope_rangemap_list_order(&entries), vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn test_scope_rangemap_list_order_addrtied_minimal_subsort() {
+        // Addrtied entries carry the minimal (0,0) subsort
+        // (database.cc:100-107): a later-inserted non-addrtied entry that
+        // starts earlier still splices before them by end, while an
+        // addrtied entry appended after a greater-end record stays put
+        // when nothing sorts between their keys.
+        let entries = vec![
+            (0x100u64, 0x107u64, (0u32, 0u64), 0),  // addrtied, far
+            (0x10u64, 0x17u64, (1u32, 42u64), 1),   // non-addrtied, near
+            (0x0u64, 0x7u64, (0u32, 0u64), 2),      // addrtied, near
+        ];
+        assert_eq!(scope_rangemap_list_order(&entries), vec![2, 1, 0]);
+    }
 
     #[test]
     fn test_print_c_copy() {
@@ -15169,6 +18572,142 @@ mod tests {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
 
         printer.doc_function(&fd);
+    }
+
+    #[test]
+    fn test_void_callee_call_prints_statement_and_bare_return() {
+        // PRINTC-VOIDCALL-0001 Rust-side regression (dormant-branch
+        // projection). Oracle-side truth is pinned by the locked-oracle
+        // golden corpus: every locked-void libc call renders as a bare
+        // statement (`free(pcVar11);` — tests/golden/ghidra_curl_1204.c) and
+        // a value-less RETURN renders `return;` — because
+        // ActionFuncLink::funcLinkOutput (coreaction.cc:1539-1541) keeps a
+        // locked-void callee's CALL output-free, so PrintC::emitExpression
+        // (printc.cc:2471-2476) sees `outvn == 0` and prints no assignment
+        // LHS, and PrintC::opReturn (printc.cc:758-761) sees numInput()==1.
+        // This test drives the print-layer projection for the IR state the
+        // guards must also survive: the CALL output SURVIVED (wired into the
+        // RETURN input) while the callspec is output-locked void — the exact
+        // shape the retired P13 text pass used to patch as `return f();`.
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        let mut fd = Funcdata::new("void_tail", Address::new(0x3000), 0);
+        let void_type = std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
+            crate::type_system::datatype::TypeBase::new(
+                "void".to_string(),
+                0,
+                crate::type_system::datatype::TypeMetatype::Void,
+            ),
+        ));
+        let mut proto = crate::fspec::FuncProto::new("free".to_string(), void_type);
+        proto.set_output_lock(true);
+        let call_addr = Address::new(0x3100);
+        let spec =
+            crate::fspec::FuncCallSpecs::new(call_addr, proto);
+        fd.callspecs
+            .push(std::sync::Arc::new(std::sync::RwLock::new(spec)));
+
+        // CALL target(0x104c50) with argument 0x42, output wired into RETURN.
+        let call = fd.new_op(2, call_addr);
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let call_target = fd.new_constant(8, 0x104c50);
+        let call_arg = fd.new_constant(8, 0x42);
+        fd.op_set_input(&call, call_target, 0);
+        fd.op_set_input(&call, call_arg, 1);
+        let call_out = fd.new_unique_out(8, &call);
+        fd.obank.mark_alive(call.clone());
+
+        let ret = fd.new_op(2, Address::new(0x3105));
+        fd.op_set_opcode(&ret, OpCode::CPUI_RETURN);
+        let ret_indirect = fd.new_constant(8, 0);
+        fd.op_set_input(&ret, ret_indirect, 0);
+        fd.op_set_input(&ret, call_out, 1);
+        fd.obank.mark_alive(ret.clone());
+
+        // Simulate the doc_function snapshot (same-module test may seed the
+        // private field directly).
+        printer.void_callee_call_addrs.insert(call_addr.as_u64());
+
+        printer.emit_block_basic_rpn(&[call, ret], false);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .expect("EmitNoMarkup")
+            .debug_get_output_ref()
+            .to_string();
+        // Statement form, no assignment LHS; bare `return;` — the oracle's
+        // no-output-CALL bytes. PRINTC-FUN-PAD-0001: the FUN_ fallback
+        // spells the printRaw digit rule (space.cc:209-216) — zero-padded
+        // width 8 for the <2^32 constant target (0x104c50 →
+        // FUN_00104c50), the headless golden database-name face.
+        assert!(
+            text.contains("FUN_00104c50(0x42);"),
+            "void callee CALL must print as a statement, got: {text}"
+        );
+        assert!(
+            !text.contains("= FUN_00104c50("),
+            "void callee CALL must not print an assignment LHS, got: {text}"
+        );
+        assert!(
+            text.contains("return;"),
+            "RETURN consuming a void-callee CALL output must print bare, got: {text}"
+        );
+        assert!(
+            !text.contains("return FUN_00104c50"),
+            "void callee tail call must not render `return f();`, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_nonvoid_locked_callee_keeps_assignment_lhs() {
+        // PRINTC-VOIDCALL-0001 negative control: a locked NON-void callee
+        // keeps the oracle's assignment LHS (funcLinkOutput re-creates the
+        // output, coreaction.cc:1540-1551, so emitExpression prints
+        // `out = f(...)`), and the void projection must stay dormant.
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        let mut fd = Funcdata::new("nonvoid_call", Address::new(0x4000), 0);
+        let int_type = std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "int".to_string(),
+                4,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        ));
+        let mut proto = crate::fspec::FuncProto::new("getint".to_string(), int_type);
+        proto.set_output_lock(true);
+        let call_addr = Address::new(0x4100);
+        fd.callspecs.push(std::sync::Arc::new(
+            std::sync::RwLock::new(crate::fspec::FuncCallSpecs::new(call_addr, proto)),
+        ));
+        // NOTE: this address is deliberately NOT seeded into
+        // void_callee_call_addrs — the callee is non-void.
+
+        let call = fd.new_op(2, call_addr);
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let call_target = fd.new_constant(8, 0x5a5a);
+        let call_arg = fd.new_constant(8, 0x7);
+        fd.op_set_input(&call, call_target, 0);
+        fd.op_set_input(&call, call_arg, 1);
+        let _out = fd.new_unique_out(4, &call);
+        fd.obank.mark_alive(call.clone());
+
+        printer.emit_block_basic_rpn(&[call], false);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .expect("EmitNoMarkup")
+            .debug_get_output_ref()
+            .to_string();
+        // PRINTC-FUN-PAD-0001: padded digit face — 0x5a5a → FUN_00005a5a.
+        assert!(
+            text.contains("= FUN_00005a5a("),
+            "locked non-void callee keeps the assignment LHS, got: {text}"
+        );
     }
 
     #[test]
@@ -15713,6 +19252,192 @@ mod tests {
         assert!(
             !child_needs_parens(CPUI_INT_ADD, CPUI_COPY, true),
             "COPY child: not a tracked binary op, no parens"
+        );
+    }
+
+    #[test]
+    fn test_print_raw_zero_pad_digits_fun_face() {
+        use super::PrintC;
+
+        // space.cc:209-216 digit core, the FUN_ database-name face
+        // (PRINTC-FUN-PAD-0001). Golden witnesses: the headless corpus
+        // spells every unnamed function `FUN_` + 8 zero-padded hex digits
+        // (curl `FUN_00102020`, httpd `FUN_0012c520`): x86-64 ram
+        // (addrsize 8, wordsize 1) with offset>>32==0 shrinks sz to 4 →
+        // setw(8).
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x102020),
+            "00102020",
+            "FUN_ face: shrunk width 8 (golden FUN_00102020)"
+        );
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x12c520),
+            "0012c520",
+            "FUN_ face: httpd golden witness spelling"
+        );
+        // space.cc:211-212: offset>>32==0 → sz=4 even for a 6-byte space.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(6, 1, 0x102020),
+            "00102020"
+        );
+        // space.cc:213-214: offset>>32!=0 but offset>>48==0 → sz=6 →
+        // setw(12). The bare `{:x}` face would print `123456789ab` (11
+        // digits) — the pad is the contract this test pins.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x123456789ab),
+            "0123456789ab"
+        );
+        // offset>>48!=0 → no shrink → setw(16).
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x123456789abcdef0),
+            "123456789abcdef0"
+        );
+        // space.cc:210: sz>4 gate — a 4-byte space never shrinks.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(4, 1, 0x102020),
+            "00102020"
+        );
+        // byteToAddress (space.hh:523-525): wordsize 4 → addressable units
+        // = offset/4. The +cut suffix belongs to the transport face only.
+        assert_eq!(PrintC::print_raw_zero_pad_digits(8, 4, 0x100), "00000040");
+        // Transport face (space.cc:216-221): "0x" + digits + "+cut" when
+        // wordsize>1 and offset%wordsize!=0.
+        assert_eq!(
+            PrintC::addr_space_print_raw_dims(8, 4, 0x102),
+            "0x00000040+2"
+        );
+        assert_eq!(
+            PrintC::addr_space_print_raw_dims(8, 1, 0x3190),
+            "0x00003190",
+            "func_ face: direct-runner golden spelling"
+        );
+    }
+
+    #[test]
+    fn test_entry_addr_dims_channel() {
+        use super::PrintC;
+        use crate::address::Address;
+        use crate::space::{AddrSpace, SpaceType};
+
+        // printc.cc:602 `fc->getEntryAddress()` dims channel
+        // (PRINTC-OPCALL-ENTRYSPACE-0001): a spaceless legacy entry (the
+        // current FuncCallSpecs::new_for_op form) and a missing callspec
+        // both take the flat Ram defaults — the hardwired-Ram behavior this
+        // must reproduce until fspec populates Address::with_space.
+        assert_eq!(PrintC::entry_addr_dims(None), (8, 1));
+        assert_eq!(
+            PrintC::entry_addr_dims(Some(&Address::new(0x102020))),
+            (8, 1),
+            "spaceless legacy entry address → flat Ram dims"
+        );
+        // An entry address carrying a registry space (ADDRESS-0001
+        // with_space form) contributes the space's own dims: a 4-byte
+        // wordsize-2 processor space → (4, 2).
+        let spc = AddrSpace::new_space(
+            SpaceType::Processor,
+            "ram_ws2",
+            false,
+            4,
+            2,
+            1,
+            0,
+            1,
+            1,
+        );
+        let entry = Address::with_space(&spc, 0x102020);
+        assert_eq!(
+            PrintC::entry_addr_dims(Some(&entry)),
+            (4, 2),
+            "entry-space channel: registry handle dims flow through"
+        );
+        // End to end: the FUN_ digits take the entry space's rule, not a
+        // hardwired Ram: 4-byte space, wordsize 2 → addressable units
+        // 0x81010 → setw(8).
+        let (sz, ws) = PrintC::entry_addr_dims(Some(&entry));
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(sz, ws, 0x102020),
+            "00081010"
+        );
+    }
+
+    #[test]
+    fn test_integer_text_explicit_suffixes() {
+        // PRINTC-INTSUFFIX-0001: push_integer's trailing explicit-print
+        // suffixes (printc.cc:1362-1365) — 'U' for unsignedprint, "L"
+        // (sizeSuffix, cc:2336-2339 long!=int) for longprint — and the
+        // cc:1319 reset: the signed branch (sign && format != force_char)
+        // clears force_unsigned even when the two's-complement flip does
+        // not print a minus.
+        let printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        use crate::printc::display_format;
+
+        // Unsigned flag on an unsigned print: suffix present.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, true, false),
+            "0x23U"
+        );
+        // Decimal small constant keeps the suffix too (val<=10 dec arm).
+        assert_eq!(
+            printer.integer_text_flagged(
+                2, 4, false, display_format::DEFAULT, true, false),
+            "2U"
+        );
+        // cc:1319: signed print never carries the U suffix, even when the
+        // flag was set and the value does not flip to a negative.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, true, display_format::HEX, true, false),
+            "0x23"
+        );
+        // longprint suffix rides alongside (cc:1364-1365 sizeSuffix="L").
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, false, true),
+            "0x23L"
+        );
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, true, true),
+            "0x23UL"
+        );
+        // Flagless default: byte-identical to the legacy scalar form.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, false, false),
+            "0x23"
+        );
+    }
+
+    #[test]
+    fn test_constant_print_flags_annotation_gate() {
+        // cc:1298: flags are read only behind vn != 0 &&
+        // !vn->isAnnotation(). Annotation constants return (false,false)
+        // regardless of the addlflags bits.
+        use crate::varnode::addl_flags;
+        use crate::varnode::varnode_flags;
+        let vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x23, 4)));
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (false, false)
+        );
+        {
+            let mut w = vn.write().unwrap();
+            w.addlflags |= addl_flags::UNSIGNED_PRINT | addl_flags::LONG_PRINT;
+        }
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (true, true)
+        );
+        {
+            let mut w = vn.write().unwrap();
+            w.flags |= varnode_flags::ANNOTATION;
+        }
+        // The annotation gate suppresses the read (cc:1298).
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (false, false)
         );
     }
 }

@@ -91,17 +91,44 @@ impl DebugGlobalDatabase {
         let dwarf = load_dwarf(bytes).context("parsing object for DWARF globals")?;
         let mut globals = BTreeMap::new();
         let mut address_size = 8usize;
+        // DWARF-SYMFIELD-TYPESTATE-0001: external variable declarations
+        // (DW_AT_declaration + DW_AT_external, no DW_AT_location) carry the
+        // declared type for data-import symbols whose storage this ELF
+        // defines through an R_X86_64_COPY relocation. Ghidra's DWARF
+        // analyzer applies that declared type to the defined symbol — the
+        // locked-oracle witnesses are `stdout`/`stdin`/`stderr` printing
+        // with bare names (ElfSymbol carries the @@GLIBC version separately)
+        // and the FILE* type state behind golden main's bare
+        // `__stream = stdin;` / `__stream_00 = stdout;` assignments versus
+        // `(FILE *)0x0` casts (ghidra_curl_1204.c:609/894/895). First
+        // declaration per name wins, matching the located-global loop's
+        // first-DIE-wins insert.
+        let mut external_decls: HashMap<String, Arc<Datatype>> = HashMap::new();
         let mut headers = dwarf.units();
         while let Some(header) = headers.next().context("iterating DWARF units")? {
             let unit = dwarf.unit(header).context("loading DWARF unit")?;
             address_size = unit.encoding().address_size as usize;
             let mut entries = unit.entries();
             // (depth, name, is_subprogram) stack for parent-function
-            // tracking: next_dfs yields (depth, entry) in document order, so
-            // popping the stack down to depth-1 leaves the direct parent.
+            // tracking. next_dfs yields (DELTA depth, entry): the isize is
+            // the depth CHANGE from the previous entry (gimli unit.rs
+            // EntriesTree::next_dfs — same accumulation pattern the
+            // read_prototype_children/read_struct_fields walks use), so the
+            // absolute level is accumulated separately and the stack is
+            // popped down to it, keeping the ancestors. Treating the delta
+            // as the absolute level popped the enclosing subprogram frame
+            // off the stack on every first child (a +1 child of a depth-1
+            // subprogram read as "depth 1" -> pop the subprogram's own
+            // frame), so every function-static (DW_TAG_variable with
+            // DW_OP_addr nested in a DW_TAG_subprogram) imported with
+            // parent_function = None and printed its bare ELF-stripped name;
+            // the locked-oracle spellings are my_get_token::save @0x17510
+            // and next_url::beenhere @0x17518 (ghidra_curl_1204.c:1226+).
             let mut scope_stack: Vec<(usize, Option<String>, bool)> = Vec::new();
-            while let Some((depth, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
-                let depth = usize::try_from(depth).unwrap_or(0);
+            let mut absolute_depth: isize = 0;
+            while let Some((delta, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+                absolute_depth += delta;
+                let depth = usize::try_from(absolute_depth).unwrap_or(0);
                 while scope_stack.len() > depth {
                     scope_stack.pop();
                 }
@@ -115,6 +142,25 @@ impl DebugGlobalDatabase {
                 if entry.tag() != gimli::DW_TAG_variable {
                     scope_stack.push((depth, entry_name, entry.tag() == gimli::DW_TAG_subprogram));
                     continue;
+                }
+                // DWARF-SYMFIELD-TYPESTATE-0001: capture the declaration's
+                // type by name before the storage-address gate below
+                // (declarations have no DW_AT_location and would otherwise
+                // be skipped without recording anything).
+                if attr_flag(entry, gimli::DW_AT_declaration)?
+                    && attr_flag(entry, gimli::DW_AT_external)?
+                {
+                    if let Some(name) = entry_name.as_deref() {
+                        if !external_decls.contains_key(name) {
+                            if let Some(offset) =
+                                entry_reference(&unit, entry, gimli::DW_AT_type)?
+                            {
+                                let data_type =
+                                    resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?;
+                                external_decls.insert(name.to_string(), data_type);
+                            }
+                        }
+                    }
                 }
                 let Some(address) = static_location_address(&unit, entry)? else {
                     scope_stack.push((depth, entry_name, false));
@@ -138,6 +184,26 @@ impl DebugGlobalDatabase {
                     },
                 );
                 scope_stack.push((depth, entry_name, false));
+            }
+        }
+        // DWARF-SYMFIELD-TYPESTATE-0001: bind the captured declaration types
+        // to their copy-relocation addresses. Located globals (real
+        // DW_AT_location) stay authoritative; the copy-reloc pass only adds
+        // entries at addresses nothing else claimed.
+        for (address, name) in copy_reloc_object_symbols(bytes) {
+            if globals.contains_key(&address) {
+                continue;
+            }
+            if let Some(data_type) = external_decls.get(&name) {
+                globals.insert(
+                    address,
+                    DebugGlobalVariable {
+                        address,
+                        name,
+                        data_type: data_type.clone(),
+                        parent_function: None,
+                    },
+                );
             }
         }
         Ok(Self {
@@ -204,6 +270,175 @@ impl DebugGlobalDatabase {
     }
 }
 
+/// PLT thunk entries keyed by thunk entry address.
+///
+/// Mirrors the function symbols Ghidra's ELF front-end creates for every PLT
+/// thunk: a `.plt.sec`/`.plt` slot (an `endbr64; bnd jmp *disp32(%rip)`
+/// sequence jumping through a GOT slot owned by an
+/// `R_X86_64_JUMP_SLOT`/`.rela.plt` relocation) or a `.plt.got` slot (whose
+/// GOT slot is owned by an `R_X86_64_GLOB_DAT` relocation in `.rela.dyn`)
+/// becomes a thunk Function named after the dynamic import it resolves. The
+/// decompiler side then reads that name through the call-spec chain
+/// (`FlowInfo::queryCall` flow.cc:656-672 → `FuncCallSpecs::setFuncdata`
+/// fspec.cc:4949-4960 → `PrintC::opCall` printc.cc:601-609 `fc->getName()`),
+/// which is why an undefined dynamic import (`apr_app_initialize`,
+/// st_value==0, lives in libapr) still prints its name at every direct call
+/// site of the thunk in the locked httpd oracle
+/// (tests/golden/ghidra_httpd_1204.c: `apr_app_initialize(auStack_9c,...)`
+/// for the 0x12a6d0 thunk). Without this import a call target address has no
+/// symbol anywhere, `Funcdata::map_globals`'s no-symbol arm builds a
+/// `uRam<offset>` data-global name for it (varmap.rs build_variable_name
+/// mirroring database.cc:2455-2468), and the printer shows `uRam...()` as
+/// the callee.
+#[derive(Debug, Clone, Default)]
+pub struct ElfPltImports {
+    thunks: BTreeMap<u64, String>,
+}
+
+impl ElfPltImports {
+    /// Import every PLT thunk name from the ELF image.
+    ///
+    /// `.plt.sec`/`.plt` slots are matched to `.rela.plt` JUMP_SLOT
+    /// relocations by slot index (`i`-th relocation ↔ `base + 16*i`, with
+    /// `.plt` slots starting at index 1 to skip the resolver header);
+    /// `.plt.got` slots are decoded individually (the `f2 ff 25 <disp32>`
+    /// tail) and matched against the R_X86_64_GLOB_DAT relocation that owns
+    /// the jumped-through GOT address. Slot geometry and matching follow the
+    /// locked-oracle witnesses documented with the original driver-side
+    /// implementation (examples/curl_decompile.rs PLT resolution block;
+    /// httpd witnesses: slot 43 = 0x2a6d0 = `apr_app_initialize`,
+    /// `.plt` @0x29020, `.plt.got` @0x2a400, `.plt.sec` @0x2a420).
+    // RUGRA-GLUE: reads the same .plt/.plt.sec/.plt.got + relocation records Ghidra's Java ELF/PLT analyzer turns into thunk Function symbols; native front-end adapter for that boundary
+    pub fn parse_elf(bytes: &[u8]) -> Self {
+        let obj = match goblin::Object::parse(bytes) {
+            Ok(obj) => obj,
+            Err(_) => return Self::default(),
+        };
+        let goblin::Object::Elf(elf) = obj else {
+            return Self::default();
+        };
+        let mut thunks = BTreeMap::new();
+
+        let mut plt_sec_base = 0u64;
+        let mut plt_base = 0u64;
+        let mut plt_got: Option<(u64, u64, u64)> = None; // (sh_addr, sh_offset, sh_size)
+        for header in elf.section_headers.iter() {
+            if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
+                match name {
+                    ".plt" => plt_base = header.sh_addr,
+                    ".plt.sec" => plt_sec_base = header.sh_addr,
+                    ".plt.got" => {
+                        plt_got =
+                            Some((header.sh_addr, header.sh_offset, header.sh_size))
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // .plt.sec (or .plt) via .rela.plt JUMP_SLOT relocations.
+        let (base, offset_start) = if plt_sec_base != 0 {
+            (plt_sec_base, 0u64)
+        } else if plt_base != 0 {
+            (plt_base, 1u64)
+        } else {
+            (0, 0)
+        };
+        if base != 0 {
+            for (i, reloc) in elf.pltrelocs.iter().enumerate() {
+                let plt_addr = base + 16 * (i as u64 + offset_start);
+                if let Some(sym) = elf.dynsyms.get(reloc.r_sym) {
+                    if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                        if !name.is_empty() {
+                            thunks
+                                .entry(plt_addr)
+                                .or_insert_with(|| name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // .plt.got slots: GOT owners are R_X86_64_GLOB_DAT relocations in
+        // .rela.dyn (not .rela.plt), so the slot-index loop above misses
+        // them; decode each slot's `f2 ff 25 <disp32>` tail directly.
+        if let Some((slot_vaddr, file_off, sh_size)) = plt_got {
+            for slot in 0..(sh_size as usize / 8) {
+                let start = file_off as usize + slot * 8;
+                let Some(insn) = bytes.get(start..start + 11) else {
+                    continue;
+                };
+                if insn[4] != 0xf2 || insn[5] != 0xff || insn[6] != 0x25 {
+                    continue;
+                }
+                let disp =
+                    i32::from_le_bytes([insn[7], insn[8], insn[9], insn[10]]) as i64;
+                let got_addr = (slot_vaddr + slot as u64 + 11) as i64 + disp;
+                let name = elf
+                    .dynrelas
+                    .iter()
+                    .chain(elf.dynrels.iter())
+                    .find_map(|reloc| {
+                        if reloc.r_offset != got_addr as u64 {
+                            return None;
+                        }
+                        elf.dynsyms
+                            .get(reloc.r_sym)
+                            .and_then(|sym| elf.dynstrtab.get_at(sym.st_name))
+                            .filter(|name| !name.is_empty())
+                    });
+                if let Some(name) = name {
+                    thunks
+                        .entry(slot_vaddr + slot as u64)
+                        .or_insert_with(|| name.to_string());
+                }
+            }
+        }
+
+        Self { thunks }
+    }
+
+    // RUGRA-GLUE: address-keyed lookup mirroring the Program database query the driver performs when seeding call-target symbols
+    pub fn get(&self, address: u64) -> Option<&String> {
+        self.thunks.get(&address)
+    }
+
+    // RUGRA-GLUE: deterministic address order for the driver-side seeding loop
+    pub fn iter(&self) -> impl Iterator<Item = (&u64, &String)> {
+        self.thunks.iter()
+    }
+
+    // RUGRA-GLUE: count accessor for import-boundary diagnostics
+    pub fn len(&self) -> usize {
+        self.thunks.len()
+    }
+
+    // RUGRA-GLUE: emptiness accessor for the clippy len-without-is_empty pair
+    pub fn is_empty(&self) -> bool {
+        self.thunks.is_empty()
+    }
+
+    // RUGRA-GLUE: thunk-membership test used to gate the default FUN_ naming pass (a thunk already carries its import name)
+    pub fn contains(&self, address: u64) -> bool {
+        self.thunks.contains_key(&address)
+    }
+}
+
+/// Default name for an analysis-discovered function symbol, mirroring the
+/// locked-oracle convention: Ghidra's front-end names every function the
+/// analysis creates (and no ELF symbol covers) `FUN_` + the entry address in
+/// 8-digit zero-padded hex — on the analyzeHeadless **image base** address,
+/// not the raw ELF virtual address (the httpd oracle loads the ET_DYN image
+/// at 0x100000, so the golden's shared tail chunks read `FUN_0012c520` for
+/// ELF vaddr 0x2c520). The decompiler prints such names verbatim at call
+/// sites through the same fspec chain as named functions
+/// (`PrintC::opCall` printc.cc:601-609); Rugra's driver seeds the name into
+/// its callpoint-symbol stand-in for that table.
+// RUGRA-GLUE: Ghidra's Java SymbolManager owns this default-name policy (outside decompile/cpp); native front-end adapter for the boundary
+pub fn analyze_headless_function_symbol_name(vaddr: u64, image_base: u64) -> String {
+    format!("FUN_{:08x}", image_base.wrapping_add(vaddr))
+}
+
 // RUGRA-GLUE: index of DWARF named types (struct/union/enum/typedef spellings)
 // built at the Program-import boundary. Ghidra's DWARF analyzer populates the
 // program type manager with these names, and the platform signature loader
@@ -236,9 +471,24 @@ pub fn parse_type_names(bytes: &[u8]) -> Result<HashMap<String, Arc<Datatype>>> 
             if names.contains_key(&name) {
                 continue;
             }
-            let data_type = match entry_reference(&unit, entry, gimli::DW_AT_type)? {
-                Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
-                None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+            // DWARF-SYMFIELD-TYPESTATE-0001: a DW_TAG_typedef entry resolves
+            // through the typedef DIE ITSELF, not its DW_AT_type target, so
+            // the index keeps the typedef spelling the way Ghidra's DWARF
+            // front end keeps a TypeTypedef (type.hh:522) — resolve_type's
+            // typedef branch materializes the underlying composite renamed
+            // to the typedef name (the `FILE` over `struct _IO_FILE`, golden
+            // witnesses `FILE *__stream` decls / `(FILE *)0x0` casts in
+            // ghidra_curl_1204.c main; resolving the raw target printed the
+            // struct spelling `_IO_FILE *` in every libc signature and
+            // cast). Struct/union/enum/base entries have no DW_AT_type and
+            // keep resolving themselves directly.
+            let data_type = if entry.tag() == gimli::DW_TAG_typedef {
+                resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?
+            } else {
+                match entry_reference(&unit, entry, gimli::DW_AT_type)? {
+                    Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
+                    None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+                }
             };
             names.insert(name, data_type);
         }
@@ -284,6 +534,56 @@ fn static_location_address(
         return Ok(None);
     }
     Ok(Some(address))
+}
+
+// RUGRA-GLUE: reads a DWARF boolean attribute accepting the flag and udata
+// forms producers emit for DW_AT_declaration/DW_AT_external; absent means
+// false, matching the Java analyzer's null-vs-present check
+fn attr_flag(
+    entry: &DebuggingInformationEntry<DwarfReader>,
+    attribute: gimli::DwAt,
+) -> Result<bool> {
+    Ok(match entry.attr_value(attribute)? {
+        Some(gimli::AttributeValue::Flag(value)) => value,
+        Some(gimli::AttributeValue::Udata(value)) => value != 0,
+        _ => false,
+    })
+}
+
+// RUGRA-GLUE: enumerates R_X86_64_COPY relocation targets with their
+// version-stripped object symbol names — the data imports (the
+// stdout/stdin/stderr-class .bss copies) whose declared DWARF type Ghidra's
+// analyzer applies to the locally-defined symbol. The symbol display name
+// carries no @@VERSION suffix (the oracle's ElfSymbol table keeps the
+// version in a separate field; golden prints bare `stdout`/`stdin`/
+// `stderr`), so the ELF strtab spelling is cut at the first '@'.
+fn copy_reloc_object_symbols(bytes: &[u8]) -> Vec<(u64, String)> {
+    let Ok(elf) = goblin::elf::Elf::parse(bytes) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for reloc in &elf.dynrelas {
+        if reloc.r_type != goblin::elf::reloc::R_X86_64_COPY {
+            continue;
+        }
+        let Some(sym) = elf.dynsyms.get(reloc.r_sym) else {
+            continue;
+        };
+        if goblin::elf::sym::st_type(sym.st_info) != goblin::elf::sym::STT_OBJECT {
+            continue;
+        }
+        let Some(full) = elf.dynstrtab.get_at(sym.st_name) else {
+            continue;
+        };
+        let Some(stripped) = full.split('@').next() else {
+            continue;
+        };
+        if stripped.is_empty() || sym.st_value == 0 {
+            continue;
+        }
+        out.push((sym.st_value, stripped.to_string()));
+    }
+    out
 }
 
 // RUGRA-GLUE: the type of an address constant that references a DWARF global; "&global" is a pointer to the variable's declared type, and arrays decay to element pointers per C address-of semantics on the IR
@@ -464,6 +764,34 @@ impl DebugPrototypeDatabase {
             }
             source_index += 1;
         }
+        // DWARF-VOID-UNKNOWN-MODEL-0001: a 0-param DWARF signature with no
+        // return-location DIE takes Ghidra's StorageVerification downgrade
+        // path (funcfixup/StorageVerificationDWARFFunctionFixup.java:
+        // `isEmptySignature = params.isEmpty() && retval.isMissingStorage()`
+        // → CommitMode.FORMAL → updateFunctionSignature runs with
+        // DYNAMIC_STORAGE_ALL_PARAMS, so hasCustomVariableStorage() is
+        // false), and the DWARF analyzer passes callingConventionName=null
+        // (DWARFImportOptions defaultCC is blank and DW_AT_calling_convention
+        // is absent) — FunctionDB.updateFunction(null,...) keeps the
+        // never-assigned convention, and FunctionPrototype.grabFromFunction
+        // (FunctionPrototype.java:129-141) reads it back as "unknown",
+        // sending the decompiler model="unknown", which
+        // FuncProto::decode routes to createUnknownModel (architecture.cc:
+        // 1159-1166; "unknown" is printInDecl=false). grabFromFunction also
+        // derives voidinputlock = (sigSource != DEFAULT) && paramCount == 0
+        // → true (already set by set_pieces' set_input_lock on the empty
+        // list). The combined observable, via ActionPrototypeWarnings
+        // (coreaction.cc:4901-4908), is the golden's
+        // "WARNING: Unknown calling convention -- yet parameter storage is
+        // locked" on exactly the three 0-param DWARF locals (main_init,
+        // main_free, hugehelp). Param'd DWARF signatures keep STORAGE commit
+        // mode (custom storage, custom_storage flag suppresses the warning
+        // in the oracle) and Rugra keeps the resolved default model name,
+        // which suppresses the warning identically — so the pin applies to
+        // the empty-signature case only.
+        if debug_proto.parameters.is_empty() {
+            proto.set_model_name("unknown");
+        }
         Ok(proto)
     }
 }
@@ -546,6 +874,18 @@ impl Default for LibcSignatureTable {
 }
 
 impl LibcSignatureTable {
+    // RUGRA-GLUE: bare-load constructor (RUGRA-FLOW-MIRROR-0001 M3). The
+    // oracle single-function harness loads via BfdArchitecture +
+    // readLoaderSymbols only — no Java analyzer, no generic_clib signature
+    // data reaches the decompiler — so every lookup misses and call sites
+    // keep their unlocked prototypes. Default construction stays the full
+    // locked ledger.
+    pub fn empty() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
     // RUGRA-GLUE: address of the Program-database signature lookup the decompiler performs via queryFunction
     pub fn lookup(&self, name: &str) -> Option<&LibcSignature> {
         self.entries.get(name)
@@ -585,6 +925,12 @@ impl LibcSignatureTable {
             return Ok(None);
         };
         let address_size = 8usize;
+        // parse_c_type resolves through the canonical shared TypeFactory
+        // (Ghidra's ONE `glb->types`, grammar.cc:2989 bases / :2402-2411
+        // pointers) so the whole program shares ONE TypePointer object per
+        // pointee — ActionMergeType's same-type grouping and the
+        // lookForFuncParamNames merge-class gate key on that identity
+        // (GLIBC-PROTO-PARAMNAME-0001).
         let return_type = parse_c_type(signature.return_type, address_size, type_names)?;
         let mut parameters = Vec::new();
         for declaration in split_parameter_list(signature.parameters) {
@@ -639,6 +985,32 @@ impl LibcSignatureTable {
         proto.set_input_lock(true);
         proto.set_output_lock(true);
         proto.set_model_lock(true);
+        // PLTSTUB-WARNLOSS-0001 (closed, CURB lane): the generic_clib
+        // import path sends the decompiler the same never-assigned
+        // convention the 0-param DWARF void-signature pin above documents:
+        // the ELF thunk's
+        // FunctionDB carries no calling convention (the importer never
+        // assigns one for external thunks; FunctionPrototype.grabFromFunction
+        // reads it back as "unknown" — FunctionPrototype.java:129-141), so
+        // FuncProto::decode (fspec.cc:4675-4711) sees model="unknown" and
+        // routes to createUnknownModel (architecture.cc:1159-1166: an
+        // UnknownProtoModel cloned from defaultfp — identical paramrange/
+        // localrange/stackgrowsnegative behavior, printInDecl=false), while
+        // ProtoStoreInternal::decode (fspec.cc:3464-3567) still assigns
+        // parameter storage through that model with the typelock bits kept.
+        // The observable, via ActionPrototypeWarnings (coreaction.cc:4901-
+        // 4908: isModelUnknown && !hasCustomStorage && (inputLocked ||
+        // outputLocked)), is the golden's "/* WARNING: Unknown calling
+        // convention -- yet parameter storage is locked */" header on
+        // exactly the 24 generic_clib-locked PLT stubs (locked curl witness
+        // 0x102310 strcpy / 0x102320 puts; the 21 imports outside the table
+        // — curl_easy_*, __vfprintf_chk, __cxa_finalize — stay unlocked and
+        // show no warning, matching the golden). Rugra pins the name string
+        // only: the bound ProtoModelFull stays the defaultfp clone, so
+        // every model-object consumer (hasEffect, derive_input_map,
+        // varmap's name-keyed registry lookup falling back to defaultfp)
+        // keeps the placeholder behavior UnknownProtoModel adopts.
+        proto.set_model_name("unknown");
         Ok(Some(proto))
     }
 }
@@ -672,61 +1044,216 @@ fn split_declaration(declaration: &str) -> Result<(&str, &str)> {
 }
 
 // RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
-fn parse_c_type(
+// RUGRA-GLUE: resolves one signature base spelling through the Architecture
+// TypeFactory the way Ghidra's signature grammar does (lexer TYPE_NAME rule
+// hits glb->types->findByName, grammar.cc:2989). A factory name-tree hit
+// keeps the core type's identity; a miss interns a named base via
+// get_base_named -> findAdd (type.cc:3412).
+fn factory_named_base(
+    types: &std::sync::Arc<
+        std::sync::RwLock<crate::type_system::typefactory::TypeFactory>,
+    >,
+    size: usize,
+    metatype: TypeMetatype,
+    name: &str,
+) -> Arc<Datatype> {
+    {
+        let factory = types
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = factory.find_by_name(name) {
+            return existing;
+        }
+    }
+    let mut factory = types
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    factory
+        .get_base_named(size, metatype, name)
+        .unwrap_or_else(|_| {
+            Arc::new(Datatype::Base(TypeBase::new(
+                name.to_string(),
+                size,
+                metatype,
+            )))
+        })
+}
+
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs; any OTHER unresolvable base is a parse error, mirroring the two oracle arms (explicit transport size or findByName miss), never a minted address-sized unknown base (BRIDGE1-TYPESEED-PIDT)
+// HEADLESS-BRIDGE-V1-TYPESEED extension: the committed-local seed manifest
+// (C1) feeds the canon golden's own declaration spellings here, so the base
+// table now also covers the analyzer-committed bases (undefined/undefinedN,
+// uint/ulong/byte/short/float/double/bool with their x86-64 gcc sizes) and
+// the outermost array declarator (`long[4]`, `char *[2]` -> TypeFactory::
+// getTypeArray, type.cc:3902 — the mirror of TypeArray::decode's
+// arraysize*alignsize reconstruction, type.cc:1330-1342).
+pub(crate) fn parse_c_type(
     type_text: &str,
     address_size: usize,
     type_names: Option<&HashMap<String, Arc<Datatype>>>,
 ) -> Result<Arc<Datatype>> {
-    let (base_text, pointer_depth) = split_pointer_depth(type_text);
+    let types = crate::type_system::typefactory::TypeFactory::shared_default();
+    let trimmed = type_text.trim();
+    // Outermost array declarator first, in C declarator order: the LEFTMOST
+    // dimension is the outermost array — `long[2][4]` reads "array 2 of
+    // array 4 of long" (C's `long name[2][4]` binds name[2] first), and the
+    // oracle's type transport nests exactly that way: TypeArray::encode
+    // wraps the element type as the sub-element, so the outer <type
+    // metatype="array" arraysize="2"> holds the inner arraysize="4" (the
+    // decode mirror is type.cc:1326-1347: arraysize from the attribute,
+    // then `arrayof = typegrp.decodeType(decoder)` recursion). Reduction
+    // therefore strips the LEFTMOST dimension and recurses on the rest of
+    // the spelling: `long[2][4]` -> array(2, parse(`long[4]`)). The former
+    // rightmost-strip inverted the nesting into array(4) of array(2) of
+    // long (BRIDGE1-TYPESEED-MULTIDIM).
+    if trimmed.ends_with(']') {
+        if let Some(open) = trimmed.find('[') {
+            if let Some(rel_close) = trimmed[open + 1..].find(']') {
+                let close = open + 1 + rel_close;
+                let count: usize = trimmed[open + 1..close].parse()?;
+                let mut spelling = String::with_capacity(trimmed.len());
+                spelling.push_str(&trimmed[..open]);
+                spelling.push_str(&trimmed[close + 1..]);
+                let base = parse_c_type(&spelling, address_size, type_names)?;
+                let mut factory = types
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                return Ok(factory.get_array(base, count));
+            }
+        }
+    }
+    let (base_text, pointer_depth) = split_pointer_depth(trimmed);
+    // Ghidra parses every platform signature through the ONE Architecture
+    // TypeFactory: base spellings resolve via the name tree
+    // (`glb->types->findByName`, grammar.cc:2989) and declarator pointers
+    // via `PointerModifier::modType -> glb->types->getTypePointer(addrsize,
+    // base, wordsize)` (grammar.cc:2402-2411), whose `findAdd`
+    // (type.cc:3412) returns the ONE interned TypePointer object for a
+    // given pointee. That type identity keys ActionMergeType's same-type
+    // grouping (`ct == high->getType()` pointer equality, merge.cc:387) —
+    // the speculative merges from `Merge::mergeLinear` mark multi-region
+    // temps with >1 merge class, and ActionNameVars::lookForFuncParamNames
+    // then declines to rename them from callee parameter names
+    // (coreaction.cc:2887 `high->getNumMergeClasses() > 1`). Minting a
+    // fresh Arc per call site here fragmented the same-type groups, so
+    // main's pointer temps stayed single-class and inherited libc
+    // parameter names the canon oracle leaves unnamed
+    // (GLIBC-PROTO-PARAMNAME-0001).
     let mut datatype = match base_text {
-        "void" => Arc::new(Datatype::Void(TypeBase::new(
-            "void".to_string(),
-            0,
-            TypeMetatype::Void,
-        ))),
+        "void" => {
+            let factory = types
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            factory.get_type_void()
+        }
         // The generic_clib Program-database type named `char` is Ghidra's
         // character datatype, not a same-sized plain integer.  The C++
         // decompiler receives it as TypeChar (type.hh:348-357), whose
         // `chartype` flag drives PrintC::pushConstant.
-        "char" => Arc::new(Datatype::Base(TypeBase::new_char(
-            "char".to_string(),
-            TypeMetatype::Int,
-        ))),
-        "int" => Arc::new(Datatype::Base(TypeBase::new(
-            "int".to_string(),
-            4,
-            TypeMetatype::Int,
-        ))),
-        "long" => Arc::new(Datatype::Base(TypeBase::new(
-            "long".to_string(),
-            address_size,
-            TypeMetatype::Int,
-        ))),
-        "size_t" | "time_t" => Arc::new(Datatype::Base(TypeBase::new(
-            base_text.to_string(),
-            address_size,
-            TypeMetatype::Uint,
-        ))),
-        "ushort" => Arc::new(Datatype::Base(TypeBase::new(
-            "ushort".to_string(),
-            2,
-            TypeMetatype::Uint,
-        ))),
-        other => type_names
-            .and_then(|index| index.get(other))
-            .cloned()
-            .unwrap_or_else(|| {
-                Arc::new(Datatype::Base(TypeBase::new(
-                    other.to_string(),
-                    address_size,
-                    TypeMetatype::Unknown,
-                )))
-            }),
+        "char" => {
+            {
+                let factory = types
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(existing) = factory.find_by_name("char") {
+                    existing
+                } else if let Ok(core_char) = factory.get_type_char(1) {
+                    core_char
+                } else {
+                    drop(factory);
+                    let mut factory = types
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    factory
+                        .get_type_char_named("char")
+                        .expect("TypeFactory cannot build the char type")
+                }
+            }
+        }
+        "int" => factory_named_base(&types, 4, TypeMetatype::Int, "int"),
+        "long" => factory_named_base(&types, address_size, TypeMetatype::Int, "long"),
+        "size_t" | "time_t" => {
+            factory_named_base(&types, address_size, TypeMetatype::Uint, base_text)
+        }
+        "ushort" => factory_named_base(&types, 2, TypeMetatype::Uint, "ushort"),
+        // C1 seed bases (x86-64 gcc data_organization sizes): the canon
+        // declaration layer's undefined/uint/byte/... spellings with their
+        // committed sizes, mirroring the base core types the oracle's
+        // TypeFactory already interns for the bare harness.
+        "ulong" => factory_named_base(&types, address_size, TypeMetatype::Uint, "ulong"),
+        "uint" => factory_named_base(&types, 4, TypeMetatype::Uint, "uint"),
+        "byte" => factory_named_base(&types, 1, TypeMetatype::Uint, "byte"),
+        "short" => factory_named_base(&types, 2, TypeMetatype::Int, "short"),
+        "float" => factory_named_base(&types, 4, TypeMetatype::Float, "float"),
+        "double" => factory_named_base(&types, 8, TypeMetatype::Float, "double"),
+        "bool" => factory_named_base(&types, 1, TypeMetatype::Bool, "bool"),
+        "undefined" => factory_named_base(&types, 1, TypeMetatype::Unknown, "undefined"),
+        "undefined1" => factory_named_base(&types, 1, TypeMetatype::Unknown, "undefined1"),
+        "undefined2" => factory_named_base(&types, 2, TypeMetatype::Unknown, "undefined2"),
+        "undefined4" => factory_named_base(&types, 4, TypeMetatype::Unknown, "undefined4"),
+        "undefined8" => factory_named_base(&types, 8, TypeMetatype::Unknown, "undefined8"),
+        // C1 glibc typedef mirror: the httpd canon commits `__pid_t`
+        // (ghidra_httpd_1204.c:24574, ap_signal_server `__pid_t local_34;`)
+        // as glibc's `typedef int __pid_t` (sys/types.h) the analyzeHeadless
+        // DWARF analyzer imported — 4 bytes, metatype int — the same (4,int)
+        // the oracle-side <localdb> encoder table (gen_seed_xml.py BASES,
+        // stage_seed_diag-validated) writes as the explicit size/metatype
+        // attributes. The httpd driver builds no DWARF name index, so the
+        // committed typedef resolves here exactly like the other seed
+        // bases. BRIDGE1-TYPESEED-PIDT: the former address-size fallback
+        // minted an 8B `__pid_t` that overlapped the neighboring committed
+        // local_30(8B@-48) and tripped the forced-variable-type failure
+        // (varmap.cc:280) in the restructure pass.
+        "__pid_t" => factory_named_base(&types, 4, TypeMetatype::Int, "__pid_t"),
+        other => match type_names.and_then(|index| index.get(other)) {
+            Some(data_type) => data_type.clone(),
+            // C4 STRUCT-SEED (HEADLESS-BRIDGE-V1 C3NEXT): a named composite
+            // (URLGlob/OutStruct/stat/LongShort/va_list/...) resolves through
+            // the ONE shared TypeFactory's name tree — the same resolution
+            // Ghidra's C parser performs for a TYPE_NAME token
+            // (`glb->types->findByName`, grammar.cc:2989). The factory's name
+            // tree is populated by the DWARF import boundary
+            // (parse_type_names -> resolve_type -> intern_named), which the
+            // curl driver runs unconditionally before any request, so a
+            // struct spelling seeded from the manifest finds the same interned
+            // Arc<struct> the signature path's type_names index holds — one
+            // type identity domain. The lookup is read-only and only fires
+            // for spellings outside the core table above, so a bare-load /
+            // no-DWARF run keeps the historical bail below.
+            None => {
+                let existing = {
+                    let factory = types
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    factory.find_by_name(other)
+                };
+                match existing {
+                    Some(data_type) => data_type,
+                    // A bare name carries no size anywhere the oracle would
+                    // honor: the <localdb>/<type> transport reads size only
+                    // from the explicit ATTRIB_SIZE (Datatype::decodeBasic,
+                    // type.cc:623-637, reached via the default arm of
+                    // TypeFactory::decodeTypeNoRef, type.cc:4536-4543), and
+                    // the C-signature path resolves a named base through
+                    // glb->types->findByName (grammar.cc:2989) — an
+                    // unresolved name lexes as a plain IDENTIFIER and the
+                    // parse fails. Neither oracle path ever mints an
+                    // address-sized unknown base from a spelling, so an
+                    // unresolvable base here is a parse error the seed
+                    // caller reports and skips (BRIDGE1-TYPESEED-PARSEFAIL
+                    // downgrade; the silent 8B mint is what made
+                    // BRIDGE1-TYPESEED-PIDT latent-poisonous).
+                    None => bail!(
+                        "unresolved base spelling `{other}`: not a committed core/seed base and no known-type entry (the oracle transports an explicit size; a bare name never mints one)"
+                    ),
+                }
+            }
+        },
     };
     for _ in 0..pointer_depth {
         // Ghidra builds parsed declarator pointers through
         // PointerModifier::modType -> glb->types->getTypePointer(addrsize,
-        // base, wordsize) (grammar.cc:2403-2411), whose 3-arg overload
+        // base, wordsize) (grammar.cc:2402-2411), whose 3-arg overload
         // leaves the name EMPTY (type.cc:3867-3875) — the "char *" spelling
         // is syntax, not type identity, so the signature-parsed pointers
         // stay anonymous and PrintC renders them through the drilled
@@ -734,11 +1261,10 @@ fn parse_c_type(
         // The former composed display names ("char *"/"char **") made these
         // NAMED single-layer pointers and printed `char * pcVar1` (oracle
         // printc_anonymous_pointer_decl_1204 named_ptr_contrast).
-        datatype = Arc::new(Datatype::Pointer(TypePointer::new(
-            address_size,
-            datatype,
-            1,
-        )));
+        let mut factory = types
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        datatype = factory.get_type_pointer(address_size, datatype, 1);
     }
     Ok(datatype)
 }
@@ -955,7 +1481,33 @@ fn resolve_type_inner(
                 // renders in decompiled C). Rugra's Datatype enum has no
                 // TypeTypedef variant yet, so the typedef is materialized as
                 // the renamed underlying type.
-                Some(name) => materialized_alias(name, &inner),
+                //
+                // Exception first (PRINTC-BOOLLITERAL-0001): the conventional
+                // boolean typedef names resolve to the core bool type the way
+                // Ghidra's DWARF front end maps `typedef bool` (curl.h line
+                // 394, DW_TAG_typedef "bool" -> char) to its boolean primitive,
+                // landing on the decompiler's core `bool` from
+                // setCoreType("bool",1,TYPE_BOOL,false) (sleigh_arch.cc:216).
+                // Type identity then drives ActionSetCasts::castInput's
+                // constant absorption (coreaction.cc:2687-2691) and
+                // PrintC::pushConstant's TYPE_BOOL arm (printc.cc:1769-1771),
+                // printing `true`/`false` — the canonical-golden behavior for
+                // every typedef-bool field (`::config.showerror = true;`).
+                // Gate on the 1-byte underlying so a malformed larger "bool"
+                // typedef keeps the alias path.
+                Some(name) => {
+                    if inner.get_size() == 1 {
+                        let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+                        let core_bool = factory
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .dwarf_conventional_bool(&name);
+                        if let Some(core_bool) = core_bool {
+                            return Ok(core_bool);
+                        }
+                    }
+                    materialized_alias(name, &inner)
+                }
                 None => Ok(inner),
             }
         }
@@ -1140,8 +1692,131 @@ fn base_metatype(entry: &DebuggingInformationEntry<DwarfReader>) -> Result<TypeM
     })
 }
 
+// Ghidra's isEncodingCompatible (DWARFDataTypeManager.java:359-369): only
+// the DW_ATE_signed / DW_ATE_unsigned requests constrain the alias-table
+// hit — a signed request rejects unsigned-integer canonicals, an unsigned
+// request rejects signed-integer canonicals. `bool` counts as an unsigned
+// integer (BooleanDataType extends AbstractUnsignedIntegerDataType), while
+// float/wchar_t/undefined1 canonicals are not AbstractIntegerDataType
+// instances and always pass; every other encoding passes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BaseAliasSign {
+    Signed,
+    Unsigned,
+    NonInteger,
+}
+
+// Ghidra: DWARFDataTypeManager.java:477-549 initBaseDataTypes
+// (Java-side DWARF analyzer; decompile/cpp has no DWARF parser, so Rugra's
+// debugproto is the native front-end adapter for that boundary).
+// The standard C base-type alias table the analyzer's getBaseType consults
+// FIRST (DWARFDataTypeManager.java:403 `dt = baseDataTypes.get(name)`): a
+// DW_AT_name spelling one of these aliases resolves to the Program DTM's
+// canonical type DIRECTLY — no typedef wrap — when the size gate and the
+// encoding gate pass, so the decompiler receives (and prints) the canonical
+// spelling: `long int` (8, DW_ATE_signed) IS the DTM `long` and casts print
+// `(long)` (golden corpus: `(long)` 55x curl / 1165x httpd, `long int` zero
+// occurrences). Canonical spellings match the C++ coretypes stream names
+// (typefactory.rs init_data_org_core_types doc): uchar/longlong/ulonglong
+// are Java-DTM-only names — the C++ stream's same-size longlong slot is
+// overwritten by long — so they intern as named non-core types exactly as
+// the database transport delivers them to TypeFactory::findAdd
+// (type.cc:3412-3437). The void/nullptr table entries serve Java-only
+// lookup paths (a DW_TAG_base_type never carries those names: DWARF
+// expresses void by an absent DW_AT_type, handled at the pointer arm).
+fn standard_base_alias(name: &str) -> Option<(&'static str, TypeMetatype, BaseAliasSign)> {
+    Some(match name {
+        // initBaseDataTypes :499-501
+        "char" | "signed char" => ("char", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned char" => ("uchar", TypeMetatype::Uint, BaseAliasSign::Unsigned),
+        // :516-520
+        "short" | "short int" | "signed short int" => ("short", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned short int" | "short unsigned int" => {
+            ("ushort", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :522-524
+        "int" | "signed int" => ("int", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned int" => ("uint", TypeMetatype::Uint, BaseAliasSign::Unsigned),
+        // :526-530
+        "long" | "long int" | "signed long int" => ("long", TypeMetatype::Int, BaseAliasSign::Signed),
+        "unsigned long int" | "long unsigned int" => {
+            ("ulong", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :532-536
+        "long long" | "long long int" | "signed long long int" => {
+            ("longlong", TypeMetatype::Int, BaseAliasSign::Signed)
+        }
+        "unsigned long long int" | "long long unsigned int" => {
+            ("ulonglong", TypeMetatype::Uint, BaseAliasSign::Unsigned)
+        }
+        // :538-543
+        "float" => ("float", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        "double" => ("double", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        "long double" => ("longdouble", TypeMetatype::Float, BaseAliasSign::NonInteger),
+        // :545-548 (bool is an unsigned integer for the compatibility gate)
+        "bool" => ("bool", TypeMetatype::Bool, BaseAliasSign::Unsigned),
+        "wchar_t" => ("wchar_t", TypeMetatype::Int, BaseAliasSign::NonInteger),
+        "undefined1" => ("undefined1", TypeMetatype::Unknown, BaseAliasSign::NonInteger),
+        _ => return None,
+    })
+}
+
+// Ghidra: DWARFDataTypeManager.java:397 getBaseType
+// (the aligned-size gate at :404 `dt.getAlignedLength() == dwarfSize`: the
+// canonical type's dataOrganization size must equal the DIE's
+// DW_AT_byte_size or the alias hit is rejected, falling through to the
+// original-name arm). The shared TypeFactory's core table IS the x86-64
+// gcc dataOrganization mirror, so factory-present canonicals resolve their
+// size through it; the three Java-DTM-only names take the same
+// dataOrganization slots — uchar = charSize, longlong/ulonglong =
+// longLongSize (== longSize, 8, under the locked x86-64 gcc cspec;
+// AbstractIntegerDataType.java:549-566).
+fn canonical_base_size(canonical: &str) -> Option<usize> {
+    let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+    let guard = factory
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = guard.find_by_name(canonical) {
+        return Some(existing.get_size());
+    }
+    match canonical {
+        "uchar" => guard.find_by_name("char").map(|dt| dt.get_size()),
+        "longlong" | "ulonglong" => guard.find_by_name("long").map(|dt| dt.get_size()),
+        _ => None,
+    }
+}
+
+// Ghidra: DWARFDataTypeManager.java:359 isEncodingCompatible
+// (the DW_ATE_signed / DW_ATE_unsigned arms at :362-368)
+fn base_alias_encoding_compatible(
+    encoding: Option<gimli::DwAte>,
+    sign: BaseAliasSign,
+) -> bool {
+    match encoding {
+        Some(value) if value == gimli::DW_ATE_signed => {
+            sign != BaseAliasSign::Unsigned
+        }
+        Some(value) if value == gimli::DW_ATE_unsigned => {
+            sign != BaseAliasSign::Signed
+        }
+        _ => true,
+    }
+}
+
 // RUGRA-GLUE: materializes the Program database base type selected by the
 // locked Ghidra DWARF analyzer before the C++ decompiler receives it.
+// Resolution order mirrors DWARFDataTypeManager.getBaseType
+// (DWARFDataTypeManager.java:397-449, reached from the base-type DIE at
+// DWARFDataTypeImporter.java:373):
+//   1. alias-table hit (size + encoding gates pass) returns the canonical
+//      Program type directly (:403-407) — the type the decompiler's
+//      TypeFactory::findAdd then dedups onto its same-named core entry
+//      (type.cc:3412-3425), so DWARF `long int` and the cspec `long` are
+//      ONE object and identical-type casts disappear;
+//   2. DW_ATE_signed_char falls back to the char type (:426), keeping the
+//      DWARF spelling the way the typedef wrap (:441-447) renders it;
+//   3. every other name keeps its DWARF spelling (the typedef-wrap arm —
+//      Rugra materializes typedefs as the renamed underlying type).
 fn dwarf_base_type(
     name: String,
     size: usize,
@@ -1149,25 +1824,29 @@ fn dwarf_base_type(
 ) -> Result<Arc<Datatype>> {
     let encoding = entry.attr_value(gimli::DW_AT_encoding)?;
     let metatype = base_metatype(entry)?;
-    let is_signed_character_encoding = matches!(
-        encoding,
-        Some(AttributeValue::Encoding(value))
-            if value == gimli::DW_ATE_signed_char
-    );
+    let encoding_kind = match encoding {
+        Some(AttributeValue::Encoding(value)) => Some(value),
+        _ => None,
+    };
+    if let Some((canonical, canonical_metatype, sign)) = standard_base_alias(name.as_str()) {
+        if canonical_base_size(canonical) == Some(size)
+            && base_alias_encoding_compatible(encoding_kind, sign)
+        {
+            return Ok(base_type(canonical.to_string(), size, canonical_metatype));
+        }
+    }
     // DWARFDataTypeManager::getBaseType resolves the core names `char` and
     // `signed char` to CharDataType before its encoding fallback.  Its
     // DW_ATE_signed_char fallback is also CharDataType, whereas
     // DW_ATE_unsigned_char resolves to the ordinary unsigned `uchar` type.
-    let is_direct_character_name = size == 1 && matches!(name.as_str(), "char" | "signed char");
-    if is_direct_character_name || is_signed_character_encoding {
-        let resolved_name = if is_direct_character_name {
-            "char".to_string()
-        } else {
-            name
-        };
-        return Ok(Arc::new(Datatype::Base(TypeBase::new_char(
-            resolved_name,
-            TypeMetatype::Int,
+    // GLIBC-PROTO-PARAMNAME-0001: interned by name so the DWARF char is
+    // the SAME type object the factory's signature/inference paths use
+    // (Ghidra resolves every `char` through its one TypeFactory,
+    // grammar.cc:2989); a fresh clone here fragmented same-type merge
+    // grouping.
+    if encoding_kind == Some(gimli::DW_ATE_signed_char) {
+        return Ok(intern_named(Arc::new(Datatype::Base(
+            TypeBase::new_char(name, TypeMetatype::Int),
         ))));
     }
     Ok(base_type(name, size, metatype))
@@ -1321,31 +2000,129 @@ fn read_array_count(unit: &Unit<DwarfReader>, offset: UnitOffset<usize>) -> Resu
 
 // RUGRA-GLUE: constructs a leaf Datatype from front-end debug metadata before it enters Ghidra-aligned type analysis
 fn base_type(name: String, size: usize, metatype: TypeMetatype) -> Arc<Datatype> {
-    Arc::new(Datatype::Base(TypeBase::new(name, size, metatype)))
+    intern_named(Arc::new(Datatype::Base(TypeBase::new(name, size, metatype))))
 }
 
 // RUGRA-GLUE: constructs a fielded struct Datatype from DWARF DW_TAG_member children; Ghidra builds the equivalent Structure dataType in its DWARF/type-manager front end
 fn struct_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype> {
-    Arc::new(Datatype::Struct(TypeStruct {
+    intern_named(Arc::new(Datatype::Struct(TypeStruct {
         base: TypeBase::new(name, size, TypeMetatype::Struct),
         fields,
-    }))
+    })))
 }
 
 // RUGRA-GLUE: constructs a fielded union Datatype from DWARF union members (all at offset 0)
 fn union_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype> {
-    Arc::new(Datatype::Union(TypeUnion {
-        base: TypeBase::new(name, size, TypeMetatype::Union),
+    let mut base = TypeBase::new(name, size, TypeMetatype::Union);
+    // Ghidra's TypeUnion constructor sets needs_resolution (type.hh:551);
+    // the import completes the fields immediately (the ctor's
+    // type_incomplete counterpart is cleared by setFields), but the
+    // resolution flag survives — every decoded/imported union carries it.
+    // Pointers to the union inherit the flag in TypePointer::calcSubmeta
+    // (type.cc:1048-1049), which is what drives
+    // ActionInferTypes::propagateTypeEdge's always-resolve arm
+    // (coreaction.cc:5081-5084) and ActionSetCasts::resolveUnion
+    // (coreaction.cc:2490). Without it the whole ResolvedUnion machinery
+    // starves (COREACT-C3-UNIONRES-0001). Same flagging pattern as
+    // enum_type's ENUMTYPE note above.
+    base.flags |= crate::type_system::datatype::type_flags::NEEDS_RESOLUTION;
+    intern_named(Arc::new(Datatype::Union(TypeUnion {
+        base,
         fields,
-    }))
+    })))
 }
 
 // RUGRA-GLUE: constructs an enum Datatype with its DWARF enumerator value table for constant-name rendering
 fn enum_type(name: String, size: usize, values: BTreeMap<u64, String>) -> Arc<Datatype> {
-    Arc::new(Datatype::Enum(TypeEnum {
-        base: TypeBase::new(name, size, TypeMetatype::Enum),
+    let mut base = TypeBase::new(name, size, TypeMetatype::Enum);
+    // Ghidra's TypeEnum sets the `enumtype` flag (type.hh:490-494 /
+    // TypeFactory decode paths); isEnumType() is flag-based, so an enum
+    // without the flag is invisible to PrintC::pushConstant's enum arm
+    // (printc.cc:1756/1763) and prints as a default cast. Mirrors the
+    // decode-side flagging in the factory (datatype.rs ENUMTYPE sets).
+    base.flags |= crate::type_system::datatype::type_flags::ENUMTYPE;
+    intern_named(Arc::new(Datatype::Enum(TypeEnum {
+        base,
         values,
-    }))
+    })))
+}
+
+// RUGRA-GLUE: DWARF-import type-manager canonicalization. Ghidra's DWARF
+// analyzer resolves every DIE type through the Architecture's ONE
+// TypeFactory (type.cc findByName/setName interning), so the same-named
+// structure reached from two variables — or from both the globals pass
+// (DebugGlobalDatabase) and the prototype pass (DebugPrototypeDatabase) —
+// is ONE interned Datatype object, and pointer-identity comparisons
+// (CastStrategyC::castStandard's `curtype == reqtype`, cast.cc:299;
+// ActionSetCasts' store-value cast, coreaction.cc:553-554) see equal types
+// and emit no cast. Rugra's two independent DWARF passes each built fresh
+// Arcs, so `*glob = glob_expand;` (URLGlob** param vs typelocked URLGlob*
+// global read) gained a spurious `(URLGlob *)` cast. This soft intern
+// reuses the shared factory's existing name entry when the shape (enum
+// variant), size, and metatype match — the shape guard keeps a cycle-break
+// shallow projection (base_type with a composite metatype) from shadowing
+// the full fielded definition of the same DWARF name — and registers the
+// new type otherwise. This is the cross-parse identity half of the importer
+// boundary noted as untracked on alias_type.
+fn intern_named(candidate: Arc<Datatype>) -> Arc<Datatype> {
+    let name = candidate.get_name().to_string();
+    if name.is_empty() {
+        return candidate;
+    }
+    // Ghidra's transport decode derives the id when the name is present and
+    // no explicit id traveled (type.cc:675-676 `id = hashName(name); //
+    // There must be some kind of id`, Datatype::decodeBasic) — and
+    // TypeFactory::findAdd rejects a zero id outright (type.cc:3417-3425
+    // "Datatype must have a valid id"). Rugra's DWARF constructors
+    // (base_type/struct_type/union_type/enum_type) leave the fresh
+    // TypeBase id at 0, so without this derivation the findAdd below
+    // errors and the candidate silently stays UNREGISTERED — invisible
+    // to the HashMap-carried consumers but a None lookup for every
+    // name-tree resolution (parse_c_type's findByName mirror, the C4
+    // struct-seed channel's spelling resolver; OUTSTRUCT-ID0). The
+    // typedef path (alias_type) already hashes explicitly, matching this
+    // rule; deriving here makes every import-boundary candidate follow
+    // the same decodeBasic contract.
+    let candidate = if candidate.get_id() == 0 {
+        let mut derived = (*candidate).clone();
+        derived.base_record_mut().id = Datatype::hash_name(&name);
+        Arc::new(derived)
+    } else {
+        candidate
+    };
+    // Ghidra's DWARF front end never feeds an incomplete (zero-size)
+    // composite to TypeFactory::findAdd — findAdd's layout pass would hit
+    // getPrimitiveAlignSize(0), a division by the default alignment map's
+    // zero entry (type.cc:3429-3437); the declaration-only DIEs stay
+    // unregistered stubs on the Java side. Rugra's resolve_type still
+    // builds zero-size candidates for DW_AT_declaration composites (the
+    // anonymous forward refs inside field graphs), so they keep the
+    // historical unregistered course here too: returned as-is, invisible
+    // to the name tree, harmless to the HashMap-carried consumers
+    // (OUTSTRUCT-ID0 follow-up guard).
+    if candidate.get_size() == 0 {
+        return candidate;
+    }
+    let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+    let mut guard = factory.write().unwrap();
+    if let Some(existing) = guard.find_by_name(&name) {
+        let same_shape = std::mem::discriminant(existing.as_ref())
+            == std::mem::discriminant(candidate.as_ref());
+        if same_shape
+            && existing.get_size() == candidate.get_size()
+            && existing.get_metatype() == candidate.get_metatype()
+        {
+            return existing;
+        }
+        // Same name, different shape/size (shallow cycle-break projection
+        // vs the full definition, or a genuine DWARF redefinition): keep the
+        // fresh candidate without touching the registered slot.
+        return candidate;
+    }
+    match guard.intern_imported((*candidate).clone()) {
+        Ok(interned) => interned,
+        Err(_) => candidate,
+    }
 }
 
 // RUGRA-GLUE: materializes a DWARF typedef as the underlying composite/enum renamed to the typedef spelling; Rugra's Datatype enum has no TypeTypedef variant yet (Ghidra type.hh has one), so fields and enumerator names are carried on the renamed type
@@ -1366,7 +2143,7 @@ fn alias_type(name: String, inner: &Datatype) -> Arc<Datatype> {
     base.display_name = name.clone();
     base.id = Datatype::hash_name(&name);
     base.flags &= !crate::type_system::datatype::type_flags::CORETYPE;
-    Arc::new(alias)
+    intern_named(Arc::new(alias))
 }
 
 // RUGRA-GLUE: constructs a pointer Datatype from a resolved DWARF pointee at the native debug-import boundary
@@ -1375,16 +2152,23 @@ fn pointer_type(pointee: Arc<Datatype>, size: usize) -> Arc<Datatype> {
     // getTypePointer path, type.cc:3867-3875 — DW_AT_name on a pointer
     // typedef attaches via alias_type, not here); see parse_c_type's note
     // for why the former composed display name diverged from the oracle.
-    Arc::new(Datatype::Pointer(TypePointer::new(size, pointee, 1)))
+    // The factory pass below canonicalizes pointer identity the way the
+    // oracle's single TypeFactory does for every DWARF type.
+    crate::type_system::typefactory::TypeFactory::shared_default()
+        .write()
+        .unwrap()
+        .get_type_pointer(size, pointee, 1)
 }
 
-// RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target
+// RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target.
+// GLIBC-PROTO-PARAMNAME-0001: routed through the canonical shared factory
+// (Ghidra's single `void` core type) so `void *` pointee identity is the
+// factory's, not a per-parse clone.
 fn void_type() -> Arc<Datatype> {
-    Arc::new(Datatype::Void(TypeBase::new(
-        "void".to_string(),
-        0,
-        TypeMetatype::Void,
-    )))
+    crate::type_system::typefactory::TypeFactory::shared_default()
+        .read()
+        .unwrap()
+        .get_type_void()
 }
 
 // RUGRA-GLUE: fail-visible unknown DWARF type used only when a DIE omits a resolvable type reference
@@ -1411,6 +2195,60 @@ mod tests {
             }
             cur.get_name().to_string()
         }
+    }
+
+    // BRIDGE1-TYPESEED-PIDT: `__pid_t` must carry the committed glibc
+    // typedef's (4, int) — the explicit size the oracle's <localdb>
+    // transport would hold (gen_seed_xml BASES mirror) — so the seeded
+    // local_34@-52 cannot overlap the 8B local_30@-48 neighbor.
+    #[test]
+    fn typeseed_pidt_base_carries_committed_four_byte_int() {
+        let dt = parse_c_type("__pid_t", 8, None).expect("committed typedef resolves");
+        assert_eq!(dt.get_name(), "__pid_t");
+        assert_eq!(dt.get_size(), 4);
+        assert_eq!(dt.get_metatype(), TypeMetatype::Int);
+    }
+
+    // BRIDGE1-TYPESEED-PIDT (fallback removal): an unresolvable bare name
+    // is a parse error — the oracle never mints an address-sized unknown
+    // base from a spelling (transport carries explicit size; grammar's
+    // findByName miss fails the parse).
+    #[test]
+    fn typeseed_unknown_base_is_parse_error_not_address_sized_mint() {
+        let err = parse_c_type("__not_a_committed_type", 8, None)
+            .expect_err("unknown base must not mint a base");
+        assert!(
+            err.to_string().contains("unresolved base spelling"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    // BRIDGE1-TYPESEED-MULTIDIM: C declarator order — `long[2][4]` is
+    // array(2) of array(4) of long (outer arraysize = leftmost dimension,
+    // matching the oracle's nested TypeArray transport).
+    #[test]
+    fn typeseed_multidim_array_strips_leftmost_dimension() {
+        let dt = parse_c_type("long[2][4]", 8, None).expect("multidim resolves");
+        let Datatype::Array(outer) = dt.as_ref() else {
+            panic!("outermost must be an array");
+        };
+        assert_eq!(outer.num_elements, 2);
+        assert_eq!(outer.base.size, 64); // 2 * 4 * 8
+        let Datatype::Array(inner) = outer.array_of.as_ref() else {
+            panic!("element must be the inner array");
+        };
+        assert_eq!(inner.num_elements, 4);
+        assert_eq!(inner.base.size, 32); // 4 * 8
+        assert_eq!(inner.array_of.get_size(), 8);
+        assert_eq!(inner.array_of.get_name(), "long");
+        // Single-dim spellings keep their shape: `char *[2]` stays
+        // array(2) of char*.
+        let single = parse_c_type("char *[2]", 8, None).expect("single-dim resolves");
+        let Datatype::Array(arr) = single.as_ref() else {
+            panic!("single-dim must be an array");
+        };
+        assert_eq!(arr.num_elements, 2);
+        assert_eq!(arr.array_of.get_metatype(), TypeMetatype::Pointer);
     }
 
     struct TestSpecHost {
@@ -1514,6 +2352,7 @@ mod tests {
         ));
         carrier
     }
+
 
     #[test]
     fn libc_signature_table_covers_the_24_locked_imports() {
@@ -1668,7 +2507,26 @@ mod tests {
     fn curl_dwarf_globals_import_urlglob_pointer_chain() {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugGlobalDatabase::parse_elf(&bytes).expect("DWARF globals");
-        assert_eq!(db.len(), 5);
+        // 5 located globals + the 3 copy-relocation externals
+        // (stdout/stdin/stderr, DWARF-SYMFIELD-TYPESTATE-0001).
+        assert_eq!(db.len(), 8);
+        {
+            let stdout = db.get(0x174e0).expect("stdout copy-reloc global");
+            assert_eq!(stdout.name, "stdout");
+            assert!(stdout.parent_function.is_none());
+            match stdout.data_type.as_ref() {
+                Datatype::Pointer(pointer) => {
+                    // Typedef spelling preserved: FILE over struct _IO_FILE.
+                    assert_eq!(pointer.ptr_to.get_name(), "FILE");
+                    assert_eq!(pointer.ptr_to.get_size(), 216);
+                }
+                other => panic!("stdout declaration is not a pointer: {other:?}"),
+            }
+            let stdin = db.get(0x174f0).expect("stdin copy-reloc global");
+            assert_eq!(stdin.name, "stdin");
+            let stderr = db.get(0x17500).expect("stderr copy-reloc global");
+            assert_eq!(stderr.name, "stderr");
+        }
 
         let glob_expand = db.get(0x17660).expect("glob_expand global");
         assert_eq!(glob_expand.name, "glob_expand");
@@ -1733,7 +2591,7 @@ mod tests {
         assert_eq!(glob_url.data_type.get_size(), 304);
 
         let map = db.address_pointer_map();
-        assert_eq!(map.len(), 5);
+        assert_eq!(map.len(), 8);
         // Address-pointer map types are anonymous pointers (see
         // pointer_type's Ghidra note); assert the pointee spelling through
         // the drill instead of the composed name.
@@ -1931,8 +2789,15 @@ mod tests {
     // bound by the caller. FuncProto::decode only constructs an unknown model
     // for an explicit, unresolved ATTRIB_MODEL value; voidinputlock merely
     // contributes to modellock (fspec.cc:4681-4698, 4737-4738, 4776-4777).
+    // DWARF-VOID-UNKNOWN-MODEL-0001 supersedes the "keeps the bound model"
+    // expectation for the 0-param DWARF locals: the headless analyzer hands
+    // the decompiler model="unknown" (StorageVerification's empty-signature
+    // downgrade + FunctionDB.updateFunction(null,...) keeping the never-
+    // assigned convention), and the locked golden witnesses it as the
+    // "WARNING: Unknown calling convention -- yet parameter storage is
+    // locked" header on exactly main_init/main_free/hugehelp.
     #[test]
-    fn void_signature_dwarf_prototype_keeps_bound_model() {
+    fn void_signature_dwarf_prototype_pins_unknown_model() {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         for (name, address) in
@@ -1947,7 +2812,10 @@ mod tests {
             assert!(db
                 .apply(&mut fd)
                 .expect("apply void-signature prototype"));
-            assert!(!fd.funcp.is_model_unknown(), "{name} keeps the bound model");
+            assert!(
+                fd.funcp.is_model_unknown(),
+                "{name} pins the oracle's unknown model (golden warning witness)"
+            );
             assert!(
                 fd.funcp.is_model_locked(),
                 "{name} void parameter list locks the bound model"
@@ -1960,20 +2828,99 @@ mod tests {
     // signatures keep the resolved model binding — in the locked golden none
     // of the 18 parameterized DWARF functions warn, so the overlay must not
     // pin the unknown sentinel for them.
+    // HTTPD-URAM-SYMBOLIZE-0001: the PLT thunk import boundary against the
+    // locked-oracle httpd image (the binary the 12.0.4 headless golden was
+    // produced from; thunk names cross-checked against the golden's function
+    // headers `/* ---- 0x12aXXX: <name> (10 bytes) ---- */`).
+    fn httpd_bytes() -> Vec<u8> {
+        std::fs::read("examples/httpd").expect("httpd fixture")
+    }
+
     #[test]
-    fn parameterized_dwarf_prototype_keeps_resolved_model() {
-        let bytes = std::fs::read("examples/curl").expect("curl fixture");
-        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
-        let mut fd = Funcdata::new("GetStr", Address::new(0x36d0), 0x4a);
-        fd.funcp = model_carrier();
-        assert!(db
-            .apply(&mut fd)
-            .expect("apply parameterized prototype"));
-        assert!(
-            !fd.funcp.is_model_unknown(),
-            "parameterized signatures keep the resolved model"
+    fn plt_imports_resolve_sec_slots_from_jump_slot_relocs() {
+        let imports = ElfPltImports::parse_elf(&httpd_bytes());
+        // .plt.sec @0x2a420, slot i at +16*i ↔ .rela.plt[i].
+        // Witness set = the 82 thunk call sites of the uRam family; every
+        // name below matches the locked golden's callee spelling.
+        for (addr, name) in [
+            (0x2a6d0u64, "apr_app_initialize"),
+            (0x2a7c0, "apr_pool_create_ex"),
+            (0x2a6a0, "apr_pool_tag"),
+            (0x2abc0, "apr_palloc"),
+            (0x2a8e0, "apr_filepath_name_get"),
+            (0x2a4d0, "apr_array_make"),
+            (0x2a450, "apr_getopt_init"),
+            (0x2b6e0, "apr_getopt"),
+            (0x2b190, "apr_array_push"),
+            (0x2aa50, "apr_hook_sort_all"),
+            (0x2b070, "apr_dynamic_fn_retrieve"),
+            (0x2a820, "apr_pool_clear"),
+            (0x2b1a0, "apr_pool_destroy"),
+            (0x2ab70, "apr_hook_deregister_all"),
+            (0x2a540, "strcasecmp"),
+            (0x2afd0, "strncasecmp"),
+            (0x2acb0, "memcmp"),
+            (0x2a800, "apr_table_get"),
+            (0x2b790, "__ctype_b_loc"),
+            (0x2b140, "apr_parse_addr_port"),
+            (0x2a8d0, "apr_itoa"),
+            (0x2b770, "__ctype_tolower_loc"),
+            (0x2a600, "strncmp"),
+            (0x2b430, "apr_sockaddr_equal"),
+            (0x2a9e0, "strchr"),
+            (0x2aee0, "apr_pstrdup"),
+            (0x2b500, "apr_pstrndup"),
+            (0x2aa30, "apr_time_exp_lt"),
+            (0x2a4e0, "apr_time_exp_gmt"),
+            (0x2aa90, "apr_strftime"),
+            (0x2a980, "__stack_chk_fail"),
+            (0x2a830, "apr_filepath_root"),
+            (0x2a910, "strlen"),
+            (0x2ab20, "apr_pool_cleanup_register"),
+            (0x2a970, "apr_pool_cleanup_kill"),
+            (0x2ab40, "memset"),
+            (0x2ae60, "memcpy"),
+            (0x2aa80, "strrchr"),
+        ] {
+            assert_eq!(
+                imports.get(addr).map(String::as_str),
+                Some(name),
+                "PLT thunk at 0x{addr:x} must import as {name}"
+            );
+        }
+        // JUMP_SLOT count == .plt.sec slot count: all 317 imports resolved.
+        assert_eq!(imports.len(), 317, "one thunk name per .rela.plt entry");
+        // Non-thunk addresses (the 5 shared tail chunks in .text) must stay
+        // unnamed here — they are analysis functions, not imports.
+        for addr in [0x2c520u64, 0x2c550, 0x2c8e0, 0x2c960, 0x2ce20] {
+            assert!(
+                imports.get(addr).is_none(),
+                "0x{addr:x} is not a PLT thunk"
+            );
+        }
+    }
+
+    #[test]
+    fn analyze_headless_function_symbol_name_uses_image_base_padding() {
+        // Locked-oracle witnesses (golden headers):
+        // 0x2c520 → FUN_0012c520, 0x2c960 → FUN_0012c960.
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2c520, 0x100000),
+            "FUN_0012c520"
         );
-        assert_eq!(fd.funcp.get_model_name(), "__stdcall");
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2c960, 0x100000),
+            "FUN_0012c960"
+        );
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2ce20, 0x100000),
+            "FUN_0012ce20"
+        );
+    }
+
+    #[test]
+    fn plt_imports_reject_non_elf_payloads() {
+        assert!(ElfPltImports::parse_elf(b"not an elf image at all").is_empty());
     }
 
 }

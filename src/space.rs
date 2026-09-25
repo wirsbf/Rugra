@@ -132,7 +132,7 @@ impl AddressSpace {
     // Ghidra: space.hh AddrSpace::getDelay
     /// Heritage delay for this space — number of heritage passes before
     /// this space's varnodes are first heritaged. Faithful to
-    /// `AddrSpace::getDelay()` (space.hh). Ghidra reads this from the
+    /// `AddrSpace::getDelay()` (space.hh:315). Ghidra reads this from the
     /// .sla spec space record (`delay` attribute, sleighbase.cc:292
     /// decodeSlaSpace → `new AddrSpace(..., delay, deadcodedelay)`).
     /// Locked x86-64 oracle values (sleigh_specs/x86-64.sla space table,
@@ -141,16 +141,33 @@ impl AddressSpace {
     ///   OTHER/const=0, unique=0 (size 4), ram=1, register=0.
     /// The stack space is NOT in the .sla — it is synthesized by
     /// `Architecture::decodeStackPointer` → `addSpacebase`
-    /// (architecture.cc:566) with `SpacebaseSpace(...,
-    /// basespace->getDelay()+1, ...)` = ram(1)+1 = **2** for x86-64.
-    /// MAINDIFF-UNIQLEAK-0001: Rugra previously had Ram=0/Stack=1,
-    /// heritaging ram one pass too early (dead removal on ram from pass
-    /// 0 → "Heritage AFTER dead removal" bump/restart) and the stack one
-    /// pass before the oracle's first stack pass at pass 2.
+    /// (architecture.cc:1013 → 559-570). The delay argument is
+    /// `ptrdata.space->getDelay()+1` (architecture.cc:565), where
+    /// `ptrdata` is the stack-pointer register VarnodeData returned by
+    /// `translate->getRegister(registerName)` (architecture.cc:1004) —
+    /// i.e. the REGISTER space (delay 0), NOT the basespace (ram, 1);
+    /// basespace is only stored as `contain` (translate.cc:61).
+    /// SpacebaseSpace forwards that dl to AddrSpace as both delay and
+    /// deadcodedelay (translate.cc:57-59 `AddrSpace(..., ind, 0, dl, dl)`).
+    /// ⇒ stack delay = register(0)+1 = **1** for x86-64 (oracle
+    /// HeritageInfo dump confirms `stack:idx=8,type=IPTR_SPACEBASE,
+    /// delay=1`; see RCA2_MAXPASS.md §4.3/§5).
+    /// RCA-2 (sb-integration probe, 2026-09-22): an earlier note here
+    /// misread `ptrdata.space` as basespace and set stack=2, pushing
+    /// stack first-heritage/placeholder resolution (and thus
+    /// freePlaceholderSlot→maxpass flip, ActionActiveParam build) one
+    /// pass late vs oracle (build@pass3 vs pass2) and inflating
+    /// ParamList::calcDelay → getMaxInputDelay (2 vs 1). Fixed to 1.
+    /// MAINDIFF-UNIQLEAK-0001 history: before that, Rugra had Ram=0
+    /// (wrong — ram heritaged one pass too early, fixed to 1) alongside
+    /// Stack=1; the "oracle first stack pass at pass 2" observation that
+    /// justified Stack=2 was counted in mainloop rounds and actually
+    /// corresponds to heritage delay=1 (stack first heritaged at
+    /// heritage pass 1 = mainloop round 2).
     pub fn get_delay(&self) -> i32 {
         match self {
             AddressSpace::Ram => 1,
-            AddressSpace::Stack => 2,
+            AddressSpace::Stack => 1,
             _ => 0,
         }
     }
@@ -305,15 +322,20 @@ impl AddressSpace {
     /// const = sizeof(uintb) = 8 (space.cc:357), OTHER = sizeof(uintb) = 8
     /// (space.cc:397), iop = sizeof(void *) = 8 (op.cc:36), unique =
     /// UniqueSpace::SIZE = 4 (space.cc:418/428), join = sizeof(uintm) = 4
-    /// (types.h:27, space.cc:447). ram/register/stack/overlay carry the
+    /// (types.h:27, space.cc:447). ram/stack/overlay carry the
     /// architecture spec values, modeled with the x86-64 production sizes
-    /// (8/8/8; an overlay copies its base space, space.cc:670) until the
+    /// (8/8; an overlay copies its base space, space.cc:670) until the
     /// enum migrates onto the registry handle (ADDRESS-0001), which carries
     /// the real per-spec size (see [`AddrSpace::get_addr_size`]).
+    /// register = 4 on the x86-64 oracle: heritage.cc:393/445/466 build
+    /// SUBPIECE offset constants via `newConstant(addr.getAddrSize(), ...)`
+    /// on register-space ranges, and the locked oracle projection emits
+    /// them as `c:X:4` — 2668/2668 SUBPIECE trailing constants are width 4
+    /// (SUBFLOW-SUBPIECE-WIDTH-0001 census).
     pub fn addr_size(&self) -> usize {
         match self {
             AddressSpace::Ram => 8,
-            AddressSpace::Register => 8,
+            AddressSpace::Register => 4,
             AddressSpace::Unique => 4, // UniqueSpace::SIZE (space.cc:418)
             AddressSpace::Const => 8, // sizeof(uintb) (space.cc:357)
             AddressSpace::Stack => 8,

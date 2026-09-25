@@ -16,11 +16,19 @@ python3 "$REPO_ROOT/tools/check_doc_sync.py" --staged || exit $?
 # 注释，并核实 4 类决定性语义），不得用 --no-verify 绕过。
 python3 "$REPO_ROOT/tools/check_ghidra_annotations.py" --all || exit $?
 
-# 机制 E 兜底: // Ghidra: 引用的 file:line 必须真实存在
+# 机制 E 兜底: // Ghidra: 引用的 file:line 必须真实存在 + 定义起始行验证
 # (运行时 PreToolUse hook 在 .zcode/align_gate.py 强制铁律 1.2"编辑前重读",
-#  此处为 commit 时静态校验文件存在且行号未越界；函数定义起始行的精确映射
-#  由逐函数账本审计负责，不能由范围检查冒充。
+#  此处为 commit 时静态校验: ①文件存在且行号未越界(所有引用形态);
+#  ②TOOLS-REFS-DEFSTART-0001 — 头注解 `// Ghidra: <file>.cc:<line> <fn>` 中
+#  <fn> 若在锁定 oracle 的 <file> 内有定义, cited line 必须是定义起始行
+#  (类名级代表行/跨文件/内联 .hh 引用按既有惯例豁免,由脚本计数不阻塞)。
 #  使用锁定 12.0.4 源码树做全库 strict 检查。)
 python3 "$REPO_ROOT/tools/check_ghidra_refs.py" --all --strict || exit $?
+
+# AUDIT-CORPUS-MARKERS-GATE-0001: 库生产代码零语料标记门禁
+# src/**/*.rs 的 #[cfg(test)] 前区域不得出现 curl/httpd 语料符号、
+# 二进制名或语料地址（注释剥除、标识符边界、误报白名单见脚本头）。
+# EXPEL-CORPUS-TABLES-0001 清除后的防复发常驻门禁。
+python3 "$REPO_ROOT/tools/check_corpus_markers.py" --all || exit $?
 
 exit 0

@@ -16,7 +16,7 @@
 
 /// A class for manipulating integer value ranges over integers mod 2^n.
 /// Corresponds to Ghidra's `CircleRange` (rangeutil.hh:50).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CircleRange {
     /// Left boundary of the open range [left, right)
     pub left: u64,
@@ -28,6 +28,29 @@ pub struct CircleRange {
     pub isempty: bool,
     /// Explicit step size
     pub step: u64,
+}
+
+// Ghidra: rangeutil.hh:331 CircleRange::operator==
+/// Equality, mirroring the C++ inline `operator==` (rangeutil.hh:331-336)
+/// field-for-field: unequal `isempty` flags are never equal; two empty
+/// ranges ARE equal without consulting the remaining fields (stale
+/// mask/step/left/right residue on an empty range must not register as a
+/// change — ValueSet::iterate's `res == range` no-change decision depends
+/// on this); otherwise all four of left/right/mask/step must match.
+impl PartialEq for CircleRange {
+    // Ghidra: rangeutil.hh:331 CircleRange::operator==
+    fn eq(&self, op2: &CircleRange) -> bool {
+        if self.isempty != op2.isempty {
+            return false;
+        }
+        if self.isempty {
+            return true;
+        }
+        self.left == op2.left
+            && self.right == op2.right
+            && self.mask == op2.mask
+            && self.step == op2.step
+    }
 }
 
 impl CircleRange {
@@ -113,50 +136,15 @@ impl CircleRange {
     pub fn get_step(&self) -> u64 { self.step }
 
     // Ghidra: rangeutil.cc:103 CircleRange::newStride
-    /// Extend the range to cover values with a different stride. Returns
-    /// true if the resulting range is empty. Faithful to cc:103-131.
-    pub fn new_stride(&mut self, mask: u64, step: u64, old_step: u64, rem: u32, myleft: &mut u64, myright: &mut u64) -> bool {
-        if old_step != 1 {
-            let old_rem = (*myleft % old_step) as u32;
-            if old_rem != (rem % old_step as u32) {
-                return true;
-            }
-        }
-        let orig_order = *myleft < *myright;
-        let left_rem = (*myleft % step) as u32;
-        let right_rem = (*myright % step) as u32;
-        if left_rem > rem {
-            *myleft += rem as u64 + step - left_rem as u64;
-        } else {
-            *myleft += rem as u64 - left_rem as u64;
-        }
-        if right_rem > rem {
-            *myright += rem as u64 + step - right_rem as u64;
-        } else {
-            *myright += rem as u64 - right_rem as u64;
-        }
-        *myleft &= mask;
-        *myright &= mask;
-        let new_order = *myleft < *myright;
-        if orig_order != new_order { return true; }
-        false
-    }
+    // 2026-09-23 (CR8 obs①): the member-mirror `new_stride` was deleted as
+    // dead code — the live faithful path is the static `new_stride_owned`
+    // called by `circle_intersect` (values flow through `&mut` locals,
+    // self is never consulted for inputs). Do not reintroduce member
+    // mirrors that shadow the _owned statics.
 
     // Ghidra: rangeutil.cc:143 CircleRange::newDomain
-    /// Truncate range to fit in a new domain mask. Returns true if empty.
-    pub fn new_domain(&mut self, new_mask: u64, new_step: u64, myleft: &mut u64, myright: &mut u64) -> bool {
-        let rem = if new_step != 1 { *myleft % new_step } else { 0 };
-        if *myleft > new_mask {
-            if *myright > new_mask { return true; }
-            *myleft = rem;
-        }
-        if *myright > new_mask + 1 {
-            *myright = (new_mask + 1) - ((new_mask + 1 - rem) % new_step);
-        }
-        self.mask = new_mask;
-        self.step = new_step;
-        false
-    }
+    // 2026-09-23 (CR8 obs①): the member-mirror `new_domain` was likewise
+    // deleted; the live faithful path is the static `new_domain_owned`.
 
     // Ghidra: rangeutil.cc:219 CircleRange::setRange(lft,rgt,size,stp)
     /// Set range from explicit boundaries, size, and step.
@@ -195,39 +183,35 @@ impl CircleRange {
     }
 
     // Ghidra: rangeutil.cc:549 CircleRange::intersect
-    /// Intersect this range with another.
-    /// Returns: 0=empty result, 1=non-empty intersection, 2=this contains op2.
+    /// Intersect this range with another (wrapper). Delegates to the
+    /// faithful `circle_intersect` port of `CircleRange::intersect`
+    /// (rangeutil.cc:549) which carries the full step/newStride/newDomain
+    /// and wrap-around overlap-code semantics, then remaps to the legacy
+    /// Rugra return codes kept for existing callers:
+    /// 0 = result is empty, 1 = non-empty single interval,
+    /// 2 = two pieces (this range is NOT modified).
     pub fn intersect(&mut self, op2: &CircleRange) -> i32 {
-        if self.isempty || op2.isempty { self.isempty = true; return 0; }
-        if self.is_full() { *self = op2.clone(); return 1; }
-        if op2.is_full() { return 1; }
-        // Simplified intersection for step==1 ranges.
-        if self.step != 1 || op2.step != 1 { return 1; } // Conservatively keep non-empty.
-        // For [a, b) and [c, d) over mod mask:
-        // Try all 4 wrap-around cases.
-        let mut best: Option<CircleRange> = None;
-        for start1 in [self.left, self.right] {
-            for start2 in [op2.left, op2.right] {
-                // Test each possible intersection segment.
-            }
+        let res = self.circle_intersect(op2);
+        if res != 0 {
+            return 2; // two pieces — original preserved
         }
-        // Simplified: for non-wrapping ranges, compute standard intersection.
-        if self.left < self.right && op2.left < op2.right {
-            let new_left = self.left.max(op2.left);
-            let new_right = self.right.min(op2.right);
-            if new_left < new_right {
-                self.left = new_left;
-                self.right = new_right;
-                return 1;
-            }
+        if self.isempty {
+            0
+        } else {
+            1
         }
-        // Wrapping case: keep current range conservatively.
-        1
     }
 
     // Ghidra: rangeutil.cc:179 CircleRange::union
-    /// Union two ranges (circleUnion). Faithful to `CircleRange::circleUnion`
-    /// (rangeutil.cc). Returns:
+    /// Union two ranges (circleUnion). Legacy SIMPLIFIED wrapper — NOT
+    /// faithful to `CircleRange::circleUnion` (rangeutil.cc:360-444): it
+    /// punts (returns two-pieces) on every wrapping range, mixed
+    /// wrap/non-wrap pair, and any step != 1, and it approximates the
+    /// full-coverage verdict with an explicit code 2. Production code that
+    /// must match upstream semantics (e.g. RuleRangeMeld cc:1405-1406) must
+    /// call the faithful `circle_union` instead. Kept only for the legacy
+    /// Rust callers/tests that depend on the 0/1/2 wrapper codes.
+    /// Returns:
     /// - 0 = result fits in a single CircleRange (stored in `self`)
     /// - 1 = result would require 2 pieces (cannot represent)
     /// - 2 = union covers the entire space (always true)
@@ -308,31 +292,14 @@ impl CircleRange {
     }
 
     // Ghidra: rangeutil.cc:533 CircleRange::invert
-    /// Convert to complementary range (invert).
-    /// Corresponds to `CircleRange::invert` (rangeutil.cc).
-    /// Returns the number of pieces: 0=full, 1=single range, 2=two pieces.
+    /// Convert to complementary range. Faithful to `CircleRange::invert`
+    /// (rangeutil.cc:533-540): the step is dropped to 1 first, then
+    /// `complement()` runs; the ORIGINAL step is returned.
     pub fn invert(&mut self) -> i32 {
-        if self.isempty {
-            self.set_full(8);
-            return 0;
-        }
-        if self.is_full() {
-            self.isempty = true;
-            return 0;
-        }
-        // Swap left and right to get complement.
-        let tmp = self.left;
-        self.left = self.right;
-        self.right = tmp;
-        if self.step != 1 {
-            // Simplified: for stepped ranges, inversion is complex.
-            return 1;
-        }
-        if self.left == self.right {
-            self.set_full(8);
-            return 0;
-        }
-        1
+        let res = self.step as i32;
+        self.step = 1;
+        self.complement();
+        res
     }
 
     // Ghidra: rangeutil.cc:245 CircleRange::setFull
@@ -472,36 +439,57 @@ impl CircleRange {
                 self.right = val;
             }
             crate::opcodes::OpCode::CPUI_INT_ZEXT => {
+                // cc:754-770: val = calc_mask(inSize); rem = left % step;
+                // zextrange = [rem, val+1+rem) in this mask/step; intersect;
+                // on 2-pieces fail; then clamp left/right/mask to the input.
                 let in_mask = Self::calc_mask(in_size);
-                let rem = if self.step != 0 {
-                    self.left % self.step
-                } else {
-                    0
-                };
-                let mut zext = CircleRange {
+                let rem = self.left % self.step;
+                let zext = CircleRange {
                     left: rem,
                     right: in_mask.wrapping_add(1).wrapping_add(rem),
                     mask: self.mask,
                     step: self.step,
                     isempty: false,
                 };
-                if self.intersect(&zext) != 0 {
+                if 0 != self.circle_intersect(&zext) {
                     return false;
                 }
                 self.left &= in_mask;
                 self.right &= in_mask;
-                self.mask &= in_mask;
+                self.mask &= in_mask; // Preserve the stride
             }
             crate::opcodes::OpCode::CPUI_INT_SEXT => {
-                // Simplified SEXT pull-back; full version requires sign_extend.
+                // cc:771-794: build the sign-extension band [signbit+rem,
+                // sign_extend(signbit+rem)) and intersect; verbatim port of
+                // the upstream control flow including the quirk that the
+                // intersection must come back EMPTY for the pull-back to
+                // succeed (sextrange.intersect(*this) != 0 → fail; then
+                // !sextrange.isEmpty() → fail).
                 let in_mask = Self::calc_mask(in_size);
+                // cc:774 NOTE: `left & step` (bitwise AND), not modulo.
+                let rem = self.left & self.step;
+                let mut sextrange = CircleRange {
+                    left: 0,
+                    right: 0,
+                    mask: self.mask,
+                    step: self.step,
+                    isempty: false,
+                };
+                let band_left = (in_mask ^ (in_mask >> 1)).wrapping_add(rem);
+                sextrange.left = band_left;
+                sextrange.right = sign_extend_size(band_left, in_size, out_size);
+                if 0 != sextrange.circle_intersect(self) {
+                    return false;
+                }
+                if !sextrange.is_empty() {
+                    return false;
+                }
                 self.left &= in_mask;
                 self.right &= in_mask;
-                self.mask &= in_mask;
+                self.mask &= in_mask; // Preserve the stride
             }
             _ => return false,
         }
-        let _ = out_size;
         true
     }
 
@@ -589,6 +577,68 @@ impl CircleRange {
                     self.complement();
                 }
             }
+            crate::opcodes::OpCode::CPUI_INT_SLESS => {
+                // cc:878-901
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                if slot == 0 {
+                    if val == (self.mask >> 1) + 1 {
+                        self.isempty = true; // X < -infinity, always false
+                    } else {
+                        self.left = (self.mask >> 1) + 1; // -infinity
+                        self.right = val;
+                    }
+                } else if val == self.mask >> 1 {
+                    self.isempty = true; // infinity < X, always false
+                } else {
+                    self.left = (val + 1) & self.mask;
+                    self.right = (self.mask >> 1) + 1; // -infinity
+                }
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_SLESSEQUAL => {
+                // cc:902-917
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                if slot == 0 {
+                    self.left = (self.mask >> 1) + 1; // -infinity
+                    self.right = (val + 1) & self.mask;
+                } else {
+                    self.left = val;
+                    self.right = (self.mask >> 1) + 1; // -infinity
+                }
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_CARRY => {
+                // cc:918-931
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                if val == 0 {
+                    self.isempty = true; // Nothing carries adding zero
+                } else {
+                    self.left = (self.mask.wrapping_sub(val).wrapping_add(1)) & self.mask;
+                    self.right = 0;
+                }
+                if yes_comp {
+                    self.complement();
+                }
+            }
             crate::opcodes::OpCode::CPUI_INT_ADD => {
                 self.left = (self.left.wrapping_sub(val)) & self.mask;
                 self.right = (self.right.wrapping_sub(val)) & self.mask;
@@ -604,7 +654,7 @@ impl CircleRange {
             }
             crate::opcodes::OpCode::CPUI_INT_RIGHT => {
                 if self.step == 1 {
-                    let right_bound = (Self::calc_mask(in_size) >> val) + 1;
+                    let right_bound = (Self::calc_mask(in_size).wrapping_shr(val as u32)) + 1;
                     let covers = (self.left >= right_bound
                         && self.right >= right_bound
                         && self.left >= self.right)
@@ -622,8 +672,42 @@ impl CircleRange {
                         if r > right_bound {
                             r = 0;
                         }
-                        self.left = (l << val) & self.mask;
-                        self.right = (r << val) & self.mask;
+                        self.left = l.wrapping_shl(val as u32) & self.mask;
+                        self.right = r.wrapping_shl(val as u32) & self.mask;
+                        if self.left == self.right {
+                            self.isempty = true;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_SRIGHT => {
+                // cc:971-998
+                if self.step == 1 {
+                    let rightb_orig = Self::calc_mask(in_size);
+                    let mut leftb = rightb_orig >> (val + 1);
+                    let new_rightb = leftb ^ rightb_orig; // Smallest negative possible
+                    leftb += 1; // Biggest positive (+1) possible
+                    if ((self.left >= leftb)
+                        && (self.left <= new_rightb)
+                        && (self.right >= leftb)
+                        && (self.right <= new_rightb)
+                        && (self.left >= self.right))
+                        || (self.left == self.right)
+                    {
+                        // covers everything in range of shift
+                        self.left = 0;
+                        self.right = 0;
+                    } else {
+                        if self.left > leftb && self.left < new_rightb {
+                            self.left = leftb;
+                        }
+                        if self.right > leftb && self.right < new_rightb {
+                            self.right = new_rightb;
+                        }
+                        self.left = self.left.wrapping_shl(val as u32) & self.mask;
+                        self.right = self.right.wrapping_shl(val as u32) & self.mask;
                         if self.left == self.right {
                             self.isempty = true;
                         }
@@ -637,112 +721,518 @@ impl CircleRange {
         true
     }
 
+    // Ghidra: rangeutil.cc:1022 CircleRange::pullBack
+    /// The pull-back is performed through a given p-code op and set this to
+    /// the resulting range (if possible). If there is a single unknown input,
+    /// and the set of values for this input that cause the output of op to
+    /// fall into this form a range, then set this to the range (the
+    /// "pullBack") and return the unknown varnode. Return None otherwise.
+    ///
+    /// We may know something about the input varnode in the form of its
+    /// NZMASK, which can further restrict the range we return. If
+    /// `usenzmask` is true and NZMASK forms a range, intersect this with the
+    /// result (a 2-piece intersection failure keeps the original range —
+    /// still a successful pull-back).
+    ///
+    /// Faithful to `CircleRange::pullBack` (rangeutil.cc:1022-1084).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `self`(=this range) is mutated in place through
+    ///   pullBackUnary/pullBackBinary/SUBPIECE salvage/nzmask intersect;
+    ///   returns the non-constant input Varnode (Arc identity) or None.
+    /// - 循环边界/遍历序: straight-line, no loops; unary/binary/else dispatch
+    ///   on `op->numInput()` (1 / 2 / other → None).
+    /// - 计数器/累加器: none; `slot` starts at 0 and only flips to 1 when
+    ///   in(0) is constant (then in(1) must be non-constant or None).
+    /// - 排序/比较键: `isConstant()` decides slot/const roles; SUBPIECE
+    ///   salvage gated on `usenzmask && val == 0` plus
+    ///   `out->getSize() < (mostsigbit_set(nzmask)+8)/8`; final nzmask
+    ///   intersect only when `setNZMask` reports a valid range.
+    // RUGRA-GLUE: the C++ `Varnode **constMarkup` out param is mirrored as
+    // `const_markup: &mut Option<Arc<RwLock<Varnode>>>`. Ghidra writes it
+    // only when the constant carries a SymbolEntry (cc:1069-1070); it is
+    // never cleared, so successive pull-backs keep the last symbol-carrying
+    // constant — last writer wins, exactly like the shared out-param in the
+    // C++ callers (RuleRangeMeld threads one `markup` across all its calls).
+    // The constraint-family callers (constraintsFromPath cc:2190/2199,
+    // generateRelativeConstraint) pass a discard slot.
+    pub fn pull_back(
+        &mut self,
+        op: &Arc<RwLock<PcodeOp>>,
+        usenzmask: bool,
+        const_markup: &mut Option<Arc<RwLock<Varnode>>>,
+    ) -> Option<Arc<RwLock<Varnode>>> {
+        let (num_input, opc) = {
+            let g = op.read().unwrap();
+            (g.num_input(), g.get_opcode())
+        };
+        let res: Arc<RwLock<Varnode>>;
+        if num_input == 1 {
+            // cc:1027-1032
+            let r = op.read().unwrap().get_in(0)?.clone();
+            if r.read().unwrap().is_constant() {
+                return None;
+            }
+            let in_size = r.read().unwrap().get_size();
+            // Ghidra dereferences op->getOut() unconditionally; live defining
+            // ops always have outputs (Ghidra-unreachable → fail pull-back).
+            let out_size = op
+                .read()
+                .unwrap()
+                .get_out()
+                .map(|o| o.read().unwrap().get_size())?;
+            if !self.pull_back_unary(opc, in_size, out_size) {
+                return None;
+            }
+            res = r;
+        } else if num_input == 2 {
+            // cc:1033-1071: find the non-constant varnode input and its slot;
+            // the other input must be constant.
+            let in0 = op.read().unwrap().get_in(0)?.clone();
+            let in1 = op.read().unwrap().get_in(1)?.clone();
+            let (r, constvn, slot) = {
+                if in0.read().unwrap().is_constant() {
+                    if in1.read().unwrap().is_constant() {
+                        return None;
+                    }
+                    (in1.clone(), in0, 1)
+                } else if !in1.read().unwrap().is_constant() {
+                    return None;
+                } else {
+                    (in0.clone(), in1, 0)
+                }
+            };
+            let val = constvn.read().unwrap().get_offset();
+            let in_size = r.read().unwrap().get_size();
+            let out_size = op
+                .read()
+                .unwrap()
+                .get_out()
+                .map(|o| o.read().unwrap().get_size())?;
+            if !self.pull_back_binary(opc, val, slot, in_size, out_size) {
+                // cc:1053-1067: SUBPIECE salvage — if everything truncated
+                // away is known zero (nzmask), the pull-back is still valid.
+                if usenzmask && opc == OpCode::CPUI_SUBPIECE && val == 0 {
+                    let msbset = crate::address::mostsigbit_set(r.read().unwrap().get_nz_mask());
+                    let msbset = (msbset + 8) / 8;
+                    if out_size < msbset as usize {
+                        // Some bytes we are chopping off might not be zero.
+                        return None;
+                    }
+                    // Keep the range but make the mask bigger. If the range
+                    // wraps, the added space is intersected away again by the
+                    // nzmask intersection below (cc:1060-1064 comment).
+                    self.expand_mask(in_size);
+                } else {
+                    return None;
+                }
+            }
+            // cc:1069-1070: pass back the constant varnode as potential
+            // markup when it carries a SymbolEntry. Runs on every successful
+            // binary pull-back (including the SUBPIECE salvage arm above);
+            // unary pull-backs never write markup.
+            if constvn.read().unwrap().get_symbol_entry().is_some() {
+                *const_markup = Some(constvn.clone());
+            }
+            res = r;
+        } else {
+            // Neither unary nor binary.
+            return None;
+        }
+
+        // cc:1075-1082
+        if usenzmask {
+            let (nzm, rsize) = {
+                let g = res.read().unwrap();
+                (g.get_nz_mask(), g.get_size())
+            };
+            match Self::set_nz_mask(nzm, rsize) {
+                // Invalid mask: return the range as-is (still successful).
+                None => return Some(res),
+                Some(nzrange) => {
+                    // If the intersect produces 2 pieces the original range
+                    // is preserved and the pull-back is still a success.
+                    self.circle_intersect(&nzrange);
+                }
+            }
+        }
+        Some(res)
+    }
+
     // Ghidra: rangeutil.cc:1093 CircleRange::pushForwardUnary
-    /// Push-forward this range through a unary operator.
-    /// Corresponds to `CircleRange::pushForwardUnary` (rangeutil.hh:94).
-    /// Returns true if the transform was possible.
+    /// Push-forward this range through a unary operator. Faithful to
+    /// `CircleRange::pushForwardUnary` (rangeutil.cc:1093-1167), including
+    /// the ZEXT/SEXT full-range and 2-pieces arms and the
+    /// BOOL_NEGATE/FLOAT_NAN collapse to [0,2). Returns true if the result
+    /// is known and forms a range.
     pub fn push_forward_unary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in_size: usize, out_size: usize) -> bool {
-        let out_mask = Self::calc_mask(out_size);
+        // cc:1096-1099: if (in1.isempty) { isempty = true; return true; }
+        if in1.isempty {
+            self.isempty = true;
+            return true;
+        }
         match opc {
-            crate::opcodes::OpCode::CPUI_COPY | crate::opcodes::OpCode::CPUI_INT_ZEXT => {
+            crate::opcodes::OpCode::CPUI_CAST
+            | crate::opcodes::OpCode::CPUI_COPY => {
                 *self = in1.clone();
-                self.mask = out_mask;
-                true
+            }
+            crate::opcodes::OpCode::CPUI_INT_ZEXT => {
+                // cc:1105-1120
+                self.isempty = false;
+                self.step = in1.step;
+                self.mask = Self::calc_mask(out_size);
+                if in1.left == in1.right {
+                    self.left = in1.left % self.step;
+                    self.right = in1.mask.wrapping_add(1).wrapping_add(self.left);
+                } else {
+                    self.left = in1.left;
+                    self.right = (in1.right.wrapping_sub(in1.step)) & in1.mask;
+                    if self.right < self.left {
+                        return false; // Extending causes 2 pieces
+                    }
+                    self.right = self.right.wrapping_add(self.step);
+                    // Impossible for it to wrap with bigger mask
+                }
             }
             crate::opcodes::OpCode::CPUI_INT_SEXT => {
-                *self = in1.clone();
-                self.mask = out_mask;
-                true
-            }
-            crate::opcodes::OpCode::CPUI_INT_NEGATE => {
-                if in1.is_full() {
-                    self.set_full(out_size);
-                } else if in1.is_empty() {
-                    *self = CircleRange::empty();
+                // cc:1121-1138
+                self.isempty = false;
+                self.step = in1.step;
+                self.mask = Self::calc_mask(out_size);
+                if in1.left == in1.right {
+                    let rem = in1.left % self.step;
+                    let half = Self::calc_mask(in_size) >> 1;
+                    self.left = (Self::calc_mask(out_size) ^ half).wrapping_add(rem);
+                    self.right = half.wrapping_add(1).wrapping_add(rem);
                 } else {
-                    // ~[left,right) = [~right, ~left]
-                    self.left = (!in1.right) & out_mask;
-                    self.right = (!in1.left) & out_mask;
-                    self.mask = out_mask;
-                    self.step = in1.step;
-                    self.isempty = false;
+                    self.left = sign_extend_size(in1.left, in_size, out_size);
+                    self.right = sign_extend_size(
+                        in1.right.wrapping_sub(in1.step) & in1.mask,
+                        in_size,
+                        out_size,
+                    );
+                    if (self.right as i64) < (self.left as i64) {
+                        return false; // Extending causes 2 pieces
+                    }
+                    self.right = self.right.wrapping_add(self.step) & self.mask;
                 }
-                true
             }
             crate::opcodes::OpCode::CPUI_INT_2COMP => {
-                if in1.is_empty() { *self = CircleRange::empty(); return true; }
-                // -[left,right) = [-right, -left)
-                self.left = ((!in1.right).wrapping_add(1)) & out_mask;
-                self.right = ((!in1.left).wrapping_add(1)) & out_mask;
-                self.mask = out_mask;
-                self.step = in1.step;
+                // cc:1139-1146
                 self.isempty = false;
-                true
+                self.step = in1.step;
+                self.mask = in1.mask;
+                self.right = (!in1.left).wrapping_add(1).wrapping_add(self.step) & self.mask;
+                self.left = (!in1.right).wrapping_add(1).wrapping_add(self.step) & self.mask;
+                self.normalize();
             }
-            _ => false,
+            crate::opcodes::OpCode::CPUI_INT_NEGATE => {
+                // cc:1147-1154
+                self.isempty = false;
+                self.step = in1.step;
+                self.mask = in1.mask;
+                self.left = (!in1.right).wrapping_add(self.step) & self.mask;
+                self.right = (!in1.left).wrapping_add(self.step) & self.mask;
+                self.normalize();
+            }
+            crate::opcodes::OpCode::CPUI_BOOL_NEGATE
+            | crate::opcodes::OpCode::CPUI_FLOAT_NAN => {
+                // Ops with boolean outcome; both possible.
+                self.isempty = false;
+                self.mask = 0xff;
+                self.step = 1;
+                self.left = 0;
+                self.right = 2;
+            }
+            _ => return false,
         }
+        true
     }
 
     // Ghidra: rangeutil.cc:1180 CircleRange::pushForwardBinary
-    /// Push-forward this range through a binary operator.
-    /// Corresponds to `CircleRange::pushForwardBinary` (rangeutil.hh:95).
-    /// Returns true if the transform was possible.
-    pub fn push_forward_binary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in2: &CircleRange, in_size: usize, out_size: usize, _max_step: i32) -> bool {
-        let out_mask = Self::calc_mask(out_size);
-        match opc {
-            crate::opcodes::OpCode::CPUI_INT_ADD => {
-                if in1.is_empty() || in2.is_empty() {
-                    *self = CircleRange::empty();
-                    return true;
-                }
-                if in1.is_full() || in2.is_full() {
-                    self.set_full(out_size);
-                    return true;
-                }
-                // [a,b) + [c,d) = [a+c, b+d) if no overflow in size
-                self.left = in1.left.wrapping_add(in2.left) & out_mask;
-                self.right = in1.right.wrapping_add(in2.right) & out_mask;
-                self.mask = out_mask;
-                self.step = 1;
-                self.isempty = false;
-                true
-            }
-            crate::opcodes::OpCode::CPUI_INT_AND => {
-                if in1.is_full() { *self = in2.clone(); self.mask = out_mask; return true; }
-                if in2.is_full() { *self = in1.clone(); self.mask = out_mask; return true; }
-                // Conservative: result could be anything in [0, min(max1,max2))
-                false
-            }
-            crate::opcodes::OpCode::CPUI_INT_OR => {
-                if in1.is_full() || in2.is_full() { self.set_full(out_size); return true; }
-                false
-            }
-            crate::opcodes::OpCode::CPUI_INT_XOR => {
-                if in1.is_full() || in2.is_full() { self.set_full(out_size); return true; }
-                false
-            }
-            _ => false,
+    /// Push-forward this range through a binary operator. Faithful to
+    /// `CircleRange::pushForwardBinary` (rangeutil.cc:1180-1367): PTRSUB
+    /// folds into INT_ADD; INT_MULT/INT_LEFT grow the step up to maxStep
+    /// with the getMaxInfo whole-size overflow arms; SUBPIECE/INT_RIGHT/
+    /// INT_SRIGHT truncate with their covered-everything checks; comparison
+    /// and boolean ops collapse to [0,2). Returns true if the result is
+    /// known and forms a range.
+    pub fn push_forward_binary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in2: &CircleRange, in_size: usize, out_size: usize, max_step: i32) -> bool {
+        // cc:1183-1186
+        if in1.isempty || in2.isempty {
+            self.isempty = true;
+            return true;
         }
+        match opc {
+            crate::opcodes::OpCode::CPUI_PTRSUB | crate::opcodes::OpCode::CPUI_INT_ADD => {
+                // cc:1188-1218
+                self.isempty = false;
+                self.mask = in1.mask | in2.mask;
+                if in1.left == in1.right || in2.left == in2.right {
+                    self.step = in1.step.min(in2.step); // Smaller step
+                    self.left = (in1.left.wrapping_add(in2.left)) % self.step;
+                    self.right = self.left;
+                } else if in2.is_single() {
+                    self.step = in1.step;
+                    self.left = (in1.left.wrapping_add(in2.left)) & self.mask;
+                    self.right = (in1.right.wrapping_add(in2.left)) & self.mask;
+                } else if in1.is_single() {
+                    self.step = in2.step;
+                    self.left = (in2.left.wrapping_add(in1.left)) & self.mask;
+                    self.right = (in2.right.wrapping_add(in1.left)) & self.mask;
+                } else {
+                    self.step = in1.step.min(in2.step); // Smaller step
+                    let size1 = if in1.left < in1.right {
+                        in1.right - in1.left
+                    } else {
+                        in1.mask.wrapping_sub(in1.left.wrapping_sub(in1.right))
+                            .wrapping_add(in1.step)
+                    };
+                    self.left = (in1.left.wrapping_add(in2.left)) & self.mask;
+                    self.right = in1
+                        .right
+                        .wrapping_sub(in1.step)
+                        .wrapping_add(in2.right)
+                        .wrapping_sub(in2.step)
+                        .wrapping_add(self.step)
+                        & self.mask;
+                    let sizenew = if self.left < self.right {
+                        self.right - self.left
+                    } else {
+                        self.mask
+                            .wrapping_sub(self.left.wrapping_sub(self.right))
+                            .wrapping_add(self.step)
+                    };
+                    if sizenew < size1 {
+                        self.right = self.left; // Over-flow, we covered everything
+                    }
+                    self.normalize();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_MULT => {
+                // cc:1219-1256
+                self.isempty = false;
+                self.mask = in1.mask | in2.mask;
+                let const_val: u64;
+                if in1.is_single() {
+                    const_val = in1.get_min();
+                    self.step = in2.step;
+                } else if in2.is_single() {
+                    const_val = in2.get_min();
+                    self.step = in1.step;
+                } else {
+                    return false;
+                }
+                let mut tmp = const_val as u32;
+                while (self.step as i32) < max_step {
+                    if (tmp & 1) != 0 {
+                        break;
+                    }
+                    self.step <<= 1;
+                    tmp >>= 1;
+                }
+                let whole_size = 64 - self.mask.leading_zeros();
+                if (in1.get_max_info() + in2.get_max_info()) as u32 > whole_size {
+                    self.left = (in1.left.wrapping_mul(in2.left)) % self.step;
+                    self.right = self.left; // Covered everything
+                    self.normalize();
+                    return true;
+                }
+                if (const_val & (self.mask ^ (self.mask >> 1))) != 0 {
+                    // Multiplying by negative number
+                    self.left = in1
+                        .right
+                        .wrapping_sub(in1.step)
+                        .wrapping_mul(in2.right.wrapping_sub(in2.step))
+                        & self.mask;
+                    self.right = in1
+                        .left
+                        .wrapping_mul(in2.left)
+                        .wrapping_add(self.step)
+                        & self.mask;
+                } else {
+                    self.left = in1.left.wrapping_mul(in2.left) & self.mask;
+                    self.right = in1
+                        .right
+                        .wrapping_sub(in1.step)
+                        .wrapping_mul(in2.right.wrapping_sub(in2.step))
+                        .wrapping_add(self.step)
+                        & self.mask;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_LEFT => {
+                // cc:1257-1278
+                if !in2.is_single() {
+                    return false;
+                }
+                self.isempty = false;
+                self.mask = in1.mask;
+                self.step = in1.step;
+                let sa = in2.get_min() as u32;
+                let mut tmp = sa;
+                while (self.step as i32) < max_step && tmp > 0 {
+                    self.step <<= 1;
+                    tmp -= 1;
+                }
+                self.left = in1.left.wrapping_shl(sa) & self.mask;
+                self.right = in1.right.wrapping_shl(sa) & self.mask;
+                let whole_size = 64 - self.mask.leading_zeros();
+                if (in1.get_max_info() as u32).wrapping_add(sa) > whole_size {
+                    self.right = self.left; // Covered everything
+                    self.normalize();
+                    return true;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_SUBPIECE => {
+                // cc:1279-1299
+                if !in2.is_single() {
+                    return false;
+                }
+                self.isempty = false;
+                let sa = ((in2.left as i32).wrapping_mul(8)) as u64;
+                self.mask = Self::calc_mask(out_size);
+                self.step = if sa == 0 { in1.step } else { 1 };
+                let range = if in1.left < in1.right {
+                    in1.right - in1.left
+                } else {
+                    in1.left.wrapping_sub(in1.right)
+                };
+                if range == 0 || (range >> sa) > self.mask {
+                    self.left = 0;
+                    self.right = 0; // We cover everything
+                } else {
+                    self.left = in1.left >> sa;
+                    self.right = ((in1.right.wrapping_sub(in1.step)) >> sa)
+                        .wrapping_add(self.step);
+                    self.left &= self.mask;
+                    self.right &= self.mask;
+                    self.normalize();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_RIGHT => {
+                // cc:1300-1318
+                if !in2.is_single() {
+                    return false;
+                }
+                self.isempty = false;
+                let sa = in2.left;
+                self.mask = Self::calc_mask(out_size);
+                self.step = 1; // Lose any step
+                if in1.left < in1.right {
+                    self.left = in1.left >> (sa & 63);
+                    self.right = ((in1.right.wrapping_sub(in1.step)) >> (sa & 63))
+                        .wrapping_add(1);
+                } else {
+                    self.left = 0;
+                    self.right = in1.mask >> (sa & 63);
+                }
+                if self.left == self.right {
+                    // Don't truncate accidentally to everything
+                    self.right = self.left.wrapping_add(1) & self.mask;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_SRIGHT => {
+                // cc:1319-1339
+                if !in2.is_single() {
+                    return false;
+                }
+                self.isempty = false;
+                let sa = in2.left as u32 & 63;
+                self.mask = Self::calc_mask(out_size);
+                self.step = 1; // Lose any step
+                let bit_pos = (8 * in_size - 1) as u32;
+                let mut val_left = sign_extend_bits(in1.left, bit_pos);
+                let mut val_right = sign_extend_bits(in1.right, bit_pos);
+                if val_left >= val_right {
+                    val_right = (self.mask >> 1) as i64; // Max positive
+                    val_left = val_right + 1; // Min negative
+                    val_left = sign_extend_bits(val_left as u64, bit_pos);
+                }
+                // cc:1334-1335: left = (valLeft >> sa) & mask;
+                //               right = (((valRight - in1.step) >> sa) + 1) & mask;
+                self.left = ((val_left >> sa) as u64) & self.mask;
+                self.right = (((val_right.wrapping_sub(in1.step as i64)) >> sa).wrapping_add(1)
+                    as u64)
+                    & self.mask;
+                if self.left == self.right {
+                    // Don't truncate accidentally to everything
+                    self.right = self.left.wrapping_add(1) & self.mask;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_EQUAL
+            | crate::opcodes::OpCode::CPUI_INT_NOTEQUAL
+            | crate::opcodes::OpCode::CPUI_INT_SLESS
+            | crate::opcodes::OpCode::CPUI_INT_SLESSEQUAL
+            | crate::opcodes::OpCode::CPUI_INT_LESS
+            | crate::opcodes::OpCode::CPUI_INT_LESSEQUAL
+            | crate::opcodes::OpCode::CPUI_INT_CARRY
+            | crate::opcodes::OpCode::CPUI_INT_SCARRY
+            | crate::opcodes::OpCode::CPUI_INT_SBORROW
+            | crate::opcodes::OpCode::CPUI_BOOL_XOR
+            | crate::opcodes::OpCode::CPUI_BOOL_AND
+            | crate::opcodes::OpCode::CPUI_BOOL_OR
+            | crate::opcodes::OpCode::CPUI_FLOAT_EQUAL
+            | crate::opcodes::OpCode::CPUI_FLOAT_NOTEQUAL
+            | crate::opcodes::OpCode::CPUI_FLOAT_LESS
+            | crate::opcodes::OpCode::CPUI_FLOAT_LESSEQUAL => {
+                // Ops with boolean outcome. We don't try to eliminate outcomes here.
+                self.isempty = false;
+                self.mask = 0xff;
+                self.step = 1;
+                self.left = 0; // Both true and false are possible
+                self.right = 2;
+            }
+            _ => return false,
+        }
+        true
     }
 
-    // Ghidra: rangeutil.cc:179 CircleRange::translateToOp
-    /// Translate this range to a comparison op.
-    /// Corresponds to `CircleRange::translate2Op` (rangeutil.hh:99).
-    /// Returns Some((opcode, constant, slot)) if the range can be expressed as a comparison.
-    pub fn translate_to_op(&self) -> Option<(crate::opcodes::OpCode, u64, i32)> {
-        if self.isempty || self.is_full() { return None; }
-        if self.step != 1 { return None; }
-        // [0, right) → INT_LESS(right) on slot 1
-        if self.left == 0 && self.right != 0 {
-            return Some((crate::opcodes::OpCode::CPUI_INT_LESS, self.right, 1));
+    // Ghidra: rangeutil.cc:1424 CircleRange::translate2Op
+    /// Translate this range to a comparison op. Faithful to
+    /// `CircleRange::translate2Op` (rangeutil.cc:1424-1467). Returns
+    /// `Ok((opc, constant, cslot))` on success (code 0); `Err(code)` carries
+    /// the upstream non-success codes: 1 = all inputs must return true,
+    /// 2 = not possible (stride / unrepresentable), 3 = no inputs return
+    /// true (empty).
+    pub fn translate_to_op(&self) -> Result<(crate::opcodes::OpCode, u64, i32), i32> {
+        if self.isempty {
+            return Err(3);
         }
-        // [left, 0) → INT_LESS(left) on slot 0 (i.e. value < left is false)
-        if self.right == 0 && self.left != 0 {
-            return Some((crate::opcodes::OpCode::CPUI_INT_LESS, self.left, 0));
+        if self.step != 1 {
+            return Err(2); // Not possible with a stride
         }
-        // [left, right) non-wrapping → value >= left && value < right
-        // Express as INT_LESSEQUAL(left, slot 0) && INT_LESS(right, slot 1) — too complex.
-        None
+        if self.right == (self.left.wrapping_add(1)) & self.mask {
+            // Single value
+            return Ok((crate::opcodes::OpCode::CPUI_INT_EQUAL, self.left, 0));
+        }
+        if self.left == (self.right.wrapping_add(1)) & self.mask {
+            // All but one value
+            return Ok((crate::opcodes::OpCode::CPUI_INT_NOTEQUAL, self.right, 0));
+        }
+        if self.left == self.right {
+            return Err(1); // All outputs are possible
+        }
+        if self.left == 0 {
+            return Ok((crate::opcodes::OpCode::CPUI_INT_LESS, self.right, 1));
+        }
+        if self.right == 0 {
+            return Ok((
+                crate::opcodes::OpCode::CPUI_INT_LESS,
+                self.left.wrapping_sub(1) & self.mask,
+                0,
+            ));
+        }
+        if self.left == (self.mask >> 1) + 1 {
+            return Ok((crate::opcodes::OpCode::CPUI_INT_SLESS, self.right, 1));
+        }
+        if self.right == (self.mask >> 1) + 1 {
+            return Ok((
+                crate::opcodes::OpCode::CPUI_INT_SLESS,
+                self.left.wrapping_sub(1) & self.mask,
+                0,
+            ));
+        }
+        Err(2) // Cannot represent
     }
 
     // Ghidra: rangeutil.cc:25 CircleRange::normalize
@@ -759,21 +1249,45 @@ impl CircleRange {
         }
     }
 
-    // Ghidra: rangeutil.cc:179 CircleRange::containsRange
-    /// Check if this range contains another range.
-    /// Faithful to Ghidra CircleRange::contains(CircleRange) (rangeutil.cc:301).
+    // Ghidra: rangeutil.cc:301 CircleRange::contains(CircleRange)
+    /// Check if this range contains another range. Faithful to
+    /// `CircleRange::contains(const CircleRange &op2)` (rangeutil.cc:301-329),
+    /// including the step-phase check and the overlap-code 'c'/'b' decisions.
     pub fn contains_range(&self, op2: &CircleRange) -> bool {
-        if self.isempty { return op2.isempty; }
-        if op2.isempty { return true; }
-        if self.step > op2.step {
-            if !op2.is_single() { return false; }
+        if self.isempty {
+            return op2.isempty;
         }
-        if self.left == self.right { return true; }
-        if op2.left == op2.right { return false; }
-        if self.left % self.step != op2.left % op2.step { return false; }
-        if self.left == op2.left && self.right == op2.right { return true; }
-        // Simplified containment: check if op2's boundaries are in this range
-        self.contains_val(op2.left) && self.contains_val(op2.right.wrapping_sub(1).wrapping_add(1).wrapping_sub(1))
+        if op2.isempty {
+            return true;
+        }
+        if self.step > op2.step {
+            // This must have a smaller or equal step to op2 or containment is
+            // impossible except in the corner case where op2 is a single
+            // element (its step is meaningless).
+            if !op2.is_single() {
+                return false;
+            }
+        }
+        if self.left == self.right {
+            return true;
+        }
+        if op2.left == op2.right {
+            return false;
+        }
+        if self.left % self.step != op2.left % op2.step {
+            return false; // Wrong phase
+        }
+        if self.left == op2.left && self.right == op2.right {
+            return true;
+        }
+        let overlap_code = Self::encode_range_overlaps(self.left, self.right, op2.left, op2.right);
+        if overlap_code == 'c' {
+            return true;
+        }
+        if overlap_code == 'b' && self.right == op2.right {
+            return true;
+        }
+        false
     }
 
     // Ghidra: rangeutil.cc:1395 CircleRange::widen
@@ -831,15 +1345,29 @@ impl CircleRange {
     }
 
     // Ghidra: rangeutil.cc:707 CircleRange::setStride
-    /// Set the stride of this range.
-    /// Faithful to Ghidra CircleRange::setStride (rangeutil.cc:707).
+    /// Change the step for this range — elements are removed; boundaries do
+    /// not change except for the remainder modulo the new step. Verbatim
+    /// port of `CircleRange::setStride` (rangeutil.cc:707-722), including
+    /// the early-return on unchanged step, the pre-assignment `right-step`
+    /// snapshot (OLD step), and the `!iseverything && left==right →
+    /// isempty` collapse (the full-range `left==right` form is preserved).
     pub fn set_stride(&mut self, new_step: u64, rem: u64) {
+        let iseverything = !self.isempty && self.left == self.right;
+        if new_step == self.step {
+            return;
+        }
+        let a_right = self.right.wrapping_sub(self.step);
         self.step = new_step;
-        if self.step > 1 {
-            self.left = (self.left / self.step) * self.step + rem;
-            self.right = (self.right / self.step) * self.step + rem;
-            self.right &= self.mask;
-            self.left &= self.mask;
+        if self.step == 1 {
+            return; // No remainder to fill in
+        }
+        let cur_rem = self.left % self.step;
+        self.left = self.left.wrapping_sub(cur_rem).wrapping_add(rem);
+        let cur_rem = a_right % self.step;
+        let a_right = a_right.wrapping_sub(cur_rem).wrapping_add(rem);
+        self.right = a_right.wrapping_add(self.step);
+        if !iseverything && self.left == self.right {
+            self.isempty = true;
         }
     }
 
@@ -1271,6 +1799,16 @@ pub fn bit_transitions(val: u64, size: usize) -> i32 {
     res
 }
 
+// Ghidra: address.hh:543 sign_extend(val, bit)
+/// Sign extend above the given bit index. Faithful to the inline
+/// `intb sign_extend(intb val, int4 bit)` (address.hh:543) used by
+/// `pushForwardBinary`'s INT_SRIGHT arm (rangeutil.cc:1327-1332):
+/// `sa = 64 - (bit+1); val = (val << sa) >> sa;` (arithmetic shift).
+fn sign_extend_bits(val: u64, bit: u32) -> i64 {
+    let sa = 64 - (bit + 1);
+    ((val as i64) << sa) >> sa
+}
+
 // Ghidra: rangeutil.cc:179 CircleRange::signExtendSize
 /// Sign-extend a value between two byte sizes. Faithful to `sign_extend(in,
 /// sizein, sizeout)` (address.cc:666).
@@ -1369,11 +1907,14 @@ mod tests {
         let in2 = CircleRange::new(5, 15, 4, 1);   // [5,15)
         let ok = result.push_forward_binary(
             crate::opcodes::OpCode::CPUI_INT_ADD,
-            &in1, &in2, 4, 4, 1);
+            &in1, &in2, 4, 4, 32);
         assert!(ok);
+        // cc:1211: right = (in1.right - in1.step + in2.right - in2.step + step)
+        //           = 10-1+15-1+1 = 24 → [5,24).
         assert!(result.contains_val(5));  // 0+5=5
-        assert!(result.contains_val(24)); // 9+14=23? Actually 9+14=23 < 24
+        assert!(result.contains_val(23)); // 9+14=23
         assert!(!result.contains_val(4));
+        assert!(!result.contains_val(24));
     }
 
     #[test]
@@ -1392,11 +1933,41 @@ mod tests {
     fn test_translate_to_op() {
         let r = CircleRange::new(0, 5, 4, 1); // [0,5)
         let result = r.translate_to_op();
-        assert!(result.is_some());
+        assert!(result.is_ok());
         let (opc, val, slot) = result.unwrap();
         assert_eq!(opc, crate::opcodes::OpCode::CPUI_INT_LESS);
         assert_eq!(val, 5);
         assert_eq!(slot, 1);
+    }
+
+    #[test]
+    fn test_translate_to_op_codes() {
+        // cc:1427: empty → 3; cc:1428-1429: stride → 2; cc:1441: full → 1.
+        assert_eq!(CircleRange::empty().translate_to_op(), Err(3));
+        assert_eq!(
+            CircleRange::new(0, 10, 4, 2).translate_to_op(),
+            Err(2)
+        );
+        assert_eq!(CircleRange::full(4).translate_to_op(), Err(1));
+        // cc:1429-1433: single value [x] → INT_EQUAL x.
+        let r = CircleRange::single(7, 4);
+        assert_eq!(
+            r.translate_to_op(),
+            Ok((crate::opcodes::OpCode::CPUI_INT_EQUAL, 7, 0))
+        );
+        // cc:1435-1439: all-but-one [x+1, x) → INT_NOTEQUAL x.
+        let r = CircleRange::new(6, 5, 4, 1);
+        assert_eq!(
+            r.translate_to_op(),
+            Ok((crate::opcodes::OpCode::CPUI_INT_NOTEQUAL, 5, 0))
+        );
+        // cc:1454-1458: [min-negative, r) → INT_SLESS.
+        let half = (0xffffffffu64 >> 1) + 1;
+        let r = CircleRange::new(half, 0x10, 4, 1);
+        assert_eq!(
+            r.translate_to_op(),
+            Ok((crate::opcodes::OpCode::CPUI_INT_SLESS, 0x10, 1))
+        );
     }
 
     #[test]
@@ -1548,6 +2119,41 @@ mod tests {
         assert_eq!(r.get_step(), 4);
         assert_eq!(r.get_left() % 4, 3);
     }
+
+    // CR8 M-B regression (rangeutil.hh:331-336): operator== consults
+    // isempty FIRST — two empty ranges are equal regardless of stale
+    // left/right/mask/step residue; unequal isempty flags are never
+    // equal; non-empty ranges compare all four fields.
+    #[test]
+    fn test_eq_operator_semantics() {
+        let a = CircleRange::empty();
+        let mut b = CircleRange::empty();
+        b.left = 0x37; // stale residue on an empty range
+        b.mask = 0xff;
+        b.step = 8;
+        assert_eq!(a, b); // both empty → true, residue ignored
+        let d = CircleRange::new(1, 5, 4, 1);
+        assert_ne!(a, d); // isempty differs → false
+        let e = CircleRange::new(1, 5, 4, 1);
+        assert_eq!(d, e); // four fields match → true
+        let f = CircleRange::new(1, 5, 4, 2);
+        assert_ne!(d, f); // step differs (non-empty) → false
+    }
+
+    // CR8 M-A regression (rangeutil.cc:419-426 'b'/'c' arms): two
+    // overlapping WRAPPING ranges merge into a single interval under the
+    // faithful circle_union — the legacy simplified `union` wrapper punted
+    // every wrapping pair as "two pieces" (no rewrite).
+    #[test]
+    fn test_circle_union_wrapping_merge() {
+        let mut a = CircleRange::new(0xf0, 0x10, 1, 1); // [0xf0,0x10) wraps
+        let b = CircleRange::new(0xf8, 0x08, 1, 1); // [0xf8,0x8) wraps, subset
+        assert_eq!(a.circle_union(&b), 0); // merged into a single interval
+        assert!(a.contains_val(0xf0));
+        assert!(a.contains_val(0xff));
+        assert!(a.contains_val(0x00));
+        assert!(!a.contains_val(0x10));
+    }
 }
 
 // =============================================================================
@@ -1608,23 +2214,6 @@ impl Equation {
     }
 }
 
-// RUGRA-GLUE: One input to a ValueSet's defining op, staged for `iterate`.
-/// Carries the input's ValueSet fields plus the input Varnode size (needed for
-/// push-forward sizing). Stands in for C++'s `op->getIn(i)->getValueSet()`
-/// chain, which Rugra cannot traverse yet because Varnode does not expose its
-/// defining op / attached ValueSet to rangeutil.
-#[derive(Debug, Clone)]
-pub struct ValueSetInput {
-    /// The input's value set range.
-    pub range: CircleRange,
-    /// Whether the input's left boundary is stable.
-    pub left_is_stable: bool,
-    /// Whether the input's right boundary is stable.
-    pub right_is_stable: bool,
-    /// Size in bytes of the input Varnode.
-    pub vn_size: usize,
-}
-
 // Ghidra: rangeutil.hh:113 ValueSet
 /// A range of values attached to a Varnode within a data-flow subsystem.
 ///
@@ -1661,13 +2250,16 @@ pub struct ValueSet {
     pub part_head: Option<usize>,
     /// Next ValueSet (arena id) in the iteration order.
     pub next: Option<VsId>,
-    /// RUGRA-GLUE staging for the defining op's inputs, used by `iterate`.
-    /// Ghidra reads these live via `op->getIn(i)->getValueSet()`.
-    pub iter_inputs: Option<Vec<ValueSetInput>>,
-    /// RUGRA-GLUE staging for the output Varnode size.
-    pub iter_out_size: Option<usize>,
-    /// RUGRA-GLUE staging for input type codes (for `compute_type_code`).
-    pub iter_input_type_codes: Vec<i32>,
+    /// RUGRA-GLUE: input ValueSet arena ids for the defining op, staged at
+    /// establish time. Ghidra reads them live during `iterate` via
+    /// `op->getIn(i)->getValueSet()`; the ids are stable so the ranges are
+    /// read live from the solver arena each iteration.
+    pub input_ids: Vec<VsId>,
+    /// RUGRA-GLUE: input varnode sizes (C++ `inSet1->vn->getSize()`), staged
+    /// at establish time alongside `input_ids`.
+    pub input_sizes: Vec<usize>,
+    /// RUGRA-GLUE: output varnode size (C++ `vn->getSize()`).
+    pub out_size: usize,
 }
 
 impl ValueSet {
@@ -1687,9 +2279,9 @@ impl ValueSet {
             equations: Vec::new(),
             part_head: None,
             next: None,
-            iter_inputs: None,
-            iter_out_size: None,
-            iter_input_type_codes: Vec::new(),
+            input_ids: Vec::new(),
+            input_sizes: Vec::new(),
+            out_size: 0,
         }
     }
 
@@ -1743,16 +2335,27 @@ impl ValueSet {
             self.left_is_stable = true;
             self.right_is_stable = true;
         } else if vn_guard.is_written() {
-            // Ghidra: PcodeOp *op = vn->getDef(); opCode = op->code();
-            // Rugra's Varnode does not carry its defining op directly here;
-            // the solver injects op_code/num_params via set_defining_op once
-            // the PcodeOp is known (see ValueSetSolver::establish_value_sets).
-            self.op_code = OpCode::CPUI_MAX;
-            self.num_params = 0;
-            // TODO: depends on unported Varnode::getDef wiring; the solver
-            // calls set_defining_op afterwards with the real op. Until then
-            // we leave the range empty (as the C++ "written" branch does:
-            // range starts empty).
+            // cc:1517-1524: PcodeOp *op = vn->getDef(); opCode = op->code();
+            // INDIRECT is treated as COPY (numParams forced to 1).
+            match vn_guard.get_def() {
+                Some(def) => {
+                    let code = def.read().unwrap().get_opcode();
+                    if code == OpCode::CPUI_INDIRECT {
+                        self.op_code = OpCode::CPUI_COPY;
+                        self.num_params = 1;
+                    } else {
+                        self.op_code = code;
+                        self.num_params = def.read().unwrap().num_input() as i32;
+                    }
+                }
+                None => {
+                    // Ghidra-unreachable: is_written implies a defining op.
+                    // Keep CPUI_MAX/0 so iterate() is a no-op for this node.
+                    self.op_code = OpCode::CPUI_MAX;
+                    self.num_params = 0;
+                }
+            }
+            // cc:1525-1526: range starts empty for written varnodes.
             self.left_is_stable = false;
             self.right_is_stable = false;
         } else if vn_guard.is_constant() {
@@ -1769,22 +2372,6 @@ impl ValueSet {
             self.range.set_full(vn_guard.get_size());
             self.left_is_stable = false;
             self.right_is_stable = false;
-        }
-    }
-
-    // RUGRA-GLUE: inject defining-op metadata (no Ghidra counterpart — Ghidra
-    // reads it from Varnode::getDef() inside setVarnode). Rugra's Varnode does
-    // not expose its defining op to rangeutil yet, so the solver passes it in.
-    /// Set the defining op-code and input count. Ghidra derives these from
-    /// `vn->getDef()` inside `setVarnode`; Rugra injects them explicitly.
-    pub fn set_defining_op(&mut self, op_code: OpCode, num_params: i32) {
-        if op_code == OpCode::CPUI_INDIRECT {
-            // Treat CPUI_INDIRECT as CPUI_COPY (rangeutil.cc:1519).
-            self.op_code = OpCode::CPUI_COPY;
-            self.num_params = 1;
-        } else {
-            self.op_code = op_code;
-            self.num_params = num_params;
         }
     }
 
@@ -2138,16 +2725,15 @@ impl Widener for WidenerFull {
                 let left_is_stable = range.get_min() == new_range.get_min();
                 *range = new_range.clone(); // Preserve any new step information
                 let lm = landmark.clone();
-                if lm.contains_val(range.get_min()) && lm.contains_val(range.get_max_value()) {
-                    // landmark contains range (approximated by endpoints).
+                // cc:1859-1870: landmark->contains(range) → widen to the
+                // landmark; else the landmark's complement.
+                if lm.contains_range(range) {
                     range.widen(&lm, left_is_stable);
                     return true;
                 } else {
                     let mut constraint = landmark.clone();
                     constraint.invert();
-                    if constraint.contains_val(range.get_min())
-                        && constraint.contains_val(range.get_max_value())
-                    {
+                    if constraint.contains_range(range) {
                         range.widen(&constraint, left_is_stable);
                         return true;
                     }
@@ -2502,10 +3088,7 @@ impl ValueSetSolver {
                 }
             }
             if let Some(ch) = cur_component {
-                let mut dummy = ValueSet::new();
-                std::mem::swap(&mut dummy, &mut self.value_nodes[cur]);
-                let changed = dummy.iterate(widener);
-                std::mem::swap(&mut dummy, &mut self.value_nodes[cur]);
+                let changed = self.iterate_node(cur, widener);
                 if changed {
                     self.record_storage[ch].is_dirty = true;
                 }
@@ -2541,10 +3124,7 @@ impl ValueSetSolver {
                     }
                 }
             } else {
-                let mut dummy = ValueSet::new();
-                std::mem::swap(&mut dummy, &mut self.value_nodes[cur]);
-                let _ = dummy.iterate(widener);
-                std::mem::swap(&mut dummy, &mut self.value_nodes[cur]);
+                self.iterate_node(cur, widener);
                 cur_set = self.value_nodes[cur].next;
             }
         }
@@ -2568,6 +3148,265 @@ impl ValueSetSolver {
                 vsr.compute(&src);
             }
         }
+    }
+
+    // Ghidra: rangeutil.cc:1611 ValueSet::iterate
+    /// Regenerate the given value set (arena id `cur`) from its operator
+    /// inputs. Faithful port of `ValueSet::iterate` (rangeutil.cc:1611-1737).
+    /// The C++ reads the inputs' ValueSets live via
+    /// `op->getIn(i)->getValueSet()`; Rugra reads them live from the arena
+    /// through the `input_ids` staged at establish time (ids are stable, so
+    /// this is the same live read).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `widener` borrowed immutably; the node's previous
+    ///   `range` is widened in place via `do_widening` (on failure `set_full`).
+    /// - 循环边界/遍历序: MULTIEQUAL iterates `i` in 0..num_params folding
+    ///   `res.circleUnion(input.range)`; equation application advances
+    ///   `eq_pos` only when `does_equation_apply(eq_pos, i)`.
+    /// - 计数器/累加器: `count += 1` once per call (after the count==0
+    ///   computeTypeCode gate); `left/right_is_stable` assigned from inputs
+    ///   (AND-ed for binary/trinary) or from prev-vs-new range comparison.
+    /// - 排序/比较键: equation slot/type_code matching; final `res == range`
+    ///   decides no-change; `part_head.is_some()` routes to the widener.
+    pub fn iterate_node(&mut self, cur: VsId, widener: &dyn Widener) -> bool {
+        // cc:1614: if (!vn->isWritten()) return false;
+        let written = self.value_nodes[cur]
+            .vn
+            .as_ref()
+            .is_some_and(|v| v.read().unwrap().is_written());
+        if !written {
+            return false;
+        }
+        // cc:1615: if (widener.checkFreeze(*this)) return false;
+        if widener.check_freeze(&self.value_nodes[cur]) {
+            return false;
+        }
+        // Snapshot the input state (C++ reads these live at this point of the
+        // iterate call, before self.range is touched): range, stability flags,
+        // and type code (for the count==0 computeTypeCode gate).
+        let n_inputs = self.value_nodes[cur].input_ids.len();
+        let mut inputs: Vec<(CircleRange, bool, bool, i32)> = Vec::with_capacity(n_inputs);
+        for i in 0..n_inputs {
+            let id = self.value_nodes[cur].input_ids[i];
+            let ivs = &self.value_nodes[id];
+            inputs.push((
+                ivs.range.clone(),
+                ivs.left_is_stable,
+                ivs.right_is_stable,
+                ivs.type_code,
+            ));
+        }
+        let input_sizes = self.value_nodes[cur].input_sizes.clone();
+        let out_size = self.value_nodes[cur].out_size;
+        // Mutate the node through a swapped-out dummy so input reads (immutable
+        // arena borrows above) and self-mutation never overlap borrows.
+        let mut dummy = ValueSet::new();
+        std::mem::swap(&mut dummy, &mut self.value_nodes[cur]);
+        let (node, changed) =
+            Self::iterate_body(dummy, inputs, input_sizes, out_size, widener);
+        self.value_nodes[cur] = node;
+        changed
+    }
+
+    /// Core of `ValueSet::iterate` (rangeutil.cc:1611-1737) operating on an
+    /// owned node plus a snapshot of its inputs `(range, left_stable,
+    /// right_stable, type_code)`. Returns the node and the change flag.
+    // Ghidra: rangeutil.cc:1611 ValueSet::iterate (body)
+    fn iterate_body(
+        mut vs: ValueSet,
+        inputs: Vec<(CircleRange, bool, bool, i32)>,
+        input_sizes: Vec<usize>,
+        out_size: usize,
+        widener: &dyn Widener,
+    ) -> (ValueSet, bool) {
+        // cc:1616-1621: count == 0 → computeTypeCode from the (live) input
+        // type codes; indeterminate combination → setFull, return true.
+        if vs.count == 0 {
+            let input_type_codes: Vec<i32> = inputs.iter().map(|inp| inp.3).collect();
+            if vs.compute_type_code_with(&input_type_codes) {
+                vs.set_full();
+                return (vs, true);
+            }
+        }
+        vs.count += 1; // cc:1622: Count this iteration
+        let mut res = CircleRange::empty();
+        let mut eq_pos: i32 = 0;
+        let op_code = vs.op_code;
+
+        let result: Option<bool> = (|| -> Option<bool> {
+            if op_code == OpCode::CPUI_MULTIEQUAL {
+                let mut pieces: i32 = 0;
+                for i in 0..vs.num_params as usize {
+                    let Some(in_set) = inputs.get(i) else { break };
+                    if vs.does_equation_apply(eq_pos, i as i32) {
+                        let mut range_copy = in_set.0.clone();
+                        let eq_idx = eq_pos as usize;
+                        let eq_range = vs.equations[eq_idx].range.clone();
+                        if 0 != range_copy.circle_intersect(&eq_range) {
+                            range_copy = eq_range;
+                        }
+                        pieces = res.circle_union(&range_copy);
+                        eq_pos += 1; // Equation was used
+                    } else {
+                        pieces = res.circle_union(&in_set.0);
+                    }
+                    if pieces == 2 {
+                        // Could not get clean union, force it.
+                        if res.minimal_container(&in_set.0, VALUE_SET_MAX_STEP) {
+                            break;
+                        }
+                    }
+                }
+                // Union with the previous iteration's set.
+                if 0 != res.circle_union(&vs.range) {
+                    res.minimal_container(&vs.range, VALUE_SET_MAX_STEP);
+                }
+                if !vs.range.is_empty() && !res.is_empty() {
+                    vs.left_is_stable = vs.range.get_min() == res.get_min();
+                    vs.right_is_stable = vs.range.get_end() == res.get_end();
+                }
+            } else if vs.num_params == 1 {
+                let Some(in_set1) = inputs.first() else {
+                    return None; // No way to change this value set
+                };
+                let in_size1 = input_sizes.first().copied().unwrap_or(out_size);
+                if vs.does_equation_apply(eq_pos, 0) {
+                    let eq_idx = eq_pos as usize;
+                    let eq_range = vs.equations[eq_idx].range.clone();
+                    let mut range_copy = in_set1.0.clone();
+                    if 0 != range_copy.circle_intersect(&eq_range) {
+                        range_copy = eq_range;
+                    }
+                    if !res.push_forward_unary(op_code, &range_copy, in_size1, out_size) {
+                        vs.set_full();
+                        return Some(true);
+                    }
+                    eq_pos += 1;
+                } else if !res.push_forward_unary(op_code, &in_set1.0, in_size1, out_size) {
+                    vs.set_full();
+                    return Some(true);
+                }
+                vs.left_is_stable = in_set1.1;
+                vs.right_is_stable = in_set1.2;
+            } else if vs.num_params == 2 {
+                if inputs.len() < 2 {
+                    return None;
+                }
+                let in_set1 = &inputs[0];
+                let in_set2 = &inputs[1];
+                let in_size1 = input_sizes.first().copied().unwrap_or(out_size);
+                if vs.equations.is_empty() {
+                    if !res.push_forward_binary(
+                        op_code,
+                        &in_set1.0,
+                        &in_set2.0,
+                        in_size1,
+                        out_size,
+                        VALUE_SET_MAX_STEP as i32,
+                    ) {
+                        vs.set_full();
+                        return Some(true);
+                    }
+                } else {
+                    let mut range1 = in_set1.0.clone();
+                    let mut range2 = in_set2.0.clone();
+                    if vs.does_equation_apply(eq_pos, 0) {
+                        let eq_idx = eq_pos as usize;
+                        let eq_range = vs.equations[eq_idx].range.clone();
+                        if 0 != range1.circle_intersect(&eq_range) {
+                            range1 = eq_range;
+                        }
+                        eq_pos += 1;
+                    }
+                    if vs.does_equation_apply(eq_pos, 1) {
+                        let eq_idx = eq_pos as usize;
+                        let eq_range = vs.equations[eq_idx].range.clone();
+                        if 0 != range2.circle_intersect(&eq_range) {
+                            range2 = eq_range;
+                        }
+                    }
+                    if !res.push_forward_binary(
+                        op_code,
+                        &range1,
+                        &range2,
+                        in_size1,
+                        out_size,
+                        VALUE_SET_MAX_STEP as i32,
+                    ) {
+                        vs.set_full();
+                        return Some(true);
+                    }
+                }
+                vs.left_is_stable = in_set1.1 && in_set2.1;
+                vs.right_is_stable = in_set1.2 && in_set2.2;
+            } else if vs.num_params == 3 {
+                if inputs.len() < 3 {
+                    return None;
+                }
+                let in_set1 = &inputs[0];
+                let in_set2 = &inputs[1];
+                let in_set3 = &inputs[2];
+                let in_size1 = input_sizes.first().copied().unwrap_or(out_size);
+                let mut range1 = in_set1.0.clone();
+                let mut range2 = in_set2.0.clone();
+                if vs.does_equation_apply(eq_pos, 0) {
+                    let eq_idx = eq_pos as usize;
+                    let eq_range = vs.equations[eq_idx].range.clone();
+                    if 0 != range1.circle_intersect(&eq_range) {
+                        range1 = eq_range;
+                    }
+                    eq_pos += 1;
+                }
+                if vs.does_equation_apply(eq_pos, 1) {
+                    let eq_idx = eq_pos as usize;
+                    let eq_range = vs.equations[eq_idx].range.clone();
+                    if 0 != range2.circle_intersect(&eq_range) {
+                        range2 = eq_range;
+                    }
+                }
+                if !res.push_forward_trinary(
+                    op_code,
+                    &range1,
+                    &range2,
+                    &in_set3.0,
+                    in_size1,
+                    out_size,
+                    VALUE_SET_MAX_STEP as i32,
+                ) {
+                    vs.set_full();
+                    return Some(true);
+                }
+                vs.left_is_stable = in_set1.1 && in_set2.1;
+                vs.right_is_stable = in_set1.2 && in_set2.2;
+            } else {
+                return None; // cc:1725-1726: no way to change this value set
+            }
+            Some(false)
+        })();
+
+        match result {
+            Some(true) => return (vs, true),  // setFull early-exit path
+            Some(false) => {}
+            None => return (vs, false),       // no-change fall-through
+        }
+
+        // cc:1728-1729: if (res == range) return false;
+        if res == vs.range {
+            return (vs, false);
+        }
+        // cc:1730-1736: widening for component members, plain assign otherwise.
+        if vs.part_head.is_some() {
+            let mut prev = vs.range.clone();
+            if !widener.do_widening(&vs, &mut prev, &res) {
+                vs.set_full();
+            } else {
+                vs.range = prev;
+            }
+        } else {
+            vs.range = res;
+        }
+        (vs, true)
     }
 
     /// Best-effort resolution of the ValueSet backing a ValueSetRead.
@@ -2666,81 +3505,440 @@ impl ValueSetSolver {
         None
     }
 
-    // TODO: depends on unported FlowBlock domination queries and full
-    // PcodeOp::pullBack wiring. The following methods are stubbed with their
-    // faithful signatures and algorithm comments so the structure is in place;
-    // they are exercised once establish_value_sets is wired into the pipeline.
+    // RANGEUTIL-CONSTGEN-0001: the constraint-generation family below is now
+    // fully implemented (was TODO stubs depending on FlowBlock domination
+    // queries and CircleRange::pullBack(PcodeOp*)).
 
     // Ghidra: rangeutil.cc:2105 ValueSetSolver::applyConstraints
     /// Look for PcodeOps where the given constraint range applies and
-    /// instantiate an equation. Faithful to `ValueSetSolver::applyConstraints`
-    /// (rangeutil.cc:2105). Requires FlowBlock domination queries not yet
-    /// ported; left as a structural stub.
+    /// instantiate an equation. If a read of the given Varnode is in a basic
+    /// block dominated by the condition producing the constraint, then either
+    /// the constraint or its complement applies to the PcodeOp reading the
+    /// Varnode. An equation holding the constraint is added to the ValueSet
+    /// of the Varnode output of the PcodeOp. Faithful to
+    /// `ValueSetSolver::applyConstraints` (rangeutil.cc:2105-2173).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `range` is borrowed (cloned into equations/landmark);
+    ///   `cbranch` is read for parent/flip; equations are written into the
+    ///   arena (`value_nodes`) / `read_nodes` via generateTrue/FalseEquation.
+    /// - 循环边界/遍历序: `vn->beginDescend()..endDescend()` iterated in
+    ///   descend-list order; the dominance walk is `for(;;)` from curBlock up
+    ///   `getImmedDom()` until trueBlock/falseBlock/splitPoint/null.
+    /// - 计数器/累加器: none; the seen_cond-style state lives inside
+    ///   restrictedByConditional (block.rs).
+    /// - 排序/比较键: block identity (pointer compare) for
+    ///   curBlock==true/false/split and `trueBlock->getIn(slot)==splitPoint`;
+    ///   MULTIEQUAL equations keyed to input `slot`; landmark added when the
+    ///   vn's ValueSet opCode is MULTIEQUAL.
     pub fn apply_constraints(
         &mut self,
-        _vn: &Arc<RwLock<Varnode>>,
-        _type_code: i32,
-        _range: &CircleRange,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        vn: &Arc<RwLock<Varnode>>,
+        type_code: i32,
+        range: &CircleRange,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO: depends on unported FlowBlock::getTrueOut/getFalseOut,
-        // restrictedByConditional, getImmedDom, and PcodeOp::getParent wiring.
+        // cc:2108-2117: splitPoint = cbranch parent; boolean flip swaps the
+        // true/false out-edges.
+        let split_point = cbranch
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        let Some(split_point) = split_point else {
+            return; // Ghidra-unreachable: live CBRANCH always has a parent.
+        };
+        let (true_block, false_block) = {
+            let flip = cbranch.read().unwrap().is_boolean_flip();
+            let sp = split_point.read().unwrap();
+            let cbranch_ref = crate::op::PcodeOpRef(cbranch.clone());
+            if flip {
+                (sp.get_false_out(&cbranch_ref), sp.get_true_out(&cbranch_ref))
+            } else {
+                (sp.get_true_out(&cbranch_ref), sp.get_false_out(&cbranch_ref))
+            }
+        };
+        let (true_block, false_block) = match (true_block, false_block) {
+            (Some(t), Some(f)) => (t, f),
+            _ => return, // Ghidra-unreachable: CBRANCH block has both outs.
+        };
+        // cc:2119-2120: is the only path to the true/false block via a
+        // splitPoint out-edge induced by the condition?
+        let true_is_restricted = true_block.read().unwrap().restricted_by_conditional(&split_point);
+        let false_is_restricted = false_block.read().unwrap().restricted_by_conditional(&split_point);
+
+        // cc:2123-2128: leave a landmark for widening on MULTIEQUAL defs.
+        if vn.read().unwrap().is_written() {
+            if let Some(vs_id) = self.find_value_set_by_vn(vn) {
+                if self.value_nodes[vs_id].op_code == OpCode::CPUI_MULTIEQUAL {
+                    self.value_nodes[vs_id].add_landmark(type_code, range.clone());
+                }
+            }
+        }
+        // cc:2129-2172: walk every read of vn.
+        let descend_ops: Vec<Arc<RwLock<PcodeOp>>> = vn.read().unwrap().descend_iter().collect();
+        for op in descend_ops {
+            let mut out_vn: Option<Arc<RwLock<Varnode>>> = None;
+            if !op.read().unwrap().is_mark() {
+                // If this is not a special read site, make sure there is a
+                // Varnode in the system.
+                let Some(out) = op.read().unwrap().get_out().cloned() else {
+                    continue;
+                };
+                if !out.read().unwrap().is_mark() {
+                    continue;
+                }
+                out_vn = Some(out);
+            }
+            let Some(cur) = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue; // Ghidra-unreachable: live ops have a parent block.
+            };
+            let mut cur_block: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Some(cur);
+            let Some(slot) = op.read().unwrap().slot_of_input(vn) else {
+                continue; // Ghidra-unreachable: iterating vn's descends.
+            };
+            let slot_i = slot as i32;
+            if op.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL {
+                let in_true = cur_block.as_ref().is_some_and(|cb| Arc::ptr_eq(cb, &true_block));
+                let in_false = cur_block.as_ref().is_some_and(|cb| Arc::ptr_eq(cb, &false_block));
+                if in_true {
+                    // If it's possible that both the true and false edges can
+                    // reach trueBlock, the only input we can restrict is a
+                    // MULTIEQUAL input along the exact true edge.
+                    let along_true_edge = true_block
+                        .read()
+                        .unwrap()
+                        .get_in(slot)
+                        .map(|e| Arc::ptr_eq(&e.point, &split_point))
+                        .unwrap_or(false);
+                    if true_is_restricted || along_true_edge {
+                        self.generate_true_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    continue;
+                } else if in_false {
+                    // ... along the exact false edge.
+                    let along_false_edge = false_block
+                        .read()
+                        .unwrap()
+                        .get_in(slot)
+                        .map(|e| Arc::ptr_eq(&e.point, &split_point))
+                        .unwrap_or(false);
+                    if false_is_restricted || along_false_edge {
+                        self.generate_false_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    continue;
+                } else {
+                    // MULTIEQUAL input is really only from one in-block.
+                    cur_block = cur_block
+                        .and_then(|cb| cb.read().unwrap().get_in(slot).map(|e| e.point));
+                    if cur_block.is_none() {
+                        continue; // Ghidra-unreachable: slot < sizeIn.
+                    }
+                }
+            }
+            // cc:2157-2171: walk the dominance chain. A None cur_block exits
+            // without generating (cc:2168 curBlock == null → break).
+            loop {
+                let Some(cb) = cur_block else { break };
+                if Arc::ptr_eq(&cb, &true_block) {
+                    if true_is_restricted {
+                        self.generate_true_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    break;
+                } else if Arc::ptr_eq(&cb, &false_block) {
+                    if false_is_restricted {
+                        self.generate_false_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    break;
+                } else if Arc::ptr_eq(&cb, &split_point) {
+                    break;
+                }
+                cur_block = cb
+                    .read()
+                    .unwrap()
+                    .get_immed_dom()
+                    .and_then(|w| w.upgrade());
+            }
+        }
     }
 
     // Ghidra: rangeutil.cc:2185 ValueSetSolver::constraintsFromPath
-    /// Generate constraints given a Varnode path. Faithful to
-    /// `ValueSetSolver::constraintsFromPath` (rangeutil.cc:2185). Requires
-    /// `CircleRange::pullBack(PcodeOp*)` which needs full opbehavior wiring.
+    /// Generate constraints given a Varnode path. Knowing that there is a
+    /// lifting path from the given starting Varnode to an ending Varnode in
+    /// the system, lift the given range to a final constraint on the ending
+    /// Varnode, then look for reads of the Varnode where the constraint
+    /// applies. Faithful to `ValueSetSolver::constraintsFromPath`
+    /// (rangeutil.cc:2185-2203).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `lift` is mutated in place by each pullBack (cc:2190/
+    ///   2199); equation attachment happens inside applyConstraints.
+    /// - 循环边界/遍历序: first loop `while(startVn != endVn)` walking defs
+    ///   via pullBack (usenzmask=false); second loop `for(;;)` applying
+    ///   constraints then walking endVn defs until unwritten / call / marker
+    ///   / pullBack-fail / unmarked.
+    /// - 计数器/累加器: none.
+    /// - 排序/比较键: Varnode identity (Arc::ptr_eq) for start/end; op gate
+    ///   via isCall()/isMarker(); system membership via isMark().
     pub fn constraints_from_path(
         &mut self,
-        _type_code: i32,
-        _lift: &mut CircleRange,
-        _start_vn: &Arc<RwLock<Varnode>>,
-        _end_vn: &Arc<RwLock<Varnode>>,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        type_code: i32,
+        lift: &mut CircleRange,
+        start_vn: &Arc<RwLock<Varnode>>,
+        end_vn: &Arc<RwLock<Varnode>>,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO: depends on unported CircleRange::pullBack(PcodeOp*,...) which
-        // in turn needs PcodeOp input/const-markup traversal.
+        // cc:2188-2192: pull the lift range all the way back to endVn.
+        let mut start = start_vn.clone();
+        while !Arc::ptr_eq(&start, end_vn) {
+            let Some(def) = start.read().unwrap().get_def() else {
+                return; // Ghidra-unreachable: chain varnodes are written.
+            };
+            let Some(next) = lift.pull_back(&def, false, &mut None) else {
+                return; // Couldn't pull all the way back to our value set.
+            };
+            start = next;
+        }
+        // cc:2193-2202: apply constraints along the path forward.
+        let mut end = end_vn.clone();
+        loop {
+            self.apply_constraints(&end, type_code, lift, cbranch);
+            if !end.read().unwrap().is_written() {
+                break;
+            }
+            let Some(op) = end.read().unwrap().get_def() else {
+                break; // Ghidra-unreachable: is_written implies def.
+            };
+            let (is_call, is_marker) = {
+                let g = op.read().unwrap();
+                (g.is_call(), g.is_marker())
+            };
+            if is_call || is_marker {
+                break;
+            }
+            let Some(next) = lift.pull_back(&op, false, &mut None) else {
+                break;
+            };
+            end = next;
+            if !end.read().unwrap().is_mark() {
+                break;
+            }
+        }
     }
 
     // Ghidra: rangeutil.cc:2210 ValueSetSolver::constraintsFromCBranch
-    /// Lift the set of values on a CBRANCH condition to any Varnode in the
-    /// system. Faithful to `ValueSetSolver::constraintsFromCBranch`
-    /// (rangeutil.cc:2210).
-    pub fn constraints_from_cbranch(&mut self, _cbranch: &Arc<RwLock<PcodeOp>>) {
-        // TODO: depends on unported CircleRange::pullBack(PcodeOp*,...) and
-        // Varnode defining-op traversal wiring.
+    /// Lift the set of values on the condition for the given CBRANCH to any
+    /// Varnode in the system, and label (the reads of) any such Varnode with
+    /// the constraint. If the values cannot be lifted or no Varnode in the
+    /// system is found, no constraints are generated. Faithful to
+    /// `ValueSetSolver::constraintsFromCBranch` (rangeutil.cc:2210-2238).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: none beyond solver mutation via
+    ///   generateRelativeConstraint / constraintsFromPath.
+    /// - 循环边界/遍历序: `while(!vn->isMark())` walking the condition chain
+    ///   via getIn(0) (or getIn(1) when in(0) is constant); breaks on
+    ///   unwritten / call / marker / numInput not in {1,2}.
+    /// - 计数器/累加器: none.
+    /// - 排序/比较键: isMark() decides system membership; both-inputs-
+    ///   non-constant triggers generateRelativeConstraint; the lift starts
+    ///   from the boolean-true range `CircleRange(true)` (mask=0xff, [1,2)).
+    pub fn constraints_from_cbranch(&mut self, cbranch: &Arc<RwLock<PcodeOp>>) {
+        // cc:2213: get Varnode deciding the condition.
+        let Some(mut vn) = cbranch.read().unwrap().get_in(1).cloned() else {
+            return; // Ghidra-unreachable: CBRANCH has an input 1.
+        };
+        while !vn.read().unwrap().is_mark() {
+            if !vn.read().unwrap().is_written() {
+                break;
+            }
+            let Some(op) = vn.read().unwrap().get_def() else {
+                break; // Ghidra-unreachable: is_written implies def.
+            };
+            let (is_call, is_marker) = {
+                let g = op.read().unwrap();
+                (g.is_call(), g.is_marker())
+            };
+            if is_call || is_marker {
+                break;
+            }
+            let num = op.read().unwrap().num_input();
+            if num == 0 || num > 2 {
+                break;
+            }
+            let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                break; // Ghidra-unreachable: op with numInput>0 has in(0).
+            };
+            vn = next;
+            if num == 2 {
+                if vn.read().unwrap().is_constant() {
+                    let Some(other) = op.read().unwrap().get_in(1).cloned() else {
+                        break; // Ghidra-unreachable.
+                    };
+                    vn = other;
+                } else if !op
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map_or(false, |v| v.read().unwrap().is_constant())
+                {
+                    // If we reach here, both inputs are non-constant.
+                    self.generate_relative_constraint(&op, cbranch);
+                    return;
+                }
+                // If we reach here, vn is non-constant, other input constant.
+            }
+        }
+        // cc:2233-2237
+        if vn.read().unwrap().is_mark() {
+            let mut lift = CircleRange::boolean(true);
+            let Some(start_vn) = cbranch.read().unwrap().get_in(1).cloned() else {
+                return;
+            };
+            self.constraints_from_path(0, &mut lift, &start_vn, &vn, cbranch);
+        }
     }
 
     // Ghidra: rangeutil.cc:2248 ValueSetSolver::generateConstraints
-    /// Given a complete data-flow system of Varnodes, look for any constraint
-    /// due to branch conditions. Faithful to
-    /// `ValueSetSolver::generateConstraints` (rangeutil.cc:2248). Requires
-    /// FlowBlock domination queries.
+    /// Given a complete data-flow system of Varnodes, look for any
+    /// constraint: for a particular Varnode, a limited set of values, due to
+    /// its involvement in a branch condition, which applies at a particular
+    /// read of the Varnode. Faithful to `ValueSetSolver::generateConstraints`
+    /// (rangeutil.cc:2248-2307).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: block marks (`setMark`/`clearMark`) are the state;
+    ///   `blockList` marks are cleared before the finalList pass, whose
+    ///   marks dedupe split points and are cleared at the end.
+    /// - 循环边界/遍历序: worklist outer order; MULTIEQUAL defs walk dom
+    ///   chains of every in-block, other defs walk their own block's dom
+    ///   chain; reads walk their block's dom chain; finalList scans every
+    ///   in-edge j of every blockList entry.
+    /// - 计数器/累加器: none; each block enters blockList at most once
+    ///   (mark-checked before push).
+    /// - 排序/比较键: splitPoint qualifies iff not marked, `sizeOut()==2`,
+    ///   and `lastOp()` is a CBRANCH; mark reuse dedupes split points.
     pub fn generate_constraints(
         &mut self,
-        _worklist: &[Arc<RwLock<Varnode>>],
-        _reads: &[Arc<RwLock<PcodeOp>>],
+        worklist: &[Arc<RwLock<Varnode>>],
+        reads: &[Arc<RwLock<PcodeOp>>],
     ) {
-        // TODO: depends on unported FlowBlock::getImmedDom/setMark/clearMark
-        // and BlockBasic::lastOp wiring.
+        type Blk = Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        let mut block_list: Vec<Blk> = Vec::new();
+        // cc:2253-2276: collect all blocks that contain a system op (input)
+        // or dominate a container.
+        for vn in worklist {
+            let Some(op) = vn.read().unwrap().get_def() else {
+                continue;
+            };
+            let Some(bl) = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue;
+            };
+            let is_multiequal = op.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL;
+            if is_multiequal {
+                let n_in = bl.read().unwrap().size_in();
+                for j in 0..n_in {
+                    let mut cur = bl.read().unwrap().get_in(j).map(|e| e.point);
+                    while let Some(c) = cur {
+                        if c.read().unwrap().is_mark() {
+                            break;
+                        }
+                        c.write().unwrap().set_mark();
+                        block_list.push(c.clone());
+                        cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                    }
+                }
+            } else {
+                let mut cur = Some(bl);
+                while let Some(c) = cur {
+                    if c.read().unwrap().is_mark() {
+                        break;
+                    }
+                    c.write().unwrap().set_mark();
+                    block_list.push(c.clone());
+                    cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                }
+            }
+        }
+        // cc:2277-2285: reads.
+        for read_op in reads {
+            let Some(bl) = read_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue;
+            };
+            let mut cur = Some(bl);
+            while let Some(c) = cur {
+                if c.read().unwrap().is_mark() {
+                    break;
+                }
+                c.write().unwrap().set_mark();
+                block_list.push(c.clone());
+                cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            }
+        }
+        // cc:2286-2287
+        for bl in &block_list {
+            bl.write().unwrap().clear_mark();
+        }
+
+        // cc:2289-2304: go through input blocks of the previously calculated
+        // blocks, looking for 2-out CBRANCH split points.
+        let mut final_list: Vec<Blk> = Vec::new();
+        for bl in &block_list {
+            let n_in = bl.read().unwrap().size_in();
+            for j in 0..n_in {
+                let Some(edge) = bl.read().unwrap().get_in(j) else {
+                    continue;
+                };
+                let split_point = edge.point.clone();
+                if split_point.read().unwrap().is_mark() {
+                    continue;
+                }
+                if split_point.read().unwrap().size_out() != 2 {
+                    continue;
+                }
+                let Some(last_op) = split_point.read().unwrap().last_op() else {
+                    continue;
+                };
+                if last_op.0.read().unwrap().get_opcode() == OpCode::CPUI_CBRANCH {
+                    split_point.write().unwrap().set_mark();
+                    final_list.push(split_point.clone());
+                    // Try to generate constraints from this splitPoint.
+                    self.constraints_from_cbranch(&last_op.0);
+                }
+            }
+        }
+        // cc:2305-2306
+        for bl in &final_list {
+            bl.write().unwrap().clear_mark();
+        }
     }
 
     // Ghidra: rangeutil.cc:2316 ValueSetSolver::checkRelativeConstant
     /// Verify that the given Varnode is produced by a straight-line sequence
     /// of COPYs / INT_ADDs with a constant from the base register marked
     /// relative. Faithful to `ValueSetSolver::checkRelativeConstant`
-    /// (rangeutil.cc:2316).
+    /// (rangeutil.cc:2316-2344).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `type_code`/`value` are out params set on success.
+    /// - 循环边界/遍历序: unbounded `for(;;)` walking COPY/INDIRECT to in(0),
+    ///   INT_ADD/PTRSUB to in(0) after accumulating the in(1) constant.
+    /// - 计数器/累加器: `value` accumulates `+constVn->getOffset()` masked
+    ///   with the CONSTANT's size mask at each step.
+    /// - 排序/比较键: mark + typeCode != 0 decides termination; op-code
+    ///   whitelist COPY/INDIRECT/INT_ADD/PTRSUB, anything else → false.
     pub fn check_relative_constant(
         &self,
         vn: Arc<RwLock<Varnode>>,
         type_code: &mut i32,
         value: &mut u64,
     ) -> bool {
+        let mut vn = vn;
         *value = 0;
         loop {
-            let vn_guard = vn.read().unwrap();
-            if vn_guard.is_mark() {
+            let marked = vn.read().unwrap().is_mark();
+            if marked {
                 if let Some(vs_id) = self.find_value_set_by_vn(&vn) {
                     if self.value_nodes[vs_id].type_code != 0 {
                         *type_code = self.value_nodes[vs_id].type_code;
@@ -2748,30 +3946,146 @@ impl ValueSetSolver {
                     }
                 }
             }
-            if !vn_guard.is_written() {
-                return false;
+            let def = {
+                let g = vn.read().unwrap();
+                if !g.is_written() {
+                    return false;
+                }
+                g.get_def()
+            };
+            let Some(def) = def else {
+                return false; // Ghidra-unreachable: is_written implies def
+            };
+            let (opc, in0, in1_const) = {
+                let g = def.read().unwrap();
+                (
+                    g.get_opcode(),
+                    g.get_in(0).cloned(),
+                    g.get_in(1).cloned(),
+                )
+            };
+            match opc {
+                OpCode::CPUI_COPY | OpCode::CPUI_INDIRECT => {
+                    let Some(next) = in0 else { return false };
+                    vn = next;
+                }
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB => {
+                    let Some(const_vn) = in1_const else { return false };
+                    let (is_const, off, sz) = {
+                        let g = const_vn.read().unwrap();
+                        (g.is_constant(), g.get_offset(), g.get_size())
+                    };
+                    if !is_const {
+                        return false;
+                    }
+                    *value = value.wrapping_add(off) & crate::address::calc_mask(sz);
+                    let Some(next) = in0 else { return false };
+                    vn = next;
+                }
+                _ => return false,
             }
-            // Ghidra: PcodeOp *op = vn->getDef(); OpCode opc = op->code();
-            // Rugra's Varnode does not expose its defining op here; the C++
-            // walks COPY/INDIRECT/INT_ADD/PTRSUB chains. Left incomplete until
-            // Varnode::getDef is wired into rangeutil.
-            drop(vn_guard);
-            // TODO: depends on unported Varnode::getDef wiring.
-            return false;
         }
         true
     }
 
     // Ghidra: rangeutil.cc:2351 ValueSetSolver::generateRelativeConstraint
-    /// Try to find a relative constraint from a comparison op and a cbranch.
-    /// Faithful to `ValueSetSolver::generateRelativeConstraint`
-    /// (rangeutil.cc:2351).
+    /// Given a binary PcodeOp producing a conditional branch, check if it can
+    /// be interpreted as a constraint relative to (the) base register
+    /// specified for this system. If it can be, a relative Equation is
+    /// generated, which will apply to relative ValueSets. Faithful to
+    /// `ValueSetSolver::generateRelativeConstraint` (rangeutil.cc:2351-2406).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `lift` (boolean-true range) is mutated in place by
+    ///   pullBackBinary; type/value are out params of checkRelativeConstant.
+    /// - 循环边界/遍历序: endVn walk `while(!endVn->isMark())` through
+    ///   COPY/PTRSUB in(0) and INT_ADD in(0) (with constant in(1) required).
+    /// - 计数器/累加器: `value` accumulates the relative offset inside
+    ///   checkRelativeConstant (masked by each constant's size).
+    /// - 排序/比较键: opcode remap INT_LESS→INT_SLESS / INT_LESSEQUAL→
+    ///   INT_SLESSEQUAL (unsigned pointer comparisons treated signed
+    ///   relative to the base register); pullBackBinary slot = the side NOT
+    ///   identified as the relative constant; outSize is 1 (boolean).
     pub fn generate_relative_constraint(
         &mut self,
-        _comp_op: &Arc<RwLock<PcodeOp>>,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        comp_op: &Arc<RwLock<PcodeOp>>,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO: depends on check_relative_constant + pullBackBinary wiring.
+        // cc:2354-2369
+        let mut opc = comp_op.read().unwrap().get_opcode();
+        match opc {
+            // Treat unsigned pointer comparisons as signed relative to the
+            // base register.
+            OpCode::CPUI_INT_LESS => opc = OpCode::CPUI_INT_SLESS,
+            OpCode::CPUI_INT_LESSEQUAL => opc = OpCode::CPUI_INT_SLESSEQUAL,
+            OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_EQUAL
+            | OpCode::CPUI_INT_NOTEQUAL => {}
+            _ => return,
+        }
+        let mut type_code = 0i32;
+        let mut value = 0u64;
+        let (in_vn0, in_vn1) = {
+            let g = comp_op.read().unwrap();
+            (g.get_in(0).cloned(), g.get_in(1).cloned())
+        };
+        let (Some(in_vn0), Some(in_vn1)) = (in_vn0, in_vn1) else {
+            return; // Ghidra-unreachable: comparison op has both inputs.
+        };
+        let mut lift = CircleRange::boolean(true);
+        let vn: Arc<RwLock<Varnode>>;
+        // cc:2376-2387: which side looks like a relative constant?
+        if self.check_relative_constant(in_vn0.clone(), &mut type_code, &mut value) {
+            vn = in_vn1;
+            let size = vn.read().unwrap().get_size();
+            if !lift.pull_back_binary(opc, value, 1, size, 1) {
+                return;
+            }
+        } else if self.check_relative_constant(in_vn1.clone(), &mut type_code, &mut value) {
+            vn = in_vn0;
+            let size = vn.read().unwrap().get_size();
+            if !lift.pull_back_binary(opc, value, 0, size, 1) {
+                return;
+            }
+        } else {
+            return; // Neither side looks like a relative constant.
+        }
+        // cc:2389-2404: walk to the system Varnode.
+        let mut end_vn = vn.clone();
+        while !end_vn.read().unwrap().is_mark() {
+            if !end_vn.read().unwrap().is_written() {
+                return;
+            }
+            let Some(op) = end_vn.read().unwrap().get_def() else {
+                return; // Ghidra-unreachable: is_written implies def.
+            };
+            let code = op.read().unwrap().get_opcode();
+            if code == OpCode::CPUI_COPY || code == OpCode::CPUI_PTRSUB {
+                let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                    return; // Ghidra-unreachable.
+                };
+                end_vn = next;
+            } else if code == OpCode::CPUI_INT_ADD {
+                // Can pull-back through INT_ADD if second param is constant.
+                let const_ok = op
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map_or(false, |c| c.read().unwrap().is_constant());
+                if !const_ok {
+                    return;
+                }
+                let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                    return; // Ghidra-unreachable.
+                };
+                end_vn = next;
+            } else {
+                return;
+            }
+        }
+        // cc:2405
+        self.constraints_from_path(type_code, &mut lift, &vn, &end_vn, cbranch);
     }
 
     // Ghidra: rangeutil.cc:2416 ValueSetSolver::establishValueSets
@@ -2837,12 +4151,104 @@ impl ValueSetSolver {
                 }
                 continue;
             }
-            // vn is written. Ghidra: PcodeOp *op = vn->getDef(); switch(op->code())
-            // Rugra's Varnode does not expose its defining op to rangeutil yet.
-            // TODO: depends on unported Varnode::getDef wiring. Until then we
-            // cannot expand inputs; the system is limited to the sinks/roots
-            // already registered.
-            let _ = indirect_as_copy;
+            // cc:2450-2498: PcodeOp *op = vn->getDef(); switch(op->code()) —
+            // distinguish ops where we can never predict an integer range.
+            let def = vn.read().unwrap().get_def();
+            let Some(def) = def else {
+                // Ghidra-unreachable: is_written implies a defining op.
+                continue;
+            };
+            let (code, is_ind_store, n_in) = {
+                let g = def.read().unwrap();
+                (g.get_opcode(), g.is_indirect_store(), g.num_input())
+            };
+            let mut expand_inputs = false;
+            match code {
+                OpCode::CPUI_INDIRECT => {
+                    if indirect_as_copy || is_ind_store {
+                        expand_inputs = true; // but only input 0 (below)
+                        let in_vn = def.read().unwrap().get_in(0).cloned();
+                        if let Some(in_vn) = in_vn {
+                            if !in_vn.read().unwrap().is_mark() {
+                                self.new_value_set(in_vn.clone(), 0);
+                                in_vn.write().unwrap().set_mark();
+                                worklist.push(in_vn);
+                            }
+                        }
+                    } else {
+                        if let Some(id) = self.find_value_set_by_vn(&vn) {
+                            self.value_nodes[id].set_full();
+                            self.root_nodes.push(id);
+                        }
+                    }
+                }
+                OpCode::CPUI_CALL
+                | OpCode::CPUI_CALLIND
+                | OpCode::CPUI_CALLOTHER
+                | OpCode::CPUI_LOAD
+                | OpCode::CPUI_NEW
+                | OpCode::CPUI_SEGMENTOP
+                | OpCode::CPUI_CPOOLREF
+                | OpCode::CPUI_FLOAT_ADD
+                | OpCode::CPUI_FLOAT_DIV
+                | OpCode::CPUI_FLOAT_MULT
+                | OpCode::CPUI_FLOAT_SUB
+                | OpCode::CPUI_FLOAT_NEG
+                | OpCode::CPUI_FLOAT_ABS
+                | OpCode::CPUI_FLOAT_SQRT
+                | OpCode::CPUI_FLOAT_INT2FLOAT
+                | OpCode::CPUI_FLOAT_FLOAT2FLOAT
+                | OpCode::CPUI_FLOAT_TRUNC
+                | OpCode::CPUI_FLOAT_CEIL
+                | OpCode::CPUI_FLOAT_FLOOR
+                | OpCode::CPUI_FLOAT_ROUND => {
+                    // Ops where we can never predict an integer range.
+                    if let Some(id) = self.find_value_set_by_vn(&vn) {
+                        self.value_nodes[id].set_full();
+                        self.root_nodes.push(id);
+                    }
+                }
+                _ => {
+                    for i in 0..n_in {
+                        let in_vn = def.read().unwrap().get_in(i).cloned();
+                        let Some(in_vn) = in_vn else { continue };
+                        let (marked, annotation) = {
+                            let g = in_vn.read().unwrap();
+                            (g.is_mark(), g.is_annotation())
+                        };
+                        if marked || annotation {
+                            continue;
+                        }
+                        self.new_value_set(in_vn.clone(), 0);
+                        in_vn.write().unwrap().set_mark();
+                        worklist.push(in_vn);
+                    }
+                    expand_inputs = true;
+                }
+            }
+            // RUGRA-GLUE input wiring: stage the defining op's input ValueSet
+            // ids (C++ reads them live via op->getIn(i)->getValueSet() in
+            // ValueSet::iterate). All inputs are in the system at this point.
+            if expand_inputs {
+                if let Some(id) = self.find_value_set_by_vn(&vn) {
+                    let vn_size = vn.read().unwrap().get_size();
+                    let limit = if code == OpCode::CPUI_INDIRECT { 1 } else { n_in };
+                    let mut ids = Vec::with_capacity(limit);
+                    let mut sizes = Vec::with_capacity(limit);
+                    for i in 0..limit {
+                        let Some(in_vn) = def.read().unwrap().get_in(i).cloned() else {
+                            continue;
+                        };
+                        sizes.push(in_vn.read().unwrap().get_size());
+                        if let Some(in_id) = self.find_value_set_by_vn(&in_vn) {
+                            ids.push(in_id);
+                        }
+                    }
+                    self.value_nodes[id].input_ids = ids;
+                    self.value_nodes[id].input_sizes = sizes;
+                    self.value_nodes[id].out_size = vn_size;
+                }
+            }
         }
         for read_op in reads {
             let num = read_op.read().unwrap().num_input();
@@ -2984,265 +4390,6 @@ fn print_range_raw(r: &CircleRange) -> String {
     s
 }
 
-// =============================================================================
-// ValueSet::iterate — requires push-forward over the defining op's inputs.
-// Ported with the inputs passed in via a small bundle so the core iteration
-// algorithm is faithful to rangeutil.cc:1611 even before the Varnode graph
-// is fully wired.
-// =============================================================================
-
-impl ValueSet {
-    // Ghidra: rangeutil.cc:1611 ValueSet::iterate
-    /// Regenerate this value set from operator inputs. Faithful to
-    /// `ValueSet::iterate` (rangeutil.cc:1611).
-    ///
-    /// The C++ method reads inputs via `op->getIn(i)->getValueSet()` and the
-    /// output size via `vn->getSize()`. Rugra passes `inputs` (one per
-    /// `num_params`) and `out_size` explicitly; the widener is consulted for
-    /// freeze/widening exactly as in Ghidra.
-    ///
-    /// Alignment Evidence (four decisive semantics):
-    /// - References/out params: `widener` borrowed immutably; `self.range` is
-    ///   the previous iteration's set and is widened in place via the widener.
-    /// - Loop bounds/order: for MULTIEQUAL, iterates `i` in 0..num_params,
-    ///   folding `res = res.circleUnion(inSet->range)`; equation application
-    ///   advances `eqPos` only when `doesEquationApply(eqPos, i)`.
-    /// - Counter/accumulator: `count += 1` once per call (before computing
-    ///   `res`); `leftIsStable`/`rightIsStable` are assigned from the inputs
-    ///   (AND-ed for binary/trinary) or from comparing previous vs. new range.
-    /// - Sort/compare key: equation slot/type_code matching via
-    ///   `does_equation_apply`; final `res == range` decides no-change.
-    pub fn iterate(&mut self, widener: &dyn Widener) -> bool {
-        // The no-inputs form (used when the Varnode graph isn't wired): Ghidra
-        // returns false early if `!vn->isWritten()`. With inputs present, the
-        // full algorithm runs via `iterate_with`.
-        if self.vn.is_none() {
-            return false;
-        }
-        if widener.check_freeze(self) {
-            return false;
-        }
-        // Without input metadata (set via set_iterate_inputs by the solver)
-        // we cannot recompute; report no change, matching the C++ "numParams
-        // not 1/2/3/MULTIEQUAL" fall-through that returns false.
-        if self.iter_inputs.is_none() {
-            return false;
-        }
-        let inputs = self.iter_inputs.clone().unwrap();
-        let out_size = self.iter_out_size.unwrap_or(0);
-        self.iterate_with(inputs, out_size, widener)
-    }
-
-    /// Provide the defining op's input value sets and output size for the next
-    /// `iterate` call. Rugra glue: Ghidra obtains these internally from
-    /// `op->getIn(i)->getValueSet()` / `vn->getSize()`.
-    // RUGRA-GLUE: stages inputs the C++ fetches live from the Varnode graph,
-    // which Rugra cannot yet traverse (Varnode::getDef unported to rangeutil).
-    pub fn set_iterate_inputs(&mut self, inputs: Vec<ValueSetInput>, out_size: usize) {
-        self.iter_inputs = Some(inputs);
-        self.iter_out_size = Some(out_size);
-    }
-
-    // Core of ValueSet::iterate (rangeutil.cc:1611) with explicit inputs.
-    // Ghidra: rangeutil.cc:1611 ValueSet::iterate
-    fn iterate_with(
-        &mut self,
-        inputs: Vec<ValueSetInput>,
-        out_size: usize,
-        widener: &dyn Widener,
-    ) -> bool {
-        if widener.check_freeze(self) {
-            return false;
-        }
-        if self.count == 0 {
-            // computeTypeCode: figure out if this value set is absolute or
-            // relative based on the input type codes. Faithful to cc:1567.
-            let input_type_codes: Vec<i32> = self.iter_input_type_codes.clone();
-            let indeterminate = self.compute_type_code_with(&input_type_codes);
-            if indeterminate {
-                self.set_full();
-                return true;
-            }
-        }
-        self.count += 1; // Count this iteration
-        let mut res = CircleRange::empty();
-        let mut eq_pos: i32 = 0;
-        let op_code = self.op_code;
-
-        if op_code == OpCode::CPUI_MULTIEQUAL {
-            let mut pieces: i32 = 0;
-            for i in 0..self.num_params as usize {
-                if i >= inputs.len() {
-                    break;
-                }
-                let in_set = &inputs[i];
-                if self.does_equation_apply(eq_pos, i as i32) {
-                    let mut range_copy = in_set.range.clone();
-                    let eq_idx = eq_pos as usize;
-                    let eq_range = &self.equations[eq_idx].range;
-                    if 0 != range_copy.circle_intersect(eq_range) {
-                        range_copy = eq_range.clone();
-                    }
-                    pieces = res.circle_union(&range_copy);
-                    eq_pos += 1; // Equation was used
-                } else {
-                    pieces = res.circle_union(&in_set.range);
-                }
-                if pieces == 2 {
-                    // Could not get clean union, force it.
-                    if res.minimal_container(&in_set.range, VALUE_SET_MAX_STEP) {
-                        break;
-                    }
-                }
-            }
-            // Union with the previous iteration's set.
-            if 0 != res.circle_union(&self.range) {
-                res.minimal_container(&self.range, VALUE_SET_MAX_STEP);
-            }
-            if !self.range.is_empty() && !res.is_empty() {
-                self.left_is_stable = self.range.get_min() == res.get_min();
-                self.right_is_stable = self.range.get_end() == res.get_end();
-            }
-        } else if self.num_params == 1 {
-            if inputs.is_empty() {
-                return false;
-            }
-            let in_set1 = &inputs[0];
-            let in_size1 = in_set1.vn_size;
-            if self.does_equation_apply(eq_pos, 0) {
-                let mut range_copy = in_set1.range.clone();
-                let eq_idx = eq_pos as usize;
-                let eq_range = &self.equations[eq_idx].range;
-                if 0 != range_copy.circle_intersect(eq_range) {
-                    range_copy = eq_range.clone();
-                }
-                if !res.push_forward_unary(op_code, &range_copy, in_size1, out_size) {
-                    self.set_full();
-                    return true;
-                }
-                eq_pos += 1;
-            } else if !res.push_forward_unary(op_code, &in_set1.range, in_size1, out_size) {
-                self.set_full();
-                return true;
-            }
-            self.left_is_stable = in_set1.left_is_stable;
-            self.right_is_stable = in_set1.right_is_stable;
-        } else if self.num_params == 2 {
-            if inputs.len() < 2 {
-                return false;
-            }
-            let in_set1 = &inputs[0];
-            let in_set2 = &inputs[1];
-            let in_size1 = in_set1.vn_size;
-            if self.equations.is_empty() {
-                if !res.push_forward_binary(
-                    op_code,
-                    &in_set1.range,
-                    &in_set2.range,
-                    in_size1,
-                    out_size,
-                    VALUE_SET_MAX_STEP as i32,
-                ) {
-                    self.set_full();
-                    return true;
-                }
-            } else {
-                let mut range1 = in_set1.range.clone();
-                let mut range2 = in_set2.range.clone();
-                if self.does_equation_apply(eq_pos, 0) {
-                    let eq_idx = eq_pos as usize;
-                    let eq_range = &self.equations[eq_idx].range;
-                    if 0 != range1.circle_intersect(eq_range) {
-                        range1 = eq_range.clone();
-                    }
-                    eq_pos += 1;
-                }
-                if self.does_equation_apply(eq_pos, 1) {
-                    let eq_idx = eq_pos as usize;
-                    let eq_range = &self.equations[eq_idx].range;
-                    if 0 != range2.circle_intersect(eq_range) {
-                        range2 = eq_range.clone();
-                    }
-                }
-                if !res.push_forward_binary(
-                    op_code,
-                    &range1,
-                    &range2,
-                    in_size1,
-                    out_size,
-                    VALUE_SET_MAX_STEP as i32,
-                ) {
-                    self.set_full();
-                    return true;
-                }
-            }
-            self.left_is_stable = in_set1.left_is_stable && in_set2.left_is_stable;
-            self.right_is_stable = in_set1.right_is_stable && in_set2.right_is_stable;
-        } else if self.num_params == 3 {
-            if inputs.len() < 3 {
-                return false;
-            }
-            let in_set1 = &inputs[0];
-            let in_set2 = &inputs[1];
-            let in_set3 = &inputs[2];
-            let in_size1 = in_set1.vn_size;
-            let mut range1 = in_set1.range.clone();
-            let mut range2 = in_set2.range.clone();
-            if self.does_equation_apply(eq_pos, 0) {
-                let eq_idx = eq_pos as usize;
-                let eq_range = &self.equations[eq_idx].range;
-                if 0 != range1.circle_intersect(eq_range) {
-                    range1 = eq_range.clone();
-                }
-                eq_pos += 1;
-            }
-            if self.does_equation_apply(eq_pos, 1) {
-                let eq_idx = eq_pos as usize;
-                let eq_range = &self.equations[eq_idx].range;
-                if 0 != range2.circle_intersect(eq_range) {
-                    range2 = eq_range.clone();
-                }
-            }
-            if !res.push_forward_trinary(
-                op_code,
-                &range1,
-                &range2,
-                &in_set3.range,
-                in_size1,
-                out_size,
-                VALUE_SET_MAX_STEP as i32,
-            ) {
-                self.set_full();
-                return true;
-            }
-            self.left_is_stable = in_set1.left_is_stable && in_set2.left_is_stable;
-            self.right_is_stable = in_set1.right_is_stable && in_set2.right_is_stable;
-        } else {
-            return false; // No way to change this value set
-        }
-
-        if res == *self.get_range() {
-            return false;
-        }
-        if self.part_head.is_some() {
-            // widener.doWidening(*this, range, res); on failure setFull().
-            let mut prev = self.range.clone();
-            if !widener.do_widening(self, &mut prev, &res) {
-                self.set_full();
-            } else {
-                self.range = prev;
-            }
-        } else {
-            self.range = res;
-        }
-        true
-    }
-}
-
-// Extension fields on ValueSet for the iterate-with-inputs pathway. These are
-// Rust glue: Ghidra fetches inputs/op-size on the fly from the Varnode graph;
-// Rugra stages them explicitly.
-// RUGRA-GLUE: extra staging fields (no Ghidra counterpart).
 
 #[cfg(test)]
 mod value_set_tests {
@@ -3432,6 +4579,279 @@ mod value_set_tests {
         assert!(s.read_nodes.is_empty());
         assert_eq!(s.get_num_iterations(), 0);
         assert!(s.value_sets().is_empty());
+    }
+
+    // RANGEUTIL-VSEMPTY-0001 regression: the solver must expand the sink's
+    // defining-op inputs into the system (establishValueSets worklist) and
+    // propagate ranges through iteration (ValueSet::iterate), so the guard
+    // read is a real stack-relative window instead of an empty range.
+    #[test]
+    fn test_solver_fills_sink_range_through_int_add() {
+        use crate::address::{Address, SeqNum};
+        use std::sync::{Arc, RwLock, Weak};
+
+        let stack_reg = Arc::new(RwLock::new(Varnode::new_unique(0x900, 8)));
+        let const_vn = Arc::new(RwLock::new(Varnode::new_constant(0x40, 8)));
+        let sum_vn = Arc::new(RwLock::new(Varnode::new_unique(0x901, 8)));
+
+        // sum = INT_ADD(stack_reg, 0x40)
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        add_op.write().unwrap().inrefs.push(stack_reg.clone());
+        add_op.write().unwrap().inrefs.push(const_vn.clone());
+        add_op.write().unwrap().output = Some(sum_vn.clone());
+        sum_vn.write().unwrap().def = Some(Arc::downgrade(&add_op) as Weak<RwLock<PcodeOp>>);
+        // Production varnodes get the WRITTEN flag via op insertion
+        // (Funcdata::op_insert); mirror it for this hand-built graph.
+        sum_vn.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        stack_reg.write().unwrap().descend.push(Arc::downgrade(&add_op));
+        const_vn.write().unwrap().descend.push(Arc::downgrade(&add_op));
+
+        // LOAD(space, sum) — the guard read, slot 1 = pointer sink. Slot 0
+        // holds the (constant) space id, unmarked, mirroring real LOADs.
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 2),
+            OpCode::CPUI_LOAD,
+        )));
+        let space_vn = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+        load_op.write().unwrap().inrefs.push(space_vn.clone());
+        load_op.write().unwrap().inrefs.push(sum_vn.clone());
+
+        let mut solver = ValueSetSolver::new();
+        solver.establish_value_sets(&[sum_vn.clone()], &[load_op.clone()], Some(stack_reg.clone()), false);
+        let widener = WidenerNone::new();
+        solver.solve(10000, &widener);
+
+        // The system expanded beyond the bare sink: stack reg + constant +
+        // sum value sets all exist.
+        assert!(solver.value_sets().len() >= 3, "system should contain the sink, its inputs and the stack register, got {}", solver.value_sets().len());
+
+        // The sink's own ValueSet converged to the stack-relative single
+        // offset {0x40}: cc:1512 sets the stack register's ValueSet via the
+        // single-value setRange(0, size) ({0}), and INT_ADD with the constant
+        // 0x40 yields {0x40} ([0x40,0x41)).
+        let sum_vs = solver
+            .value_sets()
+            .iter()
+            .find(|vs| vs.vn.as_ref().is_some_and(|v| Arc::ptr_eq(v, &sum_vn)))
+            .expect("sink ValueSet in arena");
+        assert_eq!(sum_vs.get_type_code(), 1);
+        assert!(!sum_vs.get_range().is_empty());
+        assert_eq!(sum_vs.get_range().get_min(), 0x40);
+        assert_eq!(sum_vs.get_range().get_end(), 0x41);
+
+        // The guard read mirrors the sink range (same SeqNum as the load op).
+        let seq = load_op.read().unwrap().get_seq_num().clone();
+        let read = solver.get_value_set_read(&seq).expect("read node registered");
+        assert_eq!(read.get_type_code(), 1);
+        assert!(!read.get_range().is_empty());
+        assert_eq!(read.get_range().get_min(), 0x40);
+        assert_eq!(read.get_range().get_end(), 0x41);
+        // Marks were cleared by establishValueSets.
+        assert!(!sum_vn.read().unwrap().is_mark());
+        assert!(!stack_reg.read().unwrap().is_mark());
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: CircleRange::pullBack(PcodeOp*)
+    // (cc:1022) — binary comparison arm. `lift` starts as boolean-true
+    // (CircleRange(true) = [1,2)@0xff); pulling back through
+    // INT_LESS(x, 5) yields x with the true-branch range [0,5)@size(x).
+    #[test]
+    fn test_circle_range_pull_back_binary_less() {
+        use crate::address::{Address, SeqNum};
+        use std::sync::{Arc, RwLock};
+
+        let x = Arc::new(RwLock::new(Varnode::new_unique(0x2000, 4)));
+        let c5 = Arc::new(RwLock::new(Varnode::new_constant(5, 4)));
+        let bool_vn = Arc::new(RwLock::new(Varnode::new_unique(0x2001, 1)));
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less_op.write().unwrap().inrefs.push(x.clone());
+        less_op.write().unwrap().inrefs.push(c5.clone());
+        less_op.write().unwrap().output = Some(bool_vn.clone());
+
+        let mut lift = CircleRange::boolean(true);
+        let res = lift.pull_back(&less_op, false, &mut None);
+        let res = res.expect("pull back through INT_LESS(x, 5)");
+        assert!(Arc::ptr_eq(&res, &x), "returns the non-constant input");
+        assert_eq!(lift.get_left(), 0);
+        assert_eq!(lift.get_end(), 5);
+        assert_eq!(lift.get_mask(), 0xffff_ffff);
+
+        // Constant slot swap: INT_LESS(5, x) restricts slot 1 → x >= 6,
+        // i.e. [6, 0) wrapping in 4 bytes.
+        let less2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1002), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less2.write().unwrap().inrefs.push(c5.clone());
+        less2.write().unwrap().inrefs.push(x.clone());
+        less2.write().unwrap().output = Some(bool_vn.clone());
+        let mut lift2 = CircleRange::boolean(true);
+        let res2 = lift2.pull_back(&less2, false, &mut None).expect("slot-1 pull back");
+        assert!(Arc::ptr_eq(&res2, &x));
+        assert_eq!(lift2.get_left(), 6);
+        assert_eq!(lift2.get_end(), 0);
+
+        // Both inputs non-constant → None.
+        let y = Arc::new(RwLock::new(Varnode::new_unique(0x2002, 4)));
+        let less3 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less3.write().unwrap().inrefs.push(x.clone());
+        less3.write().unwrap().inrefs.push(y.clone());
+        less3.write().unwrap().output = Some(bool_vn.clone());
+        let mut lift3 = CircleRange::boolean(true);
+        assert!(lift3.pull_back(&less3, false, &mut None).is_none());
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: pullBack SUBPIECE nzmask salvage
+    // (cc:1053-1064) + final nzmask intersect (cc:1075-1082). Truncating a
+    // size-8 value whose high 4 bytes are known zero (nzm = 0xffff_ffff) to
+    // size 4: without usenzmask this fails; with it the pull-back survives,
+    // the mask expands to 8 bytes, and the nzmask range [0,0x1_0000_0000)
+    // keeps the boolean range [1,2).
+    #[test]
+    fn test_circle_range_pull_back_subpiece_salvage() {
+        use crate::address::{Address, SeqNum};
+        use std::sync::{Arc, RwLock};
+
+        let x8 = Arc::new(RwLock::new(Varnode::new_unique(0x3000, 8)));
+        x8.write().unwrap().nzm = 0xffff_ffff; // high bytes known zero
+        let c0 = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+        let out4 = Arc::new(RwLock::new(Varnode::new_unique(0x3001, 4)));
+        let sub = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        sub.write().unwrap().inrefs.push(x8.clone());
+        sub.write().unwrap().inrefs.push(c0.clone());
+        sub.write().unwrap().output = Some(out4.clone());
+
+        // usenzmask=false → SUBPIECE has no pullBackBinary arm → None.
+        let mut lift_a = CircleRange::boolean(true);
+        assert!(lift_a.pull_back(&sub, false, &mut None).is_none());
+
+        // usenzmask=true → salvage + intersect.
+        let mut lift = CircleRange::boolean(true);
+        let res = lift.pull_back(&sub, true, &mut None).expect("SUBPIECE salvage");
+        assert!(Arc::ptr_eq(&res, &x8));
+        // Mask expanded to the full 8-byte input domain; the nzmask
+        // intersection keeps [1,2) valid under the bigger mask.
+        assert_eq!(lift.get_mask(), u64::MAX);
+        assert_eq!(lift.get_left(), 1);
+        assert_eq!(lift.get_end(), 2);
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: the full constraint-generation
+    // chain (generateConstraints → constraintsFromCBranch →
+    // constraintsFromPath → applyConstraints). A CBRANCH `if (x <u 5)`
+    // splits b1 into true b2 / false b3; a LOAD reads x inside the true
+    // block b2. The read node must carry the true-branch equation
+    // [0,5)@4 so the solved read range narrows from x's full range.
+    #[test]
+    fn test_generate_constraints_true_branch_equation() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, BlockGraph};
+        use std::sync::{Arc, RwLock};
+
+        type BlockArc = Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+
+        // Varnodes: i0 (input, full range), x = COPY(i0), c5, bool, tgt,
+        // space id.
+        let i0 = Arc::new(RwLock::new(Varnode::new_unique(0x4000, 4)));
+        let x = Arc::new(RwLock::new(Varnode::new_unique(0x4001, 4)));
+        let c5 = Arc::new(RwLock::new(Varnode::new_constant(5, 4)));
+        let bool_vn = Arc::new(RwLock::new(Varnode::new_unique(0x4002, 1)));
+        let tgt = Arc::new(RwLock::new(Varnode::new_constant(0x2100, 4)));
+        let space = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+
+        // Ops.
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        copy_op.write().unwrap().inrefs.push(i0.clone());
+        copy_op.write().unwrap().output = Some(x.clone());
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1100), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less_op.write().unwrap().inrefs.push(x.clone());
+        less_op.write().unwrap().inrefs.push(c5.clone());
+        less_op.write().unwrap().output = Some(bool_vn.clone());
+        let cbranch = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1104), 2),
+            OpCode::CPUI_CBRANCH,
+        )));
+        cbranch.write().unwrap().inrefs.push(tgt.clone());
+        cbranch.write().unwrap().inrefs.push(bool_vn.clone());
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1200), 1),
+            OpCode::CPUI_LOAD,
+        )));
+        load_op.write().unwrap().inrefs.push(space.clone());
+        load_op.write().unwrap().inrefs.push(x.clone());
+
+        // WRITTEN flags + def/descend wiring.
+        x.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        x.write().unwrap().def = Some(Arc::downgrade(&copy_op));
+        bool_vn.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        bool_vn.write().unwrap().def = Some(Arc::downgrade(&less_op));
+        i0.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        x.write().unwrap().descend.push(Arc::downgrade(&less_op));
+        x.write().unwrap().descend.push(Arc::downgrade(&load_op));
+        c5.write().unwrap().descend.push(Arc::downgrade(&less_op));
+        bool_vn.write().unwrap().descend.push(Arc::downgrade(&cbranch));
+        tgt.write().unwrap().descend.push(Arc::downgrade(&cbranch));
+        space.write().unwrap().descend.push(Arc::downgrade(&load_op));
+
+        // Block graph: b0 → b1 → {false b3 (out0), true b2 (out1)}.
+        let b0: BlockArc = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
+        let b1: BlockArc = Arc::new(RwLock::new(BlockBasic::new(1, Address::new(0x1100))));
+        let b2: BlockArc = Arc::new(RwLock::new(BlockBasic::new(2, Address::new(0x1200))));
+        let b3: BlockArc = Arc::new(RwLock::new(BlockBasic::new(3, Address::new(0x1300))));
+        let mut graph = BlockGraph::new();
+        graph.add_block(b0.clone());
+        graph.add_block(b1.clone());
+        graph.add_block(b2.clone());
+        graph.add_block(b3.clone());
+        graph.add_edge(b0.clone(), b1.clone());
+        graph.add_edge(b1.clone(), b3.clone()); // out0 = FALSE
+        graph.add_edge(b1.clone(), b2.clone()); // out1 = TRUE
+        // Dominators (b2/b3 dominated by b1).
+        let rpo = graph.calc_rpo();
+        graph.calc_forward_dominator_on(&rpo, &[b0.clone()]).unwrap();
+        // Ops into blocks (add_block installed self_ref → op.parent wired).
+        b0.write().unwrap().add_op(crate::op::PcodeOpRef(copy_op.clone()));
+        b1.write().unwrap().add_op(crate::op::PcodeOpRef(less_op.clone()));
+        b1.write().unwrap().add_op(crate::op::PcodeOpRef(cbranch.clone()));
+        b2.write().unwrap().add_op(crate::op::PcodeOpRef(load_op.clone()));
+
+        // Solver: sink = the guard pointer x, read = the LOAD.
+        let mut solver = ValueSetSolver::new();
+        solver.establish_value_sets(&[x.clone()], &[load_op.clone()], None, false);
+        let widener = WidenerNone::new();
+        solver.solve(10000, &widener);
+
+        // The read node carries the true-branch equation [0,5)@4 and the
+        // solved range narrowed from x's full (COPY of an input) range.
+        let seq = load_op.read().unwrap().get_seq_num().clone();
+        let read = solver.get_value_set_read(&seq).expect("read node");
+        assert_eq!(read.equation_type_code, 0);
+        assert_eq!(read.equation_constraint.get_left(), 0);
+        assert_eq!(read.equation_constraint.get_end(), 5);
+        assert!(!read.get_range().is_empty());
+        assert_eq!(read.get_range().get_left(), 0);
+        assert_eq!(read.get_range().get_end(), 5);
+        // Marks cleared by establishValueSets.
+        assert!(!x.read().unwrap().is_mark());
+        assert!(!load_op.read().unwrap().is_mark());
     }
 
     #[test]

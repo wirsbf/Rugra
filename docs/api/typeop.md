@@ -3,6 +3,35 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-09-26：fd-aware facing 消费点收口（UNIONRESOLVE-PKG-B-0001）
+
+锁定 oracle（e40ed130）的四个 facing 方法（varnode.cc:626-672）在 typeop 消费
+点的退化形（map-miss 臂）全部换成 fd-aware 孪生（unionresolve.rs
+`vn_high_type_read_facing`，consult `fd.union_map`），单一实现纪律同步落地：
+
+- **`comparison_input_cast`**（= `TypeOpEqual::getInputCast`，typeop.cc:932-943）
+  签名改 `(fd, op_ref, slot, strategy)`：cc:935/936/941 三处
+  `getHighTypeReadFacing(op)` 按各自 varnode 的 slot 键 consult union map；
+  detached fixture 保底 `v_type` 回退（无 AssignHigh 阶段）不变。生产调用点
+  coreaction.rs castInput 的 EQUAL/NOTEQUAL 臂直接传 `fd`+`op_ref`。
+- **trait `get_input_cast`** 签名改 `(op: &PcodeOpRef, slot, fd)`（对齐
+  `get_input_local_in_fd` 先例：Rust PcodeOp 无 parent→Funcdata 链，fd 穿参）。
+  compare 宏族 EQUAL/NOTEQUAL 臂路由到上述 canonical；LESS 族 other-operand
+  读不变。
+- **trait 新增 `get_output_token_in_fd(op_ref, fd)`**（默认转发 fd-less
+  `get_output_token`，镜像 Ghidra 单一虚分派）：`TypeOpCopy`（cc:405-409，
+  旧实现是裸 `v_type` 非 high 读）、`TypeOpPtradd`（cc:2244-2248）、
+  `TypeOpPtrsub`（cc:2349-2364，downChain 全体 + cc:2352 基座 consult fd 化）
+  的 token 覆写**只**存在于该 fd 形态——每个 oracle 函数单一实现。
+  生产消费点 = coreaction.rs cast_output 的 PTRSUB/PTRADD/COPY 臂（COPY 臂
+  本票新接线，见 coreaction.md）。
+- **`TypeOpPtradd/Ptrsub::getInputCast` 的 trait 侧退化副本删除**
+  （cc:2250/2320 的单一实现 = coreaction.rs `ptr_input_reqtype`，其
+  cc:2255/2256/2325/2326 consult 已 fd-aware；旧行为等价于 map-miss 臂，
+  生产与测试均无 trait 调用方）。
+- 测试侧新增 `op_ref()`/`detached_fd()` fixture 助手（detached fd 的空
+  union map ⇒ consult 恰为 map-miss 臂，与旧退化形同观察）。
+
 ## 2026-08-30：算术族 get_output_token → arithmeticOutputStandard（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 5）
 
 - `TypeOpIntAdd::get_output_token`（typeop.cc:1175）改调
@@ -463,7 +492,13 @@ VOID 拒绝（无 CALL 的 size 检查，:764 vs :707）、this-pointer 同 CALL
 
 ### `pub struct TypeOpMulti`
 
-*暂无代码注释*
+`TypeOpMulti(TypeFactory *t)`（typeop.cc:1947）；`propagate_type` 忠实于
+typeop.cc:1951-1965 `TypeOpMulti::propagateType`：phi 透明（input↔output 单向
+边），spacebase 源重包为 `getTypePointer(alttype->getSize(), unknown1,
+defaultDataSpace->getWordSize())` —— 指针尺寸取 **alttype 尺寸**
+（SB-ORD186-PTRARITH-0001：旧实现经 `propagate_to_pointer(unknown1)` 把指针尺寸
+错取为 unknown1 的 1，且 output→input 方向检查的是目的 input 而非源 output）。
+`printRaw` 对应 typeop.cc:1967。
 
 ### `pub struct TypeOpIndirect`
 
@@ -574,3 +609,47 @@ calc_submeta）构造。coreaction.rs 的 `make_pointer_type`/`make_ptr`/
 COPY-spacebase 指针臂（typeop.cc:418 同源）同批修正，见
 docs/api/coreaction.md。
 
+
+## 2026-09-22：propagate_to_pointer_sized — TypeOp::propagateToPointer 忠实镜像（SB-ORD332-SETCASTS-0001）
+
+新增 `pub fn propagate_to_pointer_sized(alt_type, sz, type_factory)`（typeop.cc
+:186-198）：指针尺寸取**传播边目的 varnode**（LOAD/STORE 调用方传
+`outvn->getSize()`，typeop.cc:495/565），非 alttype 尺寸；指针 alttype 降级为
+自身尺寸的 unknown 基类型（getBase(dt.size, UNKNOWN)，永不 ptr→ptr）；
+PARTIALSTRUCT 经 getComponentForPtr（cc:194-196）；产物经
+`TypeFactory::get_type_pointer(sz, dt, ws=1)` **intern**（指针身份比较——如
+TypeOpStore::getInputCast cc:546-548 的 cast-already-in-place 测试——依赖 intern
+实例相等；无工厂的 detached fixture 回退原构造）。旧 `propagate_to_pointer`
+（alttype 尺寸、非 intern）保留给既有调用点（typeop.rs spacebase 臂族 twin，
+留待该域收敛；coreaction.rs LOAD/STORE 臂已全部切换到 _sized 版本）。
+
+## 2026-09-24：TypeOpReturn 输入本地类型接通 proto 输出（Lane GG2 / sb-smallfns）
+
+`TypeOpReturn` 此前缺 `getInputLocal` 覆写——Ghidra `TypeOpReturn::getInputLocal`
+（typeop.cc:883-897）对 slot≥1 的 RETURN 输入返回**所在函数当前返回值参数类型**
+（`fp->getOutputType()`，fspec.hh:1538；非 void 且尺寸匹配时保留，否则基类默认
+`getBase(size,TYPE_UNKNOWN)`）。这是 DWARF 锁定枚举返回类型（`CURLcode`）经
+`ActionInferTypes::buildLocaltypes`→`writeBack` 到达 `return CURLE_OK;` 常量的
+唯一播种通道。Rugra 以 `get_input_local_in_fd`（fd 经 build_localtypes 显式穿线，
+因 Rust PcodeOp 无 parent→Funcdata 链）补齐该覆写；fd-缺失形态保持 Ghidra
+`bb==0` 回退（基 undefined）。
+
+## 2026-09-24：比较传播链核对（Lane GG2 只读复核）
+
+`TypeOpEqual::propagateAcrossCompare`（typeop.cc:963-986）的 compare_op_impl!
+端口在位：`*store != HTTPREQ_UNSPEC` 的常量类型经 INT_EQUAL/NOTEQUAL 输入间
+传播获得枚举类型（枚举 ENUMTYPE 旗标修复后自然接通）。
+
+## 2026-09-24（CR29 返工）：TypeOpReturn 锚行修正
+
+`TypeOpReturn::getInputLocal` 定义行是 typeop.cc:**901**（af6c5ee2 误锚 883=
+printRaw，行漂移红旗）；行内引用同步：slot0=907-908、getOutputType=918、
+void/尺寸失配=919-920。varnode.rs RETURN 臂与 coreaction build_localtypes
+注释同批修正。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 7 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

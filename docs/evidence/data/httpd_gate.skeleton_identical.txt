@@ -1,0 +1,3 @@
+[httpd_gate] matched=32 skeleton-identical=6 differ=26 total_diff_lines=1447
+[httpd_gate] identical list: ap_count_dirs, ap_pregfree, ap_stripprefix, default, default, default
+[httpd_gate] new-vs-GB reference: see scoreboard

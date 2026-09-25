@@ -1,0 +1,77 @@
+{
+ "analysis_options": {
+  "entrypoint": "direct locked-signature seeding (FuncProto::setPieces lock tail, fspec.cc:3843-3852) plus one ActionPrototypeWarnings apply (coreaction.cc:4886-4936); no full decompilation pipeline",
+  "observation": "per case: model identity line (name/unknown/printInDecl/hasModel/extrapop/modelExtraPop/three locks/param count/return size+storage), per-parameter storage lines (register@offset, size, typelock), and the filed warning headers read back from the architecture comment database; SCHEMA/ARCH_DEFAULT/UNKNOWN_PRE/UNKNOWN_POST boundary lines around the cases; pointer values and allocation identities never printed",
+  "prestate": "production x86-64-gcc.cspec loaded through BfdArchitecture on the Ghidra side / the SpecQuery+parse_compiler_config composition on the Rugra side; four Funcdata carriers (free PLT thunk, __ctype_b_loc PLT thunk, main_init DWARF void, GetStr DWARF parameterized) each with the defaultfp-bound carrier FuncProto before the front-end adapter runs"
+ },
+ "architecture": "x86:LE:64:default (SLEIGH x86-64, BfdArchitecture production cspec load)",
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "ec06a5b9e06d0d13d4292ba4372688b3f360d329028b681d5957ae7193c9b65e",
+  "curl_fixture_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "runner_sha256": "2385532cf5debcf8f9c816d3af0e878f7ccdfe73c72cfb6684d8535ea6e1c0fb",
+  "rust_fixture_sha256": "05da53fa9d9752baa377704dc52001fd40824fe9cbdbb666029890352c18dd7d",
+  "sleigh_specs/x86-64-gcc.cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "sleigh_specs/x86-64.pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "sleigh_specs/x86-64.sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "sleigh_specs/x86.ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+ },
+ "compiler_spec": "x86-64-gcc.cspec (production bytes; default model __stdcall extrapop=8)",
+ "coverage": {
+  "dwarf_parameterized_keeps_resolved_model": "GetStr void(char**,char*) keeps the resolved default model: no warning line, model name not 'unknown', no locks",
+  "dwarf_void_pins_unknown": "main_init 4-byte-return 0-param DWARF entry pins the unknown model with all three locks and files the warning",
+  "generic_clib_plt_pins_unknown": "free void(void*) and __ctype_b_loc ushort**() lock the unknown calling convention with the exact golden warning text",
+  "unknown_identity_semantics": "UNKNOWN_PRE/POST: reserved 'unknown' name absent from the compiler-spec registry before, then materialized with isUnknown=1, printInDecl=0, default-cloned extrapop, behavior shared with the carrier's default model"
+ },
+ "covered_projection_status": "MATCH",
+ "fixture_id": "DEBUGPROTO-UNKNOWN-MODEL-1204",
+ "ghidra_side": "createUnknownModel (architecture.cc:1159-1166) for the reserved 'unknown' name (exactly what FuncProto::decode runs for an unrecognized ATTRIB_MODEL, fspec.cc:4690-4698), FuncProto::setPieces lock tail, Scope::addFunction ctor chain, real ActionPrototypeWarnings apply, warning headers read back from the architecture comment database",
+ "input_manifest": {
+  "canonicalization": "the bilateral projection is the ordered stdout stream; the oracle-side pin is expected_stdout_sha256 over the full stream, the comparand pins are the file sha256s in sha256/comparand_sha256",
+  "cases": [
+   "PLT_FREE: generic_clib locked signature void(void*) on a PLT thunk, unknown calling convention",
+   "PLT_CTYPE: generic_clib void-list entry ushort**(), unknown calling convention, locked void input",
+   "DWARF_VOID: main_init @0x4960 curl DWARF void signature (4-byte return, 0 params)",
+   "DWARF_PARAMS: GetStr @0x36d0 curl DWARF parameterized, keeps the resolved model"
+  ],
+  "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+ },
+ "known_divergences": [
+  "R1 (by construction, not projected): Rugra represents the unknown model as the calling_convention string sentinel plus the shared default-model Arc (fspec.rs is_model_unknown / shares_model_with) instead of Ghidra's registered UnknownProtoModel object; behavior identical (extrapop/effects/param ranges follow default) but pointer identity (hasMatchingModel(defaultfp)) differs and is therefore not projected",
+  "R2 (normalized on both sides): void-return output storage prints 'none' (Ghidra leaves the void output address invalid; Rugra's output_storage carries a legacy (ram,0) placeholder - zero-size outputs have no storage semantically)",
+  "R3 (not projected here, covered by COREACTION-FUNCPARAMNAMES-RECOMMEND-0001 and the debugproto unit tests): NAME_LOCKED propagation; PrototypePieces has no namelock field so the Ghidra setPieces path cannot set it"
+ ],
+ "notes": "PLTSTUB-WARNLOSS-0001 seeding-layer half; B2 permanent lock of the sowing-layer unknown-convention identity (the callers' own E2E observables, 51/51 warnings with exact golden spelling and placement, are gated by the curl differential). Salvage provenance: replayed by content from wt2/debugwarn commit 5aecd028 (2026-09-01) whose master landing was split - the src half (two builders pinning the unknown sentinel) landed same-spec via CURB cf6420b4, this fixture half was FORGOTTEN; re-pinned against current master with the oracle stdout verified byte-identical to the branch capture (sha256 d89957c0...). Adaptation: cargo target stages under ${HOME}/.cache with RUGRA_DEBUGPROTO_TARGET_DIR override (branch version used the mktemp /tmp dir).",
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:4886-4936, fspec.cc:3843-3852+4675-4730, architecture.cc:1159-1166, funcdata.cc:135-145}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "overall_status": "MATCH: four cases (PLT_FREE / PLT_CTYPE / DWARF_VOID / DWARF_PARAMS) byte-identical bilaterally, oracle stdout sha256 d89957c0...",
+ "residual_todo_ids": [],
+ "rugra_base_commit": "d0e27c14c071bbc931e771da204fcf12a7c422ab",
+ "rugra_side": "LibcSignatureTable::locked_proto (free/__ctype_b_loc) and DebugPrototypeDatabase::apply (main_init/GetStr) front-end adapters with a defaultfp-bound carrier, then the ActionPrototypeWarnings port; warnings read back from the same CommentDatabaseInternal channel",
+ "schema": 1,
+ "sha256": {
+  "cpp_fixture": "ec06a5b9e06d0d13d4292ba4372688b3f360d329028b681d5957ae7193c9b65e",
+  "curl_fixture": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "runner": "2385532cf5debcf8f9c816d3af0e878f7ccdfe73c72cfb6684d8535ea6e1c0fb",
+  "rust_fixture": "05da53fa9d9752baa377704dc52001fd40824fe9cbdbb666029890352c18dd7d",
+  "sleigh_specs/x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "sleigh_specs/x86-64.pspec": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "sleigh_specs/x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "sleigh_specs/x86.ldefs": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+ },
+ "expected_stdout_sha256": "d89957c0082b8e5e78fa81354c2b8761c37e24a783a17a8480d6b51bc5fe307d",
+ "input_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+ "stable_function_closure": [
+  "ghidra::ActionPrototypeWarnings::apply coreaction.cc:4886",
+  "ghidra::FuncProto::setPieces fspec.cc:3843",
+  "ghidra::FuncProto::decode fspec.cc:4675",
+  "ghidra::Architecture::createUnknownModel architecture.cc:1159",
+  "rugra::coreaction:ActionPrototypeWarnings apply (RG-F-7d3212010e608ec3957e)",
+  "rugra::debugproto:LibcSignatureTable locked_proto (RG-F-2a34c9f6095ee64fb93b)",
+  "rugra::debugproto:DebugPrototypeDatabase apply (RG-F-1ce28154f6b860b85d1e)"
+ ],
+ "stable_function_id": "GH12-F-c0ef8ecfe0a8786b6b11"
+}

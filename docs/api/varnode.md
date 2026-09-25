@@ -100,6 +100,8 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 **varnode 去重（find_or_create_input_space）**（2026-06-29）：新增 `VarnodeBank::find_or_create_input_space(size, space, offset)`——查找已有的同 (space, offset, size) 的 free/input varnode（不含 written），复用它；没有则创建。对齐 Ghidra `Funcdata::newVarnode`（funcdata_varnode.cc:148）——建 free varnode，由 rename 连接到 written。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
 
+**find_input 空间限定**（2026-09-24，`BANK-FINDINPUT-SPACE-0001`，wt/p3batch）：`VarnodeBank::find_input(size, space, loc)` 补空间匹配——对齐 `VarnodeBank::findInput`（varnode.cc:1465-1478）的 `beginLoc(s,loc,Varnode::input)` + `vn->getAddr()==loc` 全地址比较（空间+偏移）。此前只匹配 size/offset：x86-64 寄存器偏移与其它空间不碰撞故无可观察差，但其它 ABI（寄存器偏移与栈/唯一偏移重叠）下会跨空间误命中。消费面经 `Funcdata::find_varnode_input`/`find_spacebase_input`（见 funcdata.md）：RestrictLocal 的 EffectRecord 溢出槽 walk（`effect.space`）、RestructureVarnode 参数 typelock（Register 臂）、spacebase 输入定位（`point.space`=Register 空间）。
+
 **INSERT/activeHeritage flag 模型**（2026-06-29 续）：对齐 Ghidra varnode flag 语义。`VarnodeBank::create` 不设 INSERT（对齐 varnode.cc:1250，free varnode 无 INSERT → `isHeritageKnown` false → rename 处理）。`set_def`/`set_input` 设 INSERT（对齐 createDef/makeInput→xref）。新增 `addl_flags` 模块（ACTIVE_HERITAGE=0x01 等，对齐 varnode.hh:115）。`is_heritage_known()` 检查 `flags & (INSERT|CONSTANT|ANNOTATION)`（对齐 varnode.hh:298）。`set_active_heritage()`/`is_active_heritage()` 访问器。
 
 ### 2. 数据流节点语义
@@ -535,7 +537,16 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 ### `pub fn set_flags(&mut self, f: u32)`
 
-为节点添加一个或多个 flag。
+为节点添加一个或多个 flag。两条通知臂（varnode.cc:356-360）：
+①`flagsDirty`（FLAGSDIRTY|NAMEREPDIRTY）**无条件**点火——派生旗通道
+`HighVariable::updateFlags`（variable.cc:352）的存活读者=merge_test_required、
+coreaction namevars/参数名门、varmap、is_name_lock；②`COVERDIRTY` 掩码门控
+（MERGE-HIGHCOVER-PROPAGATION-0001）。实现=varnode.rs
+`propagate_flag_change_to_high`（两臂共享一次写锁获取，piece walk 分段）。
+varnode.hh 经 setFlags/clearFlags 路由的内联访问器（setImplied/clearImplied、
+setExplicit/clearExplicit、setAddrForce/clearAddrForce、setPrecisLo/Hi+clear、
+setUnaffected）已同形改走 set_flags/clear_flags；mark/directwrite/return_address/
+autolive_hold/proto_partial 在 oracle 也是裸写，维持内联。
 
 ### 参数
 - `f`: 位标志集合
@@ -745,6 +756,23 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 - `characterize_overlap(&Varnode) -> i32`（varnode.cc:155-170）— 0=无重叠/1=部分/2=完全相同。解锁 RuleIndirectCollapse。
 - `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。含 `IPTR_CONSTANT → 3` 短路（cc:109）：当 `self` 处于常量空间时直接返回 3，等价 Ghidra `loc.getSpace()->getType()==IPTR_CONSTANT`。
 - `overlap(&Varnode) -> i32`（varnode.cc:178 + address.cc:153-165）— 返回 LSB 相对偏移。含 `IPTR_CONSTANT → -1` 短路（address.cc:159）：当 `self` 处于常量空间时直接返回 -1。范围算术用 unsigned `wrapping_sub` 模拟 Ghidra `wrapOffset`（address.cc:161），`dist >= size → -1`（cc:163）。
+
+### 2026-09-23：update_type/update_type_lock 补 high typeDirty（MATCHURL-SETCASTS-337-0001）
+
+- `update_type(ct)` / `update_type_lock(ct, lock, override)` 现在在写入
+  `v_type` 后对挂接的 HighVariable 置 TYPEDIRTY（varnode.cc:461-463 /
+  500-501 的 `if (high != 0) high->typeDirty();`），替换旧注释的
+  "typeDirty on high — no-op" 占位。HighVariable 侧
+  `get_type()`/`get_type_representative()`（variable.hh:174 →
+  variable.cc:400-415）的惰性重推导链因此第一次对
+  `Varnode::update_type` 的调用方可观察：同一 Action 内对某 varnode
+  `update_type` 后，紧随的 `get_high_type_read_facing` /
+  `get_high_type_def_facing`（varnode.cc:665/651）读到重推导后的类型，
+  与 oracle 的 `high->getType()` 时序一致。
+- 效果示例（match_url setcasts 337）：castInput 的 double-cast 调整臂对
+  LOAD 地址 varnode `updateType(code * *)` 后，castOutput 计算 LOAD token
+  （TypeOpLoad::getOutputToken，typeop.cc:472）经 read-facing 读到
+  `code * *` 的 pointee `code *`，与输出 high 相等 → 短路不插 CAST。
 
 ### 2026-07-01（续 2）：update_type + get_type_read_facing + copy_symbol（解锁 ~15 TODO）
 - `update_type(ct)`（varnode.cc:456-464）— 无锁设类型，typelock 时不改。
@@ -1178,3 +1206,91 @@ varnode.rs `get_use_point` 此前自由腿(非 written varnode)返回 `Address::
 tools/run_varnode_getusepoint_oracle.sh(written/input/free/zero_base 回绕四形态,MATCH)。
 E2E:curl 3119→3115,defects/numbering 保持 0(此前因祸得福的 Address(0) 未掩盖任何
 queryProperties/inUse 差异)。
+
+- 2026-09-23: getAddr anchor corrected to header inline definition.
+
+## 2026-09-24：op_input_type_local 增 RETURN 臂 + fd 输出类型穿线（Lane GG2）
+
+`op_input_type_local` 新增 `fd_output_type: Option<&Arc<Datatype>>` 参数与
+`(CPUI_RETURN, slot@1..)` 臂（typeop.cc:883-897 的表格化镜像：proto 输出类型
+非 void 且尺寸匹配→该类型；否则 `local_base(size, Unknown)`）。`get_local_type`
+同步穿线；唯一生产调用方 `coreaction.rs build_localtypes` 传
+`Some(fd.funcp.return_type.clone())`（Ghidra 的 op→getParent()→getFuncdata()
+通道）。slot 0（indeterminate marker）走 `_` 默认臂，与 Ghidra slot==0 →
+基类默认一致。
+
+## 2026-09-24（CR29 返工）：RETURN 臂锚行修正
+
+`op_input_type_local` 的 RETURN 臂注释锚行随 typeop.cc 修正：定义行 901（原
+883=printRaw，行漂移），fp->getOutputType()=cc:918，void/尺寸失配=cc:919-920。
+无行为变化。
+
+## 2026-09-24：create_unique_typed（PM-F2S）
+
+`VarnodeBank::create_unique_typed(size, ct)` — `VarnodeBank::createUnique(int4 s,
+Datatype *ct)`（varnode.cc:1265-1271）的 typed 镜像：分配 unique 地址偏移后以
+显式 `ct` 构造 varnode（ctor `type = dt`，varnode.cc:583）。Ghidra 要求 ct 非空
+（null 默认在 `Funcdata::newUnique` cc:86-87 完成），Rugra 侧由
+`Funcdata::new_unique_typed` 承担同一默认。调用方：
+`Merge::allocateCopyTrim`（merge.cc:416/429）与 `Merge::trimOpOutput`
+（merge.cc:668/677）的 trim COPY 输出携带源 varnode 类型（PM-F2S ord337 修复）。
+
+## 2026-09-25：coverDirty 传播半边接线（MERGE-HIGHCOVER-PROPAGATION-0001，Lane HIGHCOV）
+
+oracle 不变量：任何弄脏成员 varnode cover 的突变同步传播 coverDirty 到所属
+high（varnode.cc:352-361 setFlags / 365-374 clearFlags 的 cc:358-359/371-372
+臂；触发者 addDescend cc:339、eraseDescend cc:325、calcCover cc:261、
+VarnodeBank::replace cc:1350-1351、makeFree→setDef cc:1322）——存储聚合
+（`HighVariable::getCover` 裸读 internalCover，无惰性更新）的新鲜度完全靠它。
+
+接线（本日）：①新增 `propagate_cover_dirty_to_high(high)`（RUGRA-GLUE 借用安全
+helper：high 写锁置位 COVERDIRTY → 释放 → piece walk，规避
+markExtendCoverDirty 末腿 variable.cc:136 的同锁重入；merge.rs
+`mark_high_cover_dirty` 委托同一实现）；②`set_flags`/`clear_flags` 掩码含
+`COVERDIRTY` 时自动传播；③`add_descend`/`erase_descend`/`calc_cover` 的内联
+`flags |= COVERDIRTY` 改走 `set_flags`（oracle 字面 setFlags 调用形态）——
+replace/make_free/创建位点（set_input/set_output 置
+`INPUT|COVERDIRTY`/`WRITTEN|COVERDIRTY`，high==None 时传播臂自然 no-op，
+=oracle high==null 分支）随之自动携带。
+
+**锁不可达的 clear 侧**：`update_cover_locked`（varnode.cc:239
+clearFlags→传播）与 `get_cover`（varnode.hh:202 → updateCover）不传播——
+调用方持 high 读守卫（checkImpliedCover 借用 `&HighVariable`、
+aggregate_high_cover_from），见两函数 NOTE 注释；由 HighVariable::new 初始
+脏（variable.cc:224）+ update_high 实例扫描 + inflate/aggregate 现聚合吸收。
+该角落承载「成员在 attach 前已脏」的首次重建置脏语义。
+
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:首轮提交的
+"Rust 无 high flagsdirty 消费者" 声明为假（存活调用者: merge.rs
+merge_test_required、coreaction.rs namevars/参数名门×2、varmap.rs、
+variable.rs is_name_lock）；oracle varnode.cc:357/:370 对每次带 high 的
+setFlags/clearFlags **无条件 flagsDirty()**（无掩码门——与 coverDirty 不同）。
+已物化：`propagate_flag_change_to_high` 拆双臂（FLAGSDIRTY|NAMEREPDIRTY
+无条件半+coverdirty 掩码半，共享一次写锁获取）；varnode.hh 经 setFlags 路由
+的访问器家族（implied/explicit/addrforce/precis*/unaffected）同形改走
+set_flags/clear_flags；mark_implied 的内联传播半边与
+compute_varnode_covers 的显式传播简化为字面 setFlags 调用（merge.cc:1598/
+:1603）。锁纪律按加宽调用点集重验：261 处 set_flags/clear_flags + 32 处
+访问器 + 4 处 set_unaffected 作用域感知机械扫描，唯一共存候选=测试内
+（守卫已 drop 且 vn 无 high），零生产死锁面；双语料 cmp 逐字节恒等重跑。
+
+验证：curl/httpd 默认脸对亲父 a9475ecc cmp 逐字节恒等；cargo test --lib
+1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs --strict 绿。
+详见 docs/api/merge.md 同日节。
+
+## 2026-09-26：read/def-facing 四方法 Arc 共享（UNIONRES-FIELDOFF-PTRSUBNORM-0001，settle 契约）
+
+- `get_type_def_facing()` / `get_type_read_facing_op(op,slot)` /
+  `get_high_type_def_facing()` / `get_high_type_read_facing(op,slot)` 的
+  needs_resolution 臂此前 `Arc::new((*ct).clone())` 每调用产**新 Arc** —— 破坏
+  `Varnode::updateType` 的 `type == ct`（varnode.cc:481,Rust `Arc::ptr_eq`）
+  settle 契约:oracle 的 TypeFactory interning 保证 findResolve 结果指针稳定,
+  逐调用克隆是 `localcount >= 7` "not settling" 家族（coreaction.cc:5390-5392）
+  的身份翻转源之一。现在这些退化臂共享原 v_type/high Arc —— 即 oracle
+  findResolve map-miss 臂 `return this`（type.cc:586-590/1192-1202）在无
+  Funcdata 通道签名下的精确可达语义。
+- 零参 `get_type_read_facing()` 保留（无 Ghidra 零参对应;对非 resolution 类型
+  与 oracle `getTypeReadFacing` 等价）,注释更新指向 fd-aware 咨询孪生:
+  unionresolve.rs 的 `vn_type_read_facing` / `vn_type_def_facing` /
+  `vn_high_type_read_facing` / `vn_high_type_def_facing`（持 fd 的消费者使用,
+  map 命中时返回 interned 字段类型）。

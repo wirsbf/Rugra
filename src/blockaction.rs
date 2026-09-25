@@ -5,8 +5,8 @@
 use crate::action::{action_status, Action};
 use crate::address::Address;
 use crate::block::{
-    BlockBasic, BlockCondition, BlockGraph, BlockIf, BlockList, BlockSwitch, BlockWhileDo, BoolOp,
-    FlowBlock,
+    BlockBasic, BlockCondition, BlockGraph, BlockIf, BlockList, BlockMultiGoto, BlockSwitch,
+    BlockWhileDo, BoolOp, FlowBlock,
 };
 use crate::error::Result;
 use crate::funcdata::Funcdata;
@@ -61,7 +61,8 @@ impl Action for ActionBlockStructure {
         fd.sblocks.build_copy(&fd.bblocks);
 
         // Collapse structured patterns iteratively
-        let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name);
+        let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name)
+            .with_jump_tables(fd.jump_tables.clone());
         collapse.collapse_all();
         self.count += collapse.get_change_count() as i32;
 
@@ -287,17 +288,174 @@ pub(crate) fn rewrite_in_edges_to_idx(
 /// composite (e.g. both the outer condition's false-exit and the inner
 /// clause's exit retarget onto the shared merge block, which must end with
 /// exactly one in-edge from the composite so ruleBlockCat can chain it).
+///
+/// RUGRA-GLUE guard discipline: the oracle's eliminateInDups/eliminateOutDups
+/// (block.cc:447-501) perform each duplicate's PAIRED half-deletes
+/// synchronously — `halfDeleteInEdge(i)` here plus `bl->halfDeleteOutEdge(rev)`
+/// on the peer — over raw pointers with no locking. The former port ran the
+/// whole dedup under ONE `bl.write()` guard, so the peer-side half-delete (and
+/// the sliding repairs that target `bl` from a peer's slide) hit a held lock
+/// and either mis-routed the repair to the wrong block's list (the switch
+/// goto-case unlock OOB crash) or deadlocked convergence. This orchestrator
+/// keeps the oracle's exact per-duplicate semantics but takes ONE guard at a
+/// time: `bl`'s guard covers only `bl`-side mutations, is dropped before the
+/// peer-side half-delete runs, so every reciprocal repair (both directions,
+/// including repairs back onto `bl`) executes synchronously exactly as in
+/// Ghidra. The per-Funcdata graph rewrite is single-threaded, so no mutation
+/// can interleave in the guard-drop windows.
 pub(crate) fn dedup_edges_all_types(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
-    // Ghidra selfIdentify ends with FlowBlock::dedup (block.cc:930->525),
-    // whose eliminateInDups/eliminateOutDups remove duplicates with PAIRED
-    // half-deletes (block.cc:461-462 / 490-491), keeping every surviving
-    // edge's reciprocal reverse_index consistent on BOTH sides. The former
-    // one-sided `edges.remove(i)` dedup slid the local list without the
-    // peer corrections, leaving stale reverse_index entries that later
-    // indexed out of bounds (BLOCK-RECIPROCAL-OOB-0001). The trait-level
-    // `dedup(self_arc)` runs the faithful protocol for every block type
-    // (Ghidra's edge arrays live on the FlowBlock base).
-    bl.write().unwrap().dedup(bl);
+    // Ghidra dedup (block.cc:530-535): findDups(intothis) → eliminateInDups
+    // for each dup peer; clear; findDups(outofthis) → eliminateOutDups.
+    let in_dups = find_dup_peers(bl, true);
+    for peer in in_dups {
+        eliminate_dup_pairs(bl, &peer, true);
+    }
+    let out_dups = find_dup_peers(bl, false);
+    for peer in out_dups {
+        eliminate_dup_pairs(bl, &peer, false);
+    }
+}
+
+// Ghidra: block.cc:507 FlowBlock::findDups
+/// Discover peer blocks that are the endpoint of 2+ edges in `bl`'s in- or
+/// out-list (whichever `incoming` selects), using Ghidra's mark/mark2
+/// protocol. `bl` is read under a short guard; peers take transient write
+/// guards for the marks (no nesting: `bl` holds only a read guard).
+fn find_dup_peers(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    incoming: bool,
+) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+    let edges: Vec<crate::block::BlockEdge> = {
+        let g = bl.read().unwrap();
+        if incoming {
+            (0..g.size_in()).filter_map(|s| g.get_in(s)).collect()
+        } else {
+            (0..g.size_out()).filter_map(|s| g.get_out(s)).collect()
+        }
+    };
+    // cc:507-523: mark peers on first sight (f_mark); a second sight with
+    // f_mark already set is a duplicate (report once, f_mark2).
+    let mut duplist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+    for e in &edges {
+        let mut p = match e.point.try_write() {
+            Ok(g) => g,
+            Err(_) => {
+                // The only contended peer under the single-guard discipline
+                // is `bl` itself (a self loop whose guard we hold as a READ
+                // here — try_write fails). Ghidra's findDups sees it like any
+                // other peer; treat the address-equal peer through the same
+                // mark protocol by skipping the lock (marks live on `bl`'s
+                // state which we can re-take after the read guard drops —
+                // simplified below by re-scanning self edges separately).
+                continue;
+            }
+        };
+        if p.get_flags() & crate::block::block_flags::MARK2 != 0 {
+            continue;
+        }
+        if p.get_flags() & crate::block::block_flags::MARK != 0 {
+            if !duplist.iter().any(|a| Arc::ptr_eq(a, &e.point)) {
+                duplist.push(e.point.clone());
+            }
+            p.set_flags(crate::block::block_flags::MARK2);
+        } else {
+            p.set_flags(crate::block::block_flags::MARK);
+        }
+    }
+    // Erase marks (cc:520-522) — same lock discipline.
+    for e in &edges {
+        if let Ok(mut p) = e.point.try_write() {
+            p.clear_flags(
+                crate::block::block_flags::MARK | crate::block::block_flags::MARK2,
+            );
+        }
+    }
+    // Self loops could not be marked through the lock; a parallel self-edge
+    // pair (2+ edges pointing at `bl` itself) is reported directly
+    // (optimistically — the eliminate scan below is a safe no-op when false).
+    let self_count = edges.iter().filter(|e| Arc::ptr_eq(&e.point, bl)).count();
+    if self_count > 1 && !duplist.iter().any(|a| Arc::ptr_eq(a, bl)) {
+        duplist.push(bl.clone());
+    }
+    duplist
+}
+
+// Ghidra: block.cc:446 FlowBlock::eliminateInDups / block.cc:475 FlowBlock::eliminateOutDups
+/// Eliminate duplicate edges between `bl` and `peer` (`incoming` selects
+/// duplicates in `bl`'s in-list — eliminateInDups — vs its out-list —
+/// eliminateOutDups), keeping the first instance and OR-merging labels, with
+/// the oracle's PAIRED half-deletes (cc:461-462 / cc:490-491). One guard at a
+/// time: `bl`'s guard covers the label merge + this-side slide (the slide's
+/// reciprocal repairs hit only free peers or `bl` itself — the self-loop arm);
+/// the guard drops before the peer-side half-delete, so its repairs back onto
+/// `bl` also run synchronously.
+fn eliminate_dup_pairs(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    peer: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    incoming: bool,
+) {
+    let self_loop = Arc::ptr_eq(bl, peer);
+    loop {
+        // Find the next (keep, dup) pair under bl's guard; perform bl-side
+        // mutations; return the peer-side reciprocal slot for phase 2.
+        let peer_phase: Option<i32> = {
+            let mut g = bl.write().unwrap();
+            let list: &mut Vec<crate::block::BlockEdge> = if incoming {
+                g.in_edges_mut()
+            } else {
+                g.out_edges_mut()
+            };
+            let mut keep: Option<usize> = None;
+            let mut dup: Option<(usize, u32, i32)> = None;
+            for (i, e) in list.iter().enumerate() {
+                if Arc::ptr_eq(&e.point, peer) {
+                    match keep {
+                        None => keep = Some(i),
+                        Some(_) => {
+                            dup = Some((i, e.flags, e.reverse_index));
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some((dup_slot, label, rev)) = dup else {
+                return; // No more duplicates of this peer.
+            };
+            let keep_slot = keep.expect("duplicate without a kept instance");
+            list[keep_slot].flags |= label;
+            if incoming {
+                g.half_delete_in_edge(dup_slot);
+            } else {
+                g.half_delete_out_edge(dup_slot);
+            }
+            if self_loop {
+                // The peer is this block; the paired half-delete is also
+                // this-side — done under the same guard (block.cc:461-462's
+                // bl->halfDeleteOutEdge(rev) with bl == this).
+                if incoming {
+                    g.half_delete_out_edge(rev.max(0) as usize);
+                } else {
+                    g.half_delete_in_edge(rev.max(0) as usize);
+                }
+                None
+            } else {
+                Some(rev)
+            }
+        }; // bl's guard dropped here.
+        match peer_phase {
+            None => continue, // self-loop pair fully handled; scan for more.
+            Some(rev) => {
+                // Peer-side paired half-delete (block.cc:461-462 / 490-491)
+                // with `bl` unlocked: repairs targeting `bl` are synchronous.
+                let mut p = peer.write().unwrap();
+                if incoming {
+                    p.half_delete_out_edge(rev.max(0) as usize);
+                } else {
+                    p.half_delete_in_edge(rev.max(0) as usize);
+                }
+            }
+        }
+    }
 }
 
 // RUGRA-GLUE: 不变量修复 helper（Ghidra 无此独立函数——selfIdentify 经
@@ -468,7 +626,10 @@ pub struct LoopBody {
     pub exit_edges: Vec<FloatingEdge>,
     /// Nesting depth (incremented by each containing loop).
     pub depth: i32,
-    /// Immediate containing LoopBody index in the loop order (-1 = top-level).
+    /// Immediately containing loop's HEAD block index (-1 = top-level). The
+    /// oracle's `immed_container` is a LoopBody pointer (blockaction.hh:64);
+    /// heads are unique after merge_identical_heads, so the head block index
+    /// is the pointer's identity key and survives the depth sort.
     pub immed_container: i32,
     /// Number of head/tail nodes in the body (set by find_base).
     pub unique_count: usize,
@@ -606,11 +767,125 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.cc:46 LoopBody::extendToContainer
+    /// Backward-walk from this loop's head through the container's body,
+    /// marking every block reachable via non-goto in-edges. Faithful to
+    /// `LoopBody::extendToContainer` (blockaction.cc:46-74):
+    ///   - cc:49-53: the container head, if unmarked, is marked, pushed,
+    ///     and skipped as a backward-walk start (`i = 1`).
+    ///   - cc:54-60: each unmarked container tail is marked and pushed
+    ///     (backward walk DOES traverse from them).
+    ///   - cc:61-71: if this loop's head differs from the container head,
+    ///     its unmarked non-goto predecessors are marked and pushed.
+    ///   - cc:73-83: BFS over the pushed body's non-goto in-edges, marking
+    ///     every unmarked predecessor.
+    /// Used by `find_exit`'s container arm (findExit cc:227-237) to force
+    /// a subloop's exit block to lie inside its immediately containing loop.
+    pub fn extend_to_container(
+        &self,
+        container_head: i32,
+        container_tails: &[i32],
+        body: &mut Vec<i32>,
+        graph: &BlockGraph,
+    ) {
+        let mut i: usize = 0;
+        // cc:49-53: container head — add if unmarked; never walk back from it.
+        let head_marked = graph
+            .get_block(container_head as usize)
+            .map(|b| b.read().unwrap().is_mark())
+            .unwrap_or(false);
+        if !head_marked {
+            if let Some(hblk) = graph.get_block(container_head as usize) {
+                hblk.write().unwrap().set_mark();
+            }
+            body.push(container_head);
+            i = 1;
+        }
+        // cc:54-60: container tails — add if unmarked; walk back from them.
+        for &tail in container_tails {
+            let marked = graph
+                .get_block(tail as usize)
+                .map(|b| b.read().unwrap().is_mark())
+                .unwrap_or(false);
+            if !marked {
+                if let Some(tblk) = graph.get_block(tail as usize) {
+                    tblk.write().unwrap().set_mark();
+                }
+                body.push(tail);
+            }
+        }
+        // cc:61-71: this loop's head (already marked by find_base) — walk
+        // back from it unless it IS the container head.
+        if self.head != container_head {
+            let ins: Vec<i32> = match graph.get_block(self.head as usize) {
+                Some(hblk) => {
+                    let b = hblk.read().unwrap();
+                    let n = b.size_in();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_in(k))
+                        .filter_map(|k| b.get_in(k).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            for bl in ins {
+                let marked = graph
+                    .get_block(bl as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    continue;
+                }
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    blk.write().unwrap().set_mark();
+                }
+                body.push(bl);
+            }
+        }
+        // cc:73-83: BFS — walk non-goto in-edges of every queued block.
+        while i < body.len() {
+            let curblock = body[i];
+            i += 1;
+            let ins: Vec<i32> = match graph.get_block(curblock as usize) {
+                Some(blk) => {
+                    let b = blk.read().unwrap();
+                    let n = b.size_in();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_in(k))
+                        .filter_map(|k| b.get_in(k).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            for bl in ins {
+                let marked = graph
+                    .get_block(bl as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    continue;
+                }
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    blk.write().unwrap().set_mark();
+                }
+                body.push(bl);
+            }
+        }
+    }
+
     // Ghidra: blockaction.cc:182 LoopBody::findExit
     /// Pick a single exit block. Faithful to `LoopBody::findExit`
-    /// (blockaction.cc:182-239). Prefers exits from tails, then head, then
-    /// middle body nodes. If there's a container, the exit must be in it.
-    pub fn find_exit(&mut self, body: &[i32], graph: &BlockGraph) {
+    /// (blockaction.cc:182-239). Scans tail exits (cc:185-197), then body
+    /// nodes' exits (cc:199-221). With no containing loop the first
+    /// unmarked exit wins immediately (cc:191-195/208-212); with a
+    /// container, candidates accumulate into trialexit and the winner is
+    /// the first candidate inside the container's re-marked body
+    /// (cc:227-237 via extendToContainer + clearMarks). `container` is the
+    /// immediately containing loop's (head, tails) — the oracle's
+    /// `immed_container` pointer resolved through the depth sort (heads are
+    /// unique after mergeIdenticalHeads, so the head is the pointer's
+    /// identity key).
+    pub fn find_exit(&mut self, body: &[i32], graph: &BlockGraph, container: Option<(i32, Vec<i32>)>) {
         let mut trial_exit: Vec<i32> = Vec::new();
         // Exits from tails.
         for &tail in &self.tails {
@@ -632,7 +907,7 @@ impl LoopBody {
                     .map(|b| b.read().unwrap().is_mark())
                     .unwrap_or(false);
                 if !marked {
-                    if self.immed_container == -1 {
+                    if container.is_none() {
                         self.exit_block = cur;
                         return;
                     }
@@ -663,7 +938,7 @@ impl LoopBody {
                     .map(|b| b.read().unwrap().is_mark())
                     .unwrap_or(false);
                 if !marked {
-                    if self.immed_container == -1 {
+                    if container.is_none() {
                         self.exit_block = cur;
                         return;
                     }
@@ -675,11 +950,29 @@ impl LoopBody {
         if trial_exit.is_empty() {
             return;
         }
-        // If there's a container, the exit must be marked in the container's body.
-        // We approximate: pick the first trial exit (the container-constrained
-        // selection requires the container's body marks, which are transient;
-        // for now use the first trial exit).
-        self.exit_block = trial_exit[0];
+        // cc:227-237: if there is a containing loop, force exitblock to be
+        // inside the containing loop. The container's body is re-marked via
+        // extendToContainer (a backward walk from this loop's head through
+        // the container's head/tails), and the first trial exit that falls
+        // inside those marks wins; only the extension marks are cleared.
+        // (The previous port approximated this with `trial_exit[0]`, which
+        // could pick an exit OUTSIDE the container and desynchronized the
+        // likely-goto ordering — BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001.)
+        if let Some((chead, ctails)) = container {
+            let mut extension: Vec<i32> = Vec::new();
+            self.extend_to_container(chead, &ctails, &mut extension, graph);
+            for &te in &trial_exit {
+                let marked = graph
+                    .get_block(te as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    self.exit_block = te;
+                    break;
+                }
+            }
+            clear_marks(&extension, graph);
+        }
     }
 
     // Ghidra: blockaction.cc:245 LoopBody::orderTails
@@ -1129,6 +1422,12 @@ pub struct CollapseStructure<'a> {
     /// exactly: initialized to the copy graph's order, identify_internal
     /// removes consumed entries and pushes the install slot at the end.
     virtual_list: Vec<i32>,
+    /// Jumptables of the function under collapse, for the BlockSwitch ctor
+    /// (`jump = ind->getJumptable()`, block.cc:3488 — the oracle resolves
+    /// the BRANCHIND last-op through Funcdata::findJumpTable, block.cc:637;
+    /// Rugra passes the Arc list in because CollapseStructure has no
+    /// Funcdata back-pointer).
+    jump_tables: Vec<Arc<RwLock<crate::jumptable::JumpTable>>>,
 }
 
 impl<'a> CollapseStructure<'a> {
@@ -1152,7 +1451,20 @@ impl<'a> CollapseStructure<'a> {
             likelylistfull: false,
             loopbodyiter: -1,
             virtual_list: (0..n).collect(),
+            jump_tables: Vec::new(),
         }
+    }
+
+    // RUGRA-GLUE: builder supplying Funcdata::jump_tables for the BlockSwitch
+    // ctor lookup (Ghidra reaches them through the FlowBlock Funcdata
+    // back-pointer, block.cc:637; Rugra composites carry none).
+    /// Attach the function's jumptables so new BlockSwitch components can
+    /// hold their table (block.cc:3488 ctor semantics).
+    pub fn with_jump_tables(
+        mut self, jts: Vec<Arc<RwLock<crate::jumptable::JumpTable>>>,
+    ) -> Self {
+        self.jump_tables = jts;
+        self
     }
 
     // (The `virtual_list` field IS the Ghidra list-order mirror — see its
@@ -1276,12 +1588,23 @@ impl<'a> CollapseStructure<'a> {
                     break;
                 }
             }
-            // cc:1835-1848: second pass — IfNoExit + CaseFallthru.
-            // BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001: removed the invented
-            // `has_switch` gate — the oracle runs ruleBlockIfNoExit for every
-            // function (cc:1840); switch-clause safety comes from the rule's
-            // own isSwitchOut guard (cc:1497), which try_rule_if_no_exit
-            // checks via switch_case_indices/CASE_BODY.
+            // cc:1835-1848: second pass — per-block INTERLEAVED IfNoExit +
+            // CaseFallthru scan, first success breaks (the outer fullchange
+            // loop re-runs the inner fixpoint). The oracle's loop body is
+            //   if (ruleBlockIfNoExit(bl)) { fullchange = true; break; }
+            //   if (ruleCaseFallthru(bl))  { fullchange = true; break; }
+            // for each bl in list order — the fallthru rule is tried on the
+            // SAME block before advancing to the next one. The previous
+            // shape (ifnoexit across all blocks first, then a batch pass)
+            // both reordered the oracle's decision sequence and ran an
+            // invented batch fallthru that never fired on the pre-formation
+            // graph (BLOCKSTRUCT-SWITCH-CASEFALLTHRU-0001).
+            //
+            // BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001 note kept: the oracle
+            // runs ruleBlockIfNoExit for every function (cc:1840);
+            // switch-clause safety comes from the rule's own isSwitchOut
+            // guard (cc:1497), which try_rule_if_no_exit checks via
+            // switch_case_indices/CASE_BODY.
             let mut fullchange = false;
             if std::time::Instant::now() <= deadline {
                 // cc:1838-1848: position-order scan over Ghidra's list,
@@ -1292,9 +1615,10 @@ impl<'a> CollapseStructure<'a> {
                         fullchange = true;
                         break;
                     }
-                }
-                if !fullchange && self.collapse_case_fallthru() {
-                    fullchange = true;
+                    if self.try_rule_case_fallthru(slot as usize) {
+                        fullchange = true;
+                        break;
+                    }
                 }
             }
             if !fullchange {
@@ -1359,6 +1683,13 @@ impl<'a> CollapseStructure<'a> {
         self.collapse_conditions();
         // cc:1888: collapseInternal(NULL).
         let mut isolated = self.collapse_internal(None);
+        if std::env::var("RUGRA_BS_DUMP")
+            .map(|v| v == "3")
+            .unwrap_or(false)
+            && isolated < self.graph.get_size() as i32
+        {
+            self.debug_dump_graph("stuck1");
+        }
         // cc:1889-1892: the selectGoto loop. Ghidra has no deadline, round
         // cap, progress guard, or batch cascade — selectGoto marks ONE edge
         // and collapseInternal(targetbl) re-structures before the next mark.
@@ -1403,48 +1734,49 @@ impl<'a> CollapseStructure<'a> {
             };
             let r = b.read().unwrap();
             let dead = self.is_consumed(r.get_index());
-            let mut outs = String::new();
-            for s in 0..r.size_out() {
-                if let Some(e) = r.get_out(s) {
-                    let (dst_idx, ty) = match e.point.try_read() {
-                        Ok(g) => (g.get_index(), debug_type_name(&*g)),
-                        Err(_) => (-1, "?".to_string()),
-                    };
-                    let goto = r.is_goto_out(s);
-                    outs.push_str(&format!(
-                        " [{}:{}:{}{}]",
-                        s,
-                        dst_idx,
-                        ty,
-                        if goto { ",GOTO" } else { "" }
-                    ));
-                }
-            }
-            let mut ins = String::new();
-            for s in 0..r.size_in() {
-                if let Some(e) = r.get_in(s) {
-                    let src_idx = match e.point.try_read() {
-                        Ok(g) => g.get_index(),
-                        Err(_) => -1,
-                    };
-                    ins.push_str(&format!(" [{}:{}]", s, src_idx));
-                }
-            }
+            let addr = crate::block::dbg_front_leaf_start_addr(&b);
             let iso = dead || (r.size_in() == 0 && r.size_out() == 0);
             if !iso {
                 nonisolated += 1;
             }
             eprintln!(
-                "[DBG] {} {} blk#{} ty={} dead={} in={}{} out={}{} flags={:#x}",
+                "[DBG] {} {} blk#{} addr={:#x} ty={} dead={} in={}{} out={}{} flags={:#x}",
                 when,
                 self.name,
                 i,
+                addr,
                 debug_type_name(&*r),
-                dead,
+                self.is_consumed(r.get_index()),
                 r.size_in(),
-                ins,
+                {
+                    let mut s = String::new();
+                    for sl in 0..r.size_in() {
+                        if let Some(e) = r.get_in(sl) {
+                            s.push_str(&format!(" [{}:{}]", sl, e.point.read().unwrap().get_index()));
+                        }
+                    }
+                    s
+                },
                 r.size_out(),
-                outs,
+                {
+                    let mut s = String::new();
+                    for sl in 0..r.size_out() {
+                        if let Some(e) = r.get_out(sl) {
+                            let (dst_idx, ty) = match e.point.try_read() {
+                                Ok(g) => (g.get_index(), debug_type_name(&*g)),
+                                Err(_) => (-1, "?".to_string()),
+                            };
+                            s.push_str(&format!(
+                                " [{}:{}:{}{}]",
+                                sl,
+                                dst_idx,
+                                ty,
+                                if r.is_goto_out(sl) { ",GOTO" } else { "" }
+                            ));
+                        }
+                    }
+                    s
+                },
                 r.get_flags()
             );
         }
@@ -1454,7 +1786,7 @@ impl<'a> CollapseStructure<'a> {
         );
     }
 
-    // Ghidra: blockaction.cc:1889 CollapseStructure::collapseAll selectGoto loop
+    // Ghidra: blockaction.cc:1877 CollapseStructure::collapseAll selectGoto loop
     /// The cc:1889-1892 selectGoto loop as a reusable tail for the legacy
     /// 7-phase path (which previously ended in the invented batch cascade).
     fn select_goto_loop(&mut self) {
@@ -1578,7 +1910,32 @@ impl<'a> CollapseStructure<'a> {
             // self.collapse_cbranch_cascades();
             self.collapse_case_fallthru();
             self.collapse_sequences();
-            self.collapse_switches();
+            // R17 (2026-09-25): `collapse_switches` RETIRED
+            // (BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001). Ghidra has NO
+            // phase1 switch pre-installer — LoopBody has no collapseSwitches
+            // method and blockaction.hh:46 is the class declaration line;
+            // the ONLY BlockSwitch install point in the oracle is
+            // CollapseStructure::ruleBlockSwitch (blockaction.cc:1649-1723)
+            // → newBlockSwitch (cc:1904-1919) → grabCaseBasic, running at
+            // collapseInternal maturity where cc:1697-1708's invariant holds
+            // (each case sizeOut<=1; sizeOut==1 iff the edge is to the
+            // formal exitblock) — that invariant is what makes addCase's
+            // isexit=(bl->sizeOut()==1) (block.cc:3513-3514) sound. This
+            // phase1 pre-pass fired ~2 pipeline stages earlier, where the
+            // case bodies' out-edges still pointed at the next case/merge
+            // block, so the same capture over-fired: instrumented oracle
+            // run (stage_isexit_1204, locked e40ed130, httpd main
+            // entry=0x2b820) shows the final tree with isexit=1 on exactly
+            // 2/18 cases (0x2ba9f, 0x2bdcd), while this pre-installer's
+            // collection-loop capture produced 14/17 true (12 oracle-wrong
+            // bits; the hardcoded vec![false] it replaced was wrong on the
+            // same 2). try_rule_switch's capture at rule time is
+            // address-keyed oracle-exact 16/16 on the same fixture. After
+            // retirement the switch is installed by the rule chain
+            // (select_goto_loop → collapse_internal → try_rule_switch),
+            // which is Ghidra's own architecture. Default 5-step path never
+            // called this pre-pass. (Audit: COLLAPSEFIX R17.)
+            // self.collapse_switches();
             self.refresh_switch_cases();
 
             iterations += 1;
@@ -2127,6 +2484,7 @@ impl<'a> CollapseStructure<'a> {
     /// nothing; Rugra logs and lets the caller stop, see the cc:1275 site in
     /// collapse_all_5step). Faithful to `selectGoto` (blockaction.cc:1260-1277).
     fn select_goto(&mut self) -> Option<i32> {
+        let trace = std::env::var("RUGRA_TRACE_SELECTGOTO").is_ok();
         while self.update_loop_body() {
             while self.likelyiter < self.likelygoto.len() {
                 let fe = self.likelygoto[self.likelyiter].clone();
@@ -2134,6 +2492,23 @@ impl<'a> CollapseStructure<'a> {
                 // cc:1266: getCurrentEdge re-resolves against live graph.
                 if let Some((startbl_idx, outedge)) = fe.get_current_edge(self.graph) {
                     // cc:1269: setGotoBranch(outedge).
+                    if trace {
+                        let tgt = self
+                            .graph
+                            .get_block(startbl_idx as usize)
+                            .and_then(|b| b.read().unwrap().get_out(outedge).map(|e| e.point))
+                            .map(|t| t.read().unwrap().get_index())
+                            .unwrap_or(-1);
+                        let src_addr = self
+                            .graph
+                            .get_block(startbl_idx as usize)
+                            .map(|b| crate::block::front_leaf(&b).map(|l| l.read().unwrap().get_start_addr().as_u64()).unwrap_or(0))
+                            .unwrap_or(0);
+                        eprintln!(
+                            "[SELECTGOTO] {} mark goto: block #{} @ {:#x} outedge={} -> #{}",
+                            self.name, startbl_idx, src_addr, outedge, tgt
+                        );
+                    }
                     if let Some(blk) = self.graph.get_block(startbl_idx as usize) {
                         self.set_goto_branch_on_block(&blk, outedge);
                     }
@@ -2246,6 +2621,54 @@ impl<'a> CollapseStructure<'a> {
             return true;
         }
         b.is_goto_out(slot) // BlockBasic block-level mirror flags
+    }
+
+    // RUGRA-GLUE: Ghidra's goto mark lives on the edge label itself
+    // (outofthis[i].label, written by setGotoBranch block.cc:305-313), so
+    // removeEdge (block.cc:1469-1481) removes the mark together with the
+    // edge and the surviving edges' marks are untouched. Rugra ADDITIONALLY
+    // mirrors the mark in the slot-indexed GOTO_EDGE_0/GOTO_EDGE_1 block
+    // flags (see set_goto_branch_on_block) for BlockBasic::is_goto_out —
+    // those mirrors are slot-indexed and do NOT follow edge removal: after
+    // newBlockMultiGoto peels a goto edge, the surviving edges shift slots
+    // and a stale mirror falsely marks whichever edge moved into the
+    // vacated slot. Re-derive the mirrors from the authoritative per-edge
+    // F_GOTO_EDGE labels after every peel removal so the two channels stay
+    // equivalent (MSTRUCT-SWITCHGOTO-SELECTGOTO-0001: glob_set/glob_word
+    // round-2/3 collapse — the stale GOTO_EDGE_1 peeled the dispatch's
+    // default edge right after the dispatch→4d04 peel, cascading through
+    // checkSwitchSkips into a degenerate 0-case switch).
+    fn resync_goto_edge_mirrors(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let mut w = bl.write().unwrap();
+        let f = w.get_flags();
+        if f
+            & (crate::block::block_flags::GOTO_EDGE_0
+                | crate::block::block_flags::GOTO_EDGE_1)
+            == 0
+        {
+            return; // no mirrors to resync — edge labels are authoritative
+        }
+        let g0 = w
+            .get_out(0)
+            .map(|e| e.flags & crate::block::edge_flags::F_GOTO_EDGE != 0)
+            .unwrap_or(false);
+        let g1 = w
+            .get_out(1)
+            .map(|e| e.flags & crate::block::edge_flags::F_GOTO_EDGE != 0)
+            .unwrap_or(false);
+        // set_flags is OR-semantics (Ghidra setFlag, block.hh:155
+        // `flags |= fl`), so dropping stale mirror bits requires
+        // clear_flags (Ghidra clearFlag, block.hh:156 `flags &= ~fl`).
+        w.clear_flags(
+            crate::block::block_flags::GOTO_EDGE_0
+                | crate::block::block_flags::GOTO_EDGE_1,
+        );
+        if g0 {
+            w.set_flags(crate::block::block_flags::GOTO_EDGE_0);
+        }
+        if g1 {
+            w.set_flags(crate::block::block_flags::GOTO_EDGE_1);
+        }
     }
 
     // Ghidra: block.hh:336 FlowBlock::isDecisionOut
@@ -2634,12 +3057,26 @@ impl<'a> CollapseStructure<'a> {
                 loop_order[sub_idx].depth += 1;
             }
             // Set immed_container to the deepest container seen so far.
+            // The oracle stores the container's LoopBody POINTER (survives
+            // the step-4 depth sort); Rugra stores the container's HEAD
+            // block index — unique after merge_identical_heads — so the
+            // reference stays valid across the sort (BLOCKSTRUCT-COLLAPSE-
+            // RESIDUAL-0001: the previous positional index went stale).
             let my_depth = loop_order[i].depth;
+            let my_head = loop_order[i].head;
             for &sub_idx in &contain {
-                if loop_order[sub_idx].immed_container == -1
-                    || loop_order[loop_order[sub_idx].immed_container as usize].depth < my_depth
-                {
-                    loop_order[sub_idx].immed_container = i as i32;
+                let cur_container_head = loop_order[sub_idx].immed_container;
+                let replace = if cur_container_head == -1 {
+                    true
+                } else {
+                    // cc: labelContainments: (lb->immed_container->depth < depth)
+                    match loop_order.iter().find(|lb| lb.head == cur_container_head) {
+                        Some(c) => c.depth < my_depth,
+                        None => true,
+                    }
+                };
+                if replace {
+                    loop_order[sub_idx].immed_container = my_head;
                 }
             }
             clear_marks(&body, self.graph);
@@ -2648,10 +3085,21 @@ impl<'a> CollapseStructure<'a> {
         // sort on depth.
         loop_order.sort_by(|a, b| b.depth.cmp(&a.depth));
         // Step 5: for each loop, find_base / find_exit / order_tails / extend /
-        // label_exit_edges.
+        // label_exit_edges. find_exit needs its container's (head, tails);
+        // resolve via the head-keyed snapshot (the oracle reads the
+        // immed_container pointer here).
+        let containers_by_head: std::collections::HashMap<i32, Vec<i32>> = loop_order
+            .iter()
+            .map(|lb| (lb.head, lb.tails.clone()))
+            .collect();
         for lb in loop_order.iter_mut() {
             let mut body = lb.find_base(self.graph);
-            lb.find_exit(&body, self.graph);
+            let container = if lb.immed_container != -1 {
+                containers_by_head.get(&lb.immed_container).cloned()
+            } else {
+                None
+            };
+            lb.find_exit(&body, self.graph, container.map(|t| (lb.immed_container, t)));
             lb.order_tails(self.graph);
             lb.extend(&mut body, self.graph);
             lb.label_exit_edges(&body, self.graph);
@@ -3116,7 +3564,10 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::dominatesIdx
+    // RUGRA-GLUE: dominator lookup over the structuring graph's block
+    // indices; Ghidra has no LoopBody::dominatesIdx (blockaction.hh:46 is
+    // the LoopBody class decl with no such member) — Rugra computes
+    // idoms locally to back refresh_switch_cases case-body detection.
     /// Check if block index `a` dominates block index `b`.
     fn dominates_idx(&self, a: i32, b: i32) -> bool {
         if a == b {
@@ -3137,7 +3588,12 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::refreshSwitchCases
+    // RUGRA-GLUE: interleaved-rule case-body bookkeeping; Ghidra has no
+    // LoopBody::refreshSwitchCases and no f_case_body flag (block.hh:88-106
+    // enum tops out at f_duplicate_block=0x40000) — this tracks Rugra's
+    // switch_case_indices so interleaved rules avoid pulling case labels
+    // out of switch bodies. Clear/set must use clear_flags/set_flags
+    // (FlowBlock::clearFlag/setFlag semantics: `&= ~fl` / `|= fl`).
     /// Collect indices of all switch case body blocks. Scans both BlockSwitch
     /// nodes and CBRANCH cascade chains (which produce switch-like structures
     /// using BlockIf nodes). Interleaved rules use this to avoid pulling case
@@ -3150,8 +3606,7 @@ impl<'a> CollapseStructure<'a> {
         for i in 0..size {
             if let Some(blk) = self.graph.get_block(i) {
                 let mut b = blk.write().unwrap();
-                let cur_flags = b.get_flags();
-                b.set_flags(cur_flags & !crate::block::block_flags::CASE_BODY);
+                b.clear_flags(crate::block::block_flags::CASE_BODY);
             }
         }
         for i in 0..size {
@@ -3586,6 +4041,15 @@ impl<'a> CollapseStructure<'a> {
             } else if let Some(binf) = nref.downcast_mut::<crate::block::BlockInfLoop>() {
                 binf.incoming = new_in;
                 binf.outgoing = new_out;
+            } else if let Some(bmg) = nref.downcast_mut::<crate::block::BlockMultiGoto>() {
+                // Ghidra newBlockMultiGoto (block.cc:1738): identifyInternal(
+                // ret,[bl]) runs the same selfIdentify edge transfer as every
+                // other composite — the multigoto inherits the wrapped
+                // switch block's external in/out boundary edges (and its
+                // f_switch_out via the cc:925-926 propagation above), which
+                // ruleBlockSwitch (cc:1652) and checkSwitchSkips then read.
+                bmg.incoming = new_in;
+                bmg.outgoing = new_out;
             } else if let Some(bsw) = nref.downcast_mut::<crate::block::BlockSwitch>() {
                 // Ghidra newBlockSwitch (block.cc:1913): identifyInternal(ret,cs)
                 // runs the same selfIdentify edge transfer as every other
@@ -4184,8 +4648,15 @@ impl<'a> CollapseStructure<'a> {
                     sw.control.clone(),
                     sw.cases.clone(),
                     sw.default_case.clone(),
+                    sw.case_gototypes.clone(),
+                    sw.default_gototype,
+                    sw.case_isexit.clone(),
+                    sw.default_isexit,
                     sw.case_values.clone(),
                     sw.index_varnode.clone(),
+                    sw.jump.clone(),
+                    sw.case_order.clone(),
+                    sw.default_order.clone(),
                 )
             };
             // Rebuild with updated references
@@ -4210,8 +4681,16 @@ impl<'a> CollapseStructure<'a> {
                     control: sw_fields.1,
                     cases: new_cases,
                     default_case: new_default,
-                    case_values: sw_fields.4,
-                    index_varnode: sw_fields.5,
+                    case_gototypes: sw_fields.4,
+                    default_gototype: sw_fields.5,
+                    case_isexit: sw_fields.6,
+                    default_isexit: sw_fields.7,
+                    jump: sw_fields.10,
+                    case_order: sw_fields.11,
+                    default_label: None,
+                    default_order: sw_fields.12,
+                    case_values: sw_fields.8,
+                    index_varnode: sw_fields.9,
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
@@ -4651,9 +5130,8 @@ impl<'a> CollapseStructure<'a> {
     /// TraceDAG/selectGoto freely produces) never structured, leaving the
     /// CBRANCH orphaned as a bare conditional statement.
     /// The sizeout==1 newBlockGoto case lives in try_rule_goto; the
-    /// isSwitchOut → newBlockMultiGoto case (cc:1456-1458) has no Rugra
-    /// BlockMultiGoto counterpart yet (see TODO BLOCKSTRUCT-MULTIGOTO-0001
-    /// in the final report).
+    /// isSwitchOut → newBlockMultiGoto case (cc:1456-1458) is routed here and
+    /// in try_rule_goto ahead of the sizeout dispatch (see new_block_multigoto).
     fn try_rule_if_goto(&mut self, i: usize) -> bool {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
@@ -4672,6 +5150,27 @@ impl<'a> CollapseStructure<'a> {
         } else {
             return false;
         };
+
+        // cc:1456-1458: the isSwitchOut arm precedes the sizeout==2 arm in
+        // the oracle's single ruleBlockGoto loop — a two-out switch block
+        // with a goto edge goes to newBlockMultiGoto, never newBlockIfGoto
+        // (which would swallow the switch dispatch as an if). The multigoto
+        // edge index is the oracle loop's FIRST goto edge (lowest slot,
+        // cc:1454), not the negate-preferring slot computed above.
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
+            let first_goto = if Self::out_edge_is_goto(&*b, 0) {
+                0
+            } else {
+                goto_slot
+            };
+            drop(b);
+            self.new_block_multigoto(i, first_goto);
+            eprintln!(
+                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled 2-out switch edge {}",
+                self.name, first_goto
+            );
+            return true;
+        }
 
         // Ghidra's ruleBlockGoto (cc:1450-1475) is purely topological: no
         // CBRANCH requirement — newBlockIfGoto legitimately wraps structured
@@ -4771,6 +5270,153 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: block.cc:1720 BlockGraph::newBlockMultiGoto
+    /// Faithful port of `BlockGraph::newBlockMultiGoto(bl, outedge)`
+    /// (block.cc:1720-1753), invoked by ruleBlockGoto's isSwitchOut arm
+    /// (blockaction.cc:1456-1458): peel the goto-marked out edge of a switch
+    /// block out of the structured graph view.
+    ///
+    /// Oracle order (all four decisive semantics, see
+    /// docs/alignment_docs/BLOCKMULTIGOTO_M1_SEMANTICS.md §A):
+    ///   - `targetbl`/`isdefaultedge` captured BEFORE any mutation (cc:1724-
+    ///     1725) — removeEdge below erases the edge and its label;
+    ///   - already-t_multigoto: addEdge → removeEdge → (default) setDefaultGoto
+    ///     (cc:1726-1732);
+    ///   - fresh wrap: new BlockMultiGoto → origSizeOut captured BEFORE
+    ///     identifyInternal (cc:1735) → identifyInternal(ret,[bl]) → addBlock
+    ///     → addEdge(targetbl) → `if (targetbl != bl)` { `if (ret->sizeOut() !=
+    ///     origSizeOut)` forceOutputNum(ret->sizeOut()+1) — restore a self
+    ///     edge collapsed by identifyInternal; removeEdge(ret,targetbl) } →
+    ///     (default) setDefaultGoto (cc:1733-1751);
+    ///   - a self goto edge (targetbl == bl) is absorbed by identifyInternal
+    ///     and NOT explicitly removed (cc:1748 comment).
+    /// BlockMultiGoto::addEdge only records the target in `gotoedges` — no
+    /// graph edge is created (block.hh:580), so removeEdge takes out the
+    /// identifyInternal-inherited structured edge (bilateral, block.cc:1469).
+    /// Public for the bilateral BLOCKSTRUCT-MULTIGOTO-0001 fixture (direct
+    /// call, mirroring the oracle fixture's graph.newBlockMultiGoto).
+    pub fn new_block_multigoto(&mut self, i: usize, outedge: usize) {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return,
+        };
+        // cc:1724-1725: FlowBlock *targetbl = bl->getOut(outedge);
+        //          bool isdefaultedge = bl->isDefaultBranch(outedge);
+        let (target, isdefaultedge, already_multigoto, orig_size_out, idx) = {
+            let b = block.read().unwrap();
+            let target = b.get_out(outedge).map(|e| e.point.clone());
+            let isdefaultedge = b.is_default_branch(outedge);
+            let already = b.get_type() == crate::block::BlockType::MultiGoto;
+            // cc:1735: origSizeOut must reflect the block BEFORE the wrap —
+            // for the already-multigoto path the size comparison never runs,
+            // so reading it here for both paths is harmless.
+            let so = b.size_out();
+            (target, isdefaultedge, already, so, b.get_index())
+        };
+        let Some(targetbl) = target else {
+            return;
+        };
+        if already_multigoto {
+            // cc:1726-1732: "Already one goto edge from this same block, we
+            // add to existing structure" — ret = (BlockMultiGoto*)bl.
+            {
+                let mut mg = block.write().unwrap();
+                if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                    // cc:1728: ret->addEdge(targetbl);
+                    m.add_goto_edge(targetbl.clone());
+                }
+            }
+            // cc:1729: removeEdge(ret,targetbl);
+            self.graph.remove_edge_blocks(&block, &targetbl);
+            // RUGRA-GLUE: the peeled edge carried the goto mark on its
+            // label (removed with the edge, as in the oracle); the
+            // slot-indexed block mirrors must be re-derived or the edge
+            // that shifts into the vacated slot inherits a false goto.
+            Self::resync_goto_edge_mirrors(&block);
+            if isdefaultedge {
+                // cc:1730-1731: ret->setDefaultGoto();
+                let mut mg = block.write().unwrap();
+                if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                    m.set_default_goto();
+                }
+            }
+            // The caller (ruleBlockGoto cc:1450-1458 arm) returns true after
+            // this mutation-only path, so Ghidra's collapseInternal re-enters
+            // the scan (change=true) and ruleBlockSwitch fires on the very
+            // next pass. Rugra's inner loop infers that change bool from a
+            // structure_change_count delta, so this arm must bump it like
+            // the fresh-wrap arm below does: without the bump the loop
+            // declares a false fixpoint right after peeling the edge, the
+            // freshly marked switch skip-edges starve, and selectGoto picks
+            // foreign edges (getparameter blockstructure count 27 vs 26,
+            // second multigoto on block 29 starving ruleBlockSwitch,
+            // 2026-09-23).
+            self.structure_change_count += 1;
+            return;
+        }
+        // cc:1734: ret = new BlockMultiGoto(bl); — the constructor discards
+        // bl (components arrive via identifyInternal), so the wrapped block
+        // is held explicitly (getBlock(0) = wrapped), like BlockGoto::wrapped.
+        let mg_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockMultiGoto {
+                index: idx,
+                flags: 0,
+                parent: None,
+                gotoedges: Vec::new(),
+                defaultswitch: false,
+                wrapped: Some(block.clone()),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+            }));
+        // cc:1736-1739: nodes=[bl]; identifyInternal(ret,nodes); addBlock(ret).
+        // identify_internal inherits the boundary edges AND propagates
+        // f_switch_out (selfIdentify cc:925-926), keeping the multigoto a
+        // switch block for ruleBlockSwitch (cc:1652).
+        self.identify_internal(&mg_block, &[idx], i);
+        // RUGRA-GLUE: keep any enclosing BlockSwitch's case references live
+        // across the slot replacement (same glue as try_rule_goto /
+        // try_rule_if_goto; Ghidra needs none — its caseblocks hold
+        // FlowBlock pointers that survive identifyInternal).
+        self.update_switch_case_reference(idx, &mg_block);
+        // cc:1740: ret->addEdge(targetbl);
+        {
+            let mut mg = mg_block.write().unwrap();
+            if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                m.add_goto_edge(targetbl.clone());
+            }
+        }
+        // cc:1741-1747: `if (targetbl != bl)` — pointer identity against the
+        // ORIGINAL block (captured before the wrap), not the composite.
+        if !Arc::ptr_eq(&targetbl, &block) {
+            // cc:1742-1745: fewer out edges after identifyInternal ⟺ a self
+            // edge was collapsed (switch out edges are already deduped);
+            // forceOutputNum(sizeOut()+1) restores that self edge — it is
+            // NOT the goto edge.
+            let cur_size_out = mg_block.read().unwrap().size_out();
+            if cur_size_out != orig_size_out {
+                Self::force_output_num(&mg_block, cur_size_out + 1);
+            }
+            // cc:1746: removeEdge(ret,targetbl); — remove the structured edge
+            // to the goto target (bilateral, block.cc:1469-1481).
+            self.graph.remove_edge_blocks(&mg_block, &targetbl);
+            // RUGRA-GLUE: keep the slot-indexed goto mirrors consistent with
+            // the surviving edge labels after the peel removal (the fresh
+            // wrap starts mirror-free; this is defensive parity with the
+            // already-multigoto path above).
+            Self::resync_goto_edge_mirrors(&mg_block);
+        }
+        // else — the goto edge is a self edge and was removed by
+        // identifyInternal (cc:1748).
+        if isdefaultedge {
+            // cc:1749-1750: ret->setDefaultGoto();
+            let mut mg = mg_block.write().unwrap();
+            if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                m.set_default_goto();
+            }
+        }
+        self.structure_change_count += 1;
+    }
+
     // Ghidra: blockaction.hh:46 LoopBody::tryRuleGoto
     /// Ghidra ruleBlockGoto (blockaction.cc:1450), pure-goto branch (size_out==1).
     /// A block whose single out-edge is marked as goto (GOTO_EDGE_0) becomes a
@@ -4792,32 +5438,61 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        let (idx, size_out, goto_target) = {
+        // cc:1453-1455: `sizeout` captured before the scan; the loop finds the
+        // FIRST goto-marked out edge (lowest slot wins). isGotoOut works on
+        // every block type (edge label or the block-level GOTO_EDGE_0/1
+        // mirrors) and on every slot >= 0 — a peeled switch can still have
+        // dozens of live out edges with a goto mark on any of them.
+        let (idx, size_out, goto_edge) = {
             let b = block.read().unwrap();
-            // cc:1454-1455: isGotoOut — works on every block type (edge
-            // label or the block-level GOTO_EDGE_0/1 mirrors).
-            let has_goto = (b.size_out() >= 1 && Self::out_edge_is_goto(&*b, 0))
-                || (b.size_out() >= 2 && Self::out_edge_is_goto(&*b, 1));
-            if !has_goto {
+            let size_out = b.size_out();
+            let mut goto_edge: Option<usize> = None;
+            for j in 0..size_out {
+                if Self::out_edge_is_goto(&*b, j) {
+                    goto_edge = Some(j);
+                    break;
+                }
+            }
+            if goto_edge.is_none() {
                 return false;
             }
-            // Pure-goto case: size_out==1 with GOTO_EDGE_0. (size_out==2 with
-            // GOTO_EDGE_1 is handled by try_rule_if_goto as newBlockIfGoto.)
-            if b.size_out() != 1 {
-                return false;
-            }
-            if !Self::out_edge_is_goto(&*b, 0) {
-                return false;
-            }
-            // Ghidra's isSwitchOut arm (cc:1456-1458) goes to newBlockMultiGoto,
-            // which has no Rugra counterpart yet (BLOCKSTRUCT-MULTIGOTO-0001);
-            // skip switch blocks rather than mis-wrapping them.
-            if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
-                return false;
-            }
-            let target = b.get_out(0).map(|e| e.point.clone());
-            (b.get_index(), b.size_out(), target)
+            (b.get_index(), size_out, goto_edge)
         };
+        // cc:1456-1458: `if (bl->isSwitchOut()) { graph.newBlockMultiGoto(bl,i);
+        // return true; }` — the isSwitchOut arm runs FIRST, ahead of the
+        // sizeout==2/1 dispatch, so a switch block's goto edge is peeled into
+        // a BlockMultiGoto no matter how many out edges remain
+        // (BLOCKSTRUCT-MULTIGOTO-0001).
+        if block.read().unwrap().get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
+            let peeled_target_addr = block
+                .read()
+                .unwrap()
+                .get_out(goto_edge.unwrap())
+                .and_then(|e| {
+                    crate::block::front_leaf(&e.point)
+                        .map(|l| crate::block::dbg_front_leaf_start_addr(&l))
+                })
+                .unwrap_or(0);
+            self.new_block_multigoto(i, goto_edge.unwrap());
+            eprintln!(
+                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled switch edge {} -> @{:#x}",
+                self.name,
+                goto_edge.unwrap(),
+                peeled_target_addr
+            );
+            return true;
+        }
+        // Pure-goto case: size_out==1 with GOTO_EDGE_0. (size_out==2 with
+        // GOTO_EDGE_1 is handled by try_rule_if_goto as newBlockIfGoto;
+        // size_out>2 non-switch matches no arm — the oracle loop falls
+        // through every remaining isGotoOut edge and returns false.)
+        if size_out != 1 {
+            return false;
+        }
+        if !Self::out_edge_is_goto(&*block.read().unwrap(), 0) {
+            return false;
+        }
+        let goto_target = block.read().unwrap().get_out(0).map(|e| e.point.clone());
         let goto_target = match goto_target {
             Some(t) => t,
             None => return false,
@@ -4874,9 +5549,12 @@ impl<'a> CollapseStructure<'a> {
         // (BLOCK-RECIPROCAL-OOB-0001).
         self.graph.remove_edge_blocks(&goto_block, &goto_target);
         self.structure_change_count += 1;
+        let la = crate::block::front_leaf(&goto_block)
+            .map(|l| crate::block::dbg_front_leaf_start_addr(&l))
+            .unwrap_or(0);
         eprintln!(
-            "[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})",
-            self.name, idx, size_out
+            "[COLLAPSE] {} ruleBlockGoto: wrapped block {} @{:#x} (size_out={})",
+            self.name, idx, la, size_out
         );
         true
     }
@@ -5271,8 +5949,214 @@ impl<'a> CollapseStructure<'a> {
     ///       fallback: first out with output)
     ///   (3) Validate all cases: no goto in/out, sizeIn==1, sizeOut<=1,
     ///       out must go to exitblock, no nested switch
-    ///   (4) checkSwitchSkips (TODO: default-skip optimization)
+    ///   (4) checkSwitchSkips — mark skip-to-exit case edges as gotos
     ///   (5) newBlockSwitch(cases, hasExit)
+    // Ghidra: blockaction.cc:1607 CollapseStructure::checkSwitchSkips
+    /// Faithful port of `CollapseStructure::checkSwitchSkips`
+    /// (blockaction.cc:1607-1647):
+    ///   - cc:1608: no exitblock -> nothing to check (build the switch).
+    ///   - cc:1610-1628: scan the switch's out-edges — `anyskiptoexit` = a
+    ///     NON-default edge straight to the exitblock; `defaultnottoexit` =
+    ///     a default edge that does NOT go to the exitblock.
+    ///   - cc:1630-1635: a t_multigoto switch block's recorded default goto
+    ///     (BlockMultiGoto::hasDefaultGoto) also sets defaultnottoexit —
+    ///     the peeled default edge is invisible to the cc:1617-1626 edge
+    ///     scan, so the multigoto's flag is the only remaining witness.
+    ///   - cc:1628-1636: without both flags there is nothing to mark.
+    ///   - cc:1637-1643: mark every NON-default edge that goes straight to
+    ///     the exitblock as a goto branch; return false so ruleBlockSwitch
+    ///     reports "matched but adds gotos" and collapseInternal re-runs
+    ///     (wrapping the newly marked edges) before the switch is built.
+    /// `isDefaultBranch` reads the mirrored F_DEFAULTSWITCH_EDGE label
+    /// (block.hh:320), installed by Funcdata::switchOver (funcdata_block.cc:
+    /// 697 setDefaultSwitch(jt->getDefaultBlock())) — Rugra's equivalent
+    /// wiring is funcdata.rs set_default_switch_mirrored.
+    fn check_switch_skips(&mut self, switch_idx: usize, exitblock: Option<i32>) -> bool {
+        // cc:1608: if (exitblock == 0) return true;
+        let Some(exit_idx) = exitblock else {
+            return true;
+        };
+        let block = match self.graph.get_block(switch_idx) {
+            Some(b) => b,
+            None => return true,
+        };
+        let sizeout = block.read().unwrap().size_out();
+        // cc:1612-1623: scan for the two flags.
+        let mut defaultnottoexit = false;
+        let mut anyskiptoexit = false;
+        for edgenum in 0..sizeout {
+            let (tgt_idx, is_default) = {
+                let r = block.read().unwrap();
+                match r.get_out(edgenum) {
+                    Some(e) => (
+                        e.point.read().unwrap().get_index(),
+                        r.is_default_branch(edgenum),
+                    ),
+                    None => continue,
+                }
+            };
+            if tgt_idx == exit_idx {
+                if !is_default {
+                    anyskiptoexit = true;
+                }
+            } else if is_default {
+                defaultnottoexit = true;
+            }
+        }
+        // cc:1628: no skip edges to the exit -> build the switch.
+        if !anyskiptoexit {
+            return true;
+        }
+        // cc:1630-1635: `if ((!defaultnottoexit)&&(switchbl->getType() ==
+        // FlowBlock::t_multigoto)) { BlockMultiGoto *multibl =
+        // (BlockMultiGoto *)switchbl; if (multibl->hasDefaultGoto())
+        //   defaultnottoexit = true; }` — a default edge peeled off the
+        // switch as an unstructured goto is invisible to the edge scan
+        // above (removeEdge took it out), but its default-ness still means
+        // "default does not go to the exit", enabling the skip marking.
+        if !defaultnottoexit {
+            let is_multigoto_default = {
+                let r = block.read().unwrap();
+                r.get_type() == crate::block::BlockType::MultiGoto
+                    && r
+                        .as_any()
+                        .downcast_ref::<BlockMultiGoto>()
+                        .map_or(false, |m| m.has_default_goto())
+            };
+            if is_multigoto_default {
+                defaultnottoexit = true;
+            }
+        }
+        // cc:1636: no default elsewhere -> build the switch.
+        if !defaultnottoexit {
+            return true;
+        }
+        // cc:1637-1643: mark non-default skip-to-exit edges as goto branches.
+        let mut marked = false;
+        for edgenum in 0..sizeout {
+            let (tgt_idx, is_default) = {
+                let r = block.read().unwrap();
+                match r.get_out(edgenum) {
+                    Some(e) => (
+                        e.point.read().unwrap().get_index(),
+                        r.is_default_branch(edgenum),
+                    ),
+                    None => continue,
+                }
+            };
+            if tgt_idx == exit_idx && !is_default {
+                self.set_goto_branch_on_block(&block, edgenum);
+                marked = true;
+            }
+        }
+        let _ = marked;
+        // cc:1644: return false — "We match, but have special condition that
+        // adds gotos" (blockaction.cc:1712).
+        false
+    }
+
+    // Ghidra: blockaction.cc:1729 CollapseStructure::ruleCaseFallthru
+    /// Faithful port of `ruleCaseFallthru` (blockaction.cc:1725-1762): look
+    /// for a switch case that falls through to another switch case, starting
+    /// from the (pre-formation) switch dispatch block. A case body with
+    /// sizeIn<=2 and exactly one out-edge, whose target has sizeIn==2 (the
+    /// other in-edge being the switch itself) and sizeOut<=1, is a fallthru
+    /// candidate; every candidate's out(0) is marked goto
+    /// (`setGotoBranch(0)`). At most one nonfallthru exit is allowed.
+    ///
+    /// The rule marks edges but builds NO structure; the next first-pass
+    /// `ruleBlockGoto` wrap removes the marked edge, dropping the shared
+    /// target's sizeIn so `ruleBlockSwitch`'s fallback exit resolution can
+    /// succeed WITHOUT peeling a real case edge. BLOCKSTRUCT-SWITCH-
+    /// CASEFALLTHRU-0001: the previous batch `collapse_case_fallthru` only
+    /// inspected ALREADY-FORMED BlockSwitch composites, so on the stuck
+    /// pre-formation graph it never fired; selectGoto then peeled the
+    /// switch's case edge and the tail region landed outside the loop
+    /// (glob_set: `goto LAB_00104c20` + `code_r0x00104c7c` back-edge family).
+    fn try_rule_case_fallthru(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        // cc:1732: if (!bl->isSwitchOut()) return false;
+        if !block.read().unwrap().is_switch_out() {
+            return false;
+        }
+        let sizeout = block.read().unwrap().size_out();
+        let mut nonfallthru = 0usize;
+        let mut fallthru: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for j in 0..sizeout {
+            let curbl = match block.read().unwrap().get_out(j) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
+            // cc:1739: cannot exit to itself (pointer identity).
+            if Arc::ptr_eq(&curbl, &block) {
+                return false;
+            }
+            let (cur_sin, cur_sout) = {
+                let r = curbl.read().unwrap();
+                (r.size_in(), r.size_out())
+            };
+            // cc:1740: sizeIn>2 OR sizeOut>1 counts as a (the at most one)
+            // nonfallthru exit.
+            if cur_sin > 2 || cur_sout > 1 {
+                nonfallthru += 1;
+            } else if cur_sout == 1 {
+                // cc:1743-1748: candidate whose single out-edge lands on a
+                // block shared only with the switch itself.
+                let target_edge = {
+                    let r = curbl.read().unwrap();
+                    r.get_out(0)
+                        .map(|e| (e.point.clone(), e.reverse_index))
+                };
+                if let Some((target, inslot)) = target_edge {
+                    let (tgt_sin, tgt_sout) = {
+                        let t = target.read().unwrap();
+                        (t.size_in(), t.size_out())
+                    };
+                    if tgt_sin == 2 && tgt_sout <= 1 {
+                        // cc:1745: inslot = curbl->getOutRevIndex(0) — the
+                        // in-slot this edge occupies on the target; the
+                        // OTHER in-edge must be the switch block itself.
+                        if inslot == 0 || inslot == 1 {
+                            let other = target
+                                .read()
+                                .unwrap()
+                                .get_in((1 - inslot) as usize)
+                                .map(|e| e.point.clone());
+                            if let Some(other) = other {
+                                if Arc::ptr_eq(&other, &block) {
+                                    fallthru.push(curbl.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // cc:1750: can have at most 1 other exit block — checked DURING
+            // the scan, so a second nonfallthru out aborts before any
+            // marking happens.
+            if nonfallthru > 1 {
+                return false;
+            }
+        }
+        // cc:1752: no fallthru candidates → nothing to do.
+        if fallthru.is_empty() {
+            return false;
+        }
+        // cc:1755-1759: mark each candidate's out(0) as goto, in discovery
+        // order (setGotoBranch writes the f_goto_edge label on both edge
+        // halves plus the interior goto flags).
+        for curbl in &fallthru {
+            self.set_goto_branch_on_block(curbl, 0);
+        }
+        true
+    }
+
+    // Ghidra: blockaction.cc:1649 CollapseStructure::ruleBlockSwitch
+    /// Try to find a switch structure: find the exitblock, validate all
+    /// cases converge, run checkSwitchSkips, then build the BlockSwitch.
     pub fn try_rule_switch(&mut self, i: usize) -> bool {
         let irred_sw = std::env::var("RUGRA_IRRED_DBG")
             .map(|v| v == "1")
@@ -5290,8 +6174,15 @@ impl<'a> CollapseStructure<'a> {
             let r = block.read().unwrap();
             let outs: Vec<String> = (0..r.size_out())
                 .filter_map(|j| {
-                    r.get_out(j)
-                        .map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    r.get_out(j).map(|e| {
+                        let tgt = e.point.read().unwrap();
+                        format!(
+                            "{}@{:#x}(L{:x})",
+                            tgt.get_index(),
+                            crate::block::dbg_front_leaf_start_addr(&e.point),
+                            e.flags
+                        )
+                    })
                 })
                 .collect();
             eprintln!(
@@ -5506,15 +6397,55 @@ impl<'a> CollapseStructure<'a> {
             }
         }
 
-        // Ghidra cc:1711: checkSwitchSkips (TODO: default-skip optimization).
-        // For now, proceed without default-skip handling.
+        // Ghidra cc:1711-1712: checkSwitchSkips — mark skip-to-exit case
+        // edges as unstructured gotos when the switch has a formal default
+        // elsewhere, and let collapseInternal wrap them before building the
+        // BlockSwitch (returning true = "a change was made", cc:1712).
+        if !self.check_switch_skips(i, exitblock) {
+            // cc:1711-1712 returns true having only set goto edge marks
+            // (no structure mutation). Ghidra's collapseInternal sets its
+            // local change=true from the rule's RETURN VALUE and rescans
+            // immediately, so ruleBlockGoto consumes the fresh marks in
+            // the next pass. Rugra's inner loop models that change bool as
+            // a structure_change_count delta, so this mark-only arm must
+            // bump it: without the bump the loop declares a false fixpoint
+            // right after marking, the skip-edge gotos starve, and
+            // selectGoto picks foreign edges instead (getparameter
+            // blockstructure count 27 vs 26, first selectGoto divergence
+            // at the (131,133)/(131,15) entries, 2026-09-23). This bumps
+            // structure_change_count only — dataflow_change_count stays
+            // untouched, exactly like the oracle's arm.
+            self.structure_change_count += 1;
+            return true;
+        }
 
         // Ghidra cc:1714-1721: build cases list and create BlockSwitch. The
         // oracle's -cs- vector includes the dispatch block (cs[0]) because
         // identifyInternal consumes it; Rugra's BlockSwitch keeps the
         // dispatch in the `control` field and `cases` holds ONLY the case
         // bodies (aligned with case_values, which printc indexes jointly).
+        // cc:3515 (addCase): isdefault = switchbl->isDefaultBranch(outindex)
+        // — the out-edge installSwitchDefaults marked (the most-hit table
+        // target, switchOver cc:2552-2568) is the formal default; Rugra
+        // routes it to the separate default_case slot (Ghidra keeps it in
+        // caseblocks tagged isdefault; printc.cc:3140-3145 prints `default:`
+        // without labels either way).
+        let switch_basic = crate::block::front_leaf(&block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
         let mut cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+        // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) for gt==0
+        // cases — captured HERE, before identify_internal consumes the case
+        // blocks (selfIdentify's replaceInEdge half-deletes their external
+        // out-edge halves, block.cc:160-173, so post-consumption sizeOut is
+        // 0 and the flag is not re-derivable at print time). gt!=0 (the
+        // multigoto arm, appended below) sets isexit=false (cc:3512).
+        let mut case_isexit: Vec<bool> = Vec::new();
+        let mut default_isexit = false;
         let exit_idx = exitblock;
         for j in 0..sizeout {
             let curbl = match block.read().unwrap().get_out(j) {
@@ -5525,6 +6456,41 @@ impl<'a> CollapseStructure<'a> {
             if Some(cur_idx) == exit_idx {
                 continue;
             }
+            // cc:3506-3515 (addCase): the case's coordinates resolve on the
+            // UNDERLYING basic-block graph — `inindex =
+            // basicbl->getInIndex(switchbl)`, `outindex =
+            // basicbl->getInRevIndex(inindex)`, `isdefault =
+            // switchbl->isDefaultBranch(outindex)` — never on the
+            // structured graph's slot index j: newBlockMultiGoto peels
+            // goto-marked dispatch edges out of the structured out list
+            // (removeEdge, block.cc:1746), shifting every later slot down,
+            // so a slot-indexed isDefaultBranch(j) would read the ORIGINAL
+            // edge flags against SHIFTED targets. Observed: httpd main's
+            // post-peel slot 1 held case 0x43's block while orig slot 1 was
+            // the peeled default — 0x43 got diverted into the default slot
+            // and its case vanished (BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001
+            // symptom family). switch_case_basic_coords performs the same
+            // basic-graph in-edge walk.
+            let (is_default_edge, _outindex, _basic) =
+                Self::switch_case_basic_coords(&switch_basic, &curbl);
+            let isexit_flag = curbl.read().unwrap().size_out() == 1;
+            if irred_sw {
+                eprintln!(
+                    "[IRRED-SW] capture fn={} case blk{} addr={:#x} isdefault={} isexit={} (size_out={})",
+                    self.name,
+                    cur_idx,
+                    crate::block::dbg_front_leaf_start_addr(&curbl),
+                    is_default_edge,
+                    isexit_flag,
+                    curbl.read().unwrap().size_out()
+                );
+            }
+            if is_default_edge {
+                default_case = Some(curbl);
+                default_isexit = isexit_flag;
+                continue;
+            }
+            case_isexit.push(isexit_flag);
             cases.push(curbl);
         }
 
@@ -5532,12 +6498,16 @@ impl<'a> CollapseStructure<'a> {
         let ctrl_idx = block.read().unwrap().get_index();
         let mut case_values: Vec<Vec<u64>> = Vec::new();
         let mut index_varnode = None;
+        let mut branchind_addr: Option<u64> = None;
         {
             let b = block.read().unwrap();
             for op_ref in &b.get_ops() {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
                     index_varnode = Some(op.inrefs[0].clone());
+                    // block.cc:630-639 FlowBlock::getJumptable reads the
+                    // block's lastOp (the BRANCHIND) for findJumpTable.
+                    branchind_addr = Some(op.get_seq_num().get_addr().as_u64());
                     break;
                 }
             }
@@ -5545,6 +6515,13 @@ impl<'a> CollapseStructure<'a> {
                 case_values.push(vec![j as u64]);
             }
         }
+        // cc:1912 + cc:3488 + cc:3524: grabCaseBasic's CaseOrder recording
+        // (basicblock/outindex/casemap/chain) and the ctor jumptable
+        // resolution, both running "before the identifyInternal" like the
+        // oracle.
+        let (jump, case_order, default_order) =
+            self.grab_case_order(&block, &cases, default_case.as_ref(), branchind_addr);
+        let num_regular_cases = cases.len();
         // Ghidra newBlockSwitch (block.cc:1904-1919): identifyInternal(ret, cs)
         // consumes the dispatch block AND the case blocks into the component
         // (cs[0] is the switch block itself), forceOutputNum(1) when there is
@@ -5557,7 +6534,20 @@ impl<'a> CollapseStructure<'a> {
                 index: ctrl_idx,
                 control: block.clone(),
                 cases,
-                default_case: None,
+                default_case,
+                // cc:3510-3511 addCase: every regular case carries gototype 0
+                // (only the multigoto arm appends f_goto_goto, cc:3552) — the
+                // parallel array must be cases-length from construction.
+                case_gototypes: vec![0; num_regular_cases],
+                default_gototype: 0,
+                // cc:3513-3514 addCase: isexit captured pre-consumption
+                // (see the collection loop above).
+                case_isexit,
+                default_isexit,
+                jump,
+                case_order,
+                default_label: None,
+                default_order,
                 case_values,
                 index_varnode,
                 incoming: Vec::new(),
@@ -5568,24 +6558,175 @@ impl<'a> CollapseStructure<'a> {
         // Consume the case bodies (dispatch sits at install_idx=i).
         let case_consumed: Vec<i32> = {
             let sb = switch_block.read().unwrap();
+            let sref = sb.as_any().downcast_ref::<BlockSwitch>().unwrap();
             let mut v = Vec::new();
-            for case in &sb.as_any().downcast_ref::<BlockSwitch>().unwrap().cases {
+            for case in &sref.cases {
                 let ci = case.read().unwrap().get_index();
                 if ci as usize != i {
                     v.push(ci);
+                }
+            }
+            // cc:1714-1720: the oracle's -cs- vector holds EVERY out block
+            // except the exitblock — including the DEFAULT case (Ghidra
+            // keeps it in caseblocks tagged isdefault via addCase, cc:3515;
+            // identifyInternal consumes it like any other component). The
+            // previous collection skipped Rugra's default_case slot, leaving
+            // the default body a top-level block whose dispatch->default
+            // edge stayed external on the composite — the switch then
+            // carried a spurious second out edge, ruleBlockInfLoop (needs
+            // the single self fall-through) could not match, and a DoWhile
+            // layer wrapped the loop instead (glob_set `do { do {` family).
+            if let Some(d) = &sref.default_case {
+                let di = d.read().unwrap().get_index();
+                if di as usize != i {
+                    v.push(di);
                 }
             }
             v
         };
         self.identify_internal(&switch_block, &case_consumed, i);
         self.update_switch_case_reference(ctrl_idx, &switch_block);
+        // Ghidra newBlockSwitch cc:1912: grabCaseBasic runs "before the
+        // identifyInternal" but only RECORDS FlowBlock pointers — the oracle's
+        // caseblocks hold components and gotoedge targets alike, and
+        // consuming the components does not invalidate pointers. Rust cannot
+        // append into the pre-install literal before identify_internal
+        // consumes `cases` (the multigoto's gotoedge targets must NOT be
+        // consumed — they stay in the surrounding graph exactly as in the
+        // oracle, where cs excludes them), so the recording is appended to
+        // the installed switch here: same pointers, same order (regular
+        // cases from the out-edge scan above, then the multigoto arm's
+        // f_goto_goto cases, block.cc:3548-3553).
+        {
+            let control_is_multigoto =
+                block.read().unwrap().get_type() == crate::block::BlockType::MultiGoto;
+            if control_is_multigoto {
+                // cc:3548-3553: `if (cs[0]->getType() == t_multigoto) { ... for
+                // (i=0;i<numgoto;++i) addCase(switchbl, gotoedgeblock->getGoto(i),
+                // f_goto_goto); }` — each peeled goto edge target is re-added
+                // as a case with gototype f_goto_goto (its body is NOT part
+                // of the switch; the emitter prints the case label + a goto
+                // statement, printc.cc:3334-3337).
+                let switch_basic = crate::block::front_leaf(&block).and_then(|leaf| {
+                    let r = leaf.read().unwrap();
+                    r.as_any()
+                        .downcast_ref::<crate::block::BlockCopy>()
+                        .map(|c| c.original.clone())
+                });
+                let gotoedges: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                    let r = block.read().unwrap();
+                    r.as_any()
+                        .downcast_ref::<BlockMultiGoto>()
+                        .map(|m| m.gotoedges.clone())
+                        .unwrap_or_default()
+                };
+                let numgoto = gotoedges.len();
+                let mut sw = switch_block.write().unwrap();
+                let sw_ref = sw.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
+                sw_ref.case_gototypes = vec![0; sw_ref.cases.len()];
+                // CR-GLOBATTR F1: the grab-time virtual default index —
+                // `case_order.len()` BEFORE this arm pushes the re-added
+                // goto cases. Chains recorded by grab_case_order against
+                // the default point at THIS index.
+                let grab_order_len = sw_ref.case_order.len();
+                // case_isexit keeps its pre-consumption captures; only the
+                // appended goto-arm cases below set their own (cc:3512).
+                for target in gotoedges {
+                    let (isdefault, outindex, basic) =
+                        Self::switch_case_basic_coords(&switch_basic, &target);
+                    if isdefault {
+                        // The oracle's addCase tags this case isdefault (it
+                        // prints `default:`); Rugra's BlockSwitch holds the
+                        // default in its own slot. The oracle still records
+                        // the CaseOrder entry; Rugra's separate default slot
+                        // never prints labels for it, so no order record is
+                        // needed (documented divergence, block.rs).
+                        sw_ref.default_case = Some(target);
+                        sw_ref.default_gototype = crate::block::goto_type::GOTO_GOTO;
+                        // cc:3512: gt != 0 → isexit = false.
+                        sw_ref.default_isexit = false;
+                    } else {
+                        sw_ref.cases.push(target);
+                        sw_ref
+                            .case_gototypes
+                            .push(crate::block::goto_type::GOTO_GOTO);
+                        // cc:3512: gt != 0 → isexit = false.
+                        sw_ref.case_isexit.push(false);
+                        // Placeholder label coordinate = the basic-level
+                        // out-edge slot (the oracle's real labels come from
+                        // the jumptable index map in finalizePrinting,
+                        // block.cc:3556-3591 — JUMPTABLE-TABLEAPI-0001).
+                        sw_ref
+                            .case_values
+                            .push(outindex.map(|j| vec![j as u64]).unwrap_or_default());
+                        // cc:3495 addCase for the goto arm: the CaseOrder
+                        // record with basicblock/outindex (chain stays -1 —
+                        // the arm is appended after the chain-fill loop).
+                        sw_ref.case_order.push(crate::block::CaseOrder::placeholder(
+                            basic,
+                            outindex.map(|j| j as i32).unwrap_or(-1),
+                        ));
+                    }
+                }
+                // CR-GLOBATTR F1 remap: the g pushed entries occupy indices
+                // [grab_order_len, grab_order_len+g) of case_order, so
+                // finalize_case_labels' extended view places the virtual
+                // default at index grab_order_len+g — one past the LAST
+                // re-added case (the oracle's layout: the multigoto append
+                // lands after every cs-collected member, default included,
+                // block.cc:3548-3553). Any chain recorded against the
+                // grab-time default index must shift by g or it silently
+                // retargets the FIRST re-added case. Correct-by-construction
+                // guards: (a) the re-added entries never enter grab's
+                // casemap (their placeholders keep chain=-1 and the arm
+                // registers no casemap slot), so chain==grab_order_len can
+                // only be a grab-time default link; (b) regular-to-regular
+                // links are < grab_order_len and stay; (c)
+                // default_order.chain targets regular indices only (<
+                // grab_order_len) or -1, never the default's own index.
+                let appended = sw_ref.case_order.len() - grab_order_len;
+                if appended > 0 {
+                    let remapped = Self::remap_default_chain_indices(
+                        &mut sw_ref.case_order,
+                        grab_order_len,
+                        appended,
+                    );
+                    // Post-condition invariant: after the shift, no chain
+                    // points at grab_order_len — that slot now holds the
+                    // first re-added case, which never participates in a
+                    // fall-thru chain (chain=-1 from its placeholder).
+                    debug_assert!(
+                        sw_ref
+                            .case_order
+                            .iter()
+                            .all(|co| co.chain != grab_order_len as i32),
+                        "default chain remap left a stale link at the re-added case slot"
+                    );
+                    if std::env::var("RUGRA_BS_DUMP")
+                        .map(|v| v == "1" || v == "2")
+                        .unwrap_or(false)
+                    {
+                        eprintln!(
+                            "[BLOCKSTRUCT] multigoto arm: case_order {} -> {} (+{} re-added), default chain links remapped k -> k+g: {}",
+                            grab_order_len,
+                            sw_ref.case_order.len(),
+                            appended,
+                            remapped
+                        );
+                    }
+                }
+                let _ = numgoto;
+            }
+        }
         // cc:1916-1917: forceOutputNum(1) when there is an exit (identify's
         // boundary capture already yields exactly the exit edge); clear
-        // f_switch_out on the component.
+        // f_switch_out on the component — clearFlag is `flags &= ~fl`
+        // (block.hh:156), NOT setFlag (`flags |= fl`, block.hh:155). This
+        // clear is what lets ruleBlockSwitch's cc:1652 isSwitchOut gate
+        // reject re-entry on the installed Switch component.
         {
             let mut sw = switch_block.write().unwrap();
-            let swf = sw.get_flags();
-            sw.set_flags(swf & !crate::block::block_flags::SWITCH_OUT);
+            sw.clear_flags(crate::block::block_flags::SWITCH_OUT);
         }
         let _ = has_exit;
         self.structure_change_count += 1;
@@ -5594,6 +6735,273 @@ impl<'a> CollapseStructure<'a> {
             ctrl_idx, sizeout, exit_idx
         );
         true
+    }
+
+    // Ghidra: block.cc:3495 BlockSwitch::addCase
+    /// The basic-level case coordinates `addCase` computes (block.cc:3506-
+    /// 3515) for the multigoto goto-case arm: `inindex =
+    /// basicbl->getInIndex(switchbl)` on the UNDERLYING basic-block graph —
+    /// `switchbl` is newBlockSwitch cc:1912's `leafbl->subBlock(0)`, i.e. the
+    /// switch's basic block whose edges the structured-graph removeEdge
+    /// never touched — then `outindex = basicbl->getInRevIndex(inindex)` and
+    /// `isdefault = switchbl->isDefaultBranch(outindex)` reading the basic
+    /// edge label (installSwitchDefaults, funcdata_block.cc:687, lands on the
+    /// basic graph; buildCopy duplicates labels into the copy graph, so both
+    /// sides agree). Returns `(isdefault, basic out-edge slot, case basic
+    /// block)` — the basic block is `CaseOrder::basicblock` (block.hh:757).
+    fn switch_case_basic_coords(
+        switch_basic: &Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        case_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> (bool, Option<usize>, Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>) {
+        let Some(switch_basic) = switch_basic else {
+            return (false, None, None);
+        };
+        // cc:3500: const FlowBlock *basicbl = bl->getFrontLeaf()->subBlock(0);
+        let case_basic = crate::block::front_leaf(case_block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
+        let Some(case_basic) = case_basic else {
+            return (false, None, None);
+        };
+        // cc:3506: int4 inindex = basicbl->getInIndex(switchbl);
+        let rev = {
+            let cb = case_basic.read().unwrap();
+            let mut found = None;
+            for slot in 0..cb.size_in() {
+                if let Some(e) = cb.get_in(slot) {
+                    if Arc::ptr_eq(&e.point, switch_basic) {
+                        // cc:3509: curcase.outindex = basicbl->getInRevIndex(inindex);
+                        found = Some(e.reverse_index);
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        // Ghidra throws LowlevelError("Case block has become detached from
+        // switch") at inindex==-1 (cc:3507-3508); the multigoto path cannot
+        // detach (basic edges persist), so None degrades to "no coords".
+        let Some(rev) = rev else {
+            return (false, None, Some(case_basic));
+        };
+        let outindex = if rev >= 0 {
+            Some(rev as usize)
+        } else {
+            None
+        };
+        // cc:3515: curcase.isdefault = switchbl->isDefaultBranch(curcase.outindex);
+        let isdefault = match outindex {
+            Some(j) => switch_basic.read().unwrap().is_default_branch(j),
+            None => false,
+        };
+        (isdefault, outindex, Some(case_basic))
+    }
+
+    // Ghidra: block.cc:3524 BlockSwitch::grabCaseBasic
+    /// The CaseOrder recording half of `grabCaseBasic` (cc:3527-3546): for
+    /// each regular case component, resolve `CaseOrder::basicblock`
+    /// (`bl->getFrontLeaf()->subBlock(0)`, cc:3500) and `outindex`
+    /// (cc:3506-3509) on the underlying basic graph, build the casemap from
+    /// out-edge slot to case index (cc:3527/3532), then fill the fall-thru
+    /// `chain` links (cc:3536-3546) for case components already wrapped as
+    /// BlockGoto: the goto target's basic block, when it is another switch
+    /// case, links `chain = casemap[rev]`. Also resolves the ctor jumptable
+    /// (`jump = ind->getJumptable()`, block.cc:3488 via FlowBlock::
+    /// getJumptable block.cc:630-639: the BRANCHIND last-op looked up
+    /// against Funcdata's tables by op address). The multigoto goto-arm
+    /// (cc:3548-3553) is appended by the caller. RUGRA-GLUE: method on
+    /// CollapseStructure because the jumptables live on Funcdata, which the
+    /// oracle reaches through its FlowBlock back-pointer. pub for the
+    /// bilateral blockstruct_switch_label_1204 fixture (the only Rust-visible
+    /// production entry for the CaseOrder recording, mirroring the oracle
+    /// fixture's grabCaseBasic call).
+    pub fn grab_case_order(
+        &self,
+        switch_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        cases: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        default_case: Option<&Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        branchind_addr: Option<u64>,
+    ) -> (
+        Option<Arc<RwLock<crate::jumptable::JumpTable>>>,
+        Vec<crate::block::CaseOrder>,
+        Option<crate::block::CaseOrder>,
+    ) {
+        // block.cc:3488 + block.cc:630-639: jump = ind->getJumptable().
+        let jump = branchind_addr.and_then(|addr| {
+            self.jump_tables
+                .iter()
+                .find(|jt| jt.read().unwrap().get_op_address().as_u64() == addr)
+                .cloned()
+        });
+        // cc:1912: switchbl = leafbl->subBlock(0) — the switch's basic block.
+        let switch_basic = crate::block::front_leaf(switch_block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
+        let casemap_len = switch_basic
+            .as_ref()
+            .map(|b| b.read().unwrap().size_out())
+            .unwrap_or(0);
+        // cc:3527: vector<int4> casemap(switchbl->sizeOut(),-1);
+        let mut casemap: Vec<i32> = vec![-1; casemap_len];
+        let mut order: Vec<crate::block::CaseOrder> = Vec::with_capacity(cases.len());
+        for (i, case) in cases.iter().enumerate() {
+            let (_, outindex, basic) =
+                Self::switch_case_basic_coords(&switch_basic, case);
+            if let (Some(rev), Some(basic)) = (outindex, &basic) {
+                let _ = basic;
+                // cc:3532: casemap[caseblocks[i-1].outindex] = i-1;
+                if rev < casemap.len() {
+                    casemap[rev] = i as i32;
+                }
+            }
+            // cc:3498-3505 addCase init: label=0, depth=0, chain=-1.
+            order.push(crate::block::CaseOrder::placeholder(
+                basic,
+                outindex.map(|r| r as i32).unwrap_or(-1),
+            ));
+        }
+        // cc:3529-3533's loop adds EVERY component in cs as an ordinary
+        // caseblocks member — including the formal default (only the
+        // isdefault flag from addCase cc:3515 distinguishes it). Rugra
+        // routes the default body to the separate default_case slot, so
+        // its CaseOrder lives as the VIRTUAL entry at index cases.len():
+        // registered in the same casemap so a regular case's fall-thru
+        // chain (cc:3544) can link to it, and carrying its own chain link
+        // for the exotic default-falls-into-another-case shape.
+        let mut default_order: Option<crate::block::CaseOrder> = default_case.and_then(|def| {
+            let (_, outindex, basic) = Self::switch_case_basic_coords(&switch_basic, def);
+            if outindex.is_none() && basic.is_none() {
+                // Coordinates unresolvable — no casemap entry, no chain
+                // target; finalize_case_labels' legacy fallback places
+                // this default (the oracle's addCase would have thrown
+                // LowlevelError, cc:3507-3508).
+                return None;
+            }
+            if let Some(rev) = outindex {
+                if rev < casemap.len() {
+                    casemap[rev] = cases.len() as i32;
+                }
+            }
+            Some(crate::block::CaseOrder::placeholder(
+                basic,
+                outindex.map(|r| r as i32).unwrap_or(-1),
+            ))
+        });
+        // cc:3536-3546: fall-thru chaining — all fall-thru blocks are plain
+        // gotos at this point; the goto target resolves to another case's
+        // basic block via its in-edge from the switch block. The walk
+        // covers the virtual default entry too: a default component that
+        // is itself a BlockGoto into another case links its chain the
+        // same way.
+        let mut chain_targets: Vec<(usize, crate::block::BlockType)> = cases
+            .iter()
+            .map(|c| c.read().unwrap().get_type())
+            .enumerate()
+            .collect();
+        if default_order.is_some() {
+            if let Some(def) = default_case {
+                chain_targets.push((cases.len(), def.read().unwrap().get_type()));
+            }
+        }
+        for (i, ty) in chain_targets {
+            if ty != crate::block::BlockType::Goto {
+                continue;
+            }
+            let case = if i < cases.len() {
+                cases[i].clone()
+            } else if i == cases.len() {
+                default_case.map(|d| d.clone()).unwrap()
+            } else {
+                continue;
+            };
+            // cc:3540: targetbl = ((BlockGoto *)casebl)->getGotoTarget();
+            let target = {
+                let r = case.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockGoto>()
+                    .and_then(|g| g.target_dyn.clone())
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            // cc:3541: basicbl = targetbl->getFrontLeaf()->subBlock(0);
+            let target_basic = crate::block::front_leaf(&target).and_then(|leaf| {
+                let r = leaf.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
+            });
+            let Some(target_basic) = target_basic else {
+                continue;
+            };
+            let Some(switch_basic) = &switch_basic else {
+                continue;
+            };
+            // cc:3542: inindex = basicbl->getInIndex(switchbl);
+            let rev = {
+                let tb = target_basic.read().unwrap();
+                let mut found = None;
+                for slot in 0..tb.size_in() {
+                    if let Some(e) = tb.get_in(slot) {
+                        if Arc::ptr_eq(&e.point, switch_basic) {
+                            found = Some(e.reverse_index);
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            // cc:3543: if (inindex == -1) continue; — goto target is not
+            // another switch case.
+            let Some(rev) = rev else {
+                continue;
+            };
+            if rev >= 0 && (rev as usize) < casemap.len() {
+                // cc:3544: curcase.chain = casemap[basicbl->getInRevIndex(inindex)];
+                let chain = casemap[rev as usize];
+                if i < cases.len() {
+                    order[i].chain = chain;
+                } else if let Some(def_order) = default_order.as_mut() {
+                    def_order.chain = chain;
+                }
+            }
+        }
+        (jump, order, default_order)
+    }
+
+    // RUGRA-GLUE: index bookkeeping for Rugra's separate-default storage
+    // shape — no single Ghidra counterpart function. The oracle's
+    // grabCaseBasic appends the multigoto re-added cases AFTER every
+    // cs-collected member (block.cc:3548-3553 lands after the chain-fill
+    // loop cc:3536-3546, and the default IS a cs-collected member), so in
+    // the oracle's flat caseblocks vector the default simply keeps its
+    // grab-time index and chains stay valid. Rugra stores the default in
+    // its own slot and finalize_case_labels materializes it as the virtual
+    // entry at `case_order.len()` (after the re-added cases), so chains
+    // recorded against the grab-time virtual index k must shift by the
+    // appended count g once the multigoto arm has pushed. Shifts
+    // `chain == k` to `chain == k + g` and returns how many links moved.
+    fn remap_default_chain_indices(
+        case_order: &mut [crate::block::CaseOrder],
+        grab_order_len: usize,
+        appended: usize,
+    ) -> usize {
+        let old_default_index = grab_order_len as i32;
+        let new_default_index = (grab_order_len + appended) as i32;
+        let mut moved = 0;
+        for co in case_order.iter_mut() {
+            if co.chain == old_default_index {
+                co.chain = new_default_index;
+                moved += 1;
+            }
+        }
+        moved
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
@@ -6234,6 +7642,22 @@ impl<'a> CollapseStructure<'a> {
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseSwitches
+    /// Phase1 switch pre-installer. DISABLED (2026-09-25, R17,
+    /// BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001): Ghidra has no such
+    /// pre-pass — the annotation target is the LoopBody class line, no
+    /// collapseSwitches method exists; the oracle's ONLY BlockSwitch
+    /// install point is CollapseStructure::ruleBlockSwitch
+    /// (blockaction.cc:1649-1723) at collapseInternal maturity, where
+    /// addCase's isexit=(bl->sizeOut()==1) (block.cc:3513-3514) is sound
+    /// because every case's remaining out-edge goes to the formal
+    /// exitblock. This pre-pass fired earlier, where the same read
+    /// over-fired (14/17 true vs the oracle tree's 2/18 on the httpd main
+    /// fixture, address-keyed; the previous hardcoded vec![false] was
+    /// wrong on the same 2). Switches now install only via
+    /// try_rule_switch (whose capture is oracle-exact 16/16 on the same
+    /// fixture). Kept for reference like the R15 cascade; do not
+    /// re-enable without re-validating against an instrumented oracle
+    /// run.
     fn collapse_switches(&mut self) {
         let size = self.graph.get_size();
         let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
@@ -6271,18 +7695,57 @@ impl<'a> CollapseStructure<'a> {
             }
 
             let mut index_varnode = None;
+            let mut branchind_addr: Option<u64> = None;
             for op_ref in &ops {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
                     index_varnode = Some(op.inrefs[0].clone());
+                    // block.cc:3488 ctor jumptable lookup input.
+                    branchind_addr = Some(op.get_seq_num().get_addr().as_u64());
                     break;
                 }
             }
 
             let mut cases = Vec::new();
             let mut case_values = Vec::new();
+            let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+            // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) for gt==0
+            // cases — captured at collection time in the same form as the
+            // rule path (try_rule_switch's loop). RETIRED-WITH-CAPTURE
+            // (BLOCKACTION-COLLAPSESWITCH-ISEEXIT-0001): oracle
+            // instrumentation (stage_isexit_1204, locked e40ed130) proved
+            // this capture is only sound at ruleBlockSwitch maturity,
+            // where cc:1697-1708's invariant (case sizeOut==1 iff its edge
+            // is to the formal exitblock) holds — at this pre-pass's
+            // earlier firing point the case bodies' out-edges still point
+            // at the next case/merge block, so the same read over-fired
+            // 14/17 true against the oracle tree's 2/18 (httpd main,
+            // address-keyed). The call site is disabled; see the R17 note
+            // there. The capture is kept so a re-enabled pre-pass cannot
+            // regress to the previous hardcoded vec![false].
+            let mut case_isexit: Vec<bool> = Vec::new();
+            let mut default_isexit = false;
+            // cc:3515 (addCase): the installSwitchDefaults-marked out-edge is
+            // the formal default — route to the separate default_case slot.
+            let switch_basic_orig = crate::block::front_leaf(&block).and_then(|leaf| {
+                let r = leaf.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
+            });
             for j in 0..size_out {
                 if let Some(edge) = b.get_out(j) {
+                    let isexit_flag = edge.point.read().unwrap().size_out() == 1;
+                    let is_default_edge = switch_basic_orig
+                        .as_ref()
+                        .map(|sb| sb.read().unwrap().is_default_branch(j))
+                        .unwrap_or(false);
+                    if is_default_edge {
+                        default_case = Some(edge.point.clone());
+                        default_isexit = isexit_flag;
+                        continue;
+                    }
+                    case_isexit.push(isexit_flag);
                     cases.push(edge.point.clone());
                     case_values.push(vec![j as u64]);
                 }
@@ -6291,12 +7754,29 @@ impl<'a> CollapseStructure<'a> {
             let ctrl_idx = b.get_index();
             drop(b);
 
+            // block.cc:3524 grabCaseBasic CaseOrder recording + block.cc:3488
+            // ctor jumptable resolution for this installer path too.
+            let (jump, case_order, default_order) =
+                self.grab_case_order(&block, &cases, default_case.as_ref(), branchind_addr);
+            let num_cases_here = cases.len();
+
             let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockSwitch {
                     index: ctrl_idx,
                     control: block.clone(),
                     cases,
-                    default_case: None,
+                    default_case,
+                    // cc:3510-3511 addCase: regular cases carry gototype 0.
+                    case_gototypes: vec![0; num_cases_here],
+                    default_gototype: 0,
+                    // cc:3513-3514 addCase: isexit captured at collection
+                    // time (see the collection loop above).
+                    case_isexit,
+                    default_isexit,
+                    jump,
+                    case_order,
+                default_label: None,
+                    default_order,
                     case_values,
                     index_varnode,
                     incoming: Vec::new(),
@@ -6585,6 +8065,14 @@ impl<'a> CollapseStructure<'a> {
                     control: chain[0].1.clone(),
                     cases: case_bodies.clone(),
                     default_case,
+                    case_gototypes: Vec::new(),
+                    default_gototype: 0,
+                    case_isexit: Vec::new(),
+                    default_isexit: false,
+                    jump: None,
+                    case_order: Vec::new(),
+                    default_label: None,
+                    default_order: None,
                     case_values: case_vals,
                     index_varnode,
                     incoming: Vec::new(),
@@ -6759,8 +8247,15 @@ impl<'a> CollapseStructure<'a> {
                 let new_def = new_default.or_else(|| sw.default_case.clone());
                 let ctrl_idx = sw.index;
                 let ctrl = sw.control.clone();
+                let cgt = sw.case_gototypes.clone();
+                let dgt = sw.default_gototype;
+                let cie = sw.case_isexit.clone();
+                let die = sw.default_isexit;
                 let cv = sw.case_values.clone();
                 let iv = sw.index_varnode.clone();
+                let jmpz = sw.jump.clone();
+                let jo = sw.case_order.clone();
+                let jdo = sw.default_order.clone();
                 drop(b);
 
                 let new_sw: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -6769,6 +8264,14 @@ impl<'a> CollapseStructure<'a> {
                         control: ctrl,
                         cases: new_case_list,
                         default_case: new_def,
+                        case_gototypes: cgt,
+                        default_gototype: dgt,
+                        case_isexit: cie,
+                        default_isexit: die,
+                        jump: jmpz,
+                        case_order: jo,
+                        default_label: None,
+                        default_order: jdo,
                         case_values: cv,
                         index_varnode: iv,
                         incoming: Vec::new(),
@@ -7227,11 +8730,35 @@ impl Action for ActionFinalStructure {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
-        // Ghidra blockaction.cc:2186-2197: this action runs five graph calls
-        // (orderBlocks/finalizePrinting/scopeBreak/markUnstructured/
-        // markLabelBumpUp) and unconditionally returns 0. It never touches the
-        // protected `count` member, so the fixture-observed count/apply/res
-        // triple must stay 0 even when graph/IR mutations occur below.
+        // Ghidra blockaction.cc:2186-2197: this action runs five wired graph
+        // calls (orderBlocks/finalizePrinting/scopeBreak/markUnstructured/
+        // markLabelBumpUp) and unconditionally returns 0. It never touches
+        // the protected `count` member, so the fixture-observed count/apply/
+        // res triple must stay 0 even when graph/IR mutations occur below.
+
+        // Ghidra blockaction.cc:2191: graph.orderBlocks(); — sort the
+        // top-level structure list with FlowBlock::compareFinalOrder
+        // (block.cc:709): entry block (index 0) first, blocks whose lastOp()
+        // is a RETURN last, otherwise ascending index; a single-element list
+        // skips the sort (block.hh:431). This runs BEFORE finalizePrinting
+        // so that scopeBreak's next-sibling fall-thru (block.cc:1277-1287),
+        // gotoPrints' next-in-flow successor (block.cc:2881-2890) and
+        // emitBlockGraph's emission order all observe the final printing
+        // order. Rugra previously kept finalize_structure's survivor (slot)
+        // order, which is not the oracle's compareFinalOrder permutation:
+        // return-ending top-level blocks stayed interleaved instead of
+        // moving to the tail.
+        fd.sblocks.order_blocks();
+
+        // Ghidra blockaction.cc:2192: graph.finalizePrinting(data); —
+        // BlockGraph::finalizePrinting (block.cc:1364) recurses the tree and
+        // runs BlockSwitch::finalizePrinting (block.cc:3556-3592) on every
+        // switch component: the fall-thru depth passes, the chain-root label
+        // fill via JumpTable::numIndicesByBlock/getIndexByBlock/
+        // getLabelByIndex, the CaseOrder::compare stable sort, and the
+        // case_values materialization that printc's emit_structured_switch
+        // reads.
+        fd.sblocks.finalize_printing();
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
         // Walk the structure tree (sblocks) reclassifying any unstructured
@@ -7263,6 +8790,20 @@ impl Action for ActionFinalStructure {
         // spurious unreferenced labels.
         fd.sblocks.mark_unstructured();
 
+        // Ghidra blockaction.cc:2195: graph.markLabelBumpUp(false); // Fix up
+        // labeling — recurse the structure tree setting f_label_bumpup on
+        // every loop's front (condition/body) chain (BlockWhileDo/
+        // BlockDoWhile/BlockInfLoop force `true` down their list[0] chain,
+        // block.cc:3316/3426/3454; the incoming bump stays false everywhere
+        // else, so non-loop composites never set the flag).
+        // PrintC::emitAnyLabelStatement (printc.cc:3222) consumes it: a
+        // flagged block's label statement is skipped because the enclosing
+        // loop construct prints it at the construct entry — this is what
+        // keeps a goto-into-loop-header label OUT of the `while (...)`
+        // condition parens / inside the `do {` body and lands it before the
+        // loop keyword line.
+        fd.sblocks.mark_label_bump_up(false);
+
         // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
         // by ActionNormalizeBranches). No `count +=` here: Ghidra's goto
         // tagging lives in structure/markUnstructured, which never counts.
@@ -7279,43 +8820,53 @@ impl Action for ActionFinalStructure {
             }
         }
 
-        // Remove unreachable ops after unconditional BRANCH or RETURN
-        let mut dead_indices: Vec<usize> = Vec::new();
-        let mut hit_terminator = false;
-        let mut prev_addr: Option<u64> = None;
-
-        for (idx, op_ref) in fd.obank.alivelist.iter().enumerate() {
-            let op = op_ref.0.read().unwrap();
-            let cur_addr = op.get_addr().as_u64();
-
-            // Non-sequential address jump → new basic block
-            if let Some(prev) = prev_addr {
-                if cur_addr < prev || cur_addr > prev + 32 {
-                    hit_terminator = false;
-                }
-            }
-            prev_addr = Some(cur_addr);
-
-            if hit_terminator {
-                dead_indices.push(idx);
+        // RUGRA-GLUE: retire post-terminator ops. The oracle action has no
+        // counterpart here (blockaction.cc:2186-2197 only runs the five graph
+        // calls); in Ghidra such ops never exist in the first place — a
+        // BlockBasic's op list ends at its terminator (blocks are split at
+        // every branch during flow generation, funcdata_block.cc), and flow
+        // following never marks ops past an unconditional BRANCH/RETURN
+        // alive. Where Rugra's loader still leaves ops in a block after its
+        // unconditional BRANCH/RETURN, this glue retires them via the
+        // oracle's canonical kill path, Funcdata::opUninsert
+        // (funcdata_op.cc:164-173): PcodeOpBank::markDead (op.cc:1028-1034 —
+        // alive-list removal + `dead` flag set + dead-list append) plus
+        // BlockBasic::removeOp (block.cc:2292-2297 — parent cleared + block
+        // op-list removal). The former glue walked the alive list with an
+        // address-continuity proxy, which fired on ops of the NEXT
+        // (address-adjacent) block — killing live dataflow ops — and only
+        // spliced the alive list, leaving retired ops `is_dead() == false`
+        // and in their blocks, so block walkers (printc, dump census) still
+        // observed them while every alive-list consumer was blind
+        // (BLOCKACTION-ALIVELIST-GLUE-0001).
+        let mut dead_ops: Vec<crate::op::PcodeOpRef> = Vec::new();
+        for block_idx in 0..fd.bblocks.get_size() {
+            let Some(block_arc) = fd.bblocks.get_block(block_idx) else {
                 continue;
-            }
-
-            match op.opcode {
-                OpCode::CPUI_BRANCH | OpCode::CPUI_RETURN => {
-                    hit_terminator = true;
+            };
+            let ops = block_arc.read().unwrap().get_ops();
+            let mut hit_terminator = false;
+            for op_ref in ops.iter() {
+                let op = op_ref.0.read().unwrap();
+                if hit_terminator {
+                    dead_ops.push(op_ref.clone());
+                    continue;
                 }
-                _ => {}
+                match op.opcode {
+                    OpCode::CPUI_BRANCH | OpCode::CPUI_RETURN => {
+                        hit_terminator = true;
+                    }
+                    _ => {}
+                }
             }
         }
 
-        // Reverse removal preserves indices. Like the tagging above, dead-op
-        // cleanup is printing/IR glue with no `count +=` counterpart in the
-        // oracle action.
-        for &idx in dead_indices.iter().rev() {
-            if idx < fd.obank.alivelist.len() {
-                fd.obank.alivelist.remove(idx);
-            }
+        // Like the GOTO tagging above, this cleanup is printing/IR glue with
+        // no `count +=` counterpart in the oracle action. op_uninsert mutates
+        // block op lists, so ops are collected first and retired only after
+        // the walk completes.
+        for op in dead_ops {
+            fd.op_uninsert(&op);
         }
 
         // Ghidra blockaction.cc:2196: unconditional `return 0` — never
@@ -7348,42 +8899,170 @@ impl Action for ActionNormalizeBranches {
         let mut changed = 0;
         let size = fd.sblocks.get_size();
 
-        // Collect loop header/exit pairs from structured blocks
-        let mut loop_info: Vec<(crate::address::Address, Option<crate::address::Address>)> =
-            Vec::new();
+        // Collect loop header/exit/condition triples from structured blocks
+        // at ANY nesting depth. A WhileDo/DoWhile nested inside a BlockList
+        // (loop body chained: head -> ... -> tail -> head) is invisible to a
+        // top-level-only scan, leaving its back-edge jmp untagged
+        // (BLOCKACT-NORMALIZE-CONTINUE-TAG-0001).
+        //
+        // The traversal is Ghidra's structure-tree walk pattern
+        // (ActionPreferComplement, blockaction.cc:2143-2164): a vec-based BFS
+        // seeded with the root graph's components; copy/basic children are
+        // not descended (they hold no nested composites), every other child
+        // is pushed. The break/continue classification this feeds mirrors
+        // Ghidra's own scopeBreak (block.cc:1270-1288), which reaches every
+        // composite via virtual dispatch, not just the top level.
+        struct LoopInfo {
+            header_addr: crate::address::Address,
+            exit_addr: Option<crate::address::Address>,
+            /// Condition block resolved to the live original (BlockCopy
+            /// unwrapped), for op-parent identity checks.
+            cond_orig: std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        }
 
-        for i in 0..size {
-            let block = match fd.sblocks.get_block(i) {
-                Some(b) => b,
-                None => continue,
+        let resolve_orig = |blk: &std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>|
+         -> std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+            let r = blk.read().unwrap();
+            if r.get_type() == crate::block::BlockType::Copy {
+                if let Some(orig) = r.sub_block(0) {
+                    return orig;
+                }
+            }
+            blk.clone()
+        };
+
+        // RUGRA-GLUE: child enumeration for the composite kinds the walk
+        // descends (Ghidra's t_copy/t_basic skip, blockaction.cc:2158). Rust
+        // trait objects do not virtual-dispatch subBlock for these kinds, so
+        // downcast per type — the same enumeration is_structured_child uses.
+        let structured_children =
+            |b: &dyn FlowBlock| -> Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+                use crate::block::{
+                    BlockCondition, BlockDoWhile, BlockGoto, BlockIf, BlockInfLoop, BlockList,
+                    BlockSwitch, BlockWhileDo,
+                };
+                let mut out: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+                    Vec::new();
+                match b.get_type() {
+                    crate::block::BlockType::Condition => {
+                        if let Some(bc) = b.as_any().downcast_ref::<BlockCondition>() {
+                            out.push(bc.first.clone());
+                            out.push(bc.second.clone());
+                        }
+                    }
+                    crate::block::BlockType::If => {
+                        if let Some(bi) = b.as_any().downcast_ref::<BlockIf>() {
+                            out.push(bi.condition.clone());
+                            out.push(bi.if_body.clone());
+                            if let Some(ref eb) = bi.else_body {
+                                out.push(eb.clone());
+                            }
+                        }
+                    }
+                    crate::block::BlockType::WhileDo => {
+                        if let Some(wd) = b.as_any().downcast_ref::<BlockWhileDo>() {
+                            out.push(wd.condition.clone());
+                            out.push(wd.body.clone());
+                        }
+                    }
+                    crate::block::BlockType::DoWhile => {
+                        if let Some(dw) = b.as_any().downcast_ref::<BlockDoWhile>() {
+                            out.push(dw.condition.clone());
+                        }
+                    }
+                    crate::block::BlockType::InfLoop => {
+                        if let Some(il) = b.as_any().downcast_ref::<BlockInfLoop>() {
+                            out.push(il.body.clone());
+                        }
+                    }
+                    crate::block::BlockType::Goto => {
+                        if let Some(bg) = b.as_any().downcast_ref::<BlockGoto>() {
+                            if let Some(ref wrapped) = bg.wrapped {
+                                out.push(wrapped.clone());
+                            }
+                        }
+                    }
+                    crate::block::BlockType::List => {
+                        if let Some(bl) = b.as_any().downcast_ref::<BlockList>() {
+                            out.extend(bl.children.iter().cloned());
+                        }
+                    }
+                    crate::block::BlockType::Switch => {
+                        if let Some(bs) = b.as_any().downcast_ref::<BlockSwitch>() {
+                            out.push(bs.control.clone());
+                            out.extend(bs.cases.iter().cloned());
+                            if let Some(ref dc) = bs.default_case {
+                                out.push(dc.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                out
             };
 
+        let mut loop_info: Vec<LoopInfo> = Vec::new();
+        let mut queue: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for i in 0..size {
+            if let Some(b) = fd.sblocks.get_block(i) {
+                queue.push(b);
+            }
+        }
+        let mut pos = 0;
+        while pos < queue.len() {
+            let block = queue[pos].clone();
+            pos += 1;
+
             let block_type = block.read().unwrap().get_type();
+
+            // Children to descend into (Ghidra cc:2154-2161 skips t_copy /
+            // t_basic). Collected per composite kind via downcast; Rust's
+            // trait objects do not virtual-dispatch subBlock for these.
+            let children: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                let b: std::sync::RwLockReadGuard<'_, dyn FlowBlock + Send + Sync> =
+                    block.read().unwrap();
+                match block_type {
+                    crate::block::BlockType::Copy | crate::block::BlockType::Basic => Vec::new(),
+                    _ => structured_children(&*b),
+                }
+            };
 
             match block_type {
                 crate::block::BlockType::WhileDo => {
                     let block_read = block.read().unwrap();
                     if let Some(wd) = block_read.as_any().downcast_ref::<BlockWhileDo>() {
-                        let header_addr = wd.condition.read().unwrap().get_start_addr();
+                        // The condition member of the collapse graph is a
+                        // BlockCopy (or Basic) whose default get_start_addr
+                        // is 0 and whose edges were rewired onto the
+                        // composite by identifyInternal — resolve to the
+                        // live original, which keeps the bblocks entry
+                        // address and the original out-edges (body / exit).
+                        let cond_orig = resolve_orig(&wd.condition);
+                        let header_addr =
+                            crate::address::Address::new(crate::block::front_leaf_start_addr(
+                                &wd.condition,
+                            ));
 
-                        // The exit block is the false-branch target of the CBRANCH
-                        // in the condition block.
+                        // The exit block is the out-edge of the ORIGINAL
+                        // condition block that does NOT point at the body
+                        // front leaf.
                         let exit_addr = {
-                            let cond = wd.condition.read().unwrap();
+                            let cond = cond_orig.read().unwrap();
                             if cond.size_out() >= 2 {
-                                // false edge (slot 0 for while-do) is typically the exit
-                                // but which slot is exit depends on the loop structure.
-                                // For while(cond), true edge → exit, false edge → body.
-                                // Check both edges to find the one NOT pointing at body.
-                                let body_addr = wd.body.read().unwrap().get_start_addr();
+                                let body_u =
+                                    crate::block::front_leaf_start_addr(&wd.body);
                                 let out0_addr = cond
                                     .get_out(0)
-                                    .map(|e| e.point.read().unwrap().get_start_addr());
+                                    .map(|e| {
+                                        crate::block::front_leaf_start_addr(&e.point)
+                                    });
                                 let out1_addr = cond
                                     .get_out(1)
-                                    .map(|e| e.point.read().unwrap().get_start_addr());
+                                    .map(|e| {
+                                        crate::block::front_leaf_start_addr(&e.point)
+                                    });
 
-                                if out0_addr == Some(body_addr) {
+                                if out0_addr == Some(body_u) {
                                     out1_addr
                                 } else {
                                     out0_addr
@@ -7391,9 +9070,14 @@ impl Action for ActionNormalizeBranches {
                             } else {
                                 None
                             }
-                        };
+                        }
+                        .map(crate::address::Address::new);
 
-                        loop_info.push((header_addr, exit_addr));
+                        loop_info.push(LoopInfo {
+                            header_addr,
+                            exit_addr,
+                            cond_orig,
+                        });
                     }
                 }
                 crate::block::BlockType::DoWhile => {
@@ -7402,21 +9086,60 @@ impl Action for ActionNormalizeBranches {
                         .as_any()
                         .downcast_ref::<crate::block::BlockDoWhile>()
                     {
-                        let header_addr = dwd.condition.read().unwrap().get_start_addr();
-                        let exit_addr = {
-                            let cond = dwd.condition.read().unwrap();
-                            if cond.size_out() >= 2 {
-                                cond.get_out(1)
-                                    .map(|e| e.point.read().unwrap().get_start_addr())
-                            } else {
-                                None
-                            }
+                        let cond_orig = resolve_orig(&dwd.condition);
+                        // Do-while: the condition block IS the loop tail.
+                        // Its CBRANCH targets the loop head (back edge); the
+                        // OTHER out-edge of the original is the exit. Slot
+                        // order is not fixed, so identify the head from the
+                        // cbranch target and take the non-head edge as exit.
+                        let header_addr = {
+                            let cond = cond_orig.read().unwrap();
+                            cond.get_ops()
+                                .iter()
+                                .rev()
+                                .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                                .and_then(|o| {
+                                    let op = o.0.read().unwrap();
+                                    op.inrefs
+                                        .first()
+                                        .map(|vn| vn.read().unwrap().get_offset())
+                                })
+                                .map(crate::address::Address::new)
+                                .unwrap_or_else(|| {
+                                    crate::address::Address::new(
+                                        crate::block::front_leaf_start_addr(
+                                            &dwd.condition,
+                                        ),
+                                    )
+                                })
                         };
-                        loop_info.push((header_addr, exit_addr));
+                        let header_u = header_addr.as_u64();
+                        let exit_addr = {
+                            let cond = cond_orig.read().unwrap();
+                            (0..cond.size_out())
+                                .map(|s| {
+                                    cond.get_out(s)
+                                        .map(|e| {
+                                            crate::block::front_leaf_start_addr(&e.point)
+                                        })
+                                        .unwrap_or(u64::MAX)
+                                })
+                                .find(|&a| a != header_u)
+                                .filter(|&a| a != u64::MAX)
+                        }
+                        .map(crate::address::Address::new);
+
+                        loop_info.push(LoopInfo {
+                            header_addr,
+                            exit_addr,
+                            cond_orig,
+                        });
                     }
                 }
                 _ => {}
             }
+
+            queue.extend(children);
         }
 
         if loop_info.is_empty() {
@@ -7431,27 +9154,41 @@ impl Action for ActionNormalizeBranches {
                     if op.branch_type != crate::op::branch_type::NONE {
                         continue;
                     }
+                    // The loop's own condition test (the cbranch living in the
+                    // WhileDo/DoWhile condition block) never tags: Ghidra
+                    // consumes it as the `while (...)` / `do ... while (...)`
+                    // syntax (BlockWhileDo/BlockDoWhile emit reads the
+                    // condition's cbranch; scopeBreak never visits it as a
+                    // goto). Identify it by op-parent identity against the
+                    // resolved original condition block — the previous
+                    // op-addr == header-addr check only matched single-op
+                    // headers and mistagged the loop test of any header with
+                    // leading non-branch ops.
+                    let op_cond_parent = op
+                        .parent
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                        .map(|p| resolve_orig(&p));
+
                     // Input[0] is the branch target address varnode
                     let target_addr = match op.inrefs.get(0) {
                         Some(vn_arc) => vn_arc.read().unwrap().get_offset(),
                         None => continue,
                     };
 
-                    for (header_addr, exit_addr) in &loop_info {
-                        if target_addr == header_addr.as_u64() {
-                            // Skip the header's own CBRANCH (the loop condition test itself)
-                            if op.get_addr().as_u64() == header_addr.as_u64() {
+                    for li in &loop_info {
+                        if let Some(ref parent_orig) = op_cond_parent {
+                            if std::sync::Arc::ptr_eq(parent_orig, &li.cond_orig) {
                                 continue;
                             }
+                        }
+                        if target_addr == li.header_addr.as_u64() {
                             op.branch_type = crate::op::branch_type::CONTINUE;
                             changed += 1;
                             break;
                         }
-                        if let Some(ref exit) = exit_addr {
+                        if let Some(ref exit) = li.exit_addr {
                             if target_addr == exit.as_u64() {
-                                if op.get_addr().as_u64() == header_addr.as_u64() {
-                                    continue;
-                                }
                                 op.branch_type = crate::op::branch_type::BREAK;
                                 changed += 1;
                                 break;
@@ -7542,7 +9279,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         // Exit should be block 3 (the only out-of-body target from tail 2).
         assert_eq!(lb.exit_block, 3);
         clear_marks(&body, &g);
@@ -7553,7 +9290,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         lb.order_tails(&g);
         lb.label_exit_edges(&body, &g);
         // The 2→3 edge should be recorded (as an edge to exit_block).
@@ -7596,7 +9333,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         lb.order_tails(&g);
         lb.label_exit_edges(&body, &g);
         let mut likely: Vec<FloatingEdge> = Vec::new();
@@ -7683,5 +9420,50 @@ mod loopbody_tests {
             b0.read().unwrap().is_goto_out(1),
             "edge 1 is goto via block flag"
         );
+    }
+}
+
+#[cfg(test)]
+mod multigoto_defaultchain_tests {
+    use super::CollapseStructure;
+    use crate::block::CaseOrder;
+
+    fn co(chain: i32) -> CaseOrder {
+        CaseOrder { basicblock: None, label: 0, depth: 0, chain, outindex: -1 }
+    }
+
+    // CR-GLOBATTR F1: the multigoto arm's re-added cases occupy
+    // [k, k+g) after grab_case_order recorded the virtual default at k —
+    // chains against k must shift to k+g; everything else is untouched.
+    #[test]
+    fn remap_shifts_only_default_links() {
+        // k=3 regular entries, one chain link to the default (==3), one
+        // regular-to-regular link (==1), one -1; arm appends g=2.
+        let mut order = vec![co(3), co(1), co(-1)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 3, 2);
+        assert_eq!(moved, 1);
+        assert_eq!(order[0].chain, 5, "default link shifts k -> k+g");
+        assert_eq!(order[1].chain, 1, "regular-to-regular link untouched");
+        assert_eq!(order[2].chain, -1, "no-chain untouched");
+    }
+
+    #[test]
+    fn remap_moves_multiple_default_links() {
+        let mut order = vec![co(2), co(2), co(0), co(-1)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 2, 3);
+        assert_eq!(moved, 2);
+        assert_eq!(order[0].chain, 5);
+        assert_eq!(order[1].chain, 5);
+        assert_eq!(order[2].chain, 0, "chain 0 is a regular link, untouched");
+        assert_eq!(order[3].chain, -1);
+    }
+
+    #[test]
+    fn remap_no_links_is_noop() {
+        // Dormant shape: no case falls into the default (both corpora).
+        let mut order = vec![co(1), co(-1), co(0)];
+        let moved = CollapseStructure::remap_default_chain_indices(&mut order, 3, 2);
+        assert_eq!(moved, 0);
+        assert_eq!((order[0].chain, order[1].chain, order[2].chain), (1, -1, 0));
     }
 }

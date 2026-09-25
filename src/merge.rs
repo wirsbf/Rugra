@@ -39,11 +39,32 @@ struct AddrTiedLocRange {
 ///
 /// The cache is symmetric, exactly like `HighIntersectTest::highedgemap`.
 /// MergeType's speculative guards reject address-tied variables before this
-/// cache is queried, so the `StackAffectingOps` call-crossing branch of the
-/// general Ghidra cache is unreachable in this call closure.
+/// cache is queried, so for that closure the `StackAffectingOps`
+/// call-crossing branch is unreachable — but the cache is shared by every
+/// merge-family Action through the persistent mount (attach/detach), and the
+/// required/copy merge closures DO query it with one address-tied and one
+/// untied high (F-RESIDE: the helpf register-save slot webs vs the RSI
+/// chain), so the general Ghidra `intersection` branch
+/// (variable.cc:1186-1197) and its `StackAffectingOps` channel are ported
+/// here in full (MIRATTR-F-RESIDE-0001).
 #[derive(Default, Debug)]
 struct MergeTypeIntersectCache {
     tests: BTreeMap<(usize, usize), bool>,
+    /// `PcodeOpSet::opList` (cover.hh:38) of the `StackAffectingOps`
+    /// channel: CALL ops plus guarded STORE ops, sorted by
+    /// (block index, SeqNum order) once populated. Ghidra holds the
+    /// `StackAffectingOps` object inside the `Merge` (merge.hh:85) and
+    /// `HighIntersectTest` references it (variable.hh:258); the Rust cache
+    /// owns it by value because the whole cache round-trips through the
+    /// persistent mount at attach/detach, which carries the channel across
+    /// Actions exactly like the by-reference C++ member.
+    stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
+    /// `PcodeOpSet::blockStart` (cover.hh:39): index of the first op of each
+    /// non-empty block in `stack_affecting_ops`.
+    stack_affecting_block_start: Vec<usize>,
+    /// `PcodeOpSet::is_pop` (cover.hh:40): the lazy-populate flag that
+    /// `PcodeOpSet::clear` (cover.hh:63) resets.
+    stack_affecting_populated: bool,
 }
 
 impl MergeTypeIntersectCache {
@@ -54,11 +75,61 @@ impl MergeTypeIntersectCache {
     }
 
     // Ghidra: variable.cc:1148 HighIntersectTest::updateHigh
+    // Dirty predicate = the oracle's flag protocol as observed at the test
+    // gate. varnode.cc:352-361 Varnode::setFlags sets the member Varnode's
+    // coverdirty AND synchronously calls high->coverDirty()
+    // (variable.hh:275-281, + piece->markExtendCoverDirty). Since the
+    // HIGHCOV lane (2026-09-25) the Rust set_flags/add_descend/
+    // erase_descend/calc_cover carry that propagation half, so the flag
+    // state at this gate matches the oracle. The instance-scan is RETAINED
+    // as defense-in-depth for the one propagation leg that stays
+    // lock-blocked in Rust: update_cover_locked/get_cover clear the member
+    // flag without re-marking the high (varnode.cc:371-372's clearFlags
+    // half — callers hold read guards on the member's high across the
+    // rebuild; see the NOTE in update_cover_locked). The scan keeps the
+    // invariant "high clean ⇒ internalCover == union of current instance
+    // covers" (which the oracle maintains synchronously) holding at every
+    // test even across that gap: a high is dirty iff its own flag is set
+    // OR any member Varnode still carries coverdirty.
     fn update_high(&mut self, high: &Arc<RwLock<HighVariable>>) -> bool {
-        let dirty = high.read().unwrap().is_cover_dirty();
-        if !dirty {
+        let (high_dirty, instance_dirty) = {
+            let h = high.read().unwrap();
+            // The member-scan compensation applies to plain highs only: a
+            // piece-owning high's freshness protocol is the piece machinery
+            // (INTERSECTDIRTY/EXTENDCOVERDIRTY, variable.cc:140-172), which
+            // compute_varnode_covers and merge_highs already mark at
+            // guard-free points, and is_cover_dirty already consults
+            // extendcoverdirty (variable.hh:285-289). Routing a piece high
+            // through the scan+updateCover path from this gate reached a
+            // non-convergent post-restart merge lap in EM2 field runs (the
+            // piece rebuild re-marks members dirty and the lap never
+            // settles); flag-only checking is kept for piece highs, residual
+            // gap tracked as MERGE-COPYNOISE-SPILLRESTORE-0001-R2.
+            let instance_dirty = h.piece.is_none()
+                && h.instances.iter().any(|v| {
+                    (v.read().unwrap().flags & crate::varnode::varnode_flags::COVERDIRTY) != 0
+                });
+            (h.is_cover_dirty(), instance_dirty)
+        };
+        if !high_dirty && !instance_dirty {
             return true;
         }
+        if !high_dirty {
+            // Restore the propagation that varnode.cc:358-359 performs at
+            // setFlags time: mark the high (and its piece's extended cover)
+            // dirty so updateCover's dirty-gated rebuild fires below.
+            // mark_high_cover_dirty avoids the nested same-high write of
+            // the cover_dirty method (see its doc).
+            mark_high_cover_dirty(high);
+        }
+        // variable.cc:1153-1154: updateCover() then purgeHigh() — the purge
+        // is UNCONDITIONAL in the oracle. blockIntersection's verdicts are
+        // instance-level (copy-shadow pairs), so a pair result cached from a
+        // different instance decomposition can disagree with a recomputation
+        // even when the rebuilt union cover is bit-identical; gating the
+        // purge on cover-identity (EM2 experiment) let stale cached verdicts
+        // survive and produced wrong merges elsewhere (uStack_248/in_RDI
+        // noise), so the gate is removed.
         update_high_cover(high);
         self.purge_high(high);
         false
@@ -74,6 +145,13 @@ impl MergeTypeIntersectCache {
         instances
             .into_iter()
             .filter(|vn| {
+                // variable.cc:951: vn->getCover() is the lazy rebuild read
+                // (varnode.hh:202 → varnode.cc:233) — rebuild before reading
+                // so a mid-pass coverdirty Varnode cannot feed its stale
+                // cover into the block filter. No outer guard on vn is held
+                // here (the instances Vec is owned), so the write lock taken
+                // by update_cover_locked cannot re-enter.
+                Varnode::update_cover_locked(vn);
                 vn.read()
                     .unwrap()
                     .cover
@@ -94,6 +172,14 @@ impl MergeTypeIntersectCache {
     ) -> bool {
         let instances = high.read().unwrap().instances.clone();
         for vn in instances {
+            // variable.cc:975: vn->getCover() lazy rebuild read — mirror the
+            // oracle's getCover() so the first-stage cover filter sees the
+            // same (fresh) cover the oracle filters on. update_high refreshes
+            // `a`'s members only when a was dirty; the piece-intersection
+            // highs routed here (interPiece->getHigh()) bypass updateHigh
+            // entirely, so without this rebuild their instances could filter
+            // on stale covers. No outer guard on vn is held (owned Vec).
+            Varnode::update_cover_locked(&vn);
             let intersects_cover = vn
                 .read()
                 .unwrap()
@@ -106,10 +192,14 @@ impl MergeTypeIntersectCache {
             }
             for other in block_list {
                 let pair_intersects = {
-                    let vn_cover = vn.read().unwrap().cover.clone();
-                    let other_cover = other.read().unwrap().cover.clone();
-                    match (vn_cover, other_cover) {
-                        (Some(a), Some(b)) => b.intersect_by_block(block, &a) > 1,
+                    // Borrow both covers instead of cloning: distinct
+                    // Varnodes take independent read guards (same-Arc reads
+                    // are also fine), and the deep BTreeMap clone per pair
+                    // dominated the block-pair loop.
+                    let vn_g = vn.read().unwrap();
+                    let other_g = other.read().unwrap();
+                    match (vn_g.cover.as_ref(), other_g.cover.as_ref()) {
+                        (Some(a), Some(b)) => b.intersect_by_block(block, a) > 1,
                         _ => false,
                     }
                 };
@@ -141,11 +231,11 @@ impl MergeTypeIntersectCache {
         a: &Arc<RwLock<HighVariable>>,
         b: &Arc<RwLock<HighVariable>>,
         block: i32,
+        a_cover: &Cover,
+        b_cover: &Cover,
     ) -> bool {
-        let a_cover = high_cover(a);
-        let b_cover = high_cover(b);
-        let mut block_list = Self::gather_block_varnodes(b, block, &a_cover);
-        if Self::test_block_intersection(a, block, &b_cover, 0, &block_list) {
+        let mut block_list = Self::gather_block_varnodes(b, block, a_cover);
+        if Self::test_block_intersection(a, block, b_cover, 0, &block_list) {
             return true;
         }
 
@@ -167,7 +257,7 @@ impl MergeTypeIntersectCache {
                     if Self::test_block_intersection(
                         &intersect_high,
                         block,
-                        &b_cover,
+                        b_cover,
                         offset,
                         &block_list,
                     ) {
@@ -193,8 +283,8 @@ impl MergeTypeIntersectCache {
                     )
                 };
                 let Some(b_high) = b_high else { continue };
-                block_list = Self::gather_block_varnodes(&b_high, block, &a_cover);
-                if Self::test_block_intersection(a, block, &b_cover, -b_offset, &block_list) {
+                block_list = Self::gather_block_varnodes(&b_high, block, a_cover);
+                if Self::test_block_intersection(a, block, b_cover, -b_offset, &block_list) {
                     return true;
                 }
                 let a_piece = a.read().unwrap().piece.clone();
@@ -279,6 +369,7 @@ impl MergeTypeIntersectCache {
     // Ghidra: variable.cc:1166 HighIntersectTest::intersection
     fn intersection(
         &mut self,
+        fd: &Funcdata,
         a: &Arc<RwLock<HighVariable>>,
         b: &Arc<RwLock<HighVariable>>,
     ) -> bool {
@@ -299,9 +390,29 @@ impl MergeTypeIntersectCache {
         let b_cover = high_cover(b);
         let mut result = false;
         for block in a_cover.intersect_list(&b_cover, 2) {
-            if Self::block_intersection(a, b, block) {
+            if Self::block_intersection(a, b, block, &a_cover, &b_cover) {
                 result = true;
                 break;
+            }
+        }
+        // variable.cc:1186-1197: with no Cover-block intersection, if one
+        // variable is address tied and the other isn't, the untied variable
+        // must not cross any call that might affect the tied storage —
+        // `testUntiedCallIntersection` decides via the StackAffectingOps set.
+        if !result {
+            let (a_tied, b_tied) = {
+                // variable.hh:199 isAddrTied lazily re-derives flags
+                // (updateFlags); the Rust accessors are raw, so refresh first.
+                a.write().unwrap().update_flags();
+                b.write().unwrap().update_flags();
+                (a.read().unwrap().is_addr_tied(), b.read().unwrap().is_addr_tied())
+            };
+            if a_tied != b_tied {
+                result = if a_tied {
+                    self.test_untied_call_intersection(fd, a, b)
+                } else {
+                    self.test_untied_call_intersection(fd, b, a)
+                };
             }
         }
         self.tests.insert((a_key, b_key), result);
@@ -309,10 +420,259 @@ impl MergeTypeIntersectCache {
         result
     }
 
+    // Ghidra: variable.cc:1072 HighIntersectTest::testUntiedCallIntersection
+    /// Test if the untied variable crosses any call that might affect the
+    /// tied variable's storage. Faithful to `testUntiedCallIntersection`
+    /// (variable.cc:1072-1083): globals (persist) need no test; a local
+    /// with no possible aliases is only in scope where written; otherwise
+    /// the untied cover is intersected with the lazily populated
+    /// StackAffectingOps set (CALL ops + guarded STOREs).
+    fn test_untied_call_intersection(
+        &mut self,
+        fd: &Funcdata,
+        tied: &Arc<RwLock<HighVariable>>,
+        untied: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        // variable.cc:1075: if (tied->isPersist()) return false;
+        {
+            let mut t = tied.write().unwrap();
+            t.update_flags();
+            if t.is_persist() {
+                return false;
+            }
+        }
+        // variable.cc:1077-1078: a local variable is only in scope if it
+        // has aliases.
+        let tied_vn = tied.read().unwrap().get_tied_varnode();
+        let Some(tied_vn) = tied_vn else {
+            return false;
+        };
+        if tied_vn.read().unwrap().has_no_local_alias() {
+            return false;
+        }
+        // variable.cc:1079-1080: lazy populate of the affecting-op set.
+        if !self.stack_affecting_populated {
+            self.populate_stack_affecting(fd);
+        }
+        // variable.cc:1081: untied->getCover().intersect(affectingOps, vn)
+        let untied_cover = high_cover(untied);
+        let rep = tied_vn.read().unwrap();
+        cover_intersects_op_set(self, fd, &untied_cover, &rep)
+    }
+
+    // Ghidra: merge.cc:63 StackAffectingOps::populate
+    /// Populate the CALL + guarded-STORE op set. Faithful to
+    /// `StackAffectingOps::populate` (merge.cc:63-76): every CALL op from
+    /// the call specs, plus the STORE ops with a valid store guard, then
+    /// `PcodeOpSet::finalize` (cover.cc:627-640) sorts by (block index,
+    /// SeqNum order) and records the per-block start indices.
+    fn populate_stack_affecting(&mut self, fd: &Funcdata) {
+        use crate::opcodes::OpCode;
+        for i in 0..fd.num_calls() {
+            if let Some(fc) = fd.get_call_specs(i) {
+                if let Some(op) = fc.op.upgrade() {
+                    self.stack_affecting_ops.push(crate::op::PcodeOpRef(op));
+                }
+            }
+        }
+        for guard in &fd.heritage.store_guard {
+            // heritage.hh:169 LoadGuard::isValid:
+            // `!op->isDead() && op->code() == opc`.
+            if let Some(op) = guard.get_op() {
+                let live_store = {
+                    let o = op.read().unwrap();
+                    !o.is_dead() && o.opcode == OpCode::CPUI_STORE
+                };
+                if live_store {
+                    self.stack_affecting_ops.push(crate::op::PcodeOpRef(op));
+                }
+            }
+        }
+        // Ghidra: cover.cc:627 PcodeOpSet::finalize
+        self.stack_affecting_ops
+            .sort_by(|a, b| Self::compare_by_block(a, b));
+        self.stack_affecting_block_start.clear();
+        let mut block_num: i64 = -1;
+        for (i, op) in self.stack_affecting_ops.iter().enumerate() {
+            let new_block_num = op
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index() as i64)
+                .unwrap_or(-1);
+            if new_block_num > block_num {
+                self.stack_affecting_block_start.push(i);
+                block_num = new_block_num;
+            }
+        }
+        self.stack_affecting_populated = true;
+    }
+
+    // Ghidra: cover.cc:646 PcodeOpSet::compareByBlock
+    /// Order ops by parent block index, then SeqNum order. Faithful to
+    /// `PcodeOpSet::compareByBlock` (cover.cc:646-652).
+    fn compare_by_block(
+        a: &crate::op::PcodeOpRef,
+        b: &crate::op::PcodeOpRef,
+    ) -> std::cmp::Ordering {
+        let (a_block, a_order, b_block, b_order) = {
+            let ao = a.0.read().unwrap();
+            let bo = b.0.read().unwrap();
+            let ab = ao
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index());
+            let bb = bo
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index());
+            (ab, ao.get_seq_num().get_order(), bb, bo.get_seq_num().get_order())
+        };
+        // Ghidra compares the parent POINTERS first (same block object),
+        // which is block identity; index equality is the same identity for
+        // live ops. None (no parent) orders first by index sentinel -1.
+        let a_idx = a_block.unwrap_or(-1);
+        let b_idx = b_block.unwrap_or(-1);
+        a_idx.cmp(&b_idx).then(a_order.cmp(&b_order))
+    }
+
+    // Ghidra: merge.cc:78 StackAffectingOps::affectsTest
+    /// Secondary test after a Cover/op-set intersection is established.
+    /// Faithful to `StackAffectingOps::affectsTest` (merge.cc:78-86): a
+    /// STORE with no guard record affects everything; a guarded STORE only
+    /// affects addresses within its guard range; CALL ops always affect.
+    fn stack_affecting_test(
+        &self,
+        fd: &Funcdata,
+        op: &crate::op::PcodeOpRef,
+        rep: &Varnode,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        if op.0.read().unwrap().opcode == OpCode::CPUI_STORE {
+            match fd.heritage.get_store_guard(&op.0) {
+                None => true,
+                Some(guard) => guard.is_guarded(&rep.address_space, rep.get_offset()),
+            }
+        } else {
+            // merge.cc:84: "We could conceivably do secondary testing of
+            // CALL ops here" — the oracle returns true unconditionally.
+            true
+        }
+    }
+
     // Ghidra: variable.hh:270 HighIntersectTest::clear
     fn clear(&mut self) {
         self.tests.clear();
     }
+
+    // Ghidra: cover.hh:63 PcodeOpSet::clear
+    /// Clear the StackAffectingOps channel: `is_pop = false`,
+    /// `opList.clear()`, `blockStart.clear()` (cover.hh:63 expands
+    /// `PcodeOpSet::clear` exactly so). Invoked by `Merge::clear`
+    /// (merge.cc:1582 `stackAffectingOps.clear()`).
+    fn clear_stack_affecting(&mut self) {
+        self.stack_affecting_populated = false;
+        self.stack_affecting_ops.clear();
+        self.stack_affecting_block_start.clear();
+    }
+}
+
+// Ghidra: cover.cc:342 Cover::intersect(const PcodeOpSet&, Varnode*)
+/// Intersect a Cover with a populated PcodeOpSet. Faithful to
+/// `Cover::intersect(const PcodeOpSet &opSet, Varnode *rep)`
+/// (cover.cc:342-382): a merge-walk over the cover's blocks and the set's
+/// block-starts; in a common block, an op strictly inside the covered
+/// range (`contain` but not on the `boundary`) that passes the set's
+/// `affectsTest` secondary test prevents the merge. Implemented as a free
+/// function on the cache's channel because the Rust `Cover` (cover.rs) is
+/// a plain value type and the walk needs the cache's op-set state.
+fn cover_intersects_op_set(
+    cache: &MergeTypeIntersectCache,
+    fd: &Funcdata,
+    cover: &Cover,
+    rep: &Varnode,
+) -> bool {
+    let ops = &cache.stack_affecting_ops;
+    let block_start = &cache.stack_affecting_block_start;
+    if ops.is_empty() {
+        return false;
+    }
+    let op_block = |op: &crate::op::PcodeOpRef| -> i32 {
+        op.0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|p| p.read().unwrap().get_index())
+            .unwrap_or(-1)
+    };
+    // cover.cc:344-347: setBlock/opIndex/setIndex seed from the first op.
+    let mut set_block: usize = 0;
+    let mut op_index = block_start[set_block];
+    let mut set_index = op_block(&ops[op_index]);
+    // cover.cc:348: cover.lower_bound(opSet.opList[0] block) — BTreeMap
+    // keys are sorted, so the lower bound is the first key >= the seed.
+    let first_set_index = op_block(&ops[0]);
+    let mut cover_iter = cover
+        .blocks
+        .iter()
+        .skip_while(|(&k, _)| k < first_set_index)
+        .peekable();
+    loop {
+        // cover.cc:348-357: the cover iterator advances ONLY in the `<`
+        // and `==` arms; the `>` arm advances the set side and re-tests the
+        // same cover block (C++ does not touch coverIter there).
+        let Some((&cover_index, cover_block)) = cover_iter.peek().copied() else {
+            break;
+        };
+        if cover_index < set_index {
+            // cover.cc:349-350: cover block below the set block — advance
+            // the cover iterator only.
+            cover_iter.next();
+            continue;
+        } else if cover_index > set_index {
+            // cover.cc:351-356: advance the set block only; the same cover
+            // block is re-tested against the new set block.
+            set_block += 1;
+            if set_block >= block_start.len() {
+                break;
+            }
+            op_index = block_start[set_block];
+            set_index = op_block(&ops[op_index]);
+            continue;
+        }
+        // cover.cc:358-388: common block — scan the set's ops of this block
+        // against the covered range; the cover iterator advances past this
+        // block (post-increment at cover.cc:359).
+        cover_iter.next();
+        let mut op_max = ops.len();
+        set_block += 1;
+        if set_block < block_start.len() {
+            op_max = block_start[set_block];
+        }
+        while op_index < op_max {
+            let op = &ops[op_index];
+            // cover.cc:369-376: contain(op) via getUIndex, boundary(op)==0,
+            // then the secondary affectsTest.
+            let point = crate::cover::CoverBlock::get_u_index(&op.0.read().unwrap());
+            if cover_block.contain(point) && cover_block.boundary(point) == 0 {
+                if cache.stack_affecting_test(fd, op, rep) {
+                    return true;
+                }
+            }
+            op_index += 1;
+        }
+        if set_block >= block_start.len() {
+            break;
+        }
+    }
+    false
 }
 
 // Ghidra: merge.cc:1001 mergeAdjacent local-type gate
@@ -386,9 +746,15 @@ fn local_type_key_eq(a: &LocalTypeKey, b: &LocalTypeKey, nochar_distinct: bool) 
 ///     ActionDominantCopy's `processCopyTrims` (coreaction.hh:1008).
 ///   - `vector<PcodeOp *> protoPartial` — no Rugra counterpart yet
 ///     (`Merge::group_partials` is a documented no-op).
-///   - `StackAffectingOps stackAffectingOps` — no Rugra counterpart yet
-///     (lazily populated via `HighIntersectTest::testUntiedCallIntersection`,
-///     variable.cc:1080-1081).
+///   - `StackAffectingOps stackAffectingOps` — ported inside the shared
+///     `MergeTypeIntersectCache` (MIRATTR-F-RESIDE-0001): the CALL +
+///     guarded-STORE op set lazily populated by
+///     `HighIntersectTest::testUntiedCallIntersection`
+///     (variable.cc:1080-1081) and consumed by the addrtied-vs-untied
+///     branch of `HighIntersectTest::intersection` (variable.cc:1186-1197);
+///     it rides the cache because the whole cache round-trips through this
+///     mount at attach/detach, matching the C++ by-reference member's
+///     cross-Action lifetime.
 ///
 /// Rugra's merge Actions each construct a local `Merge::new()`
 /// (coreaction.rs applies), so the persistent channels round-trip through
@@ -414,15 +780,6 @@ pub struct MergePersistentState {
     /// only deposited/observed by the clear-lifecycle fixture. `Merge::clear`
     /// (merge.cc:1582) empties it regardless.
     proto_partial: Vec<crate::op::PcodeOpRef>,
-    /// `PcodeOpSet::opList` of the CALL/STORE ops indirectly affecting stack
-    /// variables (Ghidra merge.hh:85 `stackAffectingOps`, populated by
-    /// `StackAffectingOps::populate` merge.cc:63-76 via
-    /// `HighIntersectTest::testUntiedCallIntersection`
-    /// variable.cc:1080-1081). No Rust production path populates it yet.
-    stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
-    /// `PcodeOpSet::is_pop` mirror of `stackAffectingOps` (cover.hh:39): the
-    /// lazy-populate flag that `PcodeOpSet::clear` (cover.hh:63) resets.
-    stack_affecting_populated: bool,
 }
 
 impl MergePersistentState {
@@ -436,11 +793,27 @@ impl MergePersistentState {
     /// RUGRA-GLUE premise channel and dies with the same call.
     pub fn clear(&mut self) {
         self.test_cache.clear();
+        // merge.cc:1582 stackAffectingOps.clear() -> cover.hh:63
+        // PcodeOpSet::clear (is_pop=false, opList, blockStart).
+        self.test_cache.clear_stack_affecting();
         self.copy_trims.clear();
         self.live_set.clear();
         self.proto_partial.clear();
-        self.stack_affecting_ops.clear();
-        self.stack_affecting_populated = false;
+    }
+
+    // Ghidra: merge.cc:1549 Merge::registerProtoPartialRoot
+    /// Register an unmapped CONCAT stack with the merge process. Faithful
+    /// to `Merge::registerProtoPartialRoot` (merge.cc:1549-1553): the root
+    /// Varnode's defining op (the final PIECE of the stack) is pushed onto
+    /// the `protoPartial` list; `groupPartials` (merge.cc:967-976) later
+    /// groups each still-alive partial root into a single variable. The
+    /// Funcdata-mounted channel stands in for Ghidra's Funcdata-owned
+    /// `Merge` object (rules register during the cleanup pool, long before
+    /// any merge-family Action constructs its local `Merge`).
+    pub fn register_proto_partial_root(&mut self, vn: &Arc<RwLock<crate::varnode::Varnode>>) {
+        if let Some(def) = vn.read().unwrap().get_def() {
+            self.proto_partial.push(crate::op::PcodeOpRef(def));
+        }
     }
 
     // RUGRA-GLUE: fixture observability for the persistent channels; the
@@ -463,8 +836,8 @@ impl MergePersistentState {
     pub fn channel_sizes_extended(&self) -> (usize, usize, bool) {
         (
             self.proto_partial.len(),
-            self.stack_affecting_ops.len(),
-            self.stack_affecting_populated,
+            self.test_cache.stack_affecting_ops.len(),
+            self.test_cache.stack_affecting_populated,
         )
     }
 
@@ -489,12 +862,43 @@ impl MergePersistentState {
     ) {
         self.copy_trims.extend(trims);
         self.proto_partial.extend(proto_roots);
-        self.stack_affecting_ops.extend(stack_ops);
-        self.stack_affecting_populated = true;
+        self.test_cache.stack_affecting_ops.extend(stack_ops);
+        self.test_cache.stack_affecting_populated = true;
     }
 }
 
+// Ghidra: variable.hh:164+275 HighVariable::flagsDirty + coverDirty
+/// The deferred setFlags notification for a member whose mutation happened
+/// without one (the update_high instance-scan compensation): fires BOTH
+/// arms of varnode.cc:356-360 — flagsDirty unconditionally (variable.hh:164)
+/// and coverDirty with the piece walk (variable.hh:275-281) — under the
+/// sequenced-guard discipline implemented by propagate_flag_change_to_high
+/// (varnode.rs; the piece walk's final self leg variable.cc:136 writes the
+/// OWN high again, so the flag write and the walk must not share a guard).
+fn mark_high_cover_dirty(high: &Arc<RwLock<HighVariable>>) {
+    crate::varnode::propagate_flag_change_to_high(
+        high,
+        crate::varnode::varnode_flags::COVERDIRTY,
+    );
+}
+
 // Ghidra: variable.hh:294 HighVariable::getCover
+/// Raw stored-cover read — the oracle getCover inline returns internalCover
+/// with NO lazy update (variable.hh:294-300); its freshness contract is the
+/// mutation-time propagation invariant (varnode.cc:352-360 setFlags →
+/// high->coverDirty), which the Rust mutation half now carries (HIGHCOV
+/// lane 2026-09-25: set_flags/add_descend/erase_descend/calc_cover), with
+/// one lock-blocked leg remaining (update_cover_locked's clearFlags half —
+/// see the NOTE in varnode.rs). Every raw reader of this helper MUST
+/// therefore sit behind a refresh gate, mirroring the oracle's call
+/// discipline:
+///   - intersection() reads only after update_high on both operands
+///     (variable.cc:1170-1181 ordering);
+///   - compare_high_by_block is invoked only from merge_linear, which
+///     refreshes every high via update_high before the sort
+///     (merge.cc:280-282 ordering).
+/// Do NOT add new readers of this helper outside that discipline
+/// (MERGE-HIGHCOVER-PROPAGATION-0001).
 fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let piece = high.read().unwrap().piece.clone();
     if let Some(piece) = piece {
@@ -504,6 +908,15 @@ fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
 }
 
 // Ghidra: variable.cc:338 HighVariable::updateCover
+/// Re-derive the high's cover. The oracle's `updateCover` routes plain highs
+/// to `updateInternalCover` (variable.cc:324), whose member reads go through
+/// `inst[i]->getCover()` (varnode.hh:202) — the LAZY per-member rebuild —
+/// before merging; the member-rebuild leg is done explicitly here because
+/// Rugra's `update_internal_cover` (variable.rs) reads the raw `cover` field.
+/// Piece-owning highs route to the piece machinery (variable.cc:342-346);
+/// the intersecting-high instance rebuild is a Rugra-side freshness
+/// compensation for the piece walk (documented 2026-08-15,
+/// COVER-REBUILD-SELFLOCK-0001) kept from the parent shape.
 fn update_high_cover(high: &Arc<RwLock<HighVariable>>) {
     let instances = high.read().unwrap().instances.clone();
     for instance in instances {
@@ -691,6 +1104,8 @@ impl Merge {
         self.var_counter = 0;
         self.copy_trims.clear();
         self.type_test_cache.clear();
+        // merge.cc:1582: stackAffectingOps.clear() (cover.hh:63).
+        self.type_test_cache.clear_stack_affecting();
         self.live_set.clear();
         // clear() on an in-flight nested sequence would silently swallow an
         // attach/detach imbalance; assert balance instead so a leak surfaces
@@ -789,8 +1204,12 @@ impl Merge {
         // faithful no-op (no CONCAT machinery).
         self.merge_required(fd);
 
-        // Compute liveness covers (Ghidra calculateCover). Must run after the
-        // required merges so the speculative passes see final instance sets.
+        // Compute liveness covers for the live varnode population. The
+        // oracle has no eager Merge pass here — covers rebuild lazily via
+        // Varnode::getCover()/updateCover (varnode.cc:233) — this eager
+        // materialization runs the identical Cover::rebuild product
+        // (cover.cc:477) once, after required merges finalize the
+        // instance sets the speculative passes will read.
         self.compute_varnode_covers(fd);
 
         // Step 4: MergeMultiEntry (faithful no-op without symbol machinery).
@@ -800,10 +1219,11 @@ impl Merge {
         // Required test + merge; cover intersection silently skips (no snip).
         self.merge_opcode(fd, crate::opcodes::OpCode::CPUI_COPY);
 
-        // Step 6: DominantCopy — processCopyTrims (coreaction.cc:5723).
-        // Faithful no-op: copyTrims is never populated (Rugra lacks the
-        // snip/trim data-flow rewrite machinery that ActionMergeRequired's
-        // forced-merge path uses to fill it). See process_copy_trims.
+        // Step 6: DominantCopy — processCopyTrims (coreaction.cc:5723,
+        // coreaction.hh:1008). Consumes the copy_trims filled by step 1's
+        // forced-merge snip path (merge_addr_tied → allocate_copy_trim) and
+        // replaces ≥2-COPY groups with a single dominant COPY, in copyTrims
+        // first-seen order. See process_copy_trims.
         self.process_copy_trims(fd);
 
         // Step 7: MergeAdjacent.
@@ -821,7 +1241,11 @@ impl Merge {
         // Sync HighVariable covers from member Varnode covers. Must run AFTER
         // all speculative merges finalize the instance sets so each
         // HighVariable's cover reflects all its members. ActionMarkImplied
-        // (run later in the pipeline) consults high.cover via checkImpliedCover.
+        // (run later in the pipeline) reads VARNODE covers directly (lazily
+        // rebuilt) and aggregates fresh inside inflate_test — it does not
+        // depend on this stored product. The stored-field product is kept
+        // materialized for the raw-gated readers (high_cover discipline,
+        // MERGE-HIGHCOVER-PROPAGATION-0001).
         self.update_high_covers(fd);
 
         // NOTE (FUNCDATA-LINKSYMBOL-TYPED-0001): Ghidra's merge sequence
@@ -838,11 +1262,15 @@ impl Merge {
         self.detach(fd);
     }
 
-    // Ghidra: merge.hh:83 Merge::updateHighCovers
-    /// Re-derive every HighVariable's internal cover from its member Varnodes.
-    /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
-    /// Collects the distinct HighVariables reachable from live varnodes (each
-    /// HighVariable holds Arc-shared instances, so we dedupe by Arc pointer).
+    // RUGRA-GLUE: wholesale post-merge cover sync. The oracle has no such
+    /// pass — it maintains covers lazily (HighVariable::updateCover
+    /// variable.cc:338 via HighIntersectTest::updateHigh variable.cc:1148,
+    /// Varnode::getCover varnode.hh:202); Rugra materializes high.cover
+    /// eagerly because downstream readers (markimplied's inflateTest fast
+    /// path, varmap) read the stored field. Each high is synced through
+    /// `update_high_cover` (the updateCover port), leaving the same
+    /// invariant point the oracle reaches lazily: every cover clean and
+    /// equal to the union of its members' current covers.
     fn update_high_covers(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
         let mut seen: HashSet<usize> = HashSet::new();
@@ -860,17 +1288,38 @@ impl Merge {
             }
         }
         for ha in to_update {
-            ha.write().unwrap().update_internal_cover();
+            update_high_cover(&ha);
         }
     }
 
     // Ghidra: merge.cc:1595 Merge::markImplied
-    /// Mark a Varnode as implied. Faithful to Merge::markImplied (merge.cc:1595).
-    /// In Ghidra this also sets coverdirty on the def op's inputs so their
-    /// covers get recomputed; Rugra recomputes covers wholesale per merge_all,
-    /// so we only set the IMPLIED flag here.
+    /// Mark a Varnode as implied. Faithful to Merge::markImplied
+    /// (merge.cc:1594-1605): after setImplied, the def op's cover-having
+    /// inputs are marked coverdirty because their covers traverse the
+    /// now-implied root and must be rebuilt before any later read. Both the
+    /// cc:1598 setImplied and the cc:1603 setFlags(coverdirty) route through
+    /// varnode.rs set_implied/set_flags, which carry the full high
+    /// notification (flagsDirty unconditional + coverDirty when the mask
+    /// has it) — the observable state matches the oracle's calls one for
+    /// one (HIGHCOV lane 2026-09-25; the inline propagation half added
+    /// earlier, when set_flags lacked the arm, is now redundant and gone).
     pub fn mark_implied(vn: &Arc<RwLock<Varnode>>) {
         vn.write().unwrap().set_implied();
+        let def = vn.read().unwrap().get_def();
+        let Some(def) = def else { return };
+        let inputs: Vec<std::sync::Arc<std::sync::RwLock<Varnode>>> = {
+            let op = def.read().unwrap();
+            (0..op.num_input())
+                .filter_map(|i| op.get_in(i).cloned())
+                .collect()
+        };
+        for input in inputs {
+            let has_cover = input.read().unwrap().has_cover();
+            if has_cover {
+                // merge.cc:1603: defvn->setFlags(Varnode::coverdirty).
+                input.write().unwrap().set_flags(varnode_flags::COVERDIRTY);
+            }
+        }
     }
 
     // Ghidra: merge.cc:1616 Merge::inflateTest
@@ -890,23 +1339,147 @@ impl Merge {
         a: &Arc<RwLock<Varnode>>,
         high: &crate::variable::HighVariable,
     ) -> bool {
+        // Ghidra merge.cc:1616-1646 Merge::inflateTest.
+        //   ahigh = a->getHigh();
+        //   testCache.updateHigh(high);  (lazily rebuilds high->internalCover)
+        //   for each instance b of ahigh:
+        //     if (b->copyShadow(a)) continue;   // copy-chain shadow allowed
+        //     if (2 == b->getCover()->intersect(high->internalCover)) return true;
+        //   piece = ahigh->piece;
+        //   if (piece != null) {
+        //     piece->updateIntersections();
+        //     for each intersecting otherPiece:
+        //       off = otherPiece->getOffset() - piece->getOffset();
+        //       for each instance b of otherHigh:
+        //         if (b->partialCopyShadow(a, off)) continue;
+        //         if (2 == b->getCover()->intersect(highCover)) return true;
+        //   }
+        //   return false;
+        // The decisive semantic: only a WHOLE-INTERVAL intersection (== 2)
+        // refuses implication; a boundary-only touch (== 1) is allowed. The
+        // previous `intersects()` (any overlap) form made every SUBPIECE
+        // field extraction explicit because the input shadow's read point
+        // coincides with the piece's def point (a boundary touch).
         let a_high = a.read().unwrap().high.clone();
-        let Some(ahigh) = a_high else {
+        let Some(ahigh_arc) = a_high else {
             return false; // a has no HighVariable — no intersection possible
         };
-        let ahigh = ahigh.read().unwrap();
-        // high.cover is the union of the implied varnode's instance covers.
-        // We test each instance of a's HighVariable against it.
-        for inst_arc in &ahigh.instances {
+        let ahigh = ahigh_arc.read().unwrap();
+        let high_instances: Vec<Arc<RwLock<Varnode>>> = high.instances.clone();
+        // merge.cc:1621-1622: testCache.updateHigh(high); const Cover
+        // &highCover(high->internalCover). The oracle's updateHigh
+        // (variable.cc:1146) rebuilds internalCover only when the high is
+        // dirty, relying on the invariant that EVERY mutation which dirties
+        // a member Varnode cover also propagates coverDirty to the owning
+        // high (varnode.cc:352-360 setFlags → high->coverDirty, fired by
+        // addDescend/eraseDescend/calcCover). Rugra's mutation paths do not
+        // all maintain that propagation (a rebuilt member cover leaves the
+        // high "clean" with a stale stored aggregate — the
+        // CANARY-EXPLICIT/loop-temp family: the PTRADD/PTRSUB for-header
+        // temps' own covers end at their single COPY read, but the stored
+        // high aggregate still ran to the block bottom, making
+        // inflateTest see a whole-interval intersection where the oracle
+        // sees a boundary touch and keeps the temp implied). Aggregate
+        // fresh from the lazily-rebuilt member covers unconditionally:
+        // the product equals the oracle's internalCover under its
+        // maintained invariant, and can only be MORE current than the
+        // stale stored form.
+        let high_cover_fresh: Cover = {
+            for inst_arc in &high_instances {
+                // Oracle chain: updateHigh → updateCover → member getCover()
+                // rebuild. NOTE LOCK DISCIPLINE: unlike refresh_cover_lazy,
+                // this rebuild does NOT re-mark the high dirty across the
+                // flag clear (varnode.cc:365-374) — the caller (coreaction
+                // checkImpliedCover) holds a READ guard on this high for the
+                // whole call, so a member back-pointer write on it would
+                // self-deadlock. The always-fresh aggregation below makes
+                // this path independent of the stored `high.cover` product
+                // (whose staleness under missing dirty propagation is
+                // registered as MERGE-HIGHCOVER-PROPAGATION-0001).
+                Varnode::update_cover_locked(inst_arc);
+            }
+            let mut fresh = Cover::new();
+            // variable.cc:329: gate the merge loop on inst[0]->hasCover().
+            if high_instances
+                .first()
+                .map(|first| first.read().unwrap().has_cover())
+                .unwrap_or(false)
+            {
+                for inst_arc in &high_instances {
+                    if let Some(ic) = inst_arc.read().unwrap().cover.as_ref() {
+                        fresh.merge(ic);
+                    }
+                }
+            }
+            fresh
+        };
+        // First loop: instances of a's HighVariable (merge.cc:1623-1632).
+        // Snapshot the instance arcs, then drop the read guard BEFORE the
+        // piece walk: update_intersections takes a WRITE lock on the owning
+        // high (variable.rs), and read+write on the same RwLock from one
+        // thread would deadlock (observed: pipeline hang at markimplied).
+        let first_instances: Vec<Arc<RwLock<Varnode>>> = ahigh.instances.clone();
+        let piece_arc = ahigh.piece.clone();
+        drop(ahigh);
+        for inst_arc in &first_instances {
+            // merge.cc:1627: b->getCover() is the lazy rebuild read
+            // (varnode.hh:202 → varnode.cc:233). No high-dirty propagation
+            // here: the caller holds a read guard on the propagated high,
+            // and this instance's high may be that same high (mergecopy
+            // merges COPY in/out into one HighVariable) — a back-pointer
+            // write would self-deadlock (see the high_cover_fresh note).
+            Varnode::update_cover_locked(inst_arc);
             let inst = inst_arc.read().unwrap();
-            // Skip the instance that IS 'a' (Arc identity) — intersection
-            // with itself or its copy-shadow is allowed (merge.cc:1626 copyShadow).
-            if Arc::ptr_eq(inst_arc, a) {
+            // merge.cc:1626: if (b->copyShadow(a)) continue; — copy-chain
+            // shadows hold the same value, their cover is shared with a.
+            let a_g = a.read().unwrap();
+            if inst.copy_shadow(&a_g) {
                 continue;
             }
+            drop(a_g);
             if let Some(ic) = inst.cover.as_ref() {
-                if ic.intersects(&high.cover) {
+                if 2 == ic.intersect_char(&high_cover_fresh) {
                     return true;
+                }
+            }
+        }
+        // merge.cc:1633-1644: VariablePiece intersection walk.
+        if let Some(piece_arc) = piece_arc {
+            let other_pieces: Vec<Arc<RwLock<crate::variable::VariablePiece>>> = {
+                crate::variable::VariablePiece::update_intersections(&piece_arc);
+                let piece = piece_arc.read().unwrap();
+                (0..piece.num_intersection())
+                    .filter_map(|i| piece.get_intersection(i))
+                    .collect()
+            };
+            let piece_offset = piece_arc.read().unwrap().group_offset;
+            let a_vn_guard = a.read().unwrap();
+            for other_arc in other_pieces {
+                let (other_off, other_high_weak) = {
+                    let p = other_arc.read().unwrap();
+                    (p.group_offset, p.get_high())
+                };
+                let Some(other_high_arc) = other_high_weak.and_then(|w| w.upgrade()) else {
+                    continue;
+                };
+                let off = other_off - piece_offset;
+                let other_high = other_high_arc.read().unwrap();
+                for inst_arc in &other_high.instances {
+                    // merge.cc:1639: b->getCover() lazy rebuild read. No
+                    // high-dirty propagation (caller-held read guard — see
+                    // the merge.cc:1627 note).
+                    Varnode::update_cover_locked(inst_arc);
+                    let inst = inst_arc.read().unwrap();
+                    // merge.cc:1640: partialCopyShadow allows SUBPIECE/PIECE
+                    // derived shadows at the piece-relative offset.
+                    if inst.partial_copy_shadow(&a_vn_guard, off) {
+                        continue;
+                    }
+                    if let Some(ic) = inst.cover.as_ref() {
+                        if 2 == ic.intersect_char(&high_cover_fresh) {
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -968,7 +1541,7 @@ impl Merge {
                     .collect();
                 self.unify_address(fd, &members);
                 for range in &ranges[cluster_start..cluster_end] {
-                    self.merge_range_must(range)?;
+                    self.merge_range_must(fd, range)?;
                 }
                 if cluster_end - cluster_start > 1 {
                     let base_offset = ranges[cluster_start].offset;
@@ -1058,7 +1631,7 @@ impl Merge {
 
     // Ghidra: merge.cc:301 Merge::mergeRangeMust
     /// Merge one exact `(space, offset, size)` range in location-set order.
-    fn merge_range_must(&mut self, range: &AddrTiedLocRange) -> Result<()> {
+    fn merge_range_must(&mut self, fd: &Funcdata, range: &AddrTiedLocRange) -> Result<()> {
         let first = &range.members[0];
         Self::merge_test_must(&first.read().unwrap())?;
         let high = Self::required_high(first)?;
@@ -1068,7 +1641,7 @@ impl Merge {
                 continue;
             }
             Self::merge_test_must(&member.read().unwrap())?;
-                if !self.merge_required_result(&high, &candidate)? {
+                if !self.merge_required_result(fd, &high, &candidate)? {
                     // Registered debug TAG [MERGE-FAIL]/[MERGE-PAIR]
                     // (stderr, env-gated by RUGRA_MERGE_DIAG; registry:
                     // docs/api/merge.md "诊断 TAG 登记"). Dumps the failing
@@ -1154,13 +1727,14 @@ impl Merge {
     // followed by variable.cc:647-650.
     fn merge_required_result(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
     ) -> Result<bool> {
         if Arc::ptr_eq(high1, high2) {
             return Ok(true);
         }
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return Ok(false);
         }
         self.type_test_cache.move_intersect_tests(high1, high2);
@@ -1376,6 +1950,7 @@ impl Merge {
     /// (variable.cc:640-646) vs the single-class required merge (:648-654).
     fn merge_speculative(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
         isspeculative: bool,
@@ -1387,7 +1962,7 @@ impl Merge {
         // The cached test lazily (re)builds the pair's covers via updateHigh
         // (variable.cc:1148-1156) and reuses results cached by any earlier
         // merge Action on the persistent Funcdata Merge object.
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return false;
         }
         // variable.cc:681: HighVariable::merge calls
@@ -1405,6 +1980,7 @@ impl Merge {
     /// (variable.cc-side, true).
     fn merge_speculative_by_vn(
         &mut self,
+        fd: &Funcdata,
         vn1: &Arc<RwLock<Varnode>>,
         vn2: &Arc<RwLock<Varnode>>,
         isspeculative: bool,
@@ -1417,7 +1993,7 @@ impl Merge {
         let (Some(h1), Some(h2)) = (h1, h2) else {
             return false;
         };
-        self.merge_speculative(&h1, &h2, isspeculative)
+        self.merge_speculative(fd, &h1, &h2, isspeculative)
     }
 
     // RUGRA-GLUE: merge_test — 快速预检查两个 Varnode 是否可能合并。
@@ -1733,13 +2309,14 @@ impl Merge {
     /// separate merge classes (variable.cc:640-646).
     fn merge_type_pair(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
     ) -> bool {
         if Arc::ptr_eq(high1, high2) {
             return true;
         }
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return false;
         }
         self.type_test_cache.move_intersect_tests(high1, high2);
@@ -1763,12 +2340,18 @@ impl Merge {
     /// (merge.cc:1657-1669). Returns true and pushes high to testlist if no
     /// intersection; false otherwise.
     ///
-    /// Ghidra uses HighIntersectTest::intersection (cached, with shadow/block
-    /// refinement). Rugra uses aggregate_high_cover + intersect_char directly
-    /// (no cache, conservative — may report intersection where Ghidra's
-    /// blockIntersection would rule it out via shadow analysis).
+    /// Ghidra consults `testCache.intersection(a, high)` — the cached
+    /// HighIntersectTest pair test. Rugra routes through the same
+    /// `type_test_cache` (MergeTypeIntersectCache::intersection,
+    /// merge.rs — HighIntersectTest port with gather_block_varnodes +
+    /// test_block_intersection). The former aggregate-cover approximation
+    /// is retired: it reported "intersect" for every same-block character
+    /// overlap even when the instance def/read timestamps never interleave,
+    /// so mergeOp Phase 2 trims converged marker ops (the +8804-op
+    /// mergerequired divergence measured by the sb-impliedfold lane).
     fn merge_test_with_list(
-        &self,
+        &mut self,
+        fd: &Funcdata,
         high: &Arc<RwLock<HighVariable>>,
         testlist: &mut Vec<Arc<RwLock<HighVariable>>>,
     ) -> bool {
@@ -1778,10 +2361,22 @@ impl Merge {
         if !has_cov {
             return false;
         }
-        let high_cover = aggregate_high_cover(high);
+        // Ghidra merge.cc:1662-1666: `if (testCache.intersection(a,high))
+        // return false;` — the CACHED HighIntersectTest pair test, i.e.
+        // `intersectList(...,2)` block candidates resolved by
+        // blockIntersection (gatherBlockVarnodes + testBlockIntersection,
+        // variable.cc:998) with the testCache/moveIntersectTests lifecycle.
+        // The previous coarse aggregate-cover `intersect_char > 0`
+        // approximation returned "intersect" for every same-block
+        // character overlap, so Merge::mergeOp Phase 2 failed on marker
+        // ops whose instance def/read timestamps never actually interleave,
+        // sending every such MULTIEQUAL/INDIRECT through the trim loop
+        // (merge.cc:748-760) — the sb-impliedfold lane measured +8804 trim
+        // COPYs in main vs the oracle's +45 (COPYPROBE mergerequired
+        // census), which then surfaced as the print-side
+        // `uVarX = uVarX` / spill-restore copy noise.
         for other in testlist.iter() {
-            let other_cover = aggregate_high_cover(other);
-            if high_cover.intersect_char(&other_cover) > 0 {
+            if self.type_test_cache.intersection(fd, other, high) {
                 return false;
             }
         }
@@ -1885,21 +2480,34 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:967 Merge::groupPartials
-    /// Group CONCAT-piece roots.  RulePieceStructure marks each rewritten
-    /// PIECE root and its unmapped pieces as proto-partial; this pass rebuilds
-    /// the same VariableGroup before naming (merge.cc:967-976, 1374-1407).
+    /// Group CONCAT-piece roots.  RulePieceStructure and
+    /// SplitDatatype::buildOutConcats register each unmapped CONCAT root via
+    /// `registerProtoPartialRoot`; this pass rebuilds the same VariableGroup
+    /// before naming (merge.cc:967-976, 1374-1407). Candidates come from the
+    /// registered `protoPartial` list in registration order — the
+    /// registration sites are RulePieceStructure's root walk
+    /// (ruleaction.cc:7697-7698) and splitCopy/splitLoad's
+    /// buildOutConcats (subflow.cc:2601-2602).
     pub fn group_partials(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
-        // `protoPartial` is populated while RulePieceStructure walks the
-        // ordered op list. Reproduce that order from the bank's alive-op
-        // sequence; loc_tree order is storage order, not registration order.
-        // ActionPool::processOp advances the sorted PcodeOpTree (action.rs:1400-1414).
-        let candidates: Vec<_> = fd.obank.optree.iter()
+        let candidates: Vec<_> = fd
+            .merge_state
+            .proto_partial
+            .iter()
             .filter_map(|op_ref| {
+                // Ghidra merge.cc:970-971: dead roots were consumed or
+                // destroyed since registration.
                 let op = op_ref.0.read().unwrap();
-                (op.opcode == crate::opcodes::OpCode::CPUI_PIECE && op.is_partial_root())
-                    .then(|| op.output.clone()).flatten()
-            }).collect();
+                if op.is_dead() {
+                    return None;
+                }
+                // Ghidra merge.cc:972-973: only still-flagged partial roots.
+                if !op.is_partial_root() {
+                    return None;
+                }
+                op.output.clone()
+            })
+            .collect();
         let mut roots = HashSet::new();
         for candidate in candidates {
             let root = Self::partial_root(&candidate).unwrap_or(candidate);
@@ -1910,14 +2518,24 @@ impl Merge {
             let Some(root_high) = root.read().unwrap().get_high().cloned() else { continue };
             if root_high.read().unwrap().instances.len() != 1 { continue; }
             let mut pieces = Vec::new();
-            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), 0, &mut pieces);
+            // Ghidra merge.cc:1381-1387: baseOffset comes from the root's
+            // symbol entry (0 without one); gatherPieces starts at
+            // (baseOffset, baseOffset), and groupWith receives
+            // getTypeOffset()-baseOffset (cc:1404).
+            let base_offset = root
+                .read()
+                .unwrap()
+                .get_symbol_entry()
+                .map(|entry| entry.read().unwrap().get_offset())
+                .unwrap_or(0);
+            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), base_offset, base_offset, &mut pieces);
             if pieces.iter().all(|(piece, _)| {
                 let p = piece.read().unwrap();
                 p.is_proto_partial() && p.get_high().map_or(false, |h| h.read().unwrap().instances.len() == 1)
             }) {
                 for (piece, offset) in pieces {
                     if let Some(high) = piece.read().unwrap().get_high().cloned() {
-                        let _ = Self::group_with_arcs(&high, offset, &root_high);
+                        let _ = Self::group_with_arcs(&high, offset - base_offset, &root_high);
                     }
                 }
             } else {
@@ -1958,9 +2576,79 @@ impl Merge {
         }
     }
 
+    // Ghidra: op.cc:801 PieceNode::isLeaf
+    /// Determine if a Varnode is a leaf within the CONCAT tree rooted at
+    /// `root`. Faithful to `PieceNode::isLeaf` (op.cc:801-817): a mapped
+    /// varnode under a different symbol entry than the root (a), an
+    /// unwritten varnode (b), a def that is not PIECE (c), a varnode
+    /// without exactly one descendant (d), or an addr-tied varnode whose
+    /// address does not line up with the root at `rel_offset` (e) all
+    /// make the node a leaf. Checks (b)-(d) bound `gather_partial_pieces`'s
+    /// recursion: without them a non-tree PIECE graph (e.g. an input
+    /// defined by the very op reading it) recurses forever and overflows
+    /// the worker stack (observed on curl `main` after
+    /// FUNCDATA-OPSTACKLOAD-CONTAIN-0001 unlocked RuleLoadVarnode;
+    /// MERGE-GATHERPIECES-ISLEAF-0001).
+    fn piece_is_leaf(
+        root: &Arc<RwLock<crate::varnode::Varnode>>,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        rel_offset: i32,
+    ) -> bool {
+        // (a) vn->isMapped() && rootVn->getSymbolEntry() != vn->getSymbolEntry()
+        let (vn_mapped, vn_entry) = {
+            let v = vn.read().unwrap();
+            (v.is_mapped(), v.get_symbol_entry())
+        };
+        if vn_mapped {
+            let root_entry = root.read().unwrap().get_symbol_entry();
+            let entries_differ = match (&root_entry, &vn_entry) {
+                (Some(r), Some(v)) => !Arc::ptr_eq(r, v),
+                (None, None) => false,
+                _ => true,
+            };
+            if entries_differ {
+                return true;
+            }
+        }
+        // (b) !vn->isWritten()
+        let def = { vn.read().unwrap().get_def() };
+        let Some(def) = def else { return true };
+        // (c) def->code() != CPUI_PIECE
+        if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE {
+            return true;
+        }
+        // (d) vn->loneDescend() == null
+        if vn.read().unwrap().lone_descend().is_none() {
+            return true;
+        }
+        // (e) vn->isAddrTied(): Address addr = rootVn->getAddr() + relOffset;
+        //     if (vn->getAddr() != addr) return true;
+        if vn.read().unwrap().is_addr_tied() {
+            let (v_space, v_off, r_space, r_off) = {
+                let v = vn.read().unwrap();
+                let r = root.read().unwrap();
+                (v.get_space(), v.get_offset(), r.get_space(), r.get_offset())
+            };
+            if v_space != r_space || v_off != r_off.wrapping_add_signed(rel_offset as i64) {
+                return true;
+            }
+        }
+        false
+    }
+
     // Ghidra: op.cc:865 PieceNode::gatherPieces
-    fn gather_partial_pieces(root: &Arc<RwLock<crate::varnode::Varnode>>, op: &crate::op::PcodeOpRef,
-                             base: i32, out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>) {
+    /// Build the CONCAT tree rooted at the given Varnode. Faithful to
+    /// `PieceNode::gatherPieces` (op.cc:865-876): walk backwards through
+    /// CPUI_PIECE operations recording each input with its offset within
+    /// the root's data-type, recursing only when `PieceNode::isLeaf`
+    /// (op.cc:871) reports the input is an interior tree node.
+    fn gather_partial_pieces(
+        root: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &crate::op::PcodeOpRef,
+        base_offset: i32,
+        root_offset: i32,
+        out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>,
+    ) {
         let (big, inputs) = {
             let r = root.read().unwrap();
             let o = op.0.read().unwrap();
@@ -1969,11 +2657,18 @@ impl Merge {
         if inputs.len() < 2 { return; }
         let sizes = [inputs[0].read().unwrap().get_size() as i32, inputs[1].read().unwrap().get_size() as i32];
         for slot in 0..2 {
-            let offset = if big == (slot == 1) { base + sizes[1 - slot] } else { base };
+            let offset = if big == (slot == 1) { base_offset + sizes[1 - slot] } else { base_offset };
             let piece = inputs[slot].clone();
-            let nested = piece.read().unwrap().get_def().filter(|d| d.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE);
-            out.push((piece, offset));
-            if let Some(nested) = nested { Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, out); }
+            // Ghidra op.cc:871-874: bool res = isLeaf(rootVn,vn,offset-rootOffset);
+            // stack.emplace_back(op,i,offset,res); if (!res) gatherPieces(...).
+            let is_leaf = Self::piece_is_leaf(root, &piece, offset - root_offset);
+            out.push((piece.clone(), offset));
+            if !is_leaf {
+                // isLeaf=false guarantees a written PIECE def (checks b and c).
+                let nested = piece.read().unwrap().get_def()
+                    .expect("gather_partial_pieces: isLeaf=false guarantees a PIECE def");
+                Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, root_offset, out);
+            }
         }
     }
 
@@ -2165,7 +2860,7 @@ impl Merge {
                 // merge.cc:942-947: attempt the (non-speculative) merge —
                 // ANCHOR survives (merge(high, newHigh, false)); failure marks
                 // the symbol/high and counts the conflict too.
-                if !self.merge_speculative(&anchor_high, &new_high, false) {
+                if !self.merge_speculative(fd, &anchor_high, &new_high, false) {
                     sym_arc
                         .write()
                         .unwrap()
@@ -2261,14 +2956,15 @@ impl Merge {
                     };
                     let Some(high_in) = high_in else { continue };
                     // mergeTestRequired — pure property test, no cover check
-                    if !self.merge_test_required(&high_out, &high_in) {
+                    let req_ok = self.merge_test_required(&high_out, &high_in);
+                    if !req_ok {
                         continue;
                     }
                     // merge(high_out, high_in, false) — cover intersection
                     // returns false (skip), never snips (merge.cc:1565-1575).
                     // merge.cc:346: merge(vn1->getHigh(), vn2->getHigh(), false)
                     // — output-side survivor, required (non-speculative).
-                    let _ = self.merge_speculative(&high_out, &high_in, false);
+                    let _ = self.merge_speculative(fd, &high_out, &high_in, false);
                 }
             }
         }
@@ -2314,6 +3010,9 @@ impl Merge {
     /// union field types via `inheritResolution`/`forceFacingType`/`getUnionField`.
     /// Rugra has no union-resolution infrastructure; this path is skipped
     /// (the COPY is created without union field forcing — conservative).
+    /// The base data-type carry (cc:416 `ct = inVn->getType()` → cc:429
+    /// `newUnique(inVn->getSize(),ct)`) is NOT part of that omission: the
+    /// trim COPY's output varnode observes the input varnode's data-type.
     fn allocate_copy_trim(
         &mut self,
         fd: &mut Funcdata,
@@ -2324,8 +3023,10 @@ impl Merge {
         let copy_op = fd.new_op(1, addr);
         fd.op_set_opcode(&copy_op, crate::opcodes::OpCode::CPUI_COPY);
         let size = in_vn.read().unwrap().size;
-        // new_unique returns a free Varnode; set as COPY output.
-        let out_vn = fd.new_unique(size);
+        // cc:416/429: ct = inVn->getType(); outVn = newUnique(size, ct)
+        let ct = in_vn.read().unwrap().v_type.clone();
+        // new_unique_typed returns a free Varnode with ct as its data-type.
+        let out_vn = fd.new_unique_typed(size, ct);
         Self::wire_unique_high(fd, &out_vn);
         fd.op_set_output(&copy_op, out_vn);
         fd.op_set_input(&copy_op, in_vn.clone(), 0);
@@ -2777,7 +3478,13 @@ impl Merge {
         let op_addr = op.0.read().unwrap().get_addr();
         let copyop = fd.new_op(1, op_addr);
         fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
-        let uniq = fd.new_unique(vn.read().unwrap().size);
+        // cc:668/677: Datatype *ct = vn->getType() (read BEFORE any
+        // rewiring); uniq = data.newUnique(vn->getSize(),ct).
+        let (size, ct) = {
+            let v = vn.read().unwrap();
+            (v.size, v.v_type.clone())
+        };
+        let uniq = fd.new_unique_typed(size, ct);
         // op output → uniq; copyop output → original vn; copyop input → uniq.
         fd.op_set_output(op, uniq.clone());
         fd.op_set_output(&copyop, vn);
@@ -2794,20 +3501,24 @@ impl Merge {
     /// force-merges.
     fn merge_op(&mut self, fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
         use crate::opcodes::OpCode;
-        let (max, high_out, inputs) = {
+        let (max, high_out) = {
             let o = op.0.read().unwrap();
             let max = if o.opcode == OpCode::CPUI_INDIRECT { 1 } else { o.num_input() };
             let out_vn = o.output.clone();
-            let ins: Vec<Arc<RwLock<Varnode>>> = o.inrefs.iter().cloned().collect();
-            (max, out_vn, ins)
+            (max, out_vn)
         };
         let Some(out_vn) = high_out else { return };
         let high_out_arc = out_vn.read().unwrap().high.clone();
         let Some(high_out_arc) = high_out_arc else { return };
 
         // Phase 1: non-cover mergeTestRequired restrictions (merge.cc:730-741).
+        // Both `op->getIn(i)` (cc:731) and `op->getIn(j)` (cc:737) are live
+        // reads: a trim of an earlier slot replaces that slot's Varnode (and
+        // its HighVariable, fresh via allocateCopyTrim's wire_unique_high)
+        // mid-loop, so later slots must be tested against the POST-trim high,
+        // not a pre-loop snapshot.
         for i in 0..max {
-            let high_in = inputs.get(i).and_then(|v| v.read().unwrap().high.clone());
+            let high_in = op.0.read().unwrap().inrefs.get(i).and_then(|v| v.read().unwrap().high.clone());
             let Some(high_in) = high_in else { continue };
             if !self.merge_test_required(&high_out_arc, &high_in) {
                 self.trim_op_input(fd, op, i);
@@ -2816,7 +3527,7 @@ impl Merge {
             // Check against earlier inputs (merge.cc:736-740).
             let mut conflict = false;
             for j in 0..i {
-                let high_j = inputs.get(j).and_then(|v| v.read().unwrap().high.clone());
+                let high_j = op.0.read().unwrap().inrefs.get(j).and_then(|v| v.read().unwrap().high.clone());
                 if let Some(hj) = high_j {
                     if !self.merge_test_required(&hj, &high_in) {
                         conflict = true;
@@ -2835,13 +3546,13 @@ impl Merge {
         let high_out_arc2 = out_vn.read().unwrap().high.clone();
         if let Some(ho) = high_out_arc2 {
             let mut testlist: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
-            self.merge_test_with_list(&ho, &mut testlist);
+            self.merge_test_with_list(fd, &ho, &mut testlist);
             let mut i = 0;
             for inp in inputs2.iter().take(max) {
                 let high_in = inp.read().unwrap().high.clone();
                 match high_in {
                     Some(hi) => {
-                        if !self.merge_test_with_list(&hi, &mut testlist) {
+                        if !self.merge_test_with_list(fd, &hi, &mut testlist) {
                             break;
                         }
                     }
@@ -2855,7 +3566,7 @@ impl Merge {
                 while nexttrim < max {
                     self.trim_op_input(fd, op, nexttrim);
                     testlist.clear();
-                    self.merge_test_with_list(&ho, &mut testlist);
+                    self.merge_test_with_list(fd, &ho, &mut testlist);
                     let mut all_ok = true;
                     for k in 0..max {
                         let inp_k = op.0.read().unwrap().inrefs.get(k).cloned();
@@ -2864,7 +3575,7 @@ impl Merge {
                                 let hi = vn.read().unwrap().high.clone();
                                 match hi {
                                     Some(h) => {
-                                        if !self.merge_test_with_list(&h, &mut testlist) {
+                                        if !self.merge_test_with_list(fd, &h, &mut testlist) {
                                             all_ok = false;
                                         }
                                     }
@@ -2901,7 +3612,7 @@ impl Merge {
                     }
                     // merge(high_out, high_in, false) — cover intersect → skip.
                     // merge.cc:766: merge(out->getHigh(), in->getHigh(), false).
-                    let _ = self.merge_speculative(&ho_arc, &hi_arc, false);
+                    let _ = self.merge_speculative(fd, &ho_arc, &hi_arc, false);
                 }
                 _ => {}
             }
@@ -3089,14 +3800,14 @@ impl Merge {
         let in_high = invn0.read().unwrap().high.clone();
         let (Some(out_high), Some(in_high)) = (out_high, in_high) else { return };
         if self.merge_test_required(&out_high, &in_high) {
-            if self.merge_speculative(&in_high, &out_high, false) {
+            if self.merge_speculative(fd, &in_high, &out_high, false) {
                 return;
             }
         }
         // merge.cc:860-868: snip output interference, then retry the merge.
         if self.snip_output_interference(fd, indop) {
             if self.merge_test_required(&out_high, &in_high) {
-                if self.merge_speculative(&in_high, &out_high, false) {
+                if self.merge_speculative(fd, &in_high, &out_high, false) {
                     return;
                 }
             }
@@ -3125,7 +3836,7 @@ impl Merge {
             let ok = match out_high_now {
                 Some(oh) => {
                     self.merge_test_required(&oh, &in0_high)
-                        && self.merge_speculative(&in0_high, &oh, false)
+                        && self.merge_speculative(fd, &in0_high, &oh, false)
                 }
                 None => false,
             };
@@ -3443,43 +4154,37 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:1415 Merge::processCopyTrims
-    /// Step 6: ActionDominantCopy (coreaction.cc:5723 / coreaction.hh:1008).
-    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
+    /// Step 6 of the merge phase: ActionDominantCopy (coreaction.cc:5723;
+    /// apply at coreaction.hh:1008 is exactly `data.getMerge().processCopyTrims()`).
     ///
-    /// Walks the `copyTrims` list — COPY ops inserted by the earlier snip
-    /// trims (`allocateCopyTrim`/`snipReads`, merge.cc:411,443) — to find
+    /// Walks the `copyTrims` list — COPY ops inserted by the snip machinery
+    /// of the forced-merge path (`allocateCopyTrim`/`snipReads`, merge.cc:411,443;
+    /// wired into `merge_addr_tied` since 2026-07-04) — to find
     /// HighVariables that received ≥ 2 such COPYs and calls
-    /// `processHighDominantCopy(high)` to replace them with a single
-    /// dominant COPY.
+    /// `process_high_dominant_copy(high)` on each to replace them with a
+    /// single dominant COPY.
     ///
-    /// **INFRASTRUCTURE GAP**: Rugra has no snip/trim data-flow rewrite
-    /// machinery. `copyTrims` is never populated (the forced-merge path in
-    /// ActionMergeRequired — mergeAddrTied/mergeMarker → unifyAddress →
-    /// eliminateIntersect → snipReads → allocateCopyTrim — is not ported).
-    /// Therefore this method is a faithful no-op: the list is empty, so
-    /// nothing happens. To make it functional, port the snip/trim subsystem
-    /// (snipReads/eliminateIntersect/allocateCopyTrim + the forced-merge
-    /// callers in merge_addr_tied/merge_marker). Now ported (2026-07-04):
-    /// unify_address/eliminate_intersect/snip_reads/allocate_copy_trim are
-    /// wired into merge_addr_tied, so copy_trims is populated.
-    ///
-    /// This implementation walks copy_trims and counts COPYs per output High
-    /// (faithful to merge.cc:1420-1434). The dominant-copy replacement
-    /// (processHighDominantCopy, merge.cc:1316) is NOT yet ported — it
-    /// requires findAllIntoCopies/buildDominantCopy. copy_trims is cleared
-    /// after counting (faithful to merge.cc:1429).
+    /// Traversal order mirrors merge.cc:1418-1435 exactly: first-seen order
+    /// of the HighVariables within the copyTrims list (Ghidra pushes each
+    /// high onto `multiCopy` at its first sighting, using the copy_in1 /
+    /// copy_in2 HighVariable flags as the per-high ≥2 counter). The HashMap
+    /// below is keyed-lookup only; iteration order is carried by the
+    /// `first_seen` Vec. HashMap iteration here would randomize the dominant
+    /// COPY op-insertion order per process (DETERM-COPYTRIM-0001,
+    /// DETERM-DOMINANTCOPY-0001 — both AX/AZ nondeterminism sources).
     pub fn process_copy_trims(&mut self, fd: &mut Funcdata) {
         self.attach(fd);
         if self.copy_trims.is_empty() {
             self.detach(fd);
             return;
         }
-        // Ghidra merge.cc:1420-1428: count COPYs into each output HighVariable.
-        // Ghidra uses copy_in1/copy_in2 flags; we use a map keyed by HighVariable Arc ptr.
-        let mut counts: std::collections::HashMap<
-            usize,
-            (Arc<RwLock<HighVariable>>, u32),
-        > = std::collections::HashMap::new();
+        // Ghidra merge.cc:1420-1428: walk copyTrims in list order. First
+        // sighting of a HighVariable pushes it onto multiCopy in first-seen
+        // order and sets copy_in1; later sightings only set copy_in2 (the
+        // "at least 2" mark).
+        let mut first_seen: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        let mut counts: std::collections::HashMap<usize, u32> =
+            std::collections::HashMap::new();
         for trim in &self.copy_trims {
             let out_high = {
                 let t = trim.0.read().unwrap();
@@ -3489,20 +4194,26 @@ impl Merge {
                 })
             };
             if let Some((key, h)) = out_high {
-                counts.entry(key).or_insert_with(|| (h, 0)).1 += 1;
+                match counts.get_mut(&key) {
+                    Some(count) => *count += 1, // later sighting: setCopyIn2 (merge.cc:1427)
+                    None => {
+                        counts.insert(key, 1); // first sighting: setCopyIn1 (merge.cc:1424)
+                        first_seen.push(h); // multiCopy.push_back (merge.cc:1423)
+                    }
+                }
             }
         }
-        // Ghidra merge.cc:1430-1434: for each high with ≥2 COPYs, call processHighDominantCopy.
-        let multi: Vec<Arc<RwLock<HighVariable>>> = counts
-            .into_iter()
-            .filter_map(|(_, (h, c))| if c >= 2 { Some(h) } else { None })
-            .collect();
-        for high in &multi {
-            // Ghidra: high->hasCopyIn2() → processHighDominantCopy(high) (merge.cc:1432)
-            self.process_high_dominant_copy(fd, high);
-        }
-        // Ghidra merge.cc:1429: copyTrims.clear()
+        // Ghidra merge.cc:1429: copyTrims.clear() — between the two loops.
         self.copy_trims.clear();
+        // Ghidra merge.cc:1430-1435: for each high in multiCopy (first-seen)
+        // order, process it if it received ≥ 2 COPYs (hasCopyIn2).
+        for high in &first_seen {
+            let key = std::sync::Arc::as_ptr(high) as *const () as usize;
+            // Ghidra: if (high->hasCopyIn2()) processHighDominantCopy(high) (merge.cc:1432)
+            if counts[&key] >= 2 {
+                self.process_high_dominant_copy(fd, high);
+            }
+        }
         self.detach(fd);
     }
 
@@ -3591,7 +4302,7 @@ impl Merge {
                 //   merge(high_out,high_in,true); — the OUTPUT high
                 // survives (merge.cc:1558: the second is merged into the
                 // first).
-                self.merge_speculative_by_vn(&out_vn, &in_vn, true);
+                self.merge_speculative_by_vn(fd, &out_vn, &in_vn, true);
             }
         }
 
@@ -3895,7 +4606,7 @@ impl Merge {
                     high_list.push_back(high);
                 }
             }
-            self.merge_linear(&mut group);
+            self.merge_linear(fd, &mut group);
         }
 
         self.detach(fd);
@@ -3909,7 +4620,7 @@ impl Merge {
     /// whose cover it does not intersect; if none is compatible it starts a
     /// new stack group. After a successful merge, the stacked head's cover
     /// snapshot is refreshed so subsequent tests reflect the union.
-    fn merge_linear(&mut self, highvec: &mut Vec<Arc<RwLock<HighVariable>>>) {
+    fn merge_linear(&mut self, fd: &Funcdata, highvec: &mut Vec<Arc<RwLock<HighVariable>>>) {
         if highvec.len() <= 1 {
             return;
         }
@@ -3923,7 +4634,7 @@ impl Merge {
             let mut merged = false;
             for output in &high_stack {
                 if self.merge_test_speculative(output, high)
-                    && self.merge_type_pair(output, high)
+                    && self.merge_type_pair(fd, output, high)
                 {
                     merged = true;
                     break;
@@ -4015,6 +4726,15 @@ impl Merge {
                     }
                     // vn2->getCover()->containVarnodeDef(vn1)==1 (merge.cc:1087)
                     let (v1_blk, v1_ord, v1_is_input) = varnode_def_loc(&vn1.read().unwrap());
+                    // merge.cc:1087: vn2->getCover() is the lazy rebuild
+                    // read (varnode.hh:202 → varnode.cc:233) — rebuild
+                    // before reading so a mid-pass coverdirty instance
+                    // cannot feed its stale cover into the boundary
+                    // containment test (earlier op_set_input calls in this
+                    // same double loop dirty vn1/vn2 via add_descend;
+                    // discipline identical to gather_block_varnodes).
+                    // MERGE-HIGHCOVER-PROPAGATION-0001 residual reader fix.
+                    Varnode::update_cover_locked(vn2);
                     let vn2_covers_vn1 = vn2.read().unwrap()
                         .cover.as_ref().map(|c| c.contain_varnode_def_at(v1_is_input, v1_blk, v1_ord) == 1)
                         .unwrap_or(false);
@@ -4029,6 +4749,9 @@ impl Merge {
                     }
                     // vn1->getCover()->containVarnodeDef(vn2)==1 (merge.cc:1092)
                     let (v2_blk, v2_ord, v2_is_input) = varnode_def_loc(&vn2.read().unwrap());
+                    // merge.cc:1092: vn1->getCover() lazy rebuild read —
+                    // same discipline as the vn2 read above.
+                    Varnode::update_cover_locked(vn1);
                     let vn1_covers_vn2 = vn1.read().unwrap()
                         .cover.as_ref().map(|c| c.contain_varnode_def_at(v2_is_input, v2_blk, v2_ord) == 1)
                         .unwrap_or(false);
@@ -4313,8 +5036,104 @@ impl Merge {
                     }
                     let _ = in_vn;
                 }
-                // PIECE/SUBPIECE: VariablePiece CONCAT reassembly (merge.cc:1478-1528).
-                // Omitted — Rugra has no VariablePiece infrastructure.
+                // PIECE: output built out of pieces of itself (merge.cc:1478-1506).
+                // All three highs carry VariablePieces in the SAME group, with
+                // offsets consistent with the concat reconstruction →
+                // nonprinting op + inputs forced explicit (internal PIECE ops
+                // are hidden; the pieces print as their own statements).
+                OpCode::CPUI_PIECE => {
+                    let (v1, v2, v3) = {
+                        let op = op_ref.0.read().unwrap();
+                        (
+                            op.output.clone(),
+                            op.inrefs.get(0).cloned(),
+                            op.inrefs.get(1).cloned(),
+                        )
+                    };
+                    let (Some(v1), Some(v2), Some(v3)) = (&v1, &v2, &v3) else { continue ;
+                    };
+                    let p1 = v1.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p2 = v2.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p3 = v3.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let (Some(p1), Some(p2), Some(p3)) = (p1, p2, p3) else { continue };
+                    // p1->getGroup() != p2/p3->getGroup() → break (cc:1486-1489).
+                    let same_group = {
+                        let g1 = p1.read().unwrap().get_group_arc();
+                        let g2 = p2.read().unwrap().get_group_arc();
+                        let g3 = p3.read().unwrap().get_group_arc();
+                        match (g1, g2, g3) {
+                            (Some(a), Some(b), Some(c)) => {
+                                Arc::ptr_eq(&a, &b) && Arc::ptr_eq(&a, &c)
+                            }
+                            _ => false,
+                        }
+                    };
+                    if !same_group { continue; }
+                    // Little-endian (cc:1496-1499): p3->getOffset() == p1->getOffset()
+                    // && p2->getOffset() == p1->getOffset() + v3->getSize().
+                    // (Rugra targets x86-64 LE only; the BE arm mirrors cc:1492-1495.)
+                    let (p1_off, p2_off, p3_off) = (
+                        p1.read().unwrap().group_offset,
+                        p2.read().unwrap().group_offset,
+                        p3.read().unwrap().group_offset,
+                    );
+                    let v3_size = v3.read().unwrap().get_size() as i32;
+                    if p3_off != p1_off { continue; }
+                    if p2_off != p1_off + v3_size { continue; }
+                    fd.op_mark_non_printing(op_ref);
+                    // cc:1499-1506: inputs forced explicit (clearImplied+setExplicit).
+                    if v2.read().unwrap().is_implied() {
+                        v2.write().unwrap().clear_implied();
+                        v2.write().unwrap().set_explicit();
+                    }
+                    if v3.read().unwrap().is_implied() {
+                        v3.write().unwrap().clear_implied();
+                        v3.write().unwrap().set_explicit();
+                    }
+                }
+                // SUBPIECE: internal field extraction (merge.cc:1508-1528).
+                // out and in highs share a group and the truncation offset
+                // matches the piece-offset delta → nonprinting + in(0) explicit.
+                OpCode::CPUI_SUBPIECE => {
+                    let (v1, v2, val) = {
+                        let op = op_ref.0.read().unwrap();
+                        (
+                            op.output.clone(),
+                            op.inrefs.get(0).cloned(),
+                            op.inrefs.get(1).map(|c| c.read().unwrap().get_offset() as i32),
+                        )
+                    };
+                    let (Some(v1), Some(v2), Some(val)) = (v1, v2, val) else { continue };
+                    let p1 = v1.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p2 = v2.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let (Some(p1), Some(p2)) = (p1, p2) else { continue };
+                    let same_group = {
+                        let g1 = p1.read().unwrap().get_group_arc();
+                        let g2 = p2.read().unwrap().get_group_arc();
+                        match (g1, g2) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+                            _ => false,
+                        }
+                    };
+                    if !same_group { continue; }
+                    // Little-endian (cc:1521-1523): p2->getOffset() + val ==
+                    // p1->getOffset(). (BE arm mirrors cc:1518-1520.)
+                    let (p1_off, p2_off) = (
+                        p1.read().unwrap().group_offset,
+                        p2.read().unwrap().group_offset,
+                    );
+                    if p2_off + val != p1_off { continue; }
+                    fd.op_mark_non_printing(op_ref);
+                    if v2.read().unwrap().is_implied() {
+                        v2.write().unwrap().clear_implied();
+                        v2.write().unwrap().set_explicit();
+                    }
+                }
                 _ => {}
             }
         }
@@ -4328,24 +5147,34 @@ impl Merge {
         self.detach(fd);
     }
 
-    // Ghidra: merge.hh:83 Merge::computeVarnodeCovers
-    /// Populate `vn.cover` for every writable varnode from its def op and
-    /// reader ops. Mirrors Ghidra's `Varnode::calculateCover` /
-    /// `HighVariable::updateCover`. Constants and annotations are skipped.
+    // Ghidra: varnode.cc:233 Varnode::updateCover
+    /// Materialize `vn.cover` for every live/input varnode as the exact
+    /// product of the oracle's lazy cover machinery. Ghidra has NO eager
+    /// cover pass inside Merge: covers are allocated by `Varnode::calcCover`
+    /// (varnode.cc:254-263) at assign time (`Funcdata::setVarnodeProperties`
+    /// / `assignHigh`, funcdata_varnode.cc:38-41/52-53) and rebuilt lazily
+    /// by `Varnode::updateCover` (varnode.cc:233-241) on the first
+    /// `getCover()` read after any `coverdirty` mutation.
     ///
-    /// Cover semantics per block (matching Ghidra):
-    ///   - def in block, also used in block → `[def_order, last_use_order]`
-    ///   - def in block, no use in block but read in a later block →
-    ///     `[def_order, MAX]` (live-out); no reads anywhere → point
-    ///     `[def_order, def_order]` (oracle Cover::rebuild encoding)
-    ///   - no def in block, used in block → `[0, last_use_order]` (live-in)
-    ///   - no def, no use in block → no cover entry
+    /// The oracle Cover shape (cover.cc:477-496 `Cover::rebuild` +
+    /// `addDefPoint`/`addRefPoint`/`addRefRecurse`, cover.cc:501-612):
+    ///   - def block: `[def, end-of-block]` once any read lives elsewhere;
+    ///     `[def, def]` point when there are no reads;
+    ///   - every block on ANY predecessor path from a read back toward the
+    ///     def is filled FULLY (`addRefRecurse` setAll + backward
+    ///     recursion over `bl->getIn(j)`) — the cover is reconstructed by
+    ///     walking the CFG BACKWARD from each read, never forward over
+    ///     successors;
+    ///   - a MULTIEQUAL read only pulls cover through the incoming edges
+    ///     whose slot actually reads the varnode (cover.cc:604-607);
+    ///   - input varnodes plant the input marker at block 0
+    ///     (cover.cc:514-518).
     ///
-    /// After per-block computation, covers are propagated forward through
-    /// the CFG: any live-out block's successors get `[0, MAX]` entries
-    /// (transitively live). This is conservative but correct — it may
-    /// block some valid merges (if the varnode doesn't actually flow to
-    /// ALL successors) but never allows invalid merges.
+    /// This pass runs the same rebuild eagerly at one pipeline point.
+    /// `Cover::rebuild` is a pure function of the varnode's def/descendant/
+    /// CFG state, so forcing the COVERDIRTY flag before rebuilding yields
+    /// the oracle state even if a Rugra mutation path misses setting the
+    /// flag (the oracle's own rebuild always clears it afterward).
     pub fn compute_varnode_covers(&mut self, fd: &mut Funcdata) {
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
@@ -4357,86 +5186,34 @@ impl Merge {
             .collect();
 
         for vn_arc in vn_arcs {
-            let skip = {
-                let vn = vn_arc.read().unwrap();
-                vn.flags & (varnode_flags::CONSTANT | varnode_flags::ANNOTATION) != 0
-            };
-            if skip {
-                continue;
-            }
-
-            let mut events: Vec<(i32, u32, bool)> = Vec::new();
-
-            if let Some(def_op) = vn_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-                if let Some((bi, order)) = op_block_order(&def_op) {
-                    events.push((bi, order, true));
-                }
-            }
-
-            let reader_arcs: Vec<_> = {
-                let vn = vn_arc.read().unwrap();
-                vn.descend.iter().filter_map(|w| w.upgrade()).collect()
-            };
-            for reader_arc in reader_arcs {
-                if let Some((bi, order)) = op_block_order(&reader_arc) {
-                    events.push((bi, order, false));
-                }
-            }
-
-            let mut by_block: std::collections::BTreeMap<i32, (Option<u32>, Option<u32>)> =
-                std::collections::BTreeMap::new();
-            for (bi, order, is_def) in events {
-                let entry = by_block.entry(bi).or_insert((None, None));
-                if is_def {
-                    entry.0 = Some(order);
+            // Ghidra: funcdata_varnode.cc:52-53 assignHigh /
+            // :38-41 setVarnodeProperties — `if (vn->hasCover())
+            // vn->calcCover();` (hasCover excludes constants/annotations).
+            let materialize = {
+                let mut vn = vn_arc.write().unwrap();
+                if !vn.has_cover() {
+                    false
                 } else {
-                    entry.1 = Some(entry.1.map_or(order, |existing| existing.max(order)));
+                    if vn.cover.is_none() {
+                        vn.calc_cover();
+                    }
+                    // Ghidra: varnode.cc:352 setFlags — calcCover's own
+                    // cc:261 setFlags(coverdirty) already fired the high
+                    // notification (flagsDirty + coverDirty + piece walk);
+                    // this re-fire mirrors the sweep's unconditional dirty
+                    // intent (MERGE-COPYNOISE-SPILLRESTORE-0001) and is
+                    // idempotent, like the oracle's repeated setFlags calls.
+                    vn.set_flags(varnode_flags::COVERDIRTY);
+                    true
                 }
-            }
-
-            let mut cover = Cover::new();
-            // Highest block index holding a read event (for the live-out
-            // rule below).
-            let max_reader_block = by_block
-                .iter()
-                .filter_map(|(bi, (_, last))| last.map(|_| *bi))
-                .max();
-            for (bi, (def_order, last_ref)) in by_block {
-                let start = def_order.unwrap_or(0);
-                // A def with no in-block read: if a LATER block reads the
-                // varnode it is live-out here -> [def, MAX] (Ghidra
-                // Cover::rebuild's successor fill, e.g. P defined in b0 and
-                // read in b1); with no reads anywhere it is the POINT
-                // [def, def] the locked 12.0.4 fixture observes for
-                // def-no-read Varnodes (tA/tB/tC). The previous
-                // unconditional [def, MAX] diverged on the zero-reader case.
-                let end = match last_ref {
-                    Some(last) => last,
-                    None => match max_reader_block {
-                        Some(max_bi) if max_bi > bi => u32::MAX,
-                        _ => start,
-                    },
-                };
-                let cb = cover.blocks.entry(bi).or_insert_with(CoverBlock::new);
-                // Setter form keeps the pointer-identity domain (start_id/
-                // end_id) in sync with the u32 projection fields.
-                cb.set_begin(start);
-                cb.set_end(end);
-            }
-
-            // NOTE: We intentionally do NOT propagate covers through CFG
-            // successors (unlike an earlier version). Ghidra's Cover is a
-            // precise def->use range (cover.cc), not a forward reachability
-            // over-approximation. Propagating live-out to ALL successors as
-            // [0, MAX] made covers cover the whole CFG, which broke
-            // ActionMarkImplied's inflateTest (every input intersected) and
-            // over-blocked merge_by_cover. Precise def/use ranges are correct.
-
-            let mut vn = vn_arc.write().unwrap();
-            if cover.blocks.is_empty() {
-                vn.cover = None;
-            } else {
-                vn.cover = Some(Box::new(cover));
+            };
+            if materialize {
+                // Ghidra: varnode.cc:233 Varnode::updateCover →
+                // cover.cc:477 Cover::rebuild (backward fill through
+                // predecessors, MULTIEQUAL slot precision, INDIRECT marker
+                // ordering) — the faithful path already implemented by
+                // Cover::rebuild_from_root_snapshot.
+                Varnode::update_cover_locked(&vn_arc);
             }
         }
     }
@@ -4448,104 +5225,41 @@ fn aggregate_high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     aggregate_high_cover_from(&h)
 }
 
-// Ghidra: merge.hh:83 Merge::aggregateHighCoverFrom
+// Ghidra: variable.cc:324 HighVariable::updateInternalCover (merge.hh:83 aggregateHighCoverFrom)
 /// Aggregate (union) the covers of every instance in a borrowed HighVariable.
 /// Used by the speculative-merge primitive and copy/adjacent/type passes to
 /// test whether two HighVariables are simultaneously live.
+///
+/// Faithful to Ghidra's accessor chain `inst[i]->getCover()`
+/// (varnode.hh:202), which lazily REBUILDS a dirty Varnode Cover before it
+/// is read (varnode.cc:233 Varnode::updateCover → cover->rebuild). Reading
+/// the raw `cover` field without the rebuild merges stale (post-calcCover,
+/// pre-rebuild) empty Covers, which silently disables every cover-based
+/// merge gate downstream (RULE-PROPCOPY-ADDRTIED-0001 root cause: the
+/// MULTIEQUAL lane trim in Merge::mergeOp never fired).
 fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
     let mut agg = Cover::new();
+    // Ghidra: variable.cc:329 gates the whole merge on inst[0]->hasCover().
+    let first_has_cover = high
+        .instances
+        .first()
+        .map(|first| first.read().unwrap().has_cover())
+        .unwrap_or(false);
+    if !first_has_cover {
+        return agg;
+    }
     for inst_arc in &high.instances {
+        // Ghidra: inst[i]->getCover() — lazy rebuild (varnode.cc:233-241),
+        // then merge the rebuilt instance cover. No high-dirty propagation
+        // across the rebuild (varnode.cc:365-374): the wrapper holds a READ
+        // guard on this high (aggregate_high_cover) and this instance's high
+        // IS this high — a member back-pointer write would self-deadlock.
+        Varnode::update_cover_locked(inst_arc);
         if let Some(inst) = inst_arc.read().unwrap().cover.as_ref() {
             agg.merge(inst);
         }
     }
     agg
-}
-
-// Ghidra: merge.hh:83 Merge::opBlockOrder
-fn op_block_order(op_arc: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<(i32, u32)> {
-    let op = op_arc.read().unwrap();
-    let order = op.start.get_order();
-    let block_idx = op
-        .parent
-        .as_ref()
-        .and_then(|weak| weak.upgrade())
-        .map(|blk_arc| blk_arc.read().unwrap().get_index());
-    block_idx.map(|bi| (bi, order))
-}
-
-// Ghidra: merge.hh:83 Merge::propagateCoverThroughCfg
-/// Forward-propagate cover entries through the CFG. For each block whose
-/// cover extends to end-of-block (`end == u32::MAX`, meaning live-out),
-/// all successor blocks that don't already have a cover entry get filled
-/// with `[0, MAX]` (transitively live). Iterates to fixed point.
-///
-/// This is conservative: a varnode might not actually flow to EVERY
-/// successor (e.g., conditional branches). Over-approximating liveness
-/// is safe — it blocks some valid merges but never allows invalid ones.
-#[allow(dead_code)] // disabled: over-conservative CFG propagation broke inflateTest
-fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
-    if cover.blocks.is_empty() {
-        return;
-    }
-
-    // Build block_idx → successor block_idx map from the CFG.
-    // BlockGraph stores blocks by index; FlowBlock::get_out gives edges.
-    let mut successors: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
-    for i in 0..fd.bblocks.get_size() {
-        if let Some(blk_arc) = fd.bblocks.get_block(i) {
-            let blk = blk_arc.read().unwrap();
-            let blk_idx = blk.get_index();
-            let mut succs = Vec::new();
-            for slot in 0..blk.size_out() {
-                if let Some(edge) = blk.get_out(slot) {
-                    succs.push(edge.point.read().unwrap().get_index());
-                }
-            }
-            successors.insert(blk_idx, succs);
-        }
-    }
-
-    // Worklist of blocks that are live-out and need their successors filled.
-    let mut worklist: Vec<i32> = cover
-        .blocks
-        .iter()
-        .filter(|(_, cb)| cb.end == u32::MAX)
-        .map(|(idx, _)| *idx)
-        .collect();
-
-    while let Some(bi) = worklist.pop() {
-        let Some(succs) = successors.get(&bi) else {
-            continue;
-        };
-        for succ_idx in succs {
-            let already_full = cover
-                .blocks
-                .get(succ_idx)
-                .map(|cb| cb.start == 0 && cb.end == u32::MAX)
-                .unwrap_or(false);
-            if already_full {
-                continue;
-            }
-
-            // If the successor already has a cover entry with a real range
-            // (start > 0 or end < MAX), the varnode is actually def'd/used
-            // there — don't overwrite. Only fill empty entries.
-            let has_real_entry = cover.blocks.contains_key(succ_idx);
-            if has_real_entry {
-                continue;
-            }
-
-            let cb = cover
-                .blocks
-                .entry(*succ_idx)
-                .or_insert_with(CoverBlock::new);
-            // Full-block fill via the setAll setter (identity domain sync).
-            cb.set_all();
-            // This new full-block entry is itself live-out; queue it.
-            worklist.push(*succ_idx);
-        }
-    }
 }
 
 /// Represents a varnode within a specific block for merging purposes.
@@ -4755,6 +5469,124 @@ mod tests {
             !Arc::ptr_eq(&rdi_high, &rsi_high),
             "RDI and RSI are independent parameters and must not share a HighVariable"
         );
+    }
+
+    /// `compute_varnode_covers` must materialize the oracle `Cover::rebuild`
+    /// product (cover.cc:477-496): a def in b0 read in b2 through an empty
+    /// intermediate b1 produces
+    ///   b0: [def, end-of-block]   (addRefRecurse extends the stop, cc:542-543)
+    ///   b1: full [begin, end]     (intermediate block setAll, cc:531-536)
+    ///   b2: [begin, read]         (addRefPoint setEnd, cc:574-575)
+    /// The pre-fix events approximation produced ONLY {b0: [def,MAX],
+    /// b2: [0,read]} — the intermediate block never received cover.
+    ///
+    /// Layout (stride 0x10 per op):
+    ///   b0 @0x1000: cmp; t=COPY(RDI); CBRANCH→0x1040
+    ///   b1 @0x1030: BRANCH→0x1040        (pure intermediate block)
+    ///   b2 @0x1040: STORE(...,t); RETURN  (read block)
+    #[test]
+    fn test_compute_varnode_covers_backfills_intermediate_blocks() {
+        let mut fd = Funcdata::new("cover_backfill", Address::new(0x1000), 0x80);
+
+        let mut cmp_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
+        cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+        cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8)); // RSI
+        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
+
+        let mut copy_t = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        copy_t.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        copy_t.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+
+        let mut cbranch = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1040, 8)); // → b2
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
+
+        let mut goto_b2 = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
+        goto_b2.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1040, 8)); // → b2
+
+        let mut store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        store.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        store.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RAM ptr
+        store.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8)); // reads t
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+
+        fd.inject_raw_ops(&[cmp_zf, copy_t, cbranch, goto_b2, store, ret]);
+        fd.bblocks.build_dom_tree();
+        fd.run_heritage_direct();
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        // Locate t by (Unique, 0x100) — SSA/merge passes keep unique-space
+        // identity stable.
+        let t_vn = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .find(|r| {
+                let v = r.0.read().unwrap();
+                v.address_space == AddressSpace::Unique
+                    && v.loc.to_space_address().get_offset() == 0x100
+                    && v.size == 8
+            })
+            .map(|r| r.0.clone())
+            .expect("unique temp t should exist");
+
+        let cover = t_vn
+            .read()
+            .unwrap()
+            .cover
+            .clone()
+            .expect("t must have a materialized cover after compute_varnode_covers");
+        let copy_op_def = t_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let (def_blk, def_order) = {
+            let op_arc = copy_op_def.expect("t must keep its COPY def");
+            let op = op_arc.read().unwrap();
+            let blk_arc = op.parent.as_ref().and_then(|w| w.upgrade()).expect("def parent");
+            let idx = blk_arc.read().unwrap().get_index();
+            (idx, op.start.get_order())
+        };
+
+        // Exactly three blocks hold cover: the def block, the intermediate,
+        // the read block.
+        assert_eq!(
+            cover.blocks.len(),
+            3,
+            "def + intermediate + read blocks must all hold cover (got {:?})",
+            cover.blocks.keys().collect::<Vec<_>>()
+        );
+
+        // Def block: [def_order, MAX] — extended to end-of-block by
+        // addRefRecurse (cover.cc:542-543).
+        let def_cb = cover.blocks.get(&def_blk).expect("def block cover");
+        assert_eq!(def_cb.start, def_order);
+        assert_eq!(def_cb.end, u32::MAX, "def block extends to end-of-block");
+
+        // Intermediate block (b1, the pure BRANCH block): FULL [0, MAX]
+        // (cover.cc:531-536 setAll + predecessor recursion).
+        let full_blocks: Vec<i32> = cover
+            .blocks
+            .iter()
+            .filter(|(_, cb)| cb.start == 0 && cb.end == u32::MAX)
+            .map(|(idx, _)| *idx)
+            .collect();
+        assert_eq!(
+            full_blocks.len(),
+            1,
+            "exactly one intermediate block must be fully covered"
+        );
+
+        // Read block: [0, read_order] with read_order < MAX (the STORE).
+        let read_blocks: Vec<(i32, u32)> = cover
+            .blocks
+            .iter()
+            .filter(|(idx, cb)| **idx != def_blk && !(cb.start == 0 && cb.end == u32::MAX))
+            .map(|(idx, cb)| (*idx, cb.end))
+            .collect();
+        assert_eq!(read_blocks.len(), 1, "exactly one read block");
+        assert!(read_blocks[0].1 != u32::MAX, "read block ends at the read op, not end-of-block");
+        assert!(read_blocks[0].1 > 0, "read block spans from begin to the read op");
     }
 
     /// `merge_marker` (ActionMergeRequired, merge.cc:889) must force-merge the

@@ -1,0 +1,87 @@
+{
+ "schema_version": 2,
+ "fixture_id": "PATHOSLOW-DIVCHAIN-B2-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH",
+ "status_note": "Complete bilateral B2 observation on a real corpus function that RuleDivChain fires on: sqlite3BitvecTestNotNull (libsqlite3.so.0, index 55 under the runner's offset-sorted enumeration). Locked-oracle direct run (pristine rebuild of the GEN5-provenance build command, BFD 2.38 include tree /tmp/rugra-ghidra-bfd-2.38) and the integration-state Rugra production driver (RUGRA_GEN_MIRROR=1 gen_decompile --one 55) produce byte-identical function bodies. The division-chain folding shapes (uVar4 % 0x7c, >> 3 constant chains, / 0x7c survivors) are the RuleDivChain-covered projection; the pre-fix tree did not terminate on this function (PERFAN: >=600s burn, pass_changes==2 loop), so termination itself is part of the pinned observation.",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "ruleaction.cc:8401-8443"
+  ],
+  "runner_source_sha256": "c82028e4d7375b2ca0055aa5deb0fa17536cceaf437ccb45e5d25622823be93d",
+  "runner_build_command": "g++ -std=c++11 -O2 -I<bfd-include> -I<locked-cpp> golden_dump_1204.cc libdecomp.cc sleigh_arch.cc inject_sleigh.cc bfd_arch.cc loadimage_bfd.cc libdecomp.a <libbfd> -lz",
+  "bfd_include": "/tmp/rugra-ghidra-bfd-2.38/usr/include (ephemeral host asset; rebuild recipe in run script)",
+  "bfd_library": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "rugra_base_commit": "c3768261",
+ "architecture": {
+  "id": "x86:LE:64:default over locked sleigh assets",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spec_root": "sleigh_specs/ (repo-versioned, byte-identical to the GEN5 capture spec root)",
+  "spec_assets_sha256": {
+   "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "x86-64.pspec": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "x86.ldefs": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "x86.pspec": "7416f5f65369a1cf9c1f6f83b6749169418fb51cc674c45efe39d2f274756ccb",
+   "x86gcc.cspec": "37ac2ec43156602443b4e5625625ae5e71c61d151a8b06ece6068648046f80cd"
+  }
+ },
+ "compiler_spec": "gcc (x86-64-gcc.cspec from the locked spec root)",
+ "analysis_options": {
+  "oracle_api": "BfdArchitecture over the locked sleigh assets; readLoaderSymbols static+dynamic registration, raw .rela.plt JUMP_SLOT PLT stubs; per-function followFlow + full universal action resumed past all breakpoints; PrintC docFunction",
+  "rugra_api": "examples/gen_decompile.rs production diff-gate driver with RUGRA_GEN_MIRROR=1 (mirror-mode bare-load etc.) and --one 55 hermetic single-function run",
+  "random_seed": "none; deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "binary": "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0 (host asset; override via SQLITE3_BINARY)",
+  "binary_sha256": "f5a7fc236f80f3185608d14e9f4dea3e3fd647582e123e8a00f253629fe16830",
+  "binary_format": "ELF64 x86-64 DYN (shared library), dynsym-only contract, no DWARF",
+  "function": {
+   "index": 55,
+   "name": "sqlite3BitvecTestNotNull",
+   "offset": 127776,
+   "size": 195
+  },
+  "enumeration_contract": "runner .cc collectFunctions: global scope + children, offset-sorted, name tie-break; identical contract on both sides (GEN5 12x byte-identical repeats)"
+ },
+ "comparand": {
+  "oracle_record": "tests/oracle/divchain_sqlite_bitvec_1204.oracle.json",
+  "oracle_record_sha256": "65fbc51921b4649e67355b097ecc35360a32d853c12cc5267a462a21db108d54",
+  "function_text_sha256": "a50f9e6834bab69b8cc3bc286e6b57f74d54f2963db3ed28daa038d550623ecd",
+  "function_text_form": "record text stripped of leading/trailing newlines (the one-mode preamble on the Rugra side is dropped before compare)",
+  "normalization": "Rugra --one output drops the /* ---- header ---- */ line and the typedef preamble (one-mode preamble has no oracle counterpart); the remaining function text is compared byte-for-byte. No other normalization."
+ },
+ "decisive_semantics": [
+  "ruleaction.cc:8428 baseVn->isFree() guard fires before resval is computed",
+  "ruleaction.cc:8429 sz = vn->getSize() from the intermediate result varnode",
+  "ruleaction.cc:8431-8432 resval = (val1*val2) & calc_mask(sz), zero product rejected",
+  "ruleaction.cc:8433-8436 signbit normalization feeds bitcount only",
+  "ruleaction.cc:8437-8439 bitcount > sz*8 (DIV) / sz*8-2 (SDIV) overflow guards",
+  "ruleaction.cc:8440-8441 in(0) base replacement then in(1) constant; opcode never rewritten"
+ ],
+ "coverage": {
+  "fired_shapes": "INT_SDIV/INT_RIGHT constant chains in the bitvec hash lookups collapse exactly as the oracle folds them; surviving divisions keep oracle operands",
+  "termination": "pre-fix tree burned >=600s on this function with pass_changes==2 every pass; fixed tree completes in 0.117s (oracle) / ~0.4s (Rugra debug-instrumented lane timing)",
+  "not_covered": "(DIV,RIGHT) shift-amount >= 64 pathological constants (oracle C++ UB domain, Rugra wrapping_shl defined; no live corpus observation)"
+ },
+ "expected_results": [
+  {
+   "case": "idx55 bilateral body compare",
+   "expect": "byte-identical",
+   "status": "MATCH"
+  }
+ ],
+ "residual_todo_ids": [
+  "PATHOSLOW-DIVCHAIN-0001",
+  "SQFACE-NUMBERING-GETOPTIMUM-0001"
+ ]
+}

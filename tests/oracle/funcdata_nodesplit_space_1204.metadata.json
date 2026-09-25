@@ -1,0 +1,41 @@
+{
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_block.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh"
+  ],
+  "libdecomp_supplements": [
+   "libdecomp.cc",
+   "sleigh_arch.cc",
+   "inject_sleigh.cc"
+  ]
+ },
+ "architecture": "fixture-synthetic (FixtureArchitecture over FixtureTranslate: ram/register/unique/const/stack/join/iop spaces, x86-like 8-byte, no loader)",
+ "compiler_spec": "N/A: no ProtoModel or storage assignment consulted",
+ "analysis_options": "direct Funcdata::nodeSplit drive: synthetic two-in-edge no-out-edge block with exterior COPY writers, in-block MULTIEQUAL/INT_ADD/COPY(ram persist|addrtied out)/COPY(register out)/STORE; original outputs fabricated via Funcdata::newVarnodeOut at full addresses with hand-set flag/addlflag sentinels (the Heritage::guardReturns input shape)",
+ "input": "N1: inedge=0 full matrix; N2: inedge=1 full matrix (other MULTIEQUAL slot); N3: inedge=0 minimal matrix (MULTIEQUAL + STORE)",
+ "cpp_fixture_sha256": "09db51ab7754e8504a5027d34c98734fab7c6aff37512ff2353c663c5a4611ee",
+ "rust_fixture_sha256": "6250d90080d8d560ac45d10159c23d30c057bb539a01987c1b116eee05bca1d2",
+ "expected_stdout_sha256": "69d55dec9c3f02140380f2d460697490cf643fbb1c1598b46fad7a9c913ca98e",
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "ghidra_stderr": "empty",
+  "rugra_stderr": "empty"
+ },
+ "covered": "CloneBlockOps::buildVarnodeOutput (funcdata_block.cc:981-998): clone output storage at the ORIGINAL output's FULL address including space (ram:1000/8 for the persist write-back, register:200/4, unique:3000/4), flag copy mask (persist|addrtied|volatil in-mask; mapped|directwrite|unaffected sentinels excluded), addlflag fold (writemask|ptrflow|stack_store copied, 0x122; ptrcheck excluded), null-output early return (STORE), SeqNum pc:time of clones (orig pc + fresh time), patchInputs MULTIEQUAL->COPY inedge pick (N1 same/orig0.1 vs N2), clone-input remap to clone outputs (clone0/clone1), constant/extern share, original-block post-split opcodes and surviving inputs, nodeSplitBlockEdge in-edge counts (bin=1/bprimein=1)",
+ "notes": "FUNCDATA-NODESPLIT-SPACE-0001 (P23/UNLINKED-REF family F1). Pin of the nodeSplit clone-space loss: the W5-validated patch fixed build_varnode_output by inlining create_def_with_space + set_varnode_properties; this fixture re-verified the shipped form (Funcdata::new_varnode_out_full with the unconditional newVarnodeOut queryProperties tail, funcdata_varnode.cc:114-119) and the previously missing addlflag fold (funcdata_block.cc:995-997) against the locked oracle. cloneExpression (funcdata_block.cc:1024) remains unported (registered in ruleaction.rs) and is not exercised here.",
+ "decisive_semantics": {
+  "reference_output_parameters": "buildVarnodeOutput(origOp, cloneOp) reads origOp->getOut() (clone output installed as cloneOp's output by newVarnodeOut cc:109 op->setOutput); no out-params beyond the op/varnode mutation observed here",
+  "loop_bounds_traversal_order": "cloneBlock iterates b's ops front-to-back (beginOp..endOp); cloneList vector preserves that order; patchInputs walks cloneList front-to-back (cc:1050) and clone inputs left-to-right (cc:1068)",
+  "counter_accumulator_lifecycle": "no counters; the only monotone value is the op SeqNum time (observed verbatim per clone)",
+  "sorting_comparison_keys": "no sort; input provenance resolved by pointer equality against the pre-split snapshot and clone outputs (comparison keys are Varnode* identity, never address, so two same-address varnodes - orig mq out and clone mq out at unique:3000 - are distinguished)"
+ },
+ "fixture_id": "FUNCDATA-NODESPLIT-SPACE-0001",
+ "overall_status": "MATCH on the pinned projections (blocks/clone/orig x N1/N2/N3, 27 records, byte-identical; cloneExpression and non-oracle glue excluded)"
+}

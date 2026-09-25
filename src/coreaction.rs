@@ -403,6 +403,25 @@ impl ActionDeadCode {
         }
     }
 
+    // RUGRA-GLUE: Ghidra's PcodeOp::isCallWithoutSpec() (op.hh:177) tests the
+    // has_callspec flag, which in Ghidra is an exact proxy for "a
+    // FuncCallSpecs object is attached": flow.cc:685 FlowInfo::setupCallSpecs
+    // creates the FuncCallSpecs and rewrites in(0) in the same breath, and no
+    // other site sets the flag (typeop.cc:663/741 set it statically at
+    // opcode-assign time). Rugra's inject_raw_ops path births CPUI_CALL with
+    // the static TypeOp flag but no FuncCallSpecs object, so the flag alone
+    // is not a faithful proxy; query Funcdata::callspecs for an attached
+    // spec instead (Weak identity link, fspec.rs FuncCallSpecs::op).
+    fn op_has_attached_callspec(fd: &Funcdata, op_ref: &crate::op::PcodeOpRef) -> bool {
+        fd.callspecs.iter().any(|spec| {
+            spec.read()
+                .unwrap()
+                .op
+                .upgrade()
+                .is_some_and(|op| std::sync::Arc::ptr_eq(&op, &op_ref.0))
+        })
+    }
+
     // Ghidra: coreaction.cc:3840 ActionDeadCode::markConsumedParameters
     fn mark_consumed_parameters(
         fd: &Funcdata,
@@ -569,6 +588,27 @@ impl Action for ActionDeadCode {
                 if is_call_without_spec {
                     for input in &inputs {
                         Self::push_consumed(u64::MAX, input, &mut worklist);
+                    }
+                } else if !Self::op_has_attached_callspec(fd, op_ref) {
+                    // coreaction.cc:3846 (markConsumedParameters, first
+                    // statement): pushConsumed(~0, callOp->getIn(0)) — "In
+                    // all cases the first operand is fully consumed". In
+                    // Ghidra every CPUI_CALL carries a FuncCallSpecs
+                    // (flow.cc:685 FlowInfo::setupCallSpecs attaches one at
+                    // flow time, and TypeOpCall's static has_callspec flag
+                    // — typeop.cc:663 — makes cc:3968's isCallWithoutSpec
+                    // branch unreachable for CALL), so the cc:3846 guarantee
+                    // always covers in(0). Rugra's inject_raw_ops path births
+                    // calls with the static flag but NO FuncCallSpecs object;
+                    // the mark_consumed_parameters loop below therefore never
+                    // runs for them, in(0) keeps consume==0 after the reset
+                    // above, and ActionVarnodeProps (coreaction.cc:1327-1341)
+                    // totalReplaceConstant's the coderef target to const:0 —
+                    // the FUN_0 clobber (COREACTION-CALLIN0-CLOBBER-0001).
+                    // Restore the unconditional first-operand guarantee for
+                    // spec-less calls here.
+                    if let Some(target) = inputs.first() {
+                        Self::push_consumed(u64::MAX, target, &mut worklist);
                     }
                 }
                 if !is_assignment { continue; }
@@ -942,12 +982,17 @@ impl ActionConstantPtr {
         let op_code = op.read().unwrap().opcode;
         // cc:1077-1080: explicitly marked as a pointer type — resolve and
         // skip every heuristic gate (needexacthit=false: partial pointers may
-        // land mid-symbol).
-        if vn
-            .read()
-            .unwrap()
-            .get_type_read_facing()
-            .map(|dt| dt.get_metatype())
+        // land mid-symbol). cc:1077 reads `vn->getTypeReadFacing(op)` — the
+        // fd-aware consult (slot = op->getSlot(vn) = the `slot` param), so a
+        // union-with-ptr-field constant resolved to a TYPE_PTR field takes
+        // this head gate, not the heuristic path.
+        if crate::unionresolve::vn_type_read_facing(
+            fd,
+            vn,
+            &crate::op::PcodeOpRef(op.clone()),
+            slot as i32,
+        )
+        .map(|dt| dt.get_metatype())
             == Some(TypeMetatype::Pointer)
         {
             *rampoint = Self::resolve_constant(spc, vn_offset, vn_size, op_addr, full_encoding);
@@ -1022,23 +1067,34 @@ impl ActionConstantPtr {
                 OpCode::CPUI_INT_ADD => {
                     // cc:1118-1128: an INT_ADD output already typed PTR makes
                     // the constant the base of the pointer expression.
+                    // cc:1120 reads `outvn->getTypeDefFacing()` — the fd-aware
+                    // def-facing consult (slot -1).
                     let out_is_ptr = op
                         .read()
                         .unwrap()
                         .output
                         .as_ref()
-                        .and_then(|out| out.read().unwrap().get_type_def_facing())
+                        .and_then(|out| crate::unionresolve::vn_type_def_facing(fd, out))
                         .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
                         .unwrap_or(false);
                     if out_is_ptr {
                         // cc:1122-1123: another pointer base in the same
                         // expression means this constant is the offset, not
-                        // the pointer.
+                        // the pointer. cc:1122 reads
+                        // `op->getIn(1-slot)->getTypeReadFacing(op)` — the
+                        // fd-aware consult at slot 1-slot.
                         let other_is_ptr = op
                             .read()
                             .unwrap()
                             .get_in(1 - slot)
-                            .and_then(|other| other.read().unwrap().get_type_read_facing())
+                            .and_then(|other| {
+                                crate::unionresolve::vn_type_read_facing(
+                                    fd,
+                                    other,
+                                    &crate::op::PcodeOpRef(op.clone()),
+                                    (1 - slot) as i32,
+                                )
+                            })
                             .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
                             .unwrap_or(false);
                         if other_is_ptr {
@@ -1429,106 +1485,298 @@ impl Action for ActionRestructureVarnode {
         // Ghidra cc:2279: aliasyes = (numpass != 0).
         // Alias calculations are not reliable on the first pass.
         let aliasyes = self.numpass != 0;
-        let mut scope = crate::varmap::ScopeLocal::new();
-        // Ghidra platform-side parameter symbols: the function's local scope
-        // arrives from the Program database with the DWARF function's named
-        // parameter symbols already installed (decompile.cc <localdb>
-        // decode); ScopeLocal::restructureVarnode's fakeInputSymbols
-        // (varmap.cc:1428-1435) then skips inputs that already have a
-        // function_parameter symbol, so printing uses the parameter name
-        // (`string`/`value`) rather than the in_RXX irregular-input fallback
-        // (varmap.cc:1508 buildDefaultName). Rugra's fresh ScopeLocal is
-        // empty, so seed the input-locked FuncProto's parameters here, at
-        // scope construction, before restructure_varnode.
-        if fd.funcp.is_input_locked() {
-            let params: Vec<(
-                String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
-            )> =
-                fd
-                .funcp
-                    .parameters
-                    .iter()
-                    .map(|p| (
-                            p.name.clone(),
-                            p.data_type.clone(),
-                            p.address.as_u64()))
-                    .collect();
-            for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
-                let idx = scope.add_symbol(
-                    crate::space::AddressSpace::Register,
-                    &name,
-                    Some(dtype.clone()),
-                    offset,
-                    None,
-                );
-                scope.set_category(
-                    idx,
-                    crate::varmap::symbol_category::FUNCTION_PARAMETER,
-                    index as i32,
-                );
-                // Platform parameter symbols are name+type locked (they
-                // come from the debug info); the locks also protect the
-                // symbols from ScopeInternal::clearUnlockedCategory(
-                // Symbol::function_parameter) (varmap.cc:1275), which runs
-                // at the top of every restructureVarnode pass.
-                scope.symbols[idx].namelock = true;
-                scope.symbols[idx].typelock = true;
-                // The locked parameter symbol also type-locks its storage
-                // varnode: Ghidra's Varnode::setSymbolEntry (varnode.cc:418)
-                // sets Varnode::typelock from the Symbol flags and
-                // syncVarnodesWithSymbol (funcdata_varnode.cc:983-1002)
-                // flows the symbol's Datatype onto the varnode. Rugra's
-                // sync only walks the stack space, so apply the type to the
-                // register input directly here.
-                let input_vn =
-                    fd.find_varnode_input(dtype.get_size(), crate::address::Address::new(offset));
-                if let Some(vn_arc) = input_vn {
-                    let mut vn = vn_arc.write().unwrap();
-                    if !vn.is_type_lock() {
-                        vn.v_type = Some(dtype.clone());
-                        vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+        // Ghidra's ScopeLocal is a per-Funcdata object constructed once
+        // (funcdata.cc:63-71: new ScopeLocal + attachScope + funcp.setScope +
+        // resetLocalWindow) that PERSISTS across every
+        // ActionRestructureVarnode pass. Persistence is what keeps the
+        // markNotMapped window narrowing (FuncCallSpecs::buildInputFromTrials
+        // fspec.cc:5737 outgoing-parameter slots; ActionRestrictLocal
+        // coreaction.cc:1979/1997 saved-register spills) active for the next
+        // pass's MapState gather — addRange's inRange gate (varmap.cc:902)
+        // then drops hints for those slots. Rugra previously built a fresh
+        // ScopeLocal per pass and re-installed the full window, resurrecting
+        // entries (and nolocalalias flags) for unmapped slots
+        // (SB-MATCHURL-ORD70-0001). The scope is now created on the first
+        // apply (reset_local_window at the funcdata.cc:70 lifecycle point)
+        // and reused thereafter.
+        let mut scope = match fd.scope.take() {
+            Some(scope) => scope,
+            None => {
+                let mut scope = crate::varmap::ScopeLocal::new();
+                // funcdata.cc:66-70 lifecycle: the ScopeLocal is attached
+                // and `resetLocalWindow()` runs at Funcdata construction —
+                // BEFORE the Program database's <localdb> decode installs
+                // the platform parameter symbols. Installing the window
+                // first is what ProtoStoreSymbol::setInput's discoverScope
+                // probe (fspec.cc:3167) sees in the oracle.
+                scope.reset_local_window(fd);
+                // Ghidra platform-side parameter symbols: the function's
+                // local scope arrives from the Program database with the
+                // DWARF function's named parameter symbols already
+                // installed (decompile.cc <localdb> decode);
+                // ScopeLocal::restructureVarnode's fakeInputSymbols
+                // (varmap.cc:1428-1435) then skips inputs that already
+                // have a function_parameter symbol, so printing uses the
+                // parameter name (`string`/`value`) rather than the
+                // in_RXX irregular-input fallback (varmap.cc:1508
+                // buildDefaultName). Installation happens ONCE at scope
+                // construction; per-pass survival is clearUnlockedCategory's
+                // job (typelocked parameters survive, varmap.cc:1275).
+                if fd.funcp.is_input_locked() {
+                    let params: Vec<(
+                        String,
+                        std::sync::Arc<crate::type_system::datatype::Datatype>,
+                        crate::space::AddressSpace,
+                        u64,
+                    )> =
+                        fd
+                        .funcp
+                            .parameters
+                            .iter()
+                            .map(|p| (
+                                    p.name.clone(),
+                                    p.data_type.clone(),
+                                    p.get_address_space(),
+                                    p.address.as_u64()))
+                            .collect();
+                    for (index, (name, dtype, space, offset)) in params.into_iter().enumerate() {
+                        // Ghidra installs each platform parameter symbol at
+                        // its REAL storage (the localdb decode carries the
+                        // assigned ProtoParameter storage verbatim):
+                        // INTEGER-class params land in the register space at
+                        // their register offset with the register width;
+                        // MEMORY-class by-value params (match_url's 304-byte
+                        // URLGlob `glob`, SysV stack slot [entry_rsp+8,
+                        // +8+size)) land in the STACK space at the model
+                        // offset. ScopeInternal's maptable is per-space
+                        // (database.cc:1848-1851 maptable[spaceid]), so a
+                        // register-space blob entry can never be consulted
+                        // for stack reads — and vice versa. Installing the
+                        // whole-type-width entry in the register space (the
+                        // old Rugra bug) made find_container_entry's
+                        // [start..start+size) containment (database.cc:2269)
+                        // swallow unrelated pointer registers (rax) during
+                        // ActionNameVars linkSymbols while the real stack
+                        // reads at [8, 8+size) found nothing (bare
+                        // in_stack_00000130 names).
+                        // ProtoStoreSymbol::setInput's usepoint choice
+                        // (fspec.cc:3153, 3166-3169): the default INVALID
+                        // usepoint survives only when discoverScope's walk
+                        // finds a scope whose rangetree contains the
+                        // storage — for the function-local channel that is
+                        // the resetLocalWindow tree (localRange ∪
+                        // paramRange), i.e. MEMORY-class stack params;
+                        // register params (and any storage no scope owns)
+                        // fall back to `restricted_usepoint` = baseaddr-1
+                        // (funcdata.cc:69 `funcp.setScope(localmap,
+                        // baseaddr + -1)`, fspec.hh:1288). The uselimit
+                        // difference then drives Scope::addMap's flag rule
+                        // (database.cc:1149-1150): stack params get the
+                        // empty uselimit → `addrtied`; register params get
+                        // the one-point uselimit {baseaddr-1} → NOT
+                        // addrtied, so SymbolEntry::inUse admits them only
+                        // for queries at the function entry (the input
+                        // varnode's own usepoint, varnode.cc:696-703) —
+                        // later op outputs at the param register no longer
+                        // fold the entry flags (SETVARNODE-SCOPELOCAL-
+                        // CONSUMER-0001).
+                        let param_usepoint = if scope.in_scope(
+                            space,
+                            offset,
+                            dtype.get_size() as i64,
+                        ) {
+                            None
+                        } else {
+                            Some(fd.baseaddr.as_u64().wrapping_sub(1))
+                        };
+                        let idx = scope.add_symbol(
+                            space,
+                            &name,
+                            Some(dtype.clone()),
+                            offset,
+                            param_usepoint,
+                        );
+                        scope.set_category(
+                            idx,
+                            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                            index as i32,
+                        );
+                        // Platform parameter symbols are name+type locked
+                        // (they come from the debug info); the locks also
+                        // protect the symbols from
+                        // ScopeInternal::clearUnlockedCategory(
+                        // Symbol::function_parameter) (varmap.cc:1275),
+                        // which runs at the top of every
+                        // restructureVarnode pass.
+                        scope.symbols[idx].namelock = true;
+                        scope.symbols[idx].typelock = true;
+                        // The locked parameter symbol also type-locks its
+                        // storage varnode: Ghidra's Varnode::setSymbolEntry
+                        // (varnode.cc:418) sets Varnode::typelock from the
+                        // Symbol flags and syncVarnodesWithSymbols
+                        // (funcdata_varnode.cc:983-1002) flows the symbol's
+                        // Datatype onto the varnode. That sync walk covers
+                        // ONLY the ScopeLocal space (stack,
+                        // funcdata_varnode.cc:947-948 beginLoc(
+                        // lm->getSpaceId())), so register-storage params
+                        // need the type applied to the register input
+                        // directly here; stack-storage params take their
+                        // typelock through the sync pass, which projects
+                        // the exact field piece via SymbolEntry::
+                        // getSizedType (funcdata_varnode.cc:956-960 ->
+                        // local_symbol_sized_type in funcdata.rs).
+                        if space == crate::space::AddressSpace::Register {
+                            let input_vn = fd.find_varnode_input(
+                                dtype.get_size(),
+                                space,
+                                crate::address::Address::new(offset),
+                            );
+                            if let Some(vn_arc) = input_vn {
+                                let mut vn = vn_arc.write().unwrap();
+                                if !vn.is_type_lock() {
+                                    vn.v_type = Some(dtype.clone());
+                                    vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                                }
+                            }
+                        }
                     }
                 }
+                // HEADLESS-BRIDGE-V1-TYPESEED (C1 TYPE-SEED-LOCAL): the
+                // driver's committed-local manifest rides
+                // Funcdata::committed_locals — the Rust carrier of the
+                // `<localdb>` payload the Java DecompInterface transports
+                // before any action runs (funcdata.cc:804-810 `<localdb>` ->
+                // Database::decodeScope -> ScopeInternal::decode ->
+                // Scope::addMapSym, database.cc:1564, with
+                // ATTRIB_TYPELOCK/ATTRIB_NAMELOCK on every committed
+                // symbol). Materialize each seed as a name+type-locked
+                // stack symbol here, at scope construction (ONCE, the
+                // lifecycle position mirroring the oracle's construction
+                // -> localdb-decode -> action order):
+                // `clearUnlockedCategory(-1)` at the top of every
+                // restructureVarnode pass keeps typelocked symbols
+                // (varmap.cc:1259, database.cc:2071-2100), and
+                // MapState::gatherSymbols re-feeds them as
+                // RangeHint::fixed boundaries (varmap.cc:1044-1059) —
+                // the partition+typing that reproduces the canon
+                // declaration layer. Empty by default (bare-load
+                // contract); populated only under the driver's opt-in
+                // gate. Oracle-validated: the seeded stage_seed_diag run
+                // of httpd main reproduces `long local_c8[4]` /
+                // `local_80[2]` / `local_70[6]` and the plVar[-1]
+                // subscript family (RANGEHINT-proven HEAD domain).
+                for seed in fd.committed_locals.iter() {
+                    // BRIDGE1-TYPESEED-PARSEFAIL (declared downgrade): on a
+                    // type the seed parser cannot resolve, the oracle's
+                    // <localdb> transport has no per-symbol tolerance —
+                    // ScopeInternal::decode -> decodeType throws
+                    // LowlevelError (type.cc:4179 "Unable to resolve type",
+                    // or the TypeArray::decode size check at
+                    // type.cc:1339-1341), the whole function's database
+                    // decode fails, and the function never enters the
+                    // action pipeline. The Rust channel keeps per-symbol
+                    // skip+eprintln instead: a corrupt/unresolvable
+                    // manifest entry downgrades to "local not seeded"
+                    // rather than aborting the function. Observable only
+                    // with a manifest outside the harvest gate (valid
+                    // manifests carry only table-served spellings); since
+                    // the BRIDGE1-TYPESEED-PIDT fix removed the silent
+                    // address-size fallback in parse_c_type, this arm is
+                    // also the designated loud handler for any future
+                    // unresolvable base spelling.
+                    let dtype = match crate::debugproto::parse_c_type(
+                        &seed.type_expr,
+                        fd.stack_pointer_size as usize,
+                        None,
+                    ) {
+                        Ok(dt) => dt,
+                        Err(err) => {
+                            eprintln!(
+                                "[ACTION] typeseed: skipping {} at {:#x}: {}",
+                                seed.name, seed.offset, err
+                            );
+                            continue;
+                        }
+                    };
+                    // Negative stack offsets wrap modulo 2^64 (the stack
+                    // space address form, e.g. -0xc8 -> 0xff..f38).
+                    let start = seed.offset as u64;
+                    let idx = scope.add_symbol(
+                        crate::space::AddressSpace::Stack,
+                        &seed.name,
+                        Some(dtype),
+                        start,
+                        None,
+                    );
+                    scope.symbols[idx].typelock = true;
+                    scope.symbols[idx].namelock = true;
+                }
+                // Ghidra: varmap.cc:472 ScopeLocal::decode → collectNameRecs (call at :476)
+                // (HTTPDMAIN-F7-NAMERECOMMEND-0001): the localdb decode
+                // boundary's trailing call — every name-locked-but-not-
+                // type-locked symbol in the decoded local DB is downgraded
+                // to a name recommendation (varmap.cc:357-381) and removed,
+                // so the restructure below lays out the stack freely and
+                // ActionNameVars (coreaction.cc:2984) reattaches the names
+                // to the final symbols. The committed-local seeds above are
+                // name+type-locked (the manifest's typelock bit), so the
+                // store stays empty for them — the call is the faithful
+                // boundary wiring for any future name-lock-only transport
+                // (the oracle's ATTRIB_NAMELOCK-without-ATTRIB_TYPELOCK
+                // localdb form).
+                scope.collect_name_recs();
+                // Install the register-name lookup standing in for
+                // `glb->translate->getRegisterName` (translate.hh:380):
+                // Ghidra's ScopeInternal::buildVariableName register queries
+                // (database.cc:2447/2454/2462/2472/2485) read the SLEIGH
+                // `varnode_xref` through the Architecture's Translate;
+                // Rugra's ScopeLocal takes a caller-attached Architecture
+                // handle (`set_arch_lookup`) whose `register_xref`
+                // (populated from `SleighBase::getAllRegisters`,
+                // sleighbase.cc:182-186) answers via the faithful
+                // `Architecture::get_register_name` port
+                // (sleighbase.cc:144-168). The legacy flat table below
+                // stays as the fixture fallback for Funcdata without an
+                // Architecture.
+                scope.set_arch_lookup(fd.arch.clone());
+                if fd.arch.is_none() {
+                    scope.register_names = [
+                        (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
+                        (0x08, 8, "RCX"), (0x08, 4, "ECX"),
+                        (0x10, 8, "RDX"), (0x10, 4, "EDX"),
+                        (0x18, 8, "RBX"), (0x18, 4, "EBX"),
+                        (0x20, 8, "RSP"), (0x20, 4, "ESP"),
+                        (0x28, 8, "RBP"), (0x28, 4, "EBP"),
+                        (0x30, 8, "RSI"), (0x30, 4, "ESI"),
+                        (0x38, 8, "RDI"), (0x38, 4, "EDI"),
+                        (0x80, 8, "R8"), (0x88, 8, "R9"),
+                        (0x90, 8, "R10"), (0x98, 8, "R11"),
+                        (0xA0, 8, "R12"), (0xA8, 8, "R13"),
+                        (0xB0, 8, "R14"), (0xB8, 8, "R15"),
+                        (0x200, 8, "RIP"),
+                    ]
+                    .into_iter()
+                    .map(|(o, s, n)| ((o, s), n.to_string()))
+                    .collect();
+                }
+                // (localmap->resetLocalWindow(), funcdata.cc:70, now runs at
+                // the top of this construction block — before the platform
+                // parameter install, per the oracle's Funcdata construction
+                // → <localdb> decode order. markNotMapped narrowings applied
+                // after this point persist for the function's lifetime.)
+                scope
             }
-        }
-        // Install the register-name lookup standing in for
-        // `glb->translate->getRegisterName` (translate.hh:380): Ghidra's
-        // ScopeInternal::buildVariableName register queries
-        // (database.cc:2447/2454/2462/2472/2485) read the SLEIGH
-        // `varnode_xref` through the Architecture's Translate; Rugra's
-        // ScopeLocal takes a caller-attached Architecture handle
-        // (`set_arch_lookup`) whose `register_xref` (populated from
-        // `SleighBase::getAllRegisters`, sleighbase.cc:182-186) answers via
-        // the faithful `Architecture::get_register_name` port
-        // (sleighbase.cc:144-168). The legacy flat table below stays as the
-        // fixture fallback for Funcdata without an Architecture.
-        scope.set_arch_lookup(fd.arch.clone());
-        if fd.arch.is_none() {
-            scope.register_names = [
-                (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
-                (0x08, 8, "RCX"), (0x08, 4, "ECX"),
-                (0x10, 8, "RDX"), (0x10, 4, "EDX"),
-                (0x18, 8, "RBX"), (0x18, 4, "EBX"),
-                (0x20, 8, "RSP"), (0x20, 4, "ESP"),
-                (0x28, 8, "RBP"), (0x28, 4, "EBP"),
-                (0x30, 8, "RSI"), (0x30, 4, "ESI"),
-                (0x38, 8, "RDI"), (0x38, 4, "EDI"),
-                (0x80, 8, "R8"), (0x88, 8, "R9"),
-                (0x90, 8, "R10"), (0x98, 8, "R11"),
-                (0xA0, 8, "R12"), (0xA8, 8, "R13"),
-                (0xB0, 8, "R14"), (0xB8, 8, "R15"),
-                (0x200, 8, "RIP"),
-            ]
-            .into_iter()
-            .map(|(o, s, n)| ((o, s), n.to_string()))
-            .collect();
-        }
+        };
         // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
-        // Rugra's restructure_varnode doesn't yet take aliasyes (the
-        // markUnaliased aliasyes gate is inside restructure, which is
-        // always-on in Rugra). TODO: thread aliasyes through.
-        scope.restructure_varnode(fd);
+        scope.restructure_varnode(fd, aliasyes);
         fd.scope = Some(scope);
+        // Ghidra type.cc:2935-2945 getMap: every TypeSpacebase::getSubType
+        // re-resolves fd->getScopeLocal() dynamically, so the stack
+        // spacebase's subtype queries (AddTreeState::calc_subtype's
+        // TYPE_SPACEBASE arm, hasMatchingSubType) must observe THIS fresh
+        // restructured map. Publish the scope into the factory-cached
+        // spacebase's live handle (VARMAP-STACKBOUNDARY-0001).
+        fd.publish_scope_to_spacebase();
         // Ghidra cc:2281-2282: if (data.syncVarnodesWithSymbols(l1,false,aliasyes)) count += 1;
         if fd.sync_varnodes_with_symbols(false, aliasyes) {
             self.count += 1;
@@ -1599,7 +1847,7 @@ impl Action for ActionMergeRequired {
         let mut merge = crate::merge::Merge::new();
         // Ghidra coreaction.hh:370: three calls in sequence.
         merge.merge_addr_tied(fd);
-        merge.group_partials(fd);  // currently no-op (CONCAT infra TODO)
+        merge.group_partials(fd);
         merge.merge_marker(fd);
         Ok(action_status::NO_CHANGE)
     }
@@ -1755,128 +2003,38 @@ impl Action for ActionMergeType {
 // by oppool1 Rules (RuleXorCollapse, RuleAndOrLump, etc.) + mainloop+fullloop
 // RULE_REPEATAPPLY convergence. Verified redundant: defects=0, 952/952 tests.
 
-/// Copy propagation pass — folds COPY chains
-///
-/// Corresponds to Ghidra's `RuleCopyPropagate`. For each `COPY out = in`,
-/// redirects all users of `out` to use `in` directly, then kills the COPY.
-pub struct ActionCopyPropagate;
+// ActionCopyPropagate DELETED (COPYPROP lane 2026-09-22): self-invented
+// blanket copy-propagation pass with NO Ghidra counterpart (12.0.4 oracle has
+// no ActionCopyPropagation/RuleCopyPropagate; see
+// docs/alignment_docs/COPYPROP_LANE_VERDICT_1204.md). It was never registered
+// (zero references) and its comment falsely claimed a Ghidra correspondence.
+// Ghidra's COPY governance is merge-phase HighVariable grouping + print
+// suppression (ActionMergeCopy/DominantCopy/HideShadow/CopyMarker), all of
+// which are implemented and wired. Deletion verified behavior-neutral:
+// curl E2E byte-identical, defects=0, numbering=0.
 
-impl ActionCopyPropagate {
-    // RUGRA-GLUE: Rugra-specific copy-propagation pass; no direct Ghidra Action counterpart
-    pub fn new() -> Self {
-        Self
-    }
-}
+// ActionCallParams + known_param_count + known_param_types + is_known_function
+// DELETED (EXPEL-CORPUS-TABLES-0001, 2026-09-25): 2026-06-23 bootstrap
+// leftovers — per-function-name arity/type tables special-casing the curl/
+// httpd corpora (hugehelp/getparameter/match_url/SetHTTPrequest/glob_*/
+// ap_*/curl_easy_*/my_*/parseconfig/...) plus libc entries and a fabricated
+// `_ => 6` default. Ghidra's coreaction.cc has NO name lookup anywhere:
+// call-site param knowledge reaches the caller only through the callee's
+// own FuncProto copy (ActionDefaultParams::apply, coreaction.cc:2321-2330,
+// `fc->copy(otherfunc->getFuncProto())`) or the platform signature data
+// (Rugra's equivalent data plane: debugproto::LibcSignatureTable, installed
+// on callspecs by the driver's callspec link); a function's own inputs come
+// from trial derivation only (ActionInputPrototype::apply,
+// coreaction.cc:4707-4761 — no self-name count override, no supplement/
+// truncate by name). ActionCallParams was additionally dead code: never
+// registered in universal_action (action.rs) and never constructed — the
+// sole consumer of the tables' call-site `_ => 3` default. Deletion
+// verified behavior-neutral on both corpora in all driver states (A/B
+// byte-identical; see commit message Differential block).
 
-impl Action for ActionCopyPropagate {
-    // RUGRA-GLUE: Rugra-specific copy-propagation apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let mut changed = 0;
-        let mut to_kill: Vec<crate::op::PcodeOpRef> = Vec::new();
-
-        // Multi-pass: keep propagating until no more COPYs can be folded
-        loop {
-            let mut round_changed = 0;
-
-            for op_ref in &fd.obank.alivelist {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    continue;
-                }
-                if op.inrefs.is_empty() || op.output.is_none() {
-                    continue;
-                }
-
-                let src = op.inrefs[0].clone();
-                let dst = op.output.as_ref().unwrap().clone();
-
-                if Arc::ptr_eq(&src, &dst) {
-                    continue;
-                }
-
-                // Propagate type from COPY output to input before redirecting.
-                // ActionTypeInfer (which runs before CopyPropagate) may have
-                // assigned a meaningful type to the output based on usage
-                // context. Transfer it to the source so the type survives
-                // the COPY elimination.
-                {
-                    let dst_vn = dst.read().unwrap();
-                    let dst_type = dst_vn.v_type.clone();
-                    drop(dst_vn);
-                    if let Some(dt) = dst_type {
-                        let mut src_vn = src.write().unwrap();
-                        let should_update = src_vn.v_type.as_ref().map_or(true, |t| {
-                            t.get_metatype() == crate::type_system::TypeMetatype::Unknown
-                                || t.get_name() == "undefined"
-                        });
-                        if should_update {
-                            src_vn.v_type = Some(dt);
-                        }
-                    }
-                }
-
-                let dst_vn = dst.read().unwrap();
-                let users: Vec<_> = dst_vn.descend.iter()
-                    .filter_map(|w| w.upgrade())
-                    .collect();
-
-                if users.is_empty() {
-                    // No users, dead code will clean up
-                    continue;
-                }
-
-                drop(dst_vn);
-                drop(op);
-
-                // Redirect all users of dst to use src instead
-                for user_arc in &users {
-                    let mut user = user_arc.write().unwrap();
-                    for slot in 0..user.inrefs.len() {
-                        if Arc::ptr_eq(&user.inrefs[slot], &dst) {
-                            user.inrefs[slot] = src.clone();
-                            src.write().unwrap().descend.push(Arc::downgrade(user_arc));
-                        }
-                    }
-                }
-
-                // Clear dst's descendents since we redirected them
-                dst.write().unwrap().descend.clear();
-
-                to_kill.push(op_ref.clone());
-                round_changed += 1;
-            }
-
-            changed += round_changed;
-            if round_changed == 0 {
-                break;
-            }
-
-            // Kill the propagated COPYs
-            for op_ref in to_kill.drain(..) {
-                fd.obank.mark_dead(op_ref);
-            }
-        }
-
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
-    }
-
-    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCopyPropagate
-    fn get_name(&self) -> &str {
-        "copy_propagate"
-    }
-}
-
-/// Attach System V AMD64 ABI register parameters to CPUI_CALL operations
-///
-/// Scans for register writes (rdi, rsi, rdx, rcx, r8, r9) preceding each call
-/// and attaches them as additional inputs so PrintC can emit function arguments.
-pub struct ActionCallParams;
-
-/// SysV AMD64 argument register offsets in order
+/// SysV AMD64 argument register offsets in order, consumed by
+/// ActionInferParams' input-register candidate scan.
+// RUGRA-GLUE: Rugra-specific ABI register index for the SysV trial scan
 const SYSV_ARG_REGS: [(u64, &str); 6] = [
     (0x38, "rdi"),  // arg0
     (0x30, "rsi"),  // arg1
@@ -1885,373 +2043,6 @@ const SYSV_ARG_REGS: [(u64, &str); 6] = [
     (0x80, "r8"),   // arg4
     (0x88, "r9"),   // arg5
 ];
-
-/// Standard libc function signature database.
-/// Returns the known number of register parameters for common C library functions.
-/// For variadic functions (printf, etc.), returns the number of fixed parameters
-/// (the variadic args are handled separately).
-/// For unknown functions, returns 6 (all SysV AMD64 arg registers).
-/// This is the standard approach used by all decompilers (Ghidra .gdt, IDA .til).
-// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param count); no Ghidra counterpart (Ghidra uses FuncProto lock instead)
-fn known_param_count(func_name: Option<&str>) -> usize {
-    // Normalize function name: replace '.' with '_' so that GCC-optimized
-    // variants like "parseconfig.constprop.0" match "parseconfig_constprop_0".
-    let normalized = func_name.map(|n| n.replace('.', "_"));
-    match normalized.as_deref() {
-        Some(name) => match name {
-            "curl_version" | "curl_global_cleanup" | "__errno_location"
-            | "__ctype_b_loc" | "getpid" | "fork"
-            | "_init" | "_fini" | "__libc_csu_init" | "__libc_csu_fini"
-            | "main_init" | "main_free" => 0,
-
-            "malloc" | "free" | "strlen" | "strdup" | "puts" | "exit" | "_exit"
-            | "atoi" | "atol" | "atof" | "abs" | "isatty" | "fileno" | "close"
-            | "fclose" | "fflush" | "ferror" | "clearerr" | "rewind"
-            | "perror" | "remove" | "unlink" | "sleep" | "alarm"
-            | "toupper" | "tolower" | "isalpha" | "isdigit" | "isspace"
-            | "curl_easy_init" | "curl_easy_cleanup" | "curl_easy_perform"
-            | "curl_global_init" | "curl_getenv" | "curl_free"
-            | "curl_slist_free_all"
-            | "hugehelp"
-            | "progressbarinit" | "my_get_token" | "my_get_line" => 1,
-
-            "strcpy" | "strcat" | "strcmp" | "strstr" | "strchr" | "strrchr"
-            | "strpbrk" | "strtok" | "fopen" | "fdopen" | "freopen"
-            | "signal" | "access" | "stat" | "lstat" | "mkdir"
-            | "rename" | "fgets" | "fputs" | "realloc" | "calloc"
-            | "memcmp" | "strequal" | "strnequal" | "GetStr"
-            | "glob_url" | "glob_set"
-            | "curl_slist_append" | "fputc" | "fgetc"
-            | "SetHTTPrequest" | "SetHTTPrequest_part_0"
-            | "helpf"
-            | "glob_range"
-            | "ap_log_error" | "ap_exists_config_define" => 2,
-
-            "memcpy" | "memmove" | "memset" | "strncpy" | "strncat" | "strncmp"
-            | "fread" | "strtol" | "strtoul" | "strtod"
-            | "read" | "write" | "open" | "fcntl" | "ioctl"
-            | "__xstat"
-            | "curl_easy_setopt"
-            | "glob_word" | "next_url" => 3,
-
-            "fseek" | "snprintf" | "fwrite" | "my_fwrite"
-            | "parseconfig_constprop_0" | "parseconfig" => 4,
-
-            "match_url" | "myprogress"
-            | "getparameter.constprop.0" | "getparameter_constprop_0" => 5,
-
-            "__sprintf_chk" | "__fprintf_chk" | "__printf_chk"
-            | "__snprintf_chk"
-            | "__isoc99_sscanf" | "sscanf" => 5,
-            // __vfprintf_chk(fp, flag, format, va_list) — 4 fixed args, not variadic
-            "__vfprintf_chk" => 4,
-
-            "maprintf" | "maprintf_constprop_0" => 2,
-            "strdup" => 1,
-            "ap_ht_time" => 4,
-            "ap_strcmp_match" | "ap_strcasecmp_match" => 2,
-            "ap_fini_vhost_config" | "ap_parse_vhost_addrs" => 2,
-            "ap_init_vhost_config" | "ap_set_name_virtual_host" => 1,
-            "ap_matches_request_vhost" => 3,
-            "ap_update_vhost_given_ip" => 1,
-            "ap_make_dirstr_prefix" | "ap_no2slash" | "ap_getparents" | "ap_pregsub" => 1,
-
-            _ => 6,
-        },
-        None => 6,
-    }
-}
-
-/// Known parameter type signatures for functions whose source code we know.
-/// Returns a list of "ptr" or "int" for each parameter position.
-/// Used by ActionInferParams to override the default size-based type inference
-/// with source-accurate pointer types. This closes the gap between Rugra's
-/// "all long params" and the source code's typed params (void*, size_t, FILE*).
-// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param types)
-fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
-    let normalized = func_name.map(|n| n.replace('.', "_"));
-    let name = normalized.as_deref()?;
-    // (param_index → "ptr" or "int")
-    match name {
-        // curl functions (source: curl/src/tool_*.c)
-        "my_fwrite" => Some(vec!["ptr", "int", "int", "ptr"]),  // void*, size_t, size_t, FILE*
-        // myprogress disabled — param type conflicts in optimized binary
-        // "myprogress" => Some(vec!["ptr", "int", "int", "int", "ptr"]),
-        "SetHTTPrequest" | "SetHTTPrequest_part_0" => Some(vec!["int", "ptr"]),  // HttpReq, HttpReq*
-        "helpf" => Some(vec!["ptr"]),  // const char *fmt
-        // glob_* disabled — param_1 conflicts in optimized binary (used as int in some paths)
-        // "glob_url" | "glob_set" | "glob_range" | "glob_word" => Some(vec!["ptr", "ptr"]),
-        "next_url" => Some(vec!["ptr"]),  // URLGlob*
-        "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "ptr"]),  // const char*, Configurable*
-        "getparameter" | "getparameter_constprop_0" => {
-            Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"])
-        }
-        "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
-        "progressbarinit" => Some(vec!["ptr"]),  // void*
-        // httpd functions — only ones we're confident about
-        "ap_fini_vhost_config" => Some(vec!["ptr", "ptr"]),
-        "ap_parse_vhost_addrs" => Some(vec!["ptr", "ptr"]),
-        _ => None,
-    }
-}
-
-// RUGRA-GLUE: Rugra-specific ABI table (known-callee predicate)
-fn is_known_function(func_name: Option<&str>) -> bool {
-    known_param_count(func_name) != 6
-}
-
-impl ActionCallParams {
-    // RUGRA-GLUE: Rugra-specific param fill-in pass; no direct Ghidra Action counterpart
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Action for ActionCallParams {
-    // RUGRA-GLUE: Rugra-specific param fill-in apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        use crate::space::AddressSpace;
-        let mut changed = 0;
-
-        // Build symbol lookup for call targets
-        let symbol_table: std::collections::HashMap<u64, String> = fd.symbol_table.clone();
-
-        // Collect info about CALL ops: (index in alivelist, max_args, num_inputs)
-        // num_inputs distinguishes old-style (1 = target only) from new-style
-        // (7 = target + 6 SysV arg registers from the lifter).
-        let call_info: Vec<(usize, usize, usize)> = fd
-            .obank
-            .alivelist
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, op_ref)| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode == OpCode::CPUI_CALL {
-                    let target_addr = op.inrefs[0].read().unwrap().get_offset();
-                    let func_name = symbol_table.get(&target_addr).map(|s| s.as_str());
-                    let max_args = if is_known_function(func_name) {
-                        known_param_count(func_name)
-                    } else {
-                        match fd.external_prototypes.get(&target_addr) {
-                            Some(&count) if count > 0 => count,
-                            _ => 3,
-                        }
-                    };
-                    Some((idx, max_args, op.num_input()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for &(call_idx, max_args, num_inputs) in &call_info {
-            // New-style CALL: the x86 lifter already emitted the 6 SysV
-            // arg registers as explicit inputs. Heritage processed them
-            // into proper SSA varnodes. Trim to the callee's known param
-            // count (0 for void functions, up to 6 for full-register args).
-            if num_inputs > 1 {
-                let call_op = fd.obank.alivelist[call_idx].0.clone();
-                let desired_total = 1 + max_args.min(SYSV_ARG_REGS.len());
-                let mut call_op_w = call_op.write().unwrap();
-                while call_op_w.inrefs.len() > desired_total {
-                    call_op_w.inrefs.pop();
-                }
-                if max_args > 0 {
-                    changed += 1;
-                }
-                continue;
-            }
-
-            if max_args == 0 {
-                continue;
-            }
-
-            // Old-style CALL (num_inputs == 1): no lifter-provided args.
-            // Fall back to backwards search for arg register writes.
-            let search_regs = max_args.min(SYSV_ARG_REGS.len());
-            let mut arg_varnodes: Vec<Option<Arc<std::sync::RwLock<crate::varnode::Varnode>>>> =
-                vec![None; search_regs];
-
-            // Search backwards from the call through the alivelist.
-            // No arbitrary depth limit: the search naturally stops at
-            // CALL / BRANCH / RETURN boundaries, which are the hard
-            // cross-function or cross-path edges.
-            for search_idx in (0..call_idx).rev() {
-                let op_ref = &fd.obank.alivelist[search_idx];
-                let op = op_ref.0.read().unwrap();
-
-                // Skip if no output
-                if let Some(ref out_arc) = op.output {
-                    let out_vn = out_arc.read().unwrap();
-                    if out_vn.get_space() == AddressSpace::Register {
-                        let reg_offset = out_vn.get_offset();
-                        // Check if this is one of the SysV arg registers (up to max_args)
-                        for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                            if reg_offset == expected_off && arg_varnodes[i].is_none() {
-                                arg_varnodes[i] = Some(out_arc.clone());
-                            }
-                        }
-                    }
-                }
-
-                // Stop at previous CALL, RETURN, or unconditional BRANCH.
-                // CBRANCH is intentionally NOT a stop: the register write
-                // might be in a predecessor block reached via the
-                // conditional branch's fallthrough. Crossing the CBRANCH
-                // to find it matches Ghidra's SSA-based argument tracking.
-                if op.opcode == OpCode::CPUI_CALL
-                    || op.opcode == OpCode::CPUI_BRANCH
-                    || op.opcode == OpCode::CPUI_RETURN
-                {
-                    break;
-                }
-
-                // If all found, stop early
-                if arg_varnodes.iter().all(|v| v.is_some()) {
-                    break;
-                }
-            }
-
-            // Fallback: for arg registers still not found, search ONLY ops before
-            // the FIRST call in the function. This finds function entry parameter
-            // setup without picking up writes from unrelated paths.
-            if call_idx > 0 {
-                // Find how far to search: from start to first CALL (exclusive)
-                let first_call_idx = fd
-                    .obank
-                    .alivelist
-                    .iter()
-                    .position(|op_ref| {
-                    let op = op_ref.0.read().unwrap();
-                    op.opcode == OpCode::CPUI_CALL
-                })
-                    .unwrap_or(0);
-
-                // Only use this fallback if the current call IS the first call
-                if call_idx == first_call_idx {
-                    for i in 0..search_regs {
-                        if arg_varnodes[i].is_none() {
-                            let (expected_off, _) = SYSV_ARG_REGS[i];
-                            for idx in 0..first_call_idx {
-                                let op_ref = &fd.obank.alivelist[idx];
-                                let op = op_ref.0.read().unwrap();
-                                if let Some(ref out_arc) = op.output {
-                                    let out_vn = out_arc.read().unwrap();
-                                    if out_vn.get_space() == AddressSpace::Register
-                                        && out_vn.get_offset() == expected_off
-                                    {
-                                        arg_varnodes[i] = Some(out_arc.clone());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallback B: block-level search within the CALL's own basic block.
-            // The heritage pass places MULTIEQUAL (phi) nodes at block entries
-            // for registers with different definitions across predecessors.
-            // Scanning the CALL's block finds these phi nodes (the SSA-correct
-            // merged definition) without crossing BRANCH boundaries — avoiding
-            // the wrong-path regressions seen in earlier linear-search attempts.
-            if arg_varnodes.iter().any(|v| v.is_none()) {
-                let call_op_arc = fd.obank.alivelist[call_idx].0.clone();
-                let block_arc_opt = {
-                    let call_op = call_op_arc.read().unwrap();
-                    call_op.parent.as_ref().and_then(|w| w.upgrade())
-                };
-                if let Some(block_arc) = block_arc_opt {
-                    let block = block_arc.read().unwrap();
-                    let block_ops = block.get_ops();
-                    // Find the CALL op's position within its block.
-                    let call_pos = block_ops
-                        .iter()
-                        .position(|op_ref| Arc::ptr_eq(&op_ref.0, &call_op_arc)
-                    );
-                    let search_end = call_pos.unwrap_or(block_ops.len());
-                    for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                        if arg_varnodes[i].is_some() { continue; }
-                        // Scan this block's ops backwards from the CALL.
-                        for op_ref in block_ops[..search_end].iter().rev() {
-                            let op = op_ref.0.read().unwrap();
-                            if let Some(ref out_arc) = op.output {
-                                let out_vn = out_arc.read().unwrap();
-                                if out_vn.get_space() == AddressSpace::Register
-                                    && out_vn.get_offset() == expected_off
-                                {
-                                    arg_varnodes[i] = Some(out_arc.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallback C: INPUT varnode lookup. If the arg register was never
-            // written in this function, it's a function parameter (INPUT
-            // varnode created by heritage). Search the VarnodeBank for an
-            // INPUT varnode at the expected register offset.
-            if arg_varnodes.iter().any(|v| v.is_none()) {
-                use crate::varnode::varnode_flags;
-                for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
-                    if arg_varnodes[i].is_some() { continue; }
-                    for vn_ref in &fd.vbank.loc_tree {
-                        let vn = vn_ref.0.read().unwrap();
-                        if vn.get_space() == AddressSpace::Register
-                            && vn.get_offset() == expected_off
-                            && (vn.flags & varnode_flags::INPUT) != 0
-                        {
-                            arg_varnodes[i] = Some(vn_ref.0.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Attach found arg varnodes to the CALL op.
-            // Find the last non-None slot to determine how many args to attach.
-            // For gaps (None between two Some), create a register varnode directly
-            // so the argument position is preserved.
-            let last_found = arg_varnodes.iter().rposition(|v| v.is_some());
-            let mut args_to_add: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
-            if let Some(last_idx) = last_found {
-                for i in 0..=last_idx {
-                    if let Some(ref vn) = arg_varnodes[i] {
-                        args_to_add.push(vn.clone());
-                    } else {
-                        let (reg_off, _) = SYSV_ARG_REGS[i];
-                        let placeholder = fd.vbank
-                                .create_with_space(8, AddressSpace::Register, reg_off);
-                        args_to_add.push(placeholder);
-                    }
-                }
-            }
-
-            if !args_to_add.is_empty() {
-                let call_ref = &fd.obank.alivelist[call_idx];
-                let mut call_op = call_ref.0.write().unwrap();
-                for arg in args_to_add {
-                    call_op.inrefs.push(arg);
-                }
-                changed += 1;
-            }
-        }
-
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
-    }
-
-    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCallParams
-    fn get_name(&self) -> &str {
-        "call_params"
-    }
-}
 
 /// Infer function parameters and return type from P-code IR
 ///
@@ -2436,59 +2227,18 @@ impl Action for ActionInferParams {
 
         let mut params = Vec::new();
         let mut expected_abi_idx = 0usize;
-        let known_types = known_param_types(Some(fd.get_name()));
         for (abi_idx, offset, size, v_type) in &param_candidates {
             // Stop at first gap > 0 — require strictly contiguous ABI registers
             if *abi_idx != expected_abi_idx {
                 break;
             }
-            let param_pos = params.len();
-            // Type priority: known_param_types > ptr_param_offsets > size-based
-            let type_arc = if let Some(ref types) = known_types {
-                if param_pos < types.len() {
-                    match types[param_pos] {
-                        "ptr" => {
-                            let base = Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )));
-                            Arc::new(Datatype::Pointer(
-                                crate::type_system::datatype::TypePointer {
-                                base: crate::type_system::datatype::TypeBase::new(
-                                        "void *".to_string(), 8, TypeMetatype::Pointer,
-                                    ),
-                                ptr_to: base,
-                                wordsize: 1,
-                            },
-                            ))
-                        }
-                        "int" => Arc::new(match size {
-                            1 => Datatype::Base(TypeBase::new(
-                                "byte".to_string(), 1, TypeMetatype::Int,
-                            )),
-                            2 => Datatype::Base(TypeBase::new(
-                                "short".to_string(), 2, TypeMetatype::Int,
-                            )),
-                            4 => Datatype::Base(TypeBase::new(
-                                "int".to_string(), 4, TypeMetatype::Int,
-                            )),
-                            _ => Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )),
-                        }),
-                        _ => v_type.clone().unwrap_or_else(|| {
-                            Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            )))
-                        }),
-                    }
-                } else {
-                    v_type.clone().unwrap_or_else(|| {
-                        Arc::new(Datatype::Base(TypeBase::new(
-                            "long".to_string(), 8, TypeMetatype::Int,
-                        )))
-                    })
-                }
-            } else if ptr_param_offsets.contains(offset) {
+            // Type priority: ptr_param_offsets > size-based. The former
+            // per-name known_param_types tier was corpus-table knowledge
+            // and is gone (EXPEL-CORPUS-TABLES-0001); oracle
+            // ActionInputPrototype (coreaction.cc:4707-4761) derives
+            // inputs purely from register trials with no self-name
+            // type table.
+            let type_arc = if ptr_param_offsets.contains(offset) {
                 let base = Arc::new(Datatype::Base(TypeBase::new(
                     "long".to_string(), 8, TypeMetatype::Int,
                 )));
@@ -2525,68 +2275,11 @@ impl Action for ActionInferParams {
             expected_abi_idx += 1;
         }
 
-        // If this function has a known parameter count in the signature database,
-        // trust it over the inferred count. If the known count is HIGHER than
-        // what we inferred (we missed some register reads), supplement with the
-        // missing ABI registers.
-        let known_types = known_param_types(Some(fd.get_name()));
-        let is_known = is_known_function(Some(fd.get_name()));
-        let known_n = if let Some(ref types) = known_types {
-            types.len()
-        } else if is_known {
-            known_param_count(Some(fd.get_name()))
-        } else {
-            0 // Unknown function — don't supplement or truncate
-        };
-
-        // Supplement missing params from ABI register list if known_n > params.len()
-        if known_n > params.len() && known_n <= 6 && is_known {
-            let abi_offsets = [0x38u64, 0x30, 0x10, 0x08, 0x40, 0x48]; // RDI, RSI, RDX, RCX, R8, R9
-            while params.len() < known_n {
-                let idx = params.len();
-                if idx >= abi_offsets.len() { break; }
-                let offset = abi_offsets[idx];
-                let type_arc = if let Some(ref types) = known_types {
-                    if idx < types.len() {
-                        match types[idx] {
-                            "ptr" => {
-                                let base = Arc::new(Datatype::Base(TypeBase::new(
-                                    "long".to_string(), 8, TypeMetatype::Int,
-                                )));
-                                Arc::new(Datatype::Pointer(
-                                    crate::type_system::datatype::TypePointer {
-                                    base: crate::type_system::datatype::TypeBase::new(
-                                            "void *".to_string(), 8, TypeMetatype::Pointer,
-                                        ),
-                                    ptr_to: base, wordsize: 1,
-                                },
-                                ))
-                            }
-                            _ => Arc::new(Datatype::Base(TypeBase::new(
-                                "long".to_string(), 8, TypeMetatype::Int,
-                            ))),
-                        }
-                    } else {
-                        Arc::new(Datatype::Base(TypeBase::new(
-                            "long".to_string(), 8, TypeMetatype::Int,
-                        )))
-                    }
-                } else {
-                    Arc::new(Datatype::Base(TypeBase::new(
-                        "long".to_string(), 8, TypeMetatype::Int,
-                    )))
-                };
-                params.push(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", params.len() + 1),
-                    type_arc,
-                    crate::address::Address::new(offset),
-                ));
-            }
-        }
-
-        if is_known && known_n < params.len() {
-            params.truncate(known_n);
-        }
+        // No self-name count supplement/truncate: oracle
+        // ActionInputPrototype (coreaction.cc:4707-4761) derives the input
+        // map purely from register trials. The former per-name
+        // known_param_count/known_param_types supplement/truncate arms were
+        // corpus-table knowledge and are gone (EXPEL-CORPUS-TABLES-0001).
 
         // Ghidra: coreaction.cc:4711-4761 ActionInputPrototype mutates the
         // input map only when FuncProto::isInputLocked() is false. This
@@ -3011,6 +2704,14 @@ impl Action for ActionUnreachable {
         }
         Ok(action_status::NO_CHANGE)
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3461 `count += 1`) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
     // RUGRA-GLUE: Rust Action trait get_name; "unreachable" mirrors ctor at coreaction.hh:493
     fn get_name(&self) -> &str { "unreachable" }
 }
@@ -3278,13 +2979,16 @@ impl Action for ActionDoNothing {
                     bl.write()
                         .unwrap()
                         .set_flags(crate::block::block_flags::DONOTHING_LOOP);
-                    let start = crate::block::front_leaf(&bl)
-                        .map(|l| l.read().unwrap().get_start_addr().as_u64())
-                        .unwrap_or(0);
-                    fd.warning(
-                        "Do nothing block with infinite loop",
-                        crate::address::Address::new(start),
-                    );
+                    // cc:3479: data.warning(..., bb->getStart()) — the
+                    // BlockBasic's own cover start (block.cc:2319: first
+                    // range's first address), NOT a front-leaf descent:
+                    // oracle getFrontLeaf on a t_basic block returns null
+                    // (block.cc:344-348 — subBlock(0) is null), so a
+                    // front_leaf detour here produces address 0 and the
+                    // comment never lands in the function's window
+                    // (MSTRUCT-DONOTHING-WARN-0001).
+                    let start = bl.read().unwrap().get_start_addr();
+                    fd.warning("Do nothing block with infinite loop", start);
                 }
                 continue;
             }
@@ -3332,9 +3036,17 @@ impl ActionRedundBranch {
 impl Action for ActionRedundBranch {
     // Ghidra: coreaction.cc:3492 ActionRedundBranch::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let n = fd.bblocks.get_size();
-        for i in 0..n {
-            let bl = match fd.bblocks.get_block(i) {
+        // cc:3501 `for(i=0;i<graph.getSize();++i)` re-evaluates the bound
+        // every iteration (splices shrink the graph); the case-1 reset
+        // `i = -1` (cc:3511) rescans from block 0 after each splice. Ported
+        // as an index loop so both behaviors survive.
+        let mut i: i64 = -1;
+        loop {
+            i += 1;
+            if i >= fd.bblocks.get_size() as i64 {
+                break;
+            }
+            let bl = match fd.bblocks.get_block(i as usize) {
                 Some(b) => b,
                 None => continue,
             };
@@ -3351,28 +3063,30 @@ impl Action for ActionRedundBranch {
             };
 
             if n_out == 1 {
-                // Case 1: splice block if target has only 1 in-edge and it's
-                // from this block, and this isn't a switch output. Faithful to
-                // ActionRedundBranch::apply case 1 (coreaction.cc:3505-3513).
+                // Case 1 (cc:3505-3513): splice bb into its sole successor
+                // when the successor is entered only from bb, is not the
+                // entry point, and bb is not a switch dispatch output
+                // (splicing a single-exit switch block would prevent second
+                // stage recovery).
                 let should_splice = {
                     let bl_rg = bl.read().unwrap();
-                    let is_switch_out = (bl_rg.get_flags() & 0) != 0; // isSwitchOut not tracked;保守 false
-                    let _ = is_switch_out;
-                    let target_rg = first_target.read().unwrap();
-                    let target_n_in = target_rg.size_in();
-                    let target_is_entry = (target_rg.get_flags()
-                        & crate::block::block_flags::ENTRY_POINT) != 0;
-                    target_n_in == 1 && !target_is_entry
-                };
-                if should_splice {
-                    if fd.splice_block_basic(&bl) {
-                        return Ok(action_status::NO_CHANGE);
+                    if bl_rg.is_switch_out() {
+                        false
+                    } else {
+                        let target_rg = first_target.read().unwrap();
+                        target_rg.size_in() == 1 && !target_rg.is_entry_point()
                     }
+                };
+                if should_splice && fd.splice_block_basic(&bl) {
+                    // cc:3509 `count += 1`; harvested by take_count_delta.
+                    self.count += 1;
+                    // cc:3510-3511: one block was removed, reset the scan.
+                    i = -1;
                 }
                 continue;
             }
 
-            // Case 2: check if all out-edges go to the same target.
+            // Case 2 (cc:3515-3517): are all out-edges to the same block?
             let all_same = {
                 let bl_rg = bl.read().unwrap();
                 let mut same = true;
@@ -3390,14 +3104,22 @@ impl Action for ActionRedundBranch {
                 continue;
             }
 
-            // coreaction.cc:3528: remove the branch edge at slot 1.
+            // cc:3524-3525: remove the branch edge at slot 1, count the
+            // change, and keep scanning (no index reset in this arm).
             fd.remove_branch(&bl, 1);
-            return Ok(action_status::NO_CHANGE);
+            self.count += 1;
         }
+        // cc:3527: indicate the full rule was applied.
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "redundbranch" mirrors ctor at coreaction.hh:515
     fn get_name(&self) -> &str { "redundbranch" }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3509/3525 `count += 1`) into the ActionState accumulator
+    // harvested by Action::perform, same pattern as ActionDeterminedBranch.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
 }
 
 /// Remove determined conditional branches (constant condition). Faithful to
@@ -3569,31 +3291,54 @@ impl ActionSwitchNorm {
 impl Action for ActionSwitchNorm {
     // Ghidra: coreaction.cc:4548 ActionSwitchNorm::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionSwitchNorm::apply (coreaction.cc:4548-4565).
         // In Ghidra, every JumpTable on `data` was already recovered during
-        // flow tracing (`FlowInfo::recoverJumpTables` → `Funcdata::
-        // recoverJumpTable`, funcdata_block.cc:640) — this action only
+        // flow tracing (`FlowInfo::recoverJumpTables` → Funcdata::
+        // recoverJumpTable, funcdata_block.cc:640) — this action only
         // normalizes the recovered tables. Rugra formerly ran an in-place
         // recovery pre-pass here because flow-time recovery was unwired;
         // JUMPTABLE-PIPELINE-0001 removed it now that the staged flow-time
         // path exists.
         //
-        // coreaction.cc:4549-4558: for each unlabelled table, matchModel /
-        // recoverLabels / foldInNormalization, then foldInGuards (clearing
-        // the structure on change). The fold stages remain L3 gaps.
-        let mut count = 0;
-        for jt_arc in &fd.jump_tables {
-            let is_labelled = jt_arc.read().unwrap().is_labelled();
-            if !is_labelled {
-                // jt->matchModel(&data); jt->recoverLabels(&data);
-                // jt->foldInNormalization(&data);
-                count += 1;
+        // cc:4551-4563: for each unlabelled table, matchModel /
+        // recoverLabels / foldInNormalization, then foldInGuards on every
+        // table (clearing the structure on change). Ghidra iterates by index
+        // over data.numJumpTables(); the table list cannot grow during the
+        // loop (fold-ins only append address entries), so an Arc snapshot is
+        // equivalent.
+        let jump_tables: Vec<_> = fd.jump_tables.clone();
+        for jt_arc in jump_tables {
+            {
+                let mut jt = jt_arc.write().unwrap();
+                if !jt.is_labelled() {
+                    // Ghidra: matchModel/recoverLabels LowlevelError messages
+                    // propagate out of apply verbatim; keep the exact string.
+                    jt.match_model(fd)
+                        .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?;
+                    jt.recover_labels(fd)
+                        .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?; // Recover case statement labels
+                    jt.fold_in_normalization(fd);
+                    self.count += 1;
+                }
             }
-            // if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
+            // cc:4559-4562: fold guards for every table, labelled or not.
+            let folded = jt_arc.write().unwrap().fold_in_guards(fd);
+            if folded {
+                fd.get_structure().clear(); // Make sure we redo structure
+                self.count += 1;
+            }
         }
-        let _ = count;
-        // cc:4559: `return 0;` — Ghidra reports no status change from this
+        // cc:4564: `return 0;` — Ghidra reports no status change from this
         // action regardless of the local counter.
         Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:4557/4561 `count += 1`) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "switchnorm" mirrors ctor at coreaction.hh:609
     fn get_name(&self) -> &str { "switchnorm" }
@@ -3674,6 +3419,466 @@ fn proto_has_custom_storage(_proto: &crate::fspec::FuncProto) -> bool { false }
 fn call_entry_address(fc: &crate::fspec::FuncCallSpecs) -> crate::address::Address {
     fc.entry_addr
         .unwrap_or(crate::address::Address::new(0))
+}
+
+// Ghidra: block.cc:3403 BlockWhileDo::finalizePrinting (whole-function sweep)
+/// Extract for-loop header statements from every WhileDo loop: detect the
+/// induction-variable configuration (findLoopVariable, block.cc:3158),
+/// locate the initializer (findInitializer, block.cc:3218), render the two
+/// header statements, and mark BOTH ops non-printing (block.cc:3421-3423)
+/// so the block emitters skip them while `emit_for_loop` prints the
+/// `for (init; cond; iter)` header from the rendered text.
+///
+/// Registered fidelity gaps (umbrella
+/// GETPARAM-FORLOOP-GAPSET-0001): ① testTerminal's lastOp/
+/// moveRespectingCover terminality half (block.cc:3277-3290) needs the op
+/// relocation machinery — unported (also GETPARAM-FORLOOP-OPMOVE-0001);
+/// ② findLoopVariable's 4-level non-MULTIEQUAL DFS descent (block.cc:3205)
+/// is approximated by direct comparison inputs only; ③ PcodeOp::isMoveable
+/// closure is approximated by the INT_ADD gate; ④ the constant renderer
+/// skips push_integer's Symbol equate/displayFormat consult; ⑤ the name
+/// resolver skips pushSymbolDetail's scope-qualified partial-symbol forms.
+/// CAST-wrapped constants and init-less loops fail closed (no conversion).
+///
+/// PLACEMENT NOTE: Ghidra runs this from ActionFinalStructure::apply
+/// (blockaction.cc:2192 `graph.finalizePrinting(data)`, pipeline position
+/// :5736 — BEFORE scopeBreak/markUnstructured/markLabelBumpUp at
+/// :2193-2195), by which point variable names (ActionNameVars :5734) and
+/// casts (ActionSetCasts :5735) are final. The oracle home is therefore
+/// the ActionFinalStructure slot, NOT Funcdata::print. Rugra's
+/// ActionFinalStructure lives in blockaction.rs (lane-frozen write-set
+/// this round), so the nearest stable hook is the tail of the last
+/// coreaction action before it (ActionPrototypeWarnings :5737) — one
+/// action later than the oracle position (ActionPrototypeWarnings runs
+/// after, at :5737 vs :5736 — same post-NameVars/SetCasts world, no
+/// intervening IR mutation). Relocate to the corresponding point inside
+/// ActionFinalStructure (the blockaction.rs port of blockaction.cc:2192)
+/// when that file's write-set reopens.
+pub fn for_loop_finalize_printing(fd: &mut Funcdata) {
+    use crate::block::BlockType;
+    use crate::op::pcodeop_flags::NONPRINTING;
+
+    // Ghidra bails unless the architecture has analyze_for_loops set
+    // (block.cc:3360).
+    let analyze_for_loops = fd
+        .arch
+        .as_ref()
+        .map(|a| a.analyze_for_loops)
+        .unwrap_or(false);
+    if !analyze_for_loops {
+        return;
+    }
+    if fd.sblocks.blocks.is_empty() {
+        return;
+    }
+    // Post-order component walk (BlockGraph::finalTransform,
+    // block.cc:1355-1362): visit every component in list order before the
+    // enclosing BlockWhileDo performs its own transform (block.cc:3356).
+    let mut transform_order = Vec::new();
+    let mut transform_stack = fd
+        .sblocks
+        .blocks
+        .iter()
+        .rev()
+        .map(|block| (block.clone(), false))
+        .collect::<Vec<_>>();
+    let mut discovered = std::collections::HashSet::new();
+    while let Some((block, children_done)) = transform_stack.pop() {
+        let identity = Arc::as_ptr(&block) as *const () as usize;
+        if children_done {
+            transform_order.push(block);
+            continue;
+        }
+        if !discovered.insert(identity) {
+            continue;
+        }
+        let children = {
+            let rg = block.read().unwrap();
+            match rg.get_type() {
+                BlockType::List => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockList>()
+                    .map(|list| list.children.clone())
+                    .unwrap_or_default(),
+                BlockType::Condition => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockCondition>()
+                    .map(|condition| vec![condition.first.clone(), condition.second.clone()])
+                    .unwrap_or_default(),
+                BlockType::If => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockIf>()
+                    .map(|if_block| {
+                        let mut components = vec![if_block.condition.clone()];
+                        // A one-component BlockIf is the unstructured
+                        // if-goto form (block.hh:652-655).
+                        if if_block.goto_target.is_none() {
+                            components.push(if_block.if_body.clone());
+                            if let Some(else_body) = &if_block.else_body {
+                                components.push(else_body.clone());
+                            }
+                        }
+                        components
+                    })
+                    .unwrap_or_default(),
+                BlockType::WhileDo => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockWhileDo>()
+                    .map(|while_do| vec![while_do.condition.clone(), while_do.body.clone()])
+                    .unwrap_or_default(),
+                BlockType::DoWhile => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockDoWhile>()
+                    .map(|do_while| vec![do_while.condition.clone()])
+                    .unwrap_or_default(),
+                BlockType::InfLoop => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockInfLoop>()
+                    .map(|inf_loop| vec![inf_loop.body.clone()])
+                    .unwrap_or_default(),
+                BlockType::Switch => rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockSwitch>()
+                    .map(|switch| {
+                        let mut components = vec![switch.control.clone()];
+                        components.extend(switch.cases.iter().cloned());
+                        if let Some(default_case) = &switch.default_case {
+                            if !components
+                                .iter()
+                                .any(|component| Arc::ptr_eq(component, default_case))
+                            {
+                                components.push(default_case.clone());
+                            }
+                        }
+                        components
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        };
+        transform_stack.push((block, true));
+        for child in children.into_iter().rev() {
+            transform_stack.push((child, false));
+        }
+    }
+    for bl_arc in transform_order {
+        // Downcast to BlockWhileDo (block.rs:1449). WhileDo has named
+        // `condition` (head) and `body` (tail) fields.
+        let wd = {
+            let rg = bl_arc.read().unwrap();
+            if rg.get_type() != BlockType::WhileDo {
+                continue;
+            }
+            let any = rg.as_any();
+            let Some(wd) = any.downcast_ref::<crate::block::BlockWhileDo>() else {
+                continue;
+            };
+            if wd.has_overflow_syntax() {
+                continue;
+            }
+            // Clone the Arcs out so we can drop the borrow before mutating.
+            (wd.condition.clone(), wd.body.clone())
+        };
+        let (condition_arc, body_arc) = wd;
+
+        // block.cc:3362-3365: getFrontLeaf() yields the BlockCopy at the
+        // front of the loop condition; subBlock(0) is its live Basic.
+        let Some(copy_leaf) = crate::block::front_leaf(&bl_arc) else {
+            continue;
+        };
+        let head_arc = {
+            let leaf = copy_leaf.read().unwrap();
+            if leaf.get_type() != BlockType::Copy {
+                continue;
+            }
+            let Some(head) = leaf.sub_block(0) else {
+                continue;
+            };
+            head
+        };
+        let head_ops = {
+            let head = head_arc.read().unwrap();
+            if head.get_type() != BlockType::Basic {
+                continue;
+            }
+            head.get_ops()
+        };
+
+        // block.cc:3371-3372 uses the condition subtree's virtual
+        // lastOp(), not a concrete BlockBasic downcast.
+        let cbranch = {
+            let condition = condition_arc.read().unwrap();
+            let Some(cbranch) = condition.last_op() else {
+                continue;
+            };
+            let is_cb = cbranch.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+            if !is_cb {
+                continue;
+            }
+            cbranch
+        };
+
+        // block.cc:3366-3376 obtains the body subtree's virtual lastOp,
+        // then follows the op's parent to the actual tail Basic.
+        let body_last = {
+            let body = body_arc.read().unwrap();
+            let Some(last) = body.last_op() else {
+                continue;
+            };
+            last
+        };
+        let Some(tail_arc) = body_last
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.upgrade())
+        else {
+            continue;
+        };
+        let tail_slot = {
+            let tail = tail_arc.read().unwrap();
+            if tail.get_type() != BlockType::Basic || tail.size_out() != 1 {
+                continue;
+            }
+            let Some(edge) = tail.get_out(0) else {
+                continue;
+            };
+            if !Arc::ptr_eq(&edge.point, &head_arc) || edge.reverse_index < 0 {
+                continue;
+            }
+            edge.reverse_index as usize
+        };
+        let last_op = if body_last.0.read().unwrap().is_branch() {
+            let Some(previous) = body_last
+                .0.read()
+                .unwrap()
+                .previous_op_in_block(&fd.obank)
+            else {
+                continue;
+            };
+            previous
+        } else {
+            body_last
+        };
+        // findLoopVariable (block.cc:3164-3213): the CBRANCH condition
+        // (slot 1) must be written by a comparison; one of that
+        // comparison's inputs must be defined by a MULTIEQUAL living in the
+        // head block, and that MULTIEQUAL's tail-slot input must be defined
+        // by our iterate op in the tail block.
+        //   cbranch.in[1].def  = comparison op
+        //   comparison.in[k].def = MULTIEQUAL (in head)
+        //   MULTIEQUAL.in[tailslot].def = iterate op (in tail)
+        let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
+        let Some(cond_vn) = cond_vn else { continue };
+        let comparison = cond_vn.read().unwrap().get_def();
+        let Some(comparison) = comparison else { continue ;
+        };
+        // block.cc:3174-3176: `if (op->isCall() || op->isMarker()) return;` —
+        // the loop-variable search aborts when the condition's defining op is
+        // a call or marker (no loop variable through those).
+        {
+            let comp_guard = comparison.read().unwrap();
+            if comp_guard.is_call() || comp_guard.is_marker() {
+                continue;
+            }
+        }
+        // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
+        // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
+        // non-MULTIEQUAL defs (PcodeOpNode path[4]); Rugra only follows the
+        // direct comparison inputs — the missing 3 descent levels are
+        // registered (GETPARAM-FORLOOP-GAPSET-0001 ②).
+        let mut found: Option<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = None;
+        #[allow(unused_imports)]
+        use crate::opcodes::OpCode;
+        let comp_ref = crate::op::PcodeOpRef(comparison.clone());
+        let comp_incount = comp_ref.0.read().unwrap().num_input();
+        for k in 0..comp_incount {
+            let vn = match comp_ref.0.read().unwrap().get_in(k) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let multieq = vn.read().unwrap().get_def();
+            let Some(multieq) = multieq else { continue };
+            // block.cc:3189: only a MULTIEQUAL def can be the loopDef —
+            // `if (defOp->code() == CPUI_MULTIEQUAL) { ... }` (a non-
+            // MULTIEQUAL def falls into the DFS-descent branch, never the
+            // loopDef acceptance arm).
+            if multieq.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                continue;
+            }
+            // The MULTIEQUAL must live in the head block. Compare by Arc
+            // pointer identity with head_ops.
+            let me_parent = multieq
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade());
+            let in_head = me_parent
+                .as_ref()
+                .map(|p| Arc::ptr_eq(p, &head_arc))
+                .unwrap_or(false)
+                || head_ops.iter().any(|o| Arc::ptr_eq(&o.0, &multieq));
+            if !in_head {
+                continue;
+            }
+            let me_ref = crate::op::PcodeOpRef(multieq.clone());
+            // block.cc:3174/3190 selects the MULTIEQUAL input whose slot
+            // is the tail edge's reciprocal slot at the loop head.
+            let Some(tivn) = me_ref.0.read().unwrap().get_in(tail_slot).cloned() else {
+                continue;
+            };
+            let Some(idef) = tivn.read().unwrap().get_def() else {
+                continue;
+            };
+            let iparent = idef
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.upgrade());
+            if !iparent
+                .as_ref()
+                .map(|parent| Arc::ptr_eq(parent, &tail_arc))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if idef.read().unwrap().is_marker() {
+                continue;
+            }
+            // Rugra still lacks the full PcodeOp::isMoveable closure
+            // (GETPARAM-FORLOOP-GAPSET-0001 ③). Preserve the
+            // existing conservative INT_ADD gate whenever the candidate
+            // is not already the tail's final statement.
+            if !Arc::ptr_eq(&idef, &last_op.0)
+                && idef.read().unwrap().opcode != OpCode::CPUI_INT_ADD
+            {
+                continue;
+            }
+            found = Some((me_ref, crate::op::PcodeOpRef(idef)));
+            break;
+        }
+        let Some((loop_def, iterate_op)) = found else {
+            continue;
+        };
+        // block.cc:3218-3244 findInitializer: the initialize statement
+        // lives in the block feeding the head's non-tail input slot; the
+        // def of loopDef's entry input must terminate that block, and the
+        // block must flow only into the head. Returns (init op, its
+        // block, last non-branch op of that block).
+        let entry_slot = if tail_slot == 1 { 0 } else { 1 };
+        let init_op: Option<crate::op::PcodeOpRef> = {
+            let head_in_count = {
+                let head = head_arc.read().unwrap();
+                head.size_in()
+            };
+            if head_in_count != 2 {
+                None
+            } else {
+                let init_vn = loop_def
+                    .0
+                    .read()
+                    .unwrap()
+                    .get_in(entry_slot)
+                    .and_then(|vn| vn.read().unwrap().get_def());
+                match init_vn {
+                    Some(init_def) => {
+                        let idef = init_def.read().unwrap();
+                        if idef.is_marker() {
+                            None
+                        } else {
+                            let parent = idef.parent.as_ref().and_then(|w| w.upgrade());
+                            let expected_block = {
+                                let head = head_arc.read().unwrap();
+                                head.get_in(entry_slot).map(|edge| edge.point)
+                            };
+                            let parent_ok = match (&parent, &expected_block) {
+                                (Some(p), Some(e)) => Arc::ptr_eq(p, e),
+                                _ => false,
+                            };
+                            if parent_ok {
+                                // cc:3235-3236: initializer block must
+                                // flow only into the for loop.
+                                let out_count =
+                                    expected_block.unwrap().read().unwrap().size_out();
+                                if out_count == 1 {
+                                    Some(crate::op::PcodeOpRef(init_def.clone()))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            }
+        };
+        // Ghidra testTerminal (block.cc:3258-3291): the statement rooted at
+        // each loopDef input must be an EXPLICIT variable statement —
+        // `vn->isExplicit()` (:3271) — and the root op must still be
+        // printable (:3272-3273); a COPY that is already notPrinted has its
+        // root dug through to the COPY's input def (:3263-3269), which must
+        // then live in the slot's parent block. The lastOp/
+        // moveRespectingCover terminality half (:3277-3290) needs the op
+        // relocation machinery and is registered
+        // (GETPARAM-FORLOOP-GAPSET-0001 ①). testIterateForm
+        // (block.cc:3296-3315) requires the loop variable as iterator
+        // input — the INT_ADD(var,±const) render gate below is a strict
+        // subset of it.
+        if !ActionStructureTransform::test_terminal_statement(&loop_def, tail_slot) {
+            continue;
+        }
+        if !ActionStructureTransform::test_terminal_statement(&loop_def, entry_slot) {
+            continue;
+        }
+        // The rendering below only accepts the COPY-const initializer and
+        // INT_ADD(var,±const) iterator forms; anything else bails (no
+        // for-header conversion, statement stays visible — the fail-closed
+        // equivalent of testTerminal refusing).
+        let Some(initialize_op) = init_op else {
+            continue;
+        };
+
+        // Render the init slot: emitExpression(initializeOp) for the
+        // COPY-const form → "<name(out)> = <const>". The name mirrors
+        // printc's pushVnExplicit name slice (printlanguage.cc:218-262 →
+        // PrintC::push_varnode Priority 1: high name, symbol-backed
+        // verbatim, typed name passthrough; unnamed/raw-register highs
+        // cannot be rendered faithfully here — bail).
+        let init_str = ActionStructureTransform::render_for_header_copy_const(&initialize_op);
+        // Render the iterate slot: emitExpression(iterateOp) for the
+        // INT_ADD(var, const) form → "<name(out)> = <name(var)> + <const>".
+        let iter_str = ActionStructureTransform::render_for_header_int_add(&iterate_op);
+        // Rugra can suppress the statements only when it can carry both
+        // expressions into its for-loop printer. Otherwise keep the
+        // statements visible, matching Ghidra's fail-closed transform.
+        let (Some(init_str), Some(iter_str)) = (init_str, iter_str) else {
+            continue;
+        };
+        // block.cc:3421-3423 finalizePrinting: BOTH the iterator and the
+        // initializer statements are extracted into the for header and
+        // marked non-printing for the block emitters.
+        iterate_op.0.write().unwrap().flags |= NONPRINTING;
+        initialize_op.0.write().unwrap().flags |= NONPRINTING;
+        let mut bl_write = bl_arc.write().unwrap();
+        if let Some(wd) = bl_write
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockWhileDo>()
+        {
+            wd.for_init = Some(init_str);
+            wd.for_iter = Some(iter_str);
+        }
+        // Ghidra's ActionStructureTransform::apply never increments the
+        // inherited count (blockaction.cc:2110-2115 calls finalTransform
+        // and returns 0 without touching the member) — no local
+        // counting and no take_count_delta harvest; the conversion is
+        // witnessed by the for-loop metadata + NONPRINTING mark alone.
+    }
 }
 
 impl Action for ActionPrototypeWarnings {
@@ -3766,6 +3971,18 @@ impl Action for ActionPrototypeWarnings {
             }
         }
         // coreaction.cc:4935: return 0; (no IR mutation).
+        //
+        // RUGRA ADDITION — for-loop header extraction
+        // (BlockWhileDo::finalizePrinting, block.cc:3399-3423): the oracle
+        // trigger is ActionFinalStructure::apply →
+        // graph.finalizePrinting(data) (blockaction.cc:2192, pipeline
+        // :5736, before scopeBreak). Rugra's ActionFinalStructure port
+        // lives in blockaction.rs (lane-frozen write-set this round), so
+        // this last coreaction action (:5737, one action later, no
+        // intervening IR mutation) is the nearest stable hook. See
+        // `for_loop_finalize_printing` for the full placement note and the
+        // relocation plan.
+        for_loop_finalize_printing(fd);
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "prototypewarnings" mirrors ctor at coreaction.hh:1047
@@ -3930,12 +4147,21 @@ impl ActionMarkExplicit {
                         if std::sync::Arc::ptr_eq(&root_arc, vn_arc) {
                             return -1;
                         }
-                        // cc:3040: `rootVn->getDef()->isPartialRoot()` — Rugra
-                        // has no PcodeOp::partialroot flag (ruleaction.rs
-                        // RulePieceStructure skips setPartialRoot at Ghidra
-                        // ruleaction.cc:7642; VariablePiece registry tracked
-                        // by MERGE-ADDRTIED-CLOSURE-0001), so the flag reads
-                        // false for every IR the current pipeline builds.
+                        // cc:3040-3044: `rootVn->getDef()->isPartialRoot()`
+                        // — the varnode is getting PIECEd into a structure
+                        // whose root def is flagged partialRoot (set by
+                        // RulePieceStructure ruleaction.cc:7642 and
+                        // SplitDatatype::buildOutConcats subflow.cc:2599);
+                        // all such PIECE operations should be explicit.
+                        if root_arc
+                            .read()
+                            .unwrap()
+                            .get_def()
+                            .map(|d| d.read().unwrap().is_partial_root())
+                            .unwrap_or(false)
+                        {
+                            return -1;
+                        }
                     }
                     None => return -1,
                 }
@@ -4367,16 +4593,22 @@ impl Action for ActionMarkExplicit {
             vn_arc.write().unwrap().clear_mark();
         }
 
-        if change_count > 0 {
-            // Ghidra coreaction.cc:3252/3262: every setExplicit/purge
-            // increments the inherited Action::count; apply itself returns
-            // 0 (cc:3271). Returning the bump count here is the sanctioned
-            // Rust count-bridge (see Action::perform doc).
-            self.count += change_count;
-            Ok(change_count)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra coreaction.cc:3252/3262: the inherited member accumulates
+        // every setExplicit/purge bump (bulk mirror of the two inline
+        // `count +=` sites); apply itself returns 0 unconditionally
+        // (cc:3271), and Action::perform surfaces the member (action.cc:361
+        // `return count`) via take_count_delta below — the single count
+        // bridge (a positive return would feed state.count a second time).
+        self.count += change_count;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3252/3262 accumulation) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "markexplicit" mirrors ctor at coreaction.hh:427
     fn get_name(&self) -> &str { "markexplicit" }
@@ -4398,8 +4630,10 @@ impl ActionMarkImplied {
 
     /// Return false only if one Varnode is obtained by adding non-zero thing
     /// to another Varnode. Faithful to `isPossibleAliasStep`
-    /// (coreaction.cc).
-    #[allow(dead_code)] // reserved for full LOAD/STORE crossing check
+    /// (coreaction.cc:3279-3295): scan both directions; when one side's def
+    /// is INT_ADD/PTRSUB/PTRADD/INT_XOR whose in(0) is the other side and
+    /// in(1) is a constant, the pair has a fixed additive offset — not a
+    /// possible alias.
     // Ghidra: coreaction.cc:3279 ActionMarkImplied::isPossibleAliasStep
     fn is_possible_alias_step(
         vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -4437,14 +4671,208 @@ impl ActionMarkImplied {
         true
     }
 
+    /// Return false ONLY if we can guarantee two Varnodes have different
+    /// values. Faithful to `ActionMarkImplied::isPossibleAlias`
+    /// (coreaction.cc:3303-3368). `true` = possible alias (refuse the
+    /// implied form); `false` = provably distinct pointers (let the load
+    /// through the crossed store, keeping the canon inline form).
+    ///
+    /// Decisive semantics from the oracle body:
+    /// - vn identity (`vn1 == vn2`) is a definite alias (cc:3306).
+    /// - an unwritten side falls to the constant-offset compare / step
+    ///   test (cc:3307-3311); two constants alias iff offsets are equal.
+    /// - the step test gate (cc:3313) runs BEFORE any def-op comparison.
+    /// - PTRSUB normalizes to INT_ADD; PTRADD normalizes to INT_ADD with
+    ///   multiplier = in(2) offset cast to int4 (cc:3322-3333).
+    /// - opcode mismatch → possible alias; depth==0 → possible alias
+    ///   (cc:3334-3335), depth decremented once per recursion level.
+    /// - INT_ADD with two constant addends compares `mult*offset` in
+    ///   wrapping uintb arithmetic: equal → recurse on in(0)s; unequal →
+    ///   `!functionalEquality(in0, in0)` (cc:3347-3353).
+    /// - INT_ADD with any non-constant addend: mult mismatch → possible
+    ///   alias, else the four functionalEquality pairings pick the slot
+    ///   pair to recurse on (cc:3354-3362).
+    // Ghidra: coreaction.cc:3303 ActionMarkImplied::isPossibleAlias
+    fn is_possible_alias(
+        vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        depth: i32,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+
+        if std::sync::Arc::ptr_eq(vn1, vn2) {
+            return true; // Definite alias (cc:3306)
+        }
+
+        // cc:3307-3311: an unwritten side cannot be unwound through defs.
+        let (vn1_written, vn2_written) = {
+            let a = vn1.read().unwrap();
+            let b = vn2.read().unwrap();
+            if !a.is_written() || !b.is_written() {
+                if a.is_constant() && b.is_constant() {
+                    // cc:3308-3309: constants alias iff offsets equal (the
+                    // oracle FIXME about NEAR constants is part of the
+                    // oracle's observable behavior — keep it verbatim).
+                    return a.get_offset() == b.get_offset();
+                }
+            }
+            (a.is_written(), b.is_written())
+        };
+        if !vn1_written || !vn2_written {
+            return Self::is_possible_alias_step(vn1, vn2);
+        }
+
+        // cc:3313-3314: a fixed additive offset between the pair rules out
+        // "possible alias" outright.
+        if !Self::is_possible_alias_step(vn1, vn2) {
+            return false;
+        }
+
+        let (def1, def2) = {
+            let a = vn1.read().unwrap();
+            let b = vn2.read().unwrap();
+            (a.get_def(), b.get_def())
+        };
+        let (Some(op1_arc), Some(op2_arc)) = (def1, def2) else {
+            // is_written held but def arc vanished — structurally impossible
+            // in Ghidra (written ⇒ def); fail toward "possible alias".
+            return true;
+        };
+
+        // Snapshot opcode normalization + multipliers + input varnode arcs
+        // under the op guards, then drop them before any recursion so no
+        // PcodeOp read guard is held across a nested call (lock discipline
+        // mirrors crate::expression::functional_equality_level).
+        let (opc1, opc2, mult1, mult2, op1_ins, op2_ins) = {
+            let op1 = op1_arc.read().unwrap();
+            let op2 = op2_arc.read().unwrap();
+            let mut opc1 = op1.opcode;
+            let mut opc2 = op2.opcode;
+            let mut mult1: i32 = 1;
+            let mut mult2: i32 = 1;
+            // cc:3322-3327
+            if opc1 == OpCode::CPUI_PTRSUB {
+                opc1 = OpCode::CPUI_INT_ADD;
+            } else if opc1 == OpCode::CPUI_PTRADD {
+                opc1 = OpCode::CPUI_INT_ADD;
+                mult1 = op1.get_in(2).map(|v| v.read().unwrap().get_offset() as u32 as i32).unwrap_or(1);
+            }
+            // cc:3328-3333
+            if opc2 == OpCode::CPUI_PTRSUB {
+                opc2 = OpCode::CPUI_INT_ADD;
+            } else if opc2 == OpCode::CPUI_PTRADD {
+                opc2 = OpCode::CPUI_INT_ADD;
+                mult2 = op2.get_in(2).map(|v| v.read().unwrap().get_offset() as u32 as i32).unwrap_or(1);
+            }
+            let op1_ins: Vec<_> = (0..3).map(|i| op1.get_in(i).cloned()).collect();
+            let op2_ins: Vec<_> = (0..3).map(|i| op2.get_in(i).cloned()).collect();
+            (opc1, opc2, mult1, mult2, op1_ins, op2_ins)
+        };
+
+        // cc:3334: different normalized opcodes → cannot establish a
+        // difference → possible alias.
+        if opc1 != opc2 {
+            return true;
+        }
+        // cc:3335: recursion budget exhausted before finding an absolute
+        // difference → possible alias.
+        if depth == 0 {
+            return true;
+        }
+        let depth = depth - 1;
+
+        match opc1 {
+            // cc:3338-3343: unary value-through ops recurse on in(0).
+            OpCode::CPUI_COPY
+            | OpCode::CPUI_INT_ZEXT
+            | OpCode::CPUI_INT_SEXT
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_NEGATE => {
+                match (&op1_ins[0], &op2_ins[0]) {
+                    (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                    // Unary ops always carry in(0); absent ⇒ structurally
+                    // impossible ⇒ fail toward possible alias.
+                    _ => true,
+                }
+            }
+            // cc:3344-3363
+            OpCode::CPUI_INT_ADD => {
+                let cvn1_const = op1_ins[1].as_ref().map(|v| v.read().unwrap().is_constant());
+                let cvn2_const = op2_ins[1].as_ref().map(|v| v.read().unwrap().is_constant());
+                if cvn1_const == Some(true) && cvn2_const == Some(true) {
+                    // cc:3348-3349: uintb val = mult * offset (wrapping).
+                    let off1 = op1_ins[1].as_ref().map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let off2 = op2_ins[1].as_ref().map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let val1 = (mult1 as u64).wrapping_mul(off1);
+                    let val2 = (mult2 as u64).wrapping_mul(off2);
+                    if val1 == val2 {
+                        // cc:3351: same displacement → difference rides on
+                        // the bases.
+                        return match (&op1_ins[0], &op2_ins[0]) {
+                            (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                            _ => true,
+                        };
+                    }
+                    // cc:3352: different displacements with equal bases are
+                    // provably different.
+                    return !match (&op1_ins[0], &op2_ins[0]) {
+                        (Some(a), Some(b)) => crate::expression::functional_equality(a, b),
+                        _ => false,
+                    };
+                }
+                // cc:3354
+                if mult1 != mult2 {
+                    return true;
+                }
+                // cc:3355-3362: pick the slot pair pinned equal by
+                // functionalEquality and recurse on the complementary pair.
+                let fe = |a: &Option<_>, b: &Option<_>| -> bool {
+                    match (a, b) {
+                        (Some(x), Some(y)) => crate::expression::functional_equality(x, y),
+                        _ => false,
+                    }
+                };
+                if fe(&op1_ins[0], &op2_ins[0]) {
+                    return match (&op1_ins[1], &op2_ins[1]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[1], &op2_ins[1]) {
+                    return match (&op1_ins[0], &op2_ins[0]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[0], &op2_ins[1]) {
+                    return match (&op1_ins[1], &op2_ins[0]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                if fe(&op1_ins[1], &op2_ins[0]) {
+                    return match (&op1_ins[0], &op2_ins[1]) {
+                        (Some(a), Some(b)) => Self::is_possible_alias(a, b, depth),
+                        _ => true,
+                    };
+                }
+                true // cc:3363 `break` → fallthrough return true
+            }
+            _ => true, // cc:3364-3365 default
+        }
+    }
+
     /// Check if a Varnode can be safely implied (its def expression inlined).
     /// Faithful to ActionMarkImplied::checkImpliedCover (coreaction.cc:3376).
     /// Returns true if it CAN be implied (no cover violation).
     ///
     /// Ghidra checks three conditions; Rugra implements:
-    ///  (1) LOAD def crossing STOREs — simplified: if def is LOAD and any
-    ///      STORE shares the def op's block, conservatively forbid.
-    ///  (2) LOAD/CALL def crossing CALLs — simplified: if def is LOAD/CALL
+    ///  (1) LOAD def crossing STOREs — faithful: for each alive STORE
+    ///      interior-contained in the cover (contain(storeop,2)), when the
+    ///      STORE's spacebase offset equals the LOAD's, refuse the implied
+    ///      form only if isPossibleAlias(store in(1), load in(1), 2) says
+    ///      the pointer pair may alias (coreaction.cc:3394-3397).
+    ///  (2) LOAD/CALL def crossing CALLs — faithful: if def is LOAD/CALL
     ///      and its block contains another CALL, forbid.
     ///  (3) Input cover inflation — the authoritative check: for each input
     ///      of the def op, test if inflating it to cover `high` intersects a
@@ -4472,6 +4900,20 @@ impl ActionMarkImplied {
         let Some(high_arc) = high_arc else {
             return false; // no HighVariable — shouldn't happen post-merge
         };
+
+        // cc:3385/3403 read the cover via `vn->getCover()`, which lazily
+        // REBUILDS a dirty Varnode Cover first (varnode.hh:202 → varnode.cc:231
+        // Varnode::updateCover → cover->rebuild). Rugra's Action-sequence
+        // pipeline (each merge step a separate Action, action.rs :5717-5729)
+        // has no eager compute_varnode_covers sweep at this point, so the
+        // raw `.cover` field can still be the empty post-calcCover shell
+        // with COVERDIRTY set. Mirror the lazy rebuild via
+        // Varnode::update_cover_locked before reading (CANARY-EXPLICIT
+        // family root cause: reading the raw empty cover let whole-function
+        // loads — e.g. the entry canary read whose only use is the exit
+        // compare — pass the CALL-crossing test and become implied, losing
+        // the `lVar2 = *(long *)(in_FS_OFFSET + 0x28)` explicit statement).
+        crate::varnode::Varnode::update_cover_locked(vn_arc);
 
         let def_op = def_op_arc.read().unwrap();
         let def_opc = def_op.opcode;
@@ -4506,16 +4948,34 @@ impl ActionMarkImplied {
                         continue;
                     }
                     // The LOAD crosses this STORE. Ghidra consults
-                    // isPossibleAlias (coreaction.cc:3392) before refusing;
-                    // Rugra's full alias machinery is unported
-                    // (is_possible_alias_step is reserved), so same-spacebase
-                    // crossings are conservatively refused — a superset of
-                    // Ghidra's refusals, differing only for provably
-                    // non-aliasing pointer pairs.
+                    // isPossibleAlias (coreaction.cc:3396, fn at :3303) on
+                    // the pointer pair (STORE in(1) vs LOAD in(1)) and lets
+                    // the load through when the pointers are provably
+                    // distinct; only a possibly-aliasing pair refuses the
+                    // implied form (return false). Previously Rugra
+                    // refused every same-spacebase crossing — a superset
+                    // of Ghidra's refusals that over-materialized
+                    // canon-inlined field loads (httpd main
+                    // plVar12[9]/plVar12[10]):
+                    // GETPARAM-STORECROSS-ALIASGATE-0001, now resolved by
+                    // the ported gate.
                     let store_spacebase_off =
                         store_op.get_in(0).map(|v| v.read().unwrap().get_offset());
                     if load_spacebase_off == store_spacebase_off {
-                        return false;
+                        let store_ptr = store_op.get_in(1);
+                        let load_ptr = def_op.get_in(1);
+                        match (store_ptr, load_ptr) {
+                            (Some(store_ptr), Some(load_ptr)) => {
+                                // cc:3396 `if (isPossibleAlias(storeop->getIn(1),op->getIn(1),2)) return false;`
+                                if Self::is_possible_alias(store_ptr, load_ptr, 2) {
+                                    return false;
+                                }
+                            }
+                            // STORE/LOAD always carry an in(1) pointer;
+                            // a structural absence cannot be proven
+                            // distinct, so keep the refusal.
+                            (None, _) | (_, None) => return false,
+                        }
                     }
                 }
             }
@@ -4597,61 +5057,119 @@ impl Action for ActionMarkImplied {
 
     // Ghidra: coreaction.cc:3416 ActionMarkImplied::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
-        // Iterates all Varnodes; for each non-explicit/non-implied candidate,
-        // checks whether its def expression can be safely inlined into its
-        // consumer (implied) via checkImpliedCover. If yes, mark implied;
-        // otherwise mark explicit (will be emitted as a named assignment).
+        // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416-3455).
+        // Iterates all Varnodes in location order; each unmarked root runs a
+        // depth-first traversal over its descendants (DescTreeElement
+        // varstack, cc:3422-3429), and a varnode is checked/marked only
+        // AFTER all of its unmarked descendants have completed
+        // (cc:3430-3443 pops frames whose desciter hit endDescend).
         //
-        // Ghidra uses a DFS over descendants to propagate cover inflation
-        // incrementally; Rugra approximates with static high.cover (built by
-        // Merge::update_high_covers). This is correct for the common case
-        // (single-consumer temporaries) and conservative for rare chained
-        // implications.
+        // The descendant-first order is load-bearing, not stylistic:
+        // Merge::markImplied dirties the def op's input covers
+        // (merge.cc:1600-1604), and Varnode::getCover's lazy rebuild
+        // extends the cover through outputs that are implied AT REBUILD
+        // TIME (Cover::rebuild's path traversal, cover.cc:492-493). When a
+        // consumer is marked implied before its producer is checked (e.g.
+        // the INT_EQUAL reading a LOAD's output), the producer's rebuilt
+        // cover reaches the consumer's own readers across basic blocks via
+        // Cover::addRefPoint's predecessor recursion (cover.cc:610-612) —
+        // that is exactly the oracle decision state that materializes the
+        // canon `cVar1 = *flag;` entry load (GETPARAM-CVAR1-HOIST-0001:
+        // the cover spans the rep-movs loop blocks and interior-contains
+        // the aliases-init STORE, so checkImpliedCover check (1) consults
+        // isPossibleAlias on the pointer pair and refuses the implied
+        // form). Rugra's previous flat loc-order loop processed producers
+        // before their consumers, so the cover never extended through
+        // them and store-crossing loads stayed wrongly implied.
         let mut change_count = 0;
 
         let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
 
         for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            // Skip free (neither input nor written), explicit, or already implied.
-            if !vn_rg.is_written() && !vn_rg.is_input() {
-                continue;
+            {
+                let vn_rg = vn_arc.read().unwrap();
+                // Ghidra cc:3426-3428: skip free (neither input nor
+                // written), explicit, or already-implied roots.
+                if !vn_rg.is_written() && !vn_rg.is_input() {
+                    continue;
+                }
+                if vn_rg.is_explicit() || vn_rg.is_implied() {
+                    continue;
+                }
             }
-            if vn_rg.is_explicit() || vn_rg.is_implied() {
-                continue;
+            // Ghidra cc:3429: varstack.push_back(vn). Each frame keeps the
+            // root varnode plus its collected descendant (reading) ops and
+            // the next index into them — a snapshot of the live
+            // list<PcodeOp*> iterator is sound because neither
+            // checkImpliedCover nor markImplied/setExplicit mutates read
+            // lists. The SSA output chain (op -> getOut) is a DAG by
+            // construction, so no cycle guard is needed (same invariant
+            // Ghidra's unbounded stack relies on).
+            let mut varstack: Vec<(
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
+                usize,
+            )> = Vec::new();
+            let root_descs = vn_arc.read().unwrap().descend_iter().collect();
+            varstack.push((vn_arc.clone(), root_descs, 0));
+            // Ghidra cc:3430-3451: do { ... } while(!varstack.empty());
+            while !varstack.is_empty() {
+                let next_op = {
+                    let frame = varstack.last().unwrap();
+                    frame.1.get(frame.2).cloned()
+                };
+                match next_op {
+                    Some(op_arc) => {
+                        varstack.last_mut().unwrap().2 += 1;
+                        // Ghidra cc:3445: outvn = (*desciter++)->getOut();
+                        let outvn = op_arc.read().unwrap().get_out().cloned();
+                        if let Some(outvn) = outvn {
+                            // Ghidra cc:3446-3448: push unmarked outputs so
+                            // they are traced (and marked) first.
+                            let unmarked = {
+                                let rg = outvn.read().unwrap();
+                                !rg.is_explicit() && !rg.is_implied()
+                            };
+                            if unmarked {
+                                let descs = outvn.read().unwrap().descend_iter().collect();
+                                varstack.push((outvn, descs, 0));
+                            }
+                        }
+                    }
+                    None => {
+                        // Ghidra cc:3432-3443: all descendants are traced
+                        // first — try to make vncur implied.
+                        let (cur, _, _) = varstack.pop().unwrap();
+                        // cc:3434: count += 1 — will be marked either
+                        // explicit or implied.
+                        change_count += 1;
+                        if self.check_implied_cover(fd, &cur) {
+                            crate::merge::Merge::mark_implied(&cur);
+                        } else {
+                            cur.write().unwrap().set_explicit();
+                        }
+                    }
+                }
             }
-            drop(vn_rg);
-
-            if self.check_implied_cover(fd, vn_arc) {
-                crate::merge::Merge::mark_implied(vn_arc);
-            } else {
-                vn_arc.write().unwrap().set_explicit();
-            }
-            change_count += 1;
         }
 
-        if change_count > 0 {
-            // Ghidra coreaction.cc:3434: every candidate popped from the DFS
-            // stack — each Varnode that gets marked either explicit or
-            // implied — increments the inherited Action::count; apply itself
-            // still returns 0, and Action::perform surfaces the accumulated
-            // count as its result (action.cc:362 `return count;`). Returning
-            // the bump count here is the sanctioned Rust count-bridge (see
-            // Action::perform doc; same convention as
-            // ActionMarkExplicit::apply above).
-            // Ghidra coreaction.cc:3434: `count += 1` fires for every
-            // varnode that completes the traversal — it will be marked
-            // either explicit or implied. apply itself returns 0 (cc:3454);
-            // returning the bump count is the sanctioned Rust count-bridge
-            // (see Action::perform doc), so `perform` observes
-            // lcount<count → count_apply/status_end exactly like the oracle
-            // (ActionMarkImplied is rule_onceperfunc, coreaction.hh:461).
-            self.count += change_count;
-            Ok(change_count)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra coreaction.cc:3434: `count += 1` fires for every varnode
+        // that completes the traversal — it will be marked either explicit
+        // or implied (bulk mirror of the per-varnode inline increments).
+        // apply itself returns 0 (cc:3454); the member rides back through
+        // take_count_delta below, so `perform` observes lcount<count →
+        // count_apply/status_end exactly like the oracle
+        // (ActionMarkImplied is rule_onceperfunc, coreaction.hh:461).
+        self.count += change_count;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3434 accumulation) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "markimplied" mirrors ctor at coreaction.hh:449
     fn get_name(&self) -> &str { "markimplied" }
@@ -4684,20 +5202,24 @@ impl ActionSetCasts {
     fn input_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::type_system::datatype::TypeMetatype;
         match opc {
-            // Integer arithmetic/logic/shift binary ops: metain = TYPE_INT.
-            // These are the ops where a pointer-typed operand must be cast to
-            // an integer (Ghidra TypeOpBinary metain, typeop.hh:206).
-            // Comparisons, COPY, and extensions have op-specific getInputCast
-            // overrides not captured here, so they are excluded (return None)
-            // to avoid over-casting — faithful to the metain model for the
-            // arithmetic/logic subset only.
+            // Integer/logic/shift binary+unary ops: metain comes from each
+            // TypeOp ctor's 4th ctor arg (typeop.cc:1168-1692), which is
+            // NOT uniformly TYPE_INT:
+            //   INT metain (typeop.cc:1168/1319/1381/1503/1568/1618/1652/1692):
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
-            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM
-            | OpCode::CPUI_INT_SREM
-            | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
-            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP
-            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => Some(TypeMetatype::Int)
-            ,
+            | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_SRIGHT => Some(TypeMetatype::Int),
+            //   UINT metain (typeop.cc:1395/1409/1442/1475/1528/1632/1672):
+            //   NEGATE, XOR, AND, OR, RIGHT, DIV, REM register
+            //   TypeOpBinary/Unary(...,TYPE_UINT,TYPE_UINT) — the old
+            //   uniform-Int table mistyped their inputTypeLocal base (and
+            //   thus the generic getInputCast reqtype), e.g. INT_AND slot0
+            //   reqtype int8 vs the oracle's uint8 (typeop.cc:1442).
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_INT_RIGHT
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => Some(TypeMetatype::Uint),
             // Boolean ops: metain = TYPE_BOOL
             OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
             | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => Some(TypeMetatype::Bool),
@@ -4718,37 +5240,42 @@ impl ActionSetCasts {
     /// cast `char**` that prints `*(char **)stream`.
     // Ghidra: typeop.cc:440 TypeOpLoad::getInputCast
     fn load_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if slot != 1 {
             return None;
         }
         // cc:444: reqtype = op->getOut()->getHighTypeDefFacing()
-        let reqtype = op.get_out().and_then(|o| {
-            let vn = o.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        })?;
-        let invn = op.get_in(1)?;
+        // (through HighVariable::getType's lazy typedirty re-derivation).
+        // The def-facing consult resolves through fd.union_map when the high
+        // type needs resolution (varnode.cc:651-658).
+        let reqtype = op_ref
+            .0
+            .read()
+            .unwrap()
+            .get_out()
+            .and_then(|o| {
+                crate::unionresolve::vn_high_type_def_facing(fd, &o)
+                    .or_else(|| o.read().unwrap().v_type.clone())
+            })?;
+        let invn = {
+            let op = op_ref.0.read().unwrap();
+            op.get_in(1).cloned()
+        }?;
         let in_size = invn.read().unwrap().get_size();
         // cc:446: curtype = invn->getHighTypeReadFacing(op)
-        let curtype_full = {
-            let vn = invn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
+        let curtype_full = crate::unionresolve::vn_high_type_read_facing(fd, &invn, op_ref, 1)
+            .or_else(|| invn.read().unwrap().v_type.clone())?;
         // cc:450-453: unwrap exactly one level; a non-pointer address takes
         // a direct pointer-to-reqtype cast.
         let curtype = match curtype_full.as_ref() {
             Datatype::Pointer(pt) => pt.ptr_to.clone(),
-            _ => return Some(make_ptr(reqtype, in_size)),
+            _ => return Some(make_ptr(reqtype, in_size, Some(type_factory))),
         };
         // cc:454-465: postpone branch.
         if !curtype.type_equal(&reqtype) && curtype.get_size() == reqtype.get_size() {
@@ -4774,7 +5301,7 @@ impl ActionSetCasts {
         // cc:467-469: castStandard(reqtype, curtype, false, true), then wrap
         // the resulting cast type back into a pointer.
         let cast = strategy.cast_standard_full(&reqtype, &curtype, false, true)?;
-        Some(make_ptr(cast, in_size))
+        Some(make_ptr(cast, in_size, Some(type_factory)))
     }
 
     /// Faithful port of `TypeOpStore::getInputCast` (typeop.cc:520-555).
@@ -4785,30 +5312,32 @@ impl ActionSetCasts {
     /// pointer.
     // Ghidra: typeop.cc:520 TypeOpStore::getInputCast
     fn store_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::Datatype;
         if slot == 0 {
             return None;
         }
-        let pointer_vn = op.get_in(1)?;
-        let value_vn = op.get_in(2)?;
-        let pointer_type = {
-            let vn = pointer_vn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
-        let value_type = {
-            let vn = value_vn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
+        let (pointer_vn, value_vn) = {
+            let op = op_ref.0.read().unwrap();
+            match (op.get_in(1).cloned(), op.get_in(2).cloned()) {
+                (Some(p), Some(v)) => (p, v),
+                _ => return None,
+            }
+        };
+        // cc:525/527: pointerType/valueType via getHighTypeReadFacing —
+        // the ② `(char **)` leaf: the pointer's read-facing type resolves
+        // through fd.union_map (varnode.cc:665-672 → TypePointer::findResolve
+        // type.cc:1192), yielding the field-pointer (e.g. char**) whose
+        // pointee then feeds the slot-2 value cast (cc:554).
+        let pointer_type = crate::unionresolve::vn_high_type_read_facing(fd, &pointer_vn, op_ref, 1)
+            .or_else(|| pointer_vn.read().unwrap().v_type.clone())?;
+        let value_type = crate::unionresolve::vn_high_type_read_facing(fd, &value_vn, op_ref, 2)
+            .or_else(|| value_vn.read().unwrap().v_type.clone())?;
         let ptr_size = pointer_vn.read().unwrap().get_size();
         // cc:530-535: pointedToType / destSize.
         let (pointed_to, dest_size) = match pointer_type.as_ref() {
@@ -4818,7 +5347,7 @@ impl ActionSetCasts {
         // cc:536-541: size mismatch → cast the POINTER (slot 1 only).
         if dest_size != value_type.get_size() as i64 {
             if slot == 1 {
-                return Some(make_ptr(value_type, ptr_size));
+                return Some(make_ptr(value_type, ptr_size, Some(type_factory)));
             }
             return None;
         }
@@ -4835,12 +5364,12 @@ impl ActionSetCasts {
                         .map(|d| {
                             std::ptr::eq(
                                 &*d.read().unwrap() as *const crate::op::PcodeOp,
-                                op as *const crate::op::PcodeOp,
+                                &*op_ref.0.read().unwrap() as *const crate::op::PcodeOp,
                             )
                         })
                         .unwrap_or(false)
                 {
-                    let new_type = make_ptr(value_type, ptr_size);
+                    let new_type = make_ptr(value_type, ptr_size, Some(type_factory));
                     if !pointer_type.type_equal(&new_type) {
                         return Some(new_type);
                     }
@@ -4850,6 +5379,116 @@ impl ActionSetCasts {
         }
         // cc:553-554: slot 2 — cast the value, not the pointer.
         strategy.cast_standard_full(&pointed_to, &value_type, false, true)
+    }
+
+    /// `TypeOpCopy::getInputCast` (typeop.cc:397-403): the input of a COPY
+    /// is required to carry the OUTPUT's data-type — `reqtype` is the
+    /// output varnode's def-facing high type (NOT an inputTypeLocal base
+    /// like the generic metain arm), `curtype` is input 0's read-facing
+    /// high type, and `castStandard(reqtype,curtype,false,true)` decides
+    /// the cast. Unlike the base `TypeOp::getInputCast` (typeop.cc:295)
+    /// there is no annotation guard and no inputTypeLocal lookup here.
+    /// This is what renders the `(ContentUnion)SUB2416(...)` /
+    /// `(anon_union_16_3...)auVar21._8_16_` RHS prefixes on
+    /// `glob.pattern[i].content = ...` and the `(char *)in_stack_..._X_8_`
+    /// literal stores in main.
+    // Ghidra: typeop.cc:397 TypeOpCopy::getInputCast
+    fn copy_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        fd: &Funcdata,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        // cc:399: reqtype = op->getOut()->getHighTypeDefFacing()
+        // (through HighVariable::getType's lazy typedirty re-derivation)
+        let reqtype = op_ref.0.read().unwrap().get_out().and_then(|o| {
+            crate::unionresolve::vn_high_type_def_facing(fd, &o)
+                .or_else(|| o.read().unwrap().v_type.clone())
+        })?;
+        // cc:400: curtype = op->getIn(0)->getHighTypeReadFacing(op) — the
+        // override reads slot 0 directly (COPY is unary), ignoring `slot`.
+        let _ = slot;
+        let invn = {
+            let op = op_ref.0.read().unwrap();
+            op.get_in(0).cloned()
+        }?;
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &invn, op_ref, 0)
+            .or_else(|| invn.read().unwrap().v_type.clone())?;
+        // cc:401: castStandard(reqtype,curtype,false,true); the returned Arc
+        // preserves reqtype identity, mirroring Ghidra's `return reqtype`.
+        strategy.cast_standard_full(&reqtype, &curtype, false, true)
+    }
+
+    /// The call family's input-cast arm: neither `TypeOpCall`
+    /// (typeop.cc:660) nor `TypeOpCallind` (typeop.cc:738) overrides
+    /// `getInputCast`, so a CALL/CALLIND input slot takes the BASE
+    /// `TypeOp::getInputCast` (typeop.cc:295-303): `reqtype` is
+    /// `op->inputTypeLocal(slot)` — the virtual dispatch into
+    /// `TypeOpCall::getInputLocal` (typeop.cc:687-718, the callspec's
+    /// TYPE-LOCKED parameter, kept when non-void and sized <= the input
+    /// varnode) or `TypeOpCallind::getInputLocal` (typeop.cc:745-773, the
+    /// locked parameter without the size guard) — and `curtype` is the
+    /// input's high read-facing type; `castStandard(reqtype,curtype,false,
+    /// true)` decides the cast. This is the arm that renders canon's
+    /// locked-parameter argument casts (`(char *)0x0`,
+    /// `(char **)0x17520`, `(char *)pCStack_5b8` at GetStr/fopen sites).
+    // Ghidra: typeop.cc:295 TypeOp::getInputCast
+    fn call_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+        in_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        in_size: usize,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::typeop::TypeOp as _;
+        // cc:300 reqtype = op->inputTypeLocal(slot): the opcode-specific
+        // local lookup. CALL resolves its FuncCallSpecs from the slot-0
+        // fspec annotation (typeop.cc:694-699); CALLIND resolves it
+        // through the parent Funcdata (typeop.cc:757). The opcode is read
+        // under a temporary guard released before the dispatch: the
+        // CALLIND arm's get_input_local_in_fd -> Funcdata::
+        // get_call_specs_of_op takes its own read lock on this same op,
+        // and a nested read under a live outer guard deadlocks once a
+        // writer queues on the op (std RwLock; CURLWIRE-CR-F1, probe in
+        // the lane report). Ghidra's virtual dispatch reads the opcode
+        // once from a stable op, lock-free, in this exact order;
+        // vn_high_type_read_facing below takes its own guards for the
+        // same reason.
+        let reqtype = {
+            let opcode = op_ref.0.read().unwrap().opcode;
+            if opcode == OpCode::CPUI_CALLIND {
+                crate::typeop::TypeOpCallind::new(type_factory.clone())
+                    .get_input_local_in_fd(op_ref, slot, fd)
+            } else {
+                let op = op_ref.0.read().unwrap();
+                crate::typeop::TypeOpCall::new(type_factory.clone()).get_input_local(&op, slot)
+            }
+        };
+        // cc:301 curtype = vn->getHighTypeReadFacing(op); a varnode with
+        // no resolved type yet reads as the size-matched unknown base
+        // (Ghidra's getHighTypeReadFacing never returns null).
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, in_vn, op_ref, slot as i32)
+            .or_else(|| in_vn.read().unwrap().v_type.clone())
+            .or_else(|| {
+                type_factory.read().unwrap().get_base(
+                    in_size,
+                    crate::type_system::datatype::TypeMetatype::Unknown,
+                )
+            });
+        // cc:302 castStandard(reqtype,curtype,false,true); the returned Arc
+        // preserves reqtype identity, mirroring Ghidra's `return reqtype`.
+        match (reqtype, curtype) {
+            (Some(req), Some(cur))
+                if strategy
+                    .cast_standard_full(&req, &cur, false, true)
+                    .is_some() =>
+            {
+                Some(req)
+            }
+            _ => None,
+        }
     }
 
     /// Faithful 1:1 port of `ActionSetCasts::castInput` (coreaction.cc:2655-2720).
@@ -4884,29 +5523,136 @@ impl ActionSetCasts {
         // and the base TypeOp::getInputCast (typeop.cc:293-300) is
         // castStandard(inputTypeLocal(slot), highReadFacing, false, true):
         // a null ct means no cast is needed. Annotations get a null ct
-        // (typeop.cc:295).
+        // (typeop.cc:299). The op guard is dropped before the dispatch so
+        // the fd-aware read-facing consults (union_map) can take their own
+        // guards on the same op.
         let (in_vn, ct_opt, op_pc, in_size) = {
             let op = op_ref.0.read().unwrap();
             let Some(in_arc_ref) = op.get_in(slot) else { return false; };
             let in_arc = in_arc_ref.clone();
             let op_pc = op.get_addr();
             let in_size = in_arc.read().unwrap().get_size();
-            let ct = match op.opcode {
-                OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy),
-                OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy),
+            let opcode = op.opcode;
+            drop(op);
+            let ct = match opcode {
+                OpCode::CPUI_LOAD => Self::load_input_cast(op_ref, slot, strategy, &type_factory, fd),
+                OpCode::CPUI_STORE => Self::store_input_cast(op_ref, slot, strategy, &type_factory, fd),
+                // typeop.cc:397 TypeOpCopy::getInputCast: reqtype is the
+                // OUTPUT's def-facing high type, not an inputTypeLocal base
+                // — castStandard(reqtype,curtype,false,true) inserts the
+                // `(type)` prefix cast between a COPY and its SUBPIECE
+                // producer (`(ContentUnion)SUB2416(...,8)` in main).
+                OpCode::CPUI_COPY => Self::copy_input_cast(op_ref, slot, strategy, fd),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
-                    crate::typeop::comparison_input_cast(&op, slot, strategy)
+                    // typeop.cc:932 TypeOpEqual::getInputCast — the fd-aware
+                    // canonical (comparison_input_cast) manages its own op
+                    // guards; the three High read-facing reads (cc:935/936/
+                    // 941) consult the Funcdata union map keyed on each
+                    // varnode's own slot (UNIONRESOLVE-PKG-B-0001).
+                    crate::typeop::comparison_input_cast(fd, op_ref, slot, strategy)
+                }
+                // typeop.cc:1023/1049 TypeOpIntSless/SlessEqual::getInputCast
+                // and cc:1075/1099 TypeOpIntLess/LessEqual::getInputCast: the
+                // ordering comparisons take the inputTypeLocal base type
+                // (SLESS family = INT, LESS family = UINT), force it under
+                // int promotion, else castStandard with care_uint_int=TRUE.
+                // care_ptr_uint: signed compares TRUE (cc:1030/1056), the
+                // unsigned compares FALSE (cc:1082/1106).
+                OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                    Self::ordering_compare_input_cast(
+                        op_ref,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Int,
+                        true,
+                        &type_factory,
+                        fd,
+                    )
+                }
+                OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => {
+                    Self::ordering_compare_input_cast(
+                        op_ref,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Uint,
+                        false,
+                        &type_factory,
+                        fd,
+                    )
+                }
+                // typeop.cc:1131/1157 TypeOpIntZext/Sext::getInputCast: the
+                // extension's input takes its inputTypeLocal base (ZEXT =
+                // UINT, SEXT = INT), forced under
+                // checkIntPromotionForExtension (cast.cc:126-138: promotion
+                // of the same extension direction is implied), else
+                // castStandard(req, cur, TRUE, FALSE).
+                OpCode::CPUI_INT_ZEXT => {
+                    Self::extension_input_cast(
+                        op_ref,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Uint,
+                        &type_factory,
+                        fd,
+                    )
+                }
+                OpCode::CPUI_INT_SEXT => {
+                    Self::extension_input_cast(
+                        op_ref,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Int,
+                        &type_factory,
+                        fd,
+                    )
+                }
+                // typeop.cc:1543 TypeOpIntRight / cc:1585 TypeOpIntSright
+                // slot 0: promotion gate (INT_RIGHT requires an unsigned
+                // extension present, INT_SRIGHT a signed one — the other
+                // extensions force the cast), else castStandard(req, cur,
+                // TRUE, TRUE). Slot 1 falls to the base metain arm.
+                OpCode::CPUI_INT_RIGHT if slot == 0 => {
+                    Self::shift_input_cast(op_ref, slot, strategy, 1, crate::type_system::datatype::TypeMetatype::Uint, &type_factory, fd)
+                }
+                OpCode::CPUI_INT_SRIGHT if slot == 0 => {
+                    Self::shift_input_cast(op_ref, slot, strategy, 2, crate::type_system::datatype::TypeMetatype::Int, &type_factory, fd)
+                }
+                // typeop.cc:1639/1659/1679/1699 TypeOpIntDiv/Sdiv/Rem/Srem
+                // ::getInputCast (both slots): promotion gate as the shifts
+                // (DIV/REM unsigned, SDIV/SREM signed), else
+                // castStandard(req, cur, TRUE, TRUE).
+                OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => {
+                    Self::divrem_input_cast(op_ref, slot, strategy, 1, &type_factory, fd)
+                }
+                OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM => {
+                    Self::divrem_input_cast(op_ref, slot, strategy, 2, &type_factory, fd)
+                }
+                // typeop.cc:295-303 TypeOp::getInputCast base arm — the
+                // call family does NOT override getInputCast, so a
+                // CALL/CALLIND input's required type flows through
+                // inputTypeLocal = TypeOpCall::getInputLocal
+                // (typeop.cc:687-718) / TypeOpCallind::getInputLocal
+                // (typeop.cc:745-773): the callspec's TYPE-LOCKED
+                // parameter (slot-1) anchors the cast. Before this arm
+                // CALL fell to the generic metain fallback whose reqtype
+                // is a plain base (or None), so locked parameters never
+                // produced argument casts.
+                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                    Self::call_input_cast(op_ref, slot, strategy, &type_factory, fd, &in_arc, in_size)
                 }
                 opc => match Self::input_metatype(opc) {
                     Some(meta) => {
-                        let curtype = in_arc
-                            .read()
-                            .unwrap()
-                            .get_high_type_read_facing(&op, slot as i32)
-                            .or_else(|| in_arc.read().unwrap().v_type.clone())
-                            .or_else(|| {
-                                type_factory.read().unwrap().get_base(in_size, meta)
-                            });
+                        // typeop.cc:298: curtype = vn->getHighTypeReadFacing(op)
+                        let curtype = crate::unionresolve::vn_high_type_read_facing(
+                            fd,
+                            &in_arc,
+                            op_ref,
+                            slot as i32,
+                        )
+                        .or_else(|| in_arc.read().unwrap().v_type.clone())
+                        .or_else(|| {
+                            type_factory.read().unwrap().get_base(in_size, meta)
+                        });
                         let reqtype =
                             type_factory.read().unwrap().get_base(in_size, meta);
                         match (curtype, reqtype) {
@@ -4928,15 +5674,12 @@ impl ActionSetCasts {
             } else {
                 ct
             };
-            // Release the op read guard before the Funcdata mutations below
-            // take their own write locks on this op.
-            drop(op);
             (in_arc, ct, op_pc, in_size)
         };
         // (2) cc:2663-2668: null ct — mark explicit-print constants; that is
         // the only change this path can make.
         let Some(ct) = ct_opt else {
-            return Self::mark_explicit_unsigned(op_ref, slot, strategy)
+            return Self::mark_explicit_unsigned(fd, op_ref, slot, strategy)
                 || Self::mark_explicit_long_size(op_ref, slot, strategy);
         };
         // (3) cc:2671: vnin = vn = op->getIn(slot).
@@ -4981,15 +5724,26 @@ impl ActionSetCasts {
                     }
                 }
                 // cc:2680-2684: cast directly from the input of the
-                // previous cast.
-                if let Some(prev) = in_vn
+                // previous cast. The extraction is bound to a let, NOT an
+                // if-let scrutinee: a scrutinee temporary would keep
+                // in_vn's read guard alive through the whole arm, and the
+                // arm's op_set_input opUnsetInput leg (funcdata.rs
+                // op_set_input step (3)) write-locks the OLD slot input —
+                // exactly in_vn here — self-deadlocking the futex RwLock
+                // (HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0002: stage-emitter
+                // httpd main froze at 76745763B in ActionSetCasts, CPU
+                // idle, first content trigger under RC2 cspec types).
+                // Ghidra reads vn->getDef()->getIn(0) to completion
+                // before opSetInput; the let-bound read preserves that
+                // order exactly.
+                let prev_cast_input = in_vn
                     .read()
                     .unwrap()
                     .def
                     .as_ref()
                     .and_then(|d| d.upgrade())
-                    .and_then(|d| d.read().unwrap().get_in(0).cloned())
-                {
+                    .and_then(|d| d.read().unwrap().get_in(0).cloned());
+                if let Some(prev) = prev_cast_input {
                     vnin = prev;
                     if vnin
                         .read()
@@ -5021,20 +5775,240 @@ impl ActionSetCasts {
                 return true;
             }
         }
-        // (6) cc:2692-2698 (ct PTR + testStructOffset0 → insertPtrsubZero)
-        // and cc:2699-2701 (tryResolutionAdjustment) remain registered
-        // residuals (input-side PTRSUB-zero / union resolution forms).
+        // (6a) cc:2692-2698: a POINTER requirement whose current (read-facing)
+        // high type passes testStructOffset0 takes a PTRSUB(vn,#0) instead of
+        // a CAST; a needsResolution high type also inherits its read
+        // resolution onto the PTRSUB's input edge.
+        else if ct.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
+            && {
+                let cur = crate::unionresolve::vn_high_type_read_facing(
+                    fd,
+                    &in_vn,
+                    op_ref,
+                    slot as i32,
+                )
+                .or_else(|| in_vn.read().unwrap().v_type.clone());
+                cur.is_some_and(|cur| Self::test_struct_offset0(&ct, &cur, strategy))
+            }
+        {
+            let new_op = Self::insert_ptrsub_zero(fd, op_ref, slot, &ct);
+            // cc:2695-2696: inheritResolution(vn->getHigh()->getType(),
+            //   newop, 0, op, slot)
+            let high_type = {
+                let r = in_vn.read().unwrap();
+                r.high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_type())
+                    .or_else(|| r.v_type.clone())
+            };
+            if high_type.as_ref().is_some_and(|h| h.needs_resolution()) {
+                let high_type = high_type.expect("checked above");
+                fd.inherit_resolution(high_type.as_ref(), &new_op, 0, op_ref, slot as i32);
+            }
+            return true;
+        }
+        // (6b) cc:2699-2701: tryResolutionAdjustment — CAST elimination via
+        // union field-resolution adjustment.
+        else if Self::try_resolution_adjustment(fd, op_ref, slot) {
+            return true;
+        }
         // (7) cc:2702-2718: insert CPUI_CAST op: out = CAST(vnin), out
         // implied, inserted before op.
         let new_op = fd.new_op(1, op_pc);
         let out_vn = fd.new_unique_out(vnin.read().unwrap().get_size(), &new_op);
-        out_vn.write().unwrap().v_type = Some(ct);
+        out_vn.write().unwrap().update_type(ct.clone());
         out_vn.write().unwrap().set_implied();
         fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
         fd.op_set_input(&new_op, vnin, 0);
         fd.op_set_input(op_ref, out_vn, slot);
         fd.op_insert_before(&new_op, op_ref);
+        // (8) cc:2713-2717: union bookkeeping on the new CAST — force the
+        // required type's edge and inherit vn's high-type read resolution.
+        if ct.needs_resolution() {
+            // cc:2714: data.forceFacingType(ct, -1, newop, -1)
+            fd.force_facing_type(ct.clone(), -1, &new_op, -1);
+        }
+        let vn_high_type = {
+            let r = in_vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        if vn_high_type.as_ref().is_some_and(|h| h.needs_resolution()) {
+            let vn_high_type = vn_high_type.expect("checked above");
+            // cc:2716-2717: inheritResolution(vn->getHigh()->getType(),
+            //   newop, 0, op, slot)
+            fd.inherit_resolution(vn_high_type.as_ref(), &new_op, 0, op_ref, slot as i32);
+        }
         true
+    }
+
+    // Ghidra: typeop.cc:1075 TypeOpIntLess::getInputCast
+    /// Ordering-comparison input cast shared by SLESS/SLESSEQUAL
+    /// (typeop.cc:1023/1049, metain=INT, care_ptr_uint=TRUE) and
+    /// LESS/LESSEQUAL (cc:1075/1099, metain=UINT, care_ptr_uint=FALSE):
+    /// `checkIntPromotionForCompare` forces the inputTypeLocal base type
+    /// (an interned TypeFactory base, like `tlst->getBase`), else
+    /// `castStandard(req, cur, TRUE, care_ptr_uint)`.
+    fn ordering_compare_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        metain: crate::type_system::datatype::TypeMetatype,
+        care_ptr_uint: bool,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        if slot > 1 {
+            return None;
+        }
+        let in_vn = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_vn) = op.get_in(slot).cloned() else { return None };
+            let promo_forced = strategy.check_int_promotion_for_compare_op(&op, slot);
+            (in_vn, promo_forced)
+        };
+        let curtype = {
+            let vn = in_vn.0.read().unwrap();
+            crate::unionresolve::vn_high_type_read_facing(fd, &in_vn.0, op_ref, slot as i32)
+                .or_else(|| vn.v_type.clone())
+        };
+        let reqtype = type_factory
+            .read()
+            .unwrap()
+            .get_base(in_vn.0.read().unwrap().get_size(), metain)?;
+        if in_vn.1 {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, care_ptr_uint)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1131 TypeOpIntZext::getInputCast
+    /// Extension input cast shared by ZEXT (metain=UINT) and SEXT
+    /// (metain=INT, typeop.cc:1157):
+    /// `checkIntPromotionForExtension` (cast.cc:126-138) forces the
+    /// inputTypeLocal base when the promotion direction mismatches the
+    /// extension direction, else `castStandard(req, cur, TRUE, FALSE)`.
+    fn extension_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        metain: crate::type_system::datatype::TypeMetatype,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let in_vn = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_vn) = op.get_in(slot).cloned() else { return None };
+            let opcode = op.opcode;
+            (in_vn, opcode)
+        };
+        let vn = in_vn.0.read().unwrap();
+        let curtype =
+            crate::unionresolve::vn_high_type_read_facing(fd, &in_vn.0, op_ref, slot as i32)
+                .or_else(|| vn.v_type.clone());
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        const UNKNOWN_PROMOTION: i32 = 0;
+        const UNSIGNED_EXTENSION: i32 = 1;
+        const SIGNED_EXTENSION: i32 = 2;
+        drop(vn);
+        let forced = match promo_type {
+            NO_PROMOTION => false,
+            UNKNOWN_PROMOTION => true,
+            ext => {
+                // cast.cc:135-136: a promotion extension matching the
+                // explicit extension direction is implied — no cast.
+                if (ext & UNSIGNED_EXTENSION != 0) && in_vn.1 == OpCode::CPUI_INT_ZEXT {
+                    false
+                } else if (ext & SIGNED_EXTENSION != 0) && in_vn.1 == OpCode::CPUI_INT_SEXT {
+                    false
+                } else {
+                    true
+                }
+            }
+        };
+        if forced {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, false)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1585 TypeOpIntSright::getInputCast
+    /// Shift slot-0 input cast (INT_RIGHT cc:1543 gate=UNSIGNED_EXTENSION,
+    /// INT_SRIGHT cc:1585 gate=SIGNED_EXTENSION): a promotion that lacks the
+    /// shift's own extension direction forces the inputTypeLocal base
+    /// (metain=INT for both), else `castStandard(req, cur, TRUE, TRUE)`.
+    fn shift_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        gate: i32,
+        metain: crate::type_system::datatype::TypeMetatype,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let in_vn = { let op = op_ref.0.read().unwrap(); op.get_in(slot).cloned() }?;
+        let vn = in_vn.read().unwrap();
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_vn, op_ref, slot as i32)
+            .or_else(|| vn.v_type.clone());
+        // typeop.cc:1549/1574: reqtype = op->inputTypeLocal(slot) — the
+        // op's registered metain (TypeOpBinary ctor: INT_RIGHT=TYPE_UINT at
+        // cc:1528, INT_SRIGHT=TYPE_INT at cc:1568), not a hardcoded int.
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        drop(vn);
+        if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, true)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1639 TypeOpIntDiv::getInputCast
+    /// Divide/remainder input cast, both slots (DIV/REM cc:1639/1679 gate =
+    /// UNSIGNED_EXTENSION; SDIV/SREM cc:1659/1699 gate = SIGNED_EXTENSION):
+    /// same promotion gate as the shifts, else `castStandard(req, cur,
+    /// TRUE, TRUE)` with the op's own metain (DIV/REM=UINT, SDIV/SREM=INT).
+    fn divrem_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        gate: i32,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let metain = if gate == 1 {
+            crate::type_system::datatype::TypeMetatype::Uint
+        } else {
+            crate::type_system::datatype::TypeMetatype::Int
+        };
+        let in_vn = { let op = op_ref.0.read().unwrap(); op.get_in(slot).cloned() }?;
+        let vn = in_vn.read().unwrap();
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_vn, op_ref, slot as i32)
+            .or_else(|| vn.v_type.clone());
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        drop(vn);
+        if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, true)
+            .map(|_| reqtype)
     }
 
     // RUGRA-GLUE: addlflags predicates from the Ghidra TypeOp constructors
@@ -5101,6 +6075,7 @@ impl ActionSetCasts {
     /// Varnode is flagged `unsignedprint`. Faithful to
     /// `CastStrategy::markExplicitUnsigned` (cast.cc:38-77).
     fn mark_explicit_unsigned(
+        fd: &Funcdata,
         op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
@@ -5133,11 +6108,16 @@ impl ActionSetCasts {
             return false;
         }
         // cc:47-52: unsigned-family read-facing HIGH type, not char/enum.
-        let Some(dt) = vn
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(&op, slot as i32)
-            .or_else(|| vn.read().unwrap().v_type.clone())
+        // cc:47 reads `vn->getHighTypeReadFacing(op)` — the fd-aware consult
+        // (slot = op->getSlot(vn)); a constant whose high type resolves to a
+        // uint-family field forces the unsigned print.
+        let Some(dt) = crate::unionresolve::vn_high_type_read_facing(
+            fd,
+            &vn,
+            op_ref,
+            slot as i32,
+        )
+        .or_else(|| vn.read().unwrap().v_type.clone())
         else {
             return false;
         };
@@ -5148,14 +6128,18 @@ impl ActionSetCasts {
             return false;
         }
         // cc:53-58: binary op (not firstParamOnly) — if the other side is
-        // unsigned-family it forces the unsigned already.
+        // unsigned-family it forces the unsigned already. cc:55 reads
+        // `firstvn->getHighTypeReadFacing(op)` — the fd-aware consult at
+        // slot 1-slot.
         if op.num_input() == 2 && !first_param_only && slot <= 1 {
             if let Some(other) = op.get_in(1 - slot) {
-                if let Some(ot) = other
-                    .read()
-                    .unwrap()
-                    .get_high_type_read_facing(&op, (1 - slot) as i32)
-                    .or_else(|| other.read().unwrap().v_type.clone())
+                if let Some(ot) = crate::unionresolve::vn_high_type_read_facing(
+                    fd,
+                    other,
+                    op_ref,
+                    (1 - slot) as i32,
+                )
+                .or_else(|| other.read().unwrap().v_type.clone())
                 {
                     if unsigned_family(ot.get_metatype()) {
                         return false;
@@ -5169,7 +6153,17 @@ impl ActionSetCasts {
             if outvn.read().unwrap().is_explicit() {
                 return false;
             }
-            if let Some(lone) = outvn.read().unwrap().lone_descend() {
+            // RUGRA-GLUE: scrutinee read guard lifted to statement scope
+            // (lock-hygiene family: ER ruleaction SubRight / EW castInput /
+            // EM3 cover_dirty). An `if let Some(x) = outvn.read().unwrap()
+            // .lone_descend()` scrutinee would hold the read guard through
+            // the entire if-let body; any future write lock on outvn inside
+            // the body self-deadlocks (std RwLock is non-reentrant).
+            // lone_descend returns an owned Option<Arc<_>> so the guard dies
+            // at the end of this let; read order is unchanged (cast.cc:63
+            // loneDescend read, then cc:65 lone opcode check).
+            let lone_descend = outvn.read().unwrap().lone_descend();
+            if let Some(lone) = lone_descend {
                 if !Self::op_inherits_sign(lone.read().unwrap().opcode) {
                     return false;
                 }
@@ -5217,7 +6211,7 @@ impl ActionSetCasts {
             .unwrap()
             .high
             .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
+            .map(|h| h.read().unwrap().get_type())
             .or_else(|| vn.read().unwrap().v_type.clone());
         let Some(dt) = dt else {
             return false;
@@ -5294,6 +6288,294 @@ impl ActionSetCasts {
         Arc::ptr_eq(&t1, &t2)
     }
 
+    // Ghidra: coreaction.cc:2424 ActionSetCasts::tryResolutionAdjustment
+    /// Try to adjust the input and output Varnodes to eliminate a CAST
+    /// (coreaction.cc:2415-2459): when either side's high type needs
+    /// resolution, find a compatible form pair via
+    /// `findCompatibleResolve` (type.cc virtual dispatch through
+    /// [`crate::unionresolve::find_compatible_resolve`]) and force both
+    /// edges to that field resolution. Returns true when the adjustment
+    /// made a CAST unnecessary.
+    fn try_resolution_adjustment(
+        fd: &mut Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+    ) -> bool {
+        // cc:2427-2429
+        let outvn = op_ref.0.read().unwrap().output.clone();
+        let Some(outvn) = outvn else { return false };
+        let high_type_of = |vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+            let r = vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        // cc:2430-2431: outType = outvn->getHigh()->getType();
+        //   inType = op->getIn(slot)->getHigh()->getType();
+        let out_type = high_type_of(&outvn);
+        let in_type = {
+            let in_vn_arc = {
+                let Some(inv) = op_ref.0.read().unwrap().get_in(slot).cloned() else {
+                    return false;
+                };
+                inv
+            };
+            high_type_of(&in_vn_arc)
+        };
+        let (Some(out_type), Some(in_type)) = (out_type, in_type) else {
+            return false;
+        };
+        // cc:2432
+        if !in_type.needs_resolution() && !out_type.needs_resolution() {
+            return false;
+        }
+        // cc:2433-2445
+        let mut in_resolve: i32 = -1;
+        let mut out_resolve: i32 = -1;
+        if in_type.needs_resolution() {
+            in_resolve = crate::unionresolve::find_compatible_resolve(&in_type, &out_type);
+            if in_resolve < 0 {
+                return false;
+            }
+        }
+        if out_type.needs_resolution() {
+            let arg = if in_resolve >= 0 {
+                crate::unionresolve::get_depend(in_type.as_ref(), in_resolve as usize)
+            } else {
+                in_type.clone()
+            };
+            out_resolve = crate::unionresolve::find_compatible_resolve(&out_type, &arg);
+            if out_resolve < 0 {
+                return false;
+            }
+        }
+        // cc:2447-2457
+        let typegrp = fd.get_arch().and_then(|a| a.types.clone());
+        let build_resolve = |parent: &Arc<crate::type_system::datatype::Datatype>, fld: i32| {
+            match &typegrp {
+                Some(tg) => {
+                    // Write guard: with_field interns the pointer arm through
+                    // the factory (unionresolve.cc:54,
+                    // UNIONRESOLVE-PKG-G-0001).
+                    let mut guard = tg.write().unwrap();
+                    crate::unionresolve::ResolvedUnion::with_field(parent.clone(), fld, &mut guard)
+                }
+                None => crate::unionresolve::ResolvedUnion::new(parent.clone()),
+            }
+        };
+        if in_type.needs_resolution() {
+            let resolve = build_resolve(&in_type, in_resolve);
+            if !fd.set_union_field(in_type.as_ref(), op_ref, slot as i32, resolve) {
+                return false;
+            }
+        }
+        if out_type.needs_resolution() {
+            let resolve = build_resolve(&out_type, out_resolve);
+            if !fd.set_union_field(out_type.as_ref(), op_ref, -1, resolve) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: coreaction.cc:2630 ActionSetCasts::insertPtrsubZero
+    /// Insert a PTRSUB with offset 0 accessing a field of the given
+    /// data-type right before `op`, replacing its `slot` input
+    /// (coreaction.cc:2618-2644). Returns the new PTRSUB op.
+    fn insert_ptrsub_zero(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        ct: &Arc<crate::type_system::datatype::Datatype>,
+    ) -> crate::op::PcodeOpRef {
+        let (vn, op_addr) = {
+            let o = op.0.read().unwrap();
+            (
+                o.get_in(slot).expect("insertPtrsubZero: slot out of range").clone(),
+                o.get_addr(),
+            )
+        };
+        let vn_size = vn.read().unwrap().get_size();
+        let newop = fd.new_op(2, op_addr);
+        let vnout = fd.new_unique_out(vn_size, &newop);
+        vnout.write().unwrap().update_type(ct.clone());
+        vnout.write().unwrap().set_implied();
+        fd.op_set_opcode(&newop, OpCode::CPUI_PTRSUB);
+        fd.op_set_input(&newop, vn, 0);
+        let zero = fd.new_constant(4, 0);
+        fd.op_set_input(&newop, zero, 1);
+        fd.op_set_input(op, vnout, slot);
+        fd.op_insert_before(&newop, op);
+        newop
+    }
+
+    // Ghidra: coreaction.cc:2490 ActionSetCasts::resolveUnion
+    /// If `op` reads a pointer to a union at `slot`, insert the CPUI_PTRSUB
+    /// that resolves the union (coreaction.cc:2483-2524): a last-chance
+    /// `resolveInFlow` when the high and instance types differ, then the
+    /// cached `getUnionField` consult; when a concrete field was chosen and
+    /// no cast would still be needed, `insertPtrsubZero` splices the
+    /// placeholder PTRSUB in and the resolution is attached to it
+    /// (consumed by printc's PTRSUB-into-union read, printc.cc:983).
+    /// Non-pointer (bare union) implied varnodes take the implied-field
+    /// marking arm. Returns 1 if a resolution took effect.
+    fn resolve_union(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> i32 {
+        // cc:2493-2494
+        let Some(vn) = op.0.read().unwrap().get_in(slot).cloned() else { return 0 };
+        if vn.read().unwrap().is_annotation() {
+            return 0;
+        }
+        // cc:2495: dt = vn->getHigh()->getType()
+        let dt = {
+            let r = vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        let Some(dt) = dt else { return 0 };
+        // cc:2496-2497
+        if !dt.needs_resolution() {
+            return 0;
+        }
+        // cc:2498-2499: if (dt != vn->getType()) dt->resolveInFlow(op, slot);
+        let differs = vn
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| !Arc::ptr_eq(&t, &dt))
+            .unwrap_or(true);
+        if differs {
+            crate::unionresolve::resolve_in_flow(fd, &dt, op, slot as i32);
+        }
+        // cc:2500-2501
+        let Some(res_union) = fd.get_union_field(dt.as_ref(), op, slot as i32) else {
+            return 0;
+        };
+        if res_union.get_field_num() < 0 {
+            return 0;
+        }
+        if dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer {
+            // cc:2504: reqtype = vn->getTypeReadFacing(op)
+            let reqtype = crate::unionresolve::vn_type_read_facing(fd, &vn, op, slot as i32);
+            let Some(reqtype) = reqtype else { return 0 };
+            // cc:2505-2506: if a cast is still needed, don't do the resolve.
+            if strategy
+                .cast_standard_full(&reqtype, res_union.get_datatype(), true, true)
+                .is_some()
+            {
+                return 0;
+            }
+            // cc:2508-2509
+            let ptrsub = Self::insert_ptrsub_zero(fd, op, slot, &reqtype);
+            fd.set_union_field(dt.as_ref(), &ptrsub, -1, res_union);
+        } else if vn.read().unwrap().is_implied() {
+            // cc:2511-2518: implied varnode whose write-facing resolution
+            // matches needs no field printed.
+            if let Some(def) = vn.read().unwrap().get_def() {
+                let def_ref = crate::op::PcodeOpRef(def);
+                if let Some(write_res) = fd.get_union_field(dt.as_ref(), &def_ref, -1) {
+                    if write_res.get_field_num() == res_union.get_field_num() {
+                        return 0; // Don't print implied fields for vn
+                    }
+                }
+            }
+            // cc:2519: vn->setImpliedField() — Rugra's Varnode has no
+            // has_implied_field addlflag (varnode.rs is under a separate
+            // write-domain lease); the flag's only consumer is
+            // PrintLanguage::recurse → PrintC::pushImpliedField
+            // (printlanguage.cc:527). Registered handover in the wiring
+            // commit; no current Rugra print path reads it.
+        }
+        1
+    }
+
+    // Ghidra: typeop.cc:2142 TypeOpSubpiece::getOutputToken
+    /// Output token for CPUI_SUBPIECE (typeop.cc:2142-2159):
+    /// (1) `findTruncation` of the in0 read-facing high type at the
+    /// SUBPIECE's composite byte offset (typeop.cc:2195-2207: little-endian
+    /// byte offset is the shift constant `lsb`, big-endian is
+    /// inSize-outSize-lsb), artificial slot 1, consulting the Funcdata union
+    /// resolution map read-only (TypeUnion::findTruncation type.cc:2185) —
+    /// when the matched field's type size equals the output size, the field
+    /// type IS the token; otherwise (2) the output's DEF-facing high type
+    /// when not UNKNOWN; otherwise (3) the factory INT base. This overrides
+    /// the TypeOpFunc ctor's UNKNOWN output base (typeop.cc:2117), so a
+    /// SUBPIECE token is never `undefinedN` — without this, castOutput's
+    /// implied arm (coreaction.cc:2569-2571) retypes implied SUBPIECE
+    /// outputs down to UNKNOWN and later compare inputs pick up spurious
+    /// CASTs (MYPROGRESS-SETCASTS-ORD399-0001: the extra CAST at 3519:99).
+    fn subpiece_output_token(
+        fd: &Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
+        outvn: &Arc<RwLock<crate::varnode::Varnode>>,
+        type_factory: &Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::TypeMetatype;
+        let op = op_ref.0.read().unwrap();
+        let out_size = outvn.read().unwrap().get_size();
+        // cc:2147: ct = op->getIn(0)->getHighTypeReadFacing(op) — the fd-aware
+        // consult keyed on slot 0 (the real in0 slot), so a union high type
+        // resolves to its field BEFORE findTruncation runs; the field may then
+        // be drilled into (e.g. a struct field's subfield) instead of falling
+        // to the def-facing arm.
+        let ct = op.get_in(0).and_then(|a| {
+            crate::unionresolve::vn_high_type_read_facing(fd, a, op_ref, 0)
+                .or_else(|| a.read().unwrap().v_type.clone())
+        });
+        // cc:2149 + typeop.cc:2195-2207 computeByteOffsetForComposite:
+        // lsb = (int4)op->getIn(1)->getOffset(); big-endian byteOff is
+        // inSize - outSize - lsb, little-endian is lsb.
+        let byte_off = match (op.get_in(0), op.get_in(1)) {
+            (Some(in0), Some(shift_vn)) => {
+                let in0_r = in0.read().unwrap();
+                let in_size = in0_r.get_size();
+                let lsb = shift_vn.read().unwrap().get_offset() as u32 as i64;
+                if in0_r.get_space().is_big_endian() {
+                    in_size as i64 - out_size as i64 - lsb
+                } else {
+                    lsb
+                }
+            }
+            _ => 0,
+        };
+        // cc:2150-2154: field arm — artificial slot 1; only a size-matching
+        // field returns early (a non-matching field falls through, Ghidra's
+        // inner `if` does not return).
+        if let Some(ct) = &ct {
+            if let Some((field, _offset)) = ct.find_truncation(
+                byte_off,
+                out_size,
+                Some(&op),
+                1,
+                Some(&fd.union_map),
+            ) {
+                if out_size == field.type_ptr.get_size() {
+                    return Some(field.type_ptr.clone());
+                }
+            }
+        }
+        // cc:2155-2157: dt = outvn->getHighTypeDefFacing(); non-UNKNOWN wins.
+        // The fd-aware def-facing consult (slot -1, def-op edge).
+        let dt = crate::unionresolve::vn_high_type_def_facing(fd, outvn)
+            .or_else(|| outvn.read().unwrap().v_type.clone());
+        if let Some(dt) = dt {
+            if dt.get_metatype() != TypeMetatype::Unknown {
+                return Some(dt);
+            }
+        }
+        // cc:2158: return tlst->getBase(outvn->getSize(),TYPE_INT);
+        type_factory
+            .as_ref()
+            .and_then(|f| f.read().unwrap().get_base(out_size, TypeMetatype::Int))
+    }
+
     // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
     /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
     /// token type (cc:2532-2616): token via the TypeOp virtual dispatch
@@ -5303,9 +6585,8 @@ impl ActionSetCasts {
     /// (cc:2559-2582, incl. the typelock/RETURN force case), the
     /// testStructOffset0 PTRSUB form (cc:2586-2588), and the observable
     /// rewiring order (cc:2595-2609). The union needsResolution arms
-    /// (cc:2545-2548, 2553-2557, 2610-2613) remain registered residuals
-    /// (`PIPE-ACTION-COUNT-0001C`); this is not a whole-function match
-    /// claim.
+    /// (cc:2545-2548, 2553-2557, 2610-2613) consult the Funcdata union map
+    /// through the fd-aware facing twins (UNIONRESOLVE-PKG-A-0001).
     fn cast_output(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -5329,7 +6610,16 @@ impl ActionSetCasts {
         // the token is char* while the phi-merged output high is FILE*.
         let tokenct = {
             use crate::typeop::TypeOp as _;
-            let op_rg = op.0.read().unwrap();
+            // The opcode is read under a temporary guard released before
+            // the arm dispatch: the CALL/CALLIND arm resolves its callspec
+            // through Funcdata::get_call_specs_of_op, which takes its own
+            // read lock on this same op — a nested read under a live outer
+            // guard deadlocks once a writer queues (std RwLock;
+            // CURLWIRE-CR-F1 audit). Arms needing the &PcodeOp view
+            // re-acquire a local guard; the oracle's virtual dispatch
+            // reads the opcode once from a stable op, lock-free, in this
+            // same order.
+            let opcode = op.0.read().unwrap().opcode;
             // A Ghidra PcodeOp always owns a TypeOp with a TypeFactory; Rugra
             // can represent a detached Funcdata, whose factory-dependent
             // token arms bail out (no bilateral token semantics).
@@ -5337,34 +6627,56 @@ impl ActionSetCasts {
                 .arch
                 .as_ref()
                 .and_then(|architecture| architecture.types.clone());
-            if op_rg.opcode == OpCode::CPUI_PTRSUB {
+            if opcode == OpCode::CPUI_PTRSUB {
                 // typeop.cc:2349-2364 supplies PTRSUB's field-sensitive token,
                 // and coreaction.cc:2541 consumes it at this exact cast stage.
-                // Type inference continues to use getOutputLocal (INT).
+                // Type inference continues to use getOutputLocal (INT). The
+                // fd-carrying dispatch (get_output_token_in_fd) consults the
+                // union map at cc:2352's High read-facing read, so a union-ptr
+                // base resolves to its field pointer before downChain
+                // (UNIONRESOLVE-PKG-B-0001).
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
                 let Some(token) = crate::typeop::TypeOpPtrsub::new(type_factory)
-                    .get_output_token(&op_rg)
+                    .get_output_token_in_fd(op, fd)
                 else {
                     return 0;
                 };
                 token
-            } else if op_rg.opcode == OpCode::CPUI_PTRADD {
+            } else if opcode == OpCode::CPUI_PTRADD {
                 // typeop.cc:2244: the PTRADD token is the input-0 HIGH
                 // read-facing type ("cast to the input data-type"), not the
-                // output type.
+                // output type. The fd-carrying dispatch consults the union
+                // map at the same read (UNIONRESOLVE-PKG-B-0001).
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
                 let Some(token) = crate::typeop::TypeOpPtradd::new(type_factory)
-                    .get_output_token(&op_rg)
+                    .get_output_token_in_fd(op, fd)
+                else {
+                    return 0;
+                };
+                token
+            } else if opcode == OpCode::CPUI_COPY {
+                // typeop.cc:405-409 TypeOpCopy::getOutputToken: the COPY
+                // token is the input-0 HIGH read-facing type (fd-aware
+                // consult keyed on slot 0). This arm was previously missing
+                // — COPY fell through output_metatype's pointer-producing
+                // None arm, so castOutput never gave a COPY output a token;
+                // the oracle's virtual dispatch reaches TypeOpCopy's
+                // override here (UNIONRESOLVE-PKG-B-0001 wired it).
+                let Some(type_factory) = type_factory else {
+                    return 0;
+                };
+                let Some(token) = crate::typeop::TypeOpCopy::new(type_factory)
+                    .get_output_token_in_fd(op, fd)
                 else {
                     return 0;
                 };
                 token
             } else if matches!(
-                op_rg.opcode,
+                opcode,
                 OpCode::CPUI_INT_ADD
                     | OpCode::CPUI_INT_SUB
                     | OpCode::CPUI_INT_2COMP
@@ -5381,29 +6693,26 @@ impl ActionSetCasts {
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
+                let op_rg = op.0.read().unwrap();
                 let Some(token) =
                     crate::type_system::cast::arithmetic_output_standard(&op_rg, &type_factory)
                 else {
                     return 0;
                 };
                 token
-            } else if op_rg.opcode == OpCode::CPUI_LOAD {
-                let in1_high = op_rg
-                    .get_in(1)
-                    .and_then(|a| {
-                        let vn = a.read().unwrap();
-                        vn.high
-                            .as_ref()
-                            .map(|h| h.read().unwrap().v_type.get())
-                            .or_else(|| vn.v_type.clone())
-                    });
+            } else if opcode == OpCode::CPUI_LOAD {
+                // typeop.cc:473: in(1)->getHighTypeReadFacing(op) — the
+                // read must observe a same-action updateType on the address
+                // varnode (castInput's cast-adjust arm) through the
+                // HighVariable typedirty re-derivation. The fd-aware consult
+                // is keyed on slot 1 (the address input's real slot).
+                let op_rg = op.0.read().unwrap();
+                let in1_high = op_rg.get_in(1).and_then(|a| {
+                    crate::unionresolve::vn_high_type_read_facing(fd, a, op, 1)
+                        .or_else(|| a.read().unwrap().v_type.clone())
+                });
                 let out_high = || {
-                    outvn
-                        .read()
-                        .unwrap()
-                        .high
-                        .as_ref()
-                        .map(|h| h.read().unwrap().v_type.get())
+                    crate::unionresolve::vn_high_type_def_facing(fd, &outvn)
                         .or_else(|| outvn.read().unwrap().v_type.clone())
                 };
                 match in1_high {
@@ -5423,7 +6732,11 @@ impl ActionSetCasts {
                         None => return 0,
                     },
                 }
-            } else if matches!(op_rg.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+            } else if matches!(opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                // Guard-free arm: fd.get_call_specs_of_op re-locks this op
+                // through its own read guard (Funcdata::get_call_specs_of_op),
+                // so no outer op guard may be live here — see the opcode
+                // hoist above (CURLWIRE-CR-F1 audit).
                 // cc:2541 getOutputToken -> outputTypeLocal ->
                 // TypeOpCall::getOutputLocal (typeop.cc:720-735) /
                 // TypeOpCallind::getOutputLocal (typeop.cc:776-789): the
@@ -5441,6 +6754,16 @@ impl ActionSetCasts {
                 // (typeop.cc:782); Rugra's get_call_specs_of_op performs the
                 // same op-identity verification through the slot-0 Iop
                 // annotation (TYPEOP-FSPEC-SPACE-0001).
+                // typeop.cc:261-265/720-735: the unlocked/void default is
+                // tlst->getBase(size, TYPE_UNKNOWN) — the factory-interned
+                // base ("undefined8" under the SLEIGH core table), never a
+                // fabricated un-interned TypeBase.
+                let unknown_base = || {
+                    type_factory
+                        .as_ref()
+                        .and_then(|f| f.read().unwrap().get_base(out_size, TypeMetatype::Unknown))
+                        .unwrap_or_else(|| base_type_for(out_size, TypeMetatype::Unknown))
+                };
                 match fd.get_call_specs_of_op(op) {
                     Some(fc) => {
                         let fc_r = fc.read().unwrap();
@@ -5449,17 +6772,97 @@ impl ActionSetCasts {
                             if ct.get_metatype() != TypeMetatype::Void {
                                 ct
                             } else {
-                                base_type_for(out_size, TypeMetatype::Unknown)
+                                unknown_base()
                             }
                         } else {
-                            base_type_for(out_size, TypeMetatype::Unknown)
+                            unknown_base()
                         }
                     }
-                    None => base_type_for(out_size, TypeMetatype::Unknown),
+                    None => unknown_base(),
+                }
+            } else if matches!(
+                opcode,
+                OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
+            ) {
+                // typeop.cc:1518/1558/1608 TypeOpInt{Left,Right,Sright}
+                // ::getOutputToken: the token is the input-0 HIGH
+                // read-facing type, with bool demoted to the factory int
+                // base of the same size. The fd-aware consult is keyed on
+                // slot 0.
+                let res = op.0.read().unwrap().get_in(0).and_then(|a| {
+                    crate::unionresolve::vn_high_type_read_facing(fd, a, op, 0)
+                        .or_else(|| a.read().unwrap().v_type.clone())
+                });
+                match res {
+                    Some(r) if r.get_metatype() == TypeMetatype::Bool => {
+                        let base = type_factory.as_ref().and_then(|f| {
+                            f.read()
+                                .unwrap()
+                                .get_base(r.get_size(), TypeMetatype::Int)
+                        });
+                        match base {
+                            Some(b) => b,
+                            None => return 0,
+                        }
+                    }
+                    Some(r) => r,
+                    None => return 0,
+                }
+            } else if opcode == OpCode::CPUI_SUBPIECE {
+                // typeop.cc:2142-2159 TypeOpSubpiece::getOutputToken: the
+                // token is (1) the field obtained by findTruncation of the
+                // in0 read-facing high type at the SUBPIECE's composite byte
+                // offset (artificial slot 1; the union arm consults the
+                // Funcdata resolution map read-only, TypeUnion::
+                // findTruncation type.cc:2185), when the field type's size
+                // matches the output size; otherwise (2) the output's
+                // DEF-facing high type when not UNKNOWN; otherwise (3) the
+                // factory INT base — never the ctor's TypeOpFunc UNKNOWN
+                // base (typeop.cc:2117) the generic arm would produce.
+                let Some(subpiece_token) =
+                    Self::subpiece_output_token(fd, op, &outvn, &type_factory)
+                else {
+                    return 0;
+                };
+                subpiece_token
+            } else if opcode == OpCode::CPUI_PIECE {
+                // typeop.cc:2063-2072 TypeOpPiece::getOutputToken: PIECE
+                // casts to the output's DEF-facing high type when that is
+                // INT or UINT, else the factory UINT base. The fd-aware
+                // def-facing consult (slot -1, def-op edge).
+                let def_facing = crate::unionresolve::vn_high_type_def_facing(fd, &outvn)
+                    .or_else(|| outvn.read().unwrap().v_type.clone());
+                match def_facing {
+                    Some(dt)
+                        if matches!(
+                            dt.get_metatype(),
+                            TypeMetatype::Int | TypeMetatype::Uint
+                        ) =>
+                    {
+                        dt
+                    }
+                    _ => type_factory
+                        .as_ref()
+                        .and_then(|f| {
+                            f.read()
+                                .unwrap()
+                                .get_base(out_size, TypeMetatype::Uint)
+                        })
+                        .unwrap_or_else(|| base_type_for(out_size, TypeMetatype::Uint)),
                 }
             } else {
-                match Self::output_metatype(op_rg.opcode) {
-                    Some(m) => base_type_for(out_size, m),
+                // typeop.cc:261-265: TypeOp::getOutputToken's default is
+                // tlst->getBase(size, metatype) — the factory-interned core
+                // base ("int8"/"uint8" under the SLEIGH table), so the
+                // token participates in interned identity comparisons
+                // (coreaction.cc:2544) exactly as in the oracle. The raw
+                // base_type_for fallback only serves detached fixtures
+                // without an architecture factory.
+                match Self::output_metatype(opcode) {
+                    Some(m) => type_factory
+                        .as_ref()
+                        .and_then(|f| f.read().unwrap().get_base(out_size, m))
+                        .unwrap_or_else(|| base_type_for(out_size, m)),
                     None => return 0,
                 }
             }
@@ -5470,7 +6873,7 @@ impl ActionSetCasts {
             .unwrap()
             .high
             .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
+            .map(|h| h.read().unwrap().get_type())
             .or_else(|| outvn.read().unwrap().v_type.clone())
             .unwrap_or_else(|| tokenct.clone());
         // cc:2544: if (tokenct == outHighType) → no cast needed. Ghidra
@@ -5479,12 +6882,31 @@ impl ActionSetCasts {
         // equivalent is structural equality of base types
         // (metatype+size+name).
         if tokenct.type_equal(&out_high_type) {
+            // cc:2545-2548: operation copies directly to outvn AS a union —
+            // force the varnode to resolve to the parent data-type.
+            if tokenct.needs_resolution() {
+                let resolve = crate::unionresolve::ResolvedUnion::new(tokenct.clone());
+                fd.set_union_field(tokenct.as_ref(), op, -1, resolve);
+            }
             return 0;
         }
-        // cc:2553-2557: outHighResolve starts as outHighType; the union
-        // needsResolution resolution arm is a registered residual (no union
-        // resolution infrastructure yet).
+        // cc:2553-2557: outHighResolve starts as outHighType; when the high
+        // type needs resolution, a last-chance resolveInFlow (when high and
+        // instance types differ) runs, then the def-facing findResolve
+        // fetches the resolved field type (type.cc:2137/type.cc:1192 through
+        // fd.union_map).
         let mut out_high_resolve = out_high_type.clone();
+        if out_high_type.needs_resolution() {
+            let instance_type = outvn.read().unwrap().get_type();
+            let differs = instance_type
+                .map(|t| !Arc::ptr_eq(&t, &out_high_type))
+                .unwrap_or(true);
+            if differs {
+                crate::unionresolve::resolve_in_flow(fd, &out_high_type, op, -1);
+            }
+            out_high_resolve =
+                crate::unionresolve::find_resolve(fd, &out_high_type, op, -1);
+        }
         // cc:2559-2582: implied varnode must have parse type.
         let mut force = false;
         {
@@ -5523,6 +6945,7 @@ impl ActionSetCasts {
                     // its type in favor of the token type.
                     outvn.write().unwrap().update_type(tokenct.clone());
                     out_high_resolve = Self::refresh_out_high_resolve(
+                        fd,
                         &outvn,
                         &out_high_resolve,
                         &tokenct,
@@ -5543,6 +6966,7 @@ impl ActionSetCasts {
                     if !pointee_composite {
                         outvn.write().unwrap().update_type(tokenct.clone());
                         out_high_resolve = Self::refresh_out_high_resolve(
+                            fd,
                             &outvn,
                             &out_high_resolve,
                             &tokenct,
@@ -5569,7 +6993,7 @@ impl ActionSetCasts {
         // cc:2595-2609: insert CAST/PTRSUB op after `op`.
         // vn = newUnique(outvn->getSize()); vn->updateType(tokenct); vn->setImplied()
         let vn = fd.new_unique(out_size);
-        vn.write().unwrap().v_type = Some(tokenct.clone());
+        vn.write().unwrap().update_type(tokenct.clone());
         vn.write().unwrap().set_implied();
         // cc:2598: newOp(2) for the PTRSUB form, newOp(1) for CAST.
         let op_addr = op.0.read().unwrap().get_addr();
@@ -5598,6 +7022,15 @@ impl ActionSetCasts {
         }
         fd.op_set_output(&op, vn);
         fd.op_insert_after(&newop, op);
+        // cc:2610-2613: union bookkeeping on the new CAST/PTRSUB — the
+        // token's edge is forced to the parent resolution, and the output
+        // high type's write resolution is inherited onto the new op.
+        if tokenct.needs_resolution() {
+            fd.force_facing_type(tokenct.clone(), -1, &newop, 0);
+        }
+        if out_high_type.needs_resolution() {
+            fd.inherit_resolution(out_high_type.as_ref(), &newop, -1, op, -1);
+        }
         1 // count += 1
     }
 
@@ -5607,11 +7040,14 @@ impl ActionSetCasts {
     // Rugra's typeDirty is a no-op, so a high still reporting the pre-update
     /// type (single-instance implied temp) is projected as the token type.
     fn refresh_out_high_resolve(
+        fd: &Funcdata,
         outvn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         stale: &Arc<crate::type_system::datatype::Datatype>,
         tokenct: &Arc<crate::type_system::datatype::Datatype>,
     ) -> Arc<crate::type_system::datatype::Datatype> {
-        match outvn.read().unwrap().get_high_type_def_facing() {
+        // varnode.cc:651-658: the def-facing consult resolves through
+        // fd.union_map when the high type needs resolution.
+        match crate::unionresolve::vn_high_type_def_facing(fd, outvn) {
             Some(t) if Arc::ptr_eq(&t, stale) => tokenct.clone(),
             Some(t) => t,
             None => tokenct.clone(),
@@ -5746,14 +7182,16 @@ impl ActionSetCasts {
     /// here did, which produced casts to downChain-transformed field pointers
     /// whenever ActionInferTypes gave the PTRSUB output a PointerRel form).
     ///
-    /// Residual: `getTypeReadFacing`'s in-flow resolution of
-    /// needs-resolution types (PointerRel et al.) is not available yet
-    /// (ACTION-INFERTYPES-DISPATCH-0001) — the raw v_type/high type is used,
-    /// which is exact for every type that does not need resolution. Rugra
-    /// also has no typedef layer, so the `getTypedef()` unwrap loop is a
-    /// structural no-op.
+    /// cc:2325/2326 read `getTypeReadFacing(op)`/`getHighTypeReadFacing(op)`
+    /// — the fd-aware consults keyed on slot 0 (UNIONRESOLVE-PKG-A-0001
+    /// closed the former bare-v_type residual ACTION-INFERTYPES-DISPATCH
+    /// -0001 for this site): a union-ptr base resolved to a field pointer
+    /// now drives the same_type/one-level-down decisions with the field
+    /// type. Rugra has no typedef layer, so the `getTypedef()` unwrap loop
+    /// is a structural no-op.
     // Ghidra: typeop.cc:2320 TypeOpPtrsub::getInputCast / typeop.cc:2250 TypeOpPtradd::getInputCast
     fn ptr_input_reqtype(
+        fd: &Funcdata,
         op: &crate::op::PcodeOpRef,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::Datatype;
@@ -5762,14 +7200,10 @@ impl ActionSetCasts {
             let op = op.0.read().unwrap();
             (op.opcode, op.get_in(0).cloned()?)
         };
-        let in0 = in0_arc.read().unwrap();
-        // reqtype = op->getIn(0)->getTypeReadFacing(op)
-        let reqtype = in0.v_type.clone()?;
-        // curtype = op->getIn(0)->getHighTypeReadFacing(op)
-        let curtype = in0
-            .high
-            .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
+        // reqtype = op->getIn(0)->getTypeReadFacing(op)  (typeop.cc:2325)
+        let reqtype = crate::unionresolve::vn_type_read_facing(fd, &in0_arc, op, 0)?;
+        // curtype = op->getIn(0)->getHighTypeReadFacing(op)  (typeop.cc:2326)
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in0_arc, op, 0)
             .unwrap_or_else(|| reqtype.clone());
         // Pointer-identity equality mirrors Ghidra's interned `Datatype*`
         // comparison; the name check extends it across separately-constructed
@@ -5839,14 +7273,39 @@ impl ActionSetCasts {
 
     // RUGRA-GLUE: output_metatype (no Ghidra direct counterpart; derived from
     // TypeOp::getOutputToken which Rugra lacks)
-    /// Determine the output metatype for an opcode (for castOutput). Mirrors
-    /// the integer/boolean branches of Ghidra's
-    /// `TypeOp::getOutputToken(op, castStrategy)` (typeop.cc). Pointer-
-    /// producing ops (PTRSUB/PTRADD/LOAD/CALL/COPY/etc.) return None so
-    /// castOutput leaves their output pointer type untouched — the pointer
-    /// shape is established upstream by ActionInferTypes / cast_input_ptr,
-    /// and forcing a base-int token would wrongly cast `(long *)out` →
-    /// `(long)out`.
+    /// Determine the output metatype for an opcode (for castOutput). The
+    /// metatypes are the TypeOpBinary/TypeOpUnary/TypeOpFunc constructor
+    /// registrations (typeop.cc:925-2566), consumed via
+    /// `outputTypeLocal -> getBase(size, metaout)` (typeop.cc:323/345/365):
+    ///
+    /// - BOOL outputs: INT_EQUAL(925)/INT_NOTEQUAL(989)/INT_SLESS(1016)/
+    ///   INT_SLESSEQUAL(1042)/INT_LESS(1068)/INT_LESSEQUAL(1092)/
+    ///   INT_CARRY(1333)/INT_SCARRY(1349)/INT_SBORROW(1365)/
+    ///   FLOAT_EQUAL(1744)-FLOAT_LESSEQUAL(1768)/FLOAT_NAN(1776)/
+    ///   BOOL_NEGATE(1712)/BOOL_XOR(1720)/BOOL_AND(1728)/BOOL_OR(1736)
+    /// - UINT outputs: INT_XOR(1409)/INT_AND(1442)/INT_OR(1475)/
+    ///   INT_RIGHT(1528)/INT_DIV(1632)/INT_REM(1672)/INT_NEGATE(1395)/
+    ///   INT_ZEXT(1116)
+    /// - INT outputs: INT_ADD(1168)/INT_SUB(1319)/INT_LEFT(1503)/
+    ///   INT_SRIGHT(1568)/INT_MULT(1618)/INT_SDIV(1652)/INT_SREM(1692)/
+    ///   INT_2COMP(1381)/INT_SEXT(1142)/FLOAT_TRUNC(1913)/EXTRACT(2544)/
+    ///   POPCOUNT(2559)/LZCOUNT(2566)
+    /// - FLOAT outputs: FLOAT_ADD(1784)/FLOAT_DIV(1792)/FLOAT_MULT(1800)/
+    ///   FLOAT_SUB(1808)/FLOAT_NEG(1816)/FLOAT_ABS(1824)/FLOAT_SQRT(1832)/
+    ///   FLOAT_INT2FLOAT(1840)/FLOAT_FLOAT2FLOAT(1905)/FLOAT_CEIL(1921)/
+    ///   FLOAT_FLOOR(1929)/FLOAT_ROUND(1937)
+    /// - UNKNOWN outputs (PIECE(2038)/SUBPIECE(2117)/INSERT(2529)) fall to
+    ///   the same getBase(size, TYPE_UNKNOWN) as the plain-TypeOp classes,
+    ///   so they map to Unknown here.
+    ///
+    /// Pointer-producing ops (LOAD/CALL/CALLIND/INDIRECT/MULTIEQUAL/CAST)
+    /// return None so castOutput leaves their output pointer type untouched —
+    /// the pointer shape is established upstream by ActionInferTypes /
+    /// cast_input_ptr, and forcing a base-int token would wrongly cast
+    /// `(long *)out` → `(long)out`. PTRSUB/PTRADD/COPY also return None but
+    /// are intercepted by their own token arms above (typeop.cc:2349/2244/
+    /// 405 — UNIONRESOLVE-PKG-B-0001 wired the COPY arm), so their None
+    /// entries are unreachable from the castOutput default arm.
     fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::opcodes::OpCode;
         use crate::type_system::datatype::TypeMetatype;
@@ -5861,6 +7320,25 @@ impl ActionSetCasts {
             | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
             | OpCode::CPUI_INT_SBORROW | OpCode::CPUI_FLOAT_NAN
             => Some(TypeMetatype::Bool),
+            // UINT registrations (typeop.cc:1116/1395/1409/1442/1475/1528/
+            // 1632/1672): the old `_ => Int` catch-all mistyped these as
+            // signed, e.g. INT_RIGHT's token read `int8` where the oracle's
+            // TypeOpBinary(TYPE_UINT) yields the interned `uint8`.
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_ZEXT
+            => Some(TypeMetatype::Uint),
+            // FLOAT registrations (typeop.cc:1784-1937).
+            OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_DIV
+            | OpCode::CPUI_FLOAT_MULT | OpCode::CPUI_FLOAT_SUB
+            | OpCode::CPUI_FLOAT_NEG | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT | OpCode::CPUI_FLOAT_INT2FLOAT
+            | OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR | OpCode::CPUI_FLOAT_ROUND
+            => Some(TypeMetatype::Float),
+            // UNKNOWN registrations (typeop.cc:2038/2117/2529).
+            OpCode::CPUI_PIECE | OpCode::CPUI_SUBPIECE | OpCode::CPUI_INSERT
+            => Some(TypeMetatype::Unknown),
             // Pointer-producing ops: their output token is the pointer type
             // itself (set by type inference), not a base int/bool. Skip
             // castOutput for them.
@@ -5869,6 +7347,9 @@ impl ActionSetCasts {
             | OpCode::CPUI_COPY | OpCode::CPUI_INDIRECT
             | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_CAST
             => None,
+            // INT registrations (typeop.cc:1142/1168/1319/1381/1503/1568/
+            // 1618/1652/1692/1913/2544/2559/2566) and the remaining
+            // plain-TypeOp classes.
             _ => Some(TypeMetatype::Int),
         }
     }
@@ -5924,11 +7405,15 @@ impl Action for ActionSetCasts {
                             // cc:2741: int4 sz = (int4)op->getIn(2)->getOffset()
                             let sz = scale_vn.read().unwrap().get_offset() as u32 as i64;
                             // cc:2742: ct = op->getIn(0)->getHighTypeReadFacing(op)
-                            let ct = base_vn
-                                .read()
-                                .unwrap()
-                                .get_high_type_read_facing(&op, 0)
-                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            // — the fd-aware consult: a union base resolves to
+                            // the field pointer before the alignSize check.
+                            let ct = crate::unionresolve::vn_high_type_read_facing(
+                                fd,
+                                base_vn,
+                                &op_ref,
+                                0,
+                            )
+                            .or_else(|| base_vn.read().unwrap().v_type.clone());
                             match ct.as_deref() {
                                 Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
                                     pt.ptr_to.get_align_size() as i64
@@ -5962,11 +7447,23 @@ impl Action for ActionSetCasts {
                         (Some(base_vn), Some(off_vn)) => {
                             // cc:2748: isPtrsubMatching(in(1) offset, 0, 0)
                             let off = off_vn.read().unwrap().get_offset() as i64;
-                            let t = base_vn
-                                .read()
-                                .unwrap()
-                                .get_type_read_facing_op(&op, 0)
-                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            // cc:2748: op->getIn(0)->getTypeReadFacing(op) —
+                            // the fd-aware consult. With the degenerate form a
+                            // PTRSUB whose base still carries the whole
+                            // pointer-to-union type consults as the union,
+                            // isPtrsubMatching(union)=false (type.cc:1167-1171
+                            // always-false for unions), and setcasts demotes
+                            // the very PTRSUB AddTree just built from the
+                            // resolved field — the AddTree↔setcasts rewrite
+                            // ping-pong. The consult sees the resolved field
+                            // pointer (struct pointee) and the offset matches.
+                            let t = crate::unionresolve::vn_type_read_facing(
+                                fd,
+                                base_vn,
+                                &op_ref,
+                                0,
+                            )
+                            .or_else(|| base_vn.read().unwrap().v_type.clone());
                             let matches = match t.as_deref() {
                                 Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
                                     crate::type_system::datatype::pointer_is_ptrsub_matching(
@@ -6006,9 +7503,16 @@ impl Action for ActionSetCasts {
                 (op.opcode, op.num_input())
             };
             for slot in 0..input_count {
+                // cc:2759: count += resolveUnion(op, i, data, castStrategy);
+                // the last-chance flow resolution runs BEFORE castInput and
+                // may splice a PTRSUB(#0) into this slot (its output then
+                // feeds the castInput below, exactly as in the oracle).
+                if Self::resolve_union(fd, op_ref, slot, &strategy) > 0 {
+                    changes += 1;
+                }
                 let changed =
                     if slot == 0 && matches!(live_opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
-                        Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
+                        Self::ptr_input_reqtype(fd, op_ref).is_some_and(|required| {
                             self.cast_input_ptr(fd, op_ref, slot, &strategy, required)
                         })
                     } else {
@@ -6115,17 +7619,35 @@ fn merge_min_type_order(
 // 3-arg overload's `TypePointer tmp(s,pt,ws)` carries an EMPTY name (names
 // attach only via the 4-arg overload, type.cc:3885); see make_pointer_type's
 // note for why the former composed-name spelling diverged from the oracle.
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer (interning constructor)
+/// Build a pointer type of `base` with Rugra's TypeFactory interning, the
+/// same way `tlst->getTypePointer(sz, pt, ws)` (typeop.cc:538/546 and
+/// parallels) hands the caller an INTERNED Datatype. Interning is load
+/// bearing for pointer identity: `TypeOpStore::getInputCast`'s
+/// cast-already-in-place test (typeop.cc:546-548) compares Datatype
+/// pointers, and a factory-free fresh `Arc` never equals the interned
+/// instance, forcing spurious re-casts (Phase 2 ordinal 332,
+/// SB-ORD332-SETCASTS-0001). Wordsize 1 = the ram data-space default.
 fn make_ptr(
     base: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ptr_size: usize,
+    type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
 ) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
     use crate::type_system::datatype::Datatype;
+    if let Some(factory) = type_factory {
+        let canonical = factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_pointer(ptr_size, base, 1);
+        return canonical;
+    }
+    // Detached fixtures without a factory keep the raw construction.
     std::sync::Arc::new(Datatype::Pointer(
         crate::type_system::datatype::TypePointer::new(ptr_size, base, 1),
     ))
 }
 
-// Ghidra: type.cc:3392 TypeFactory::findAdd (canonical interning every propagateType product flows through)
+// Ghidra: type.cc:3412 TypeFactory::findAdd (canonical interning every propagateType product flows through)
 /// Canonicalize a temporary data-type through the architecture TypeFactory.
 ///
 /// In the oracle, every `Datatype*` that ActionInferTypes handles is
@@ -6233,6 +7755,25 @@ fn canonicalize_temp_type(
             let mut factory = factory
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // A relative pointer (Ghidra TypePointerRel, either the ephemeral
+            // form from TypeFactory::getTypePointerRel type.cc:4016-4022 or
+            // the formal is_ptrrel form) is already factory-interned by
+            // findAdd at construction; the oracle's propagateTypeEdge stores
+            // it verbatim (coreaction.cc:5108 setTempType(newtype) — no
+            // rebuild step). Rebuilding via get_ptr would drop the
+            // parent/offset state that TypePointerRel::downChain (type.cc:
+            // 2656) and the union resolution chain read, so keep the
+            // original Arc: interning already guarantees the shared-Arc
+            // settling this canonicalization step exists for.
+            if let Datatype::Pointer(p) = dt.as_ref() {
+                if p.base.pointer_rel.is_some()
+                    || (p.base.flags
+                        & crate::type_system::datatype::type_flags::IS_PTRREL)
+                        != 0
+                {
+                    return dt.clone();
+                }
+            }
             let canonical = factory.get_ptr(pointee);
             if canonical.get_size() == dt.get_size()
                 && canonical.get_metatype() == TypeMetatype::Pointer
@@ -6332,13 +7873,24 @@ impl ActionInferTypes {
             // only path that can set it; a successful exact-piece lookup leaves
             // it false.
             let mut needs_block = false;
+            // TypeOpReturn::getInputLocal (typeop.cc:901-920) reads RETURN
+            // inputs' local types from the enclosing function's current
+            // return-value parameter (fp->getOutputType() = funcp.return_type,
+            // void when cleared) — the fd channel Ghidra reaches through
+            // op->getParent()->getFuncdata().
+            let fd_output_type = Some(fd.funcp.return_type.clone());
             let local_type = if let Some(exact_piece) = exact_piece {
                 Some(exact_piece)
             } else {
                 vn_arc
                     .read()
                     .unwrap()
-                    .get_local_type(&mut needs_block, &type_factory, userops.as_ref())
+                    .get_local_type(
+                        &mut needs_block,
+                        &type_factory,
+                        userops.as_ref(),
+                        fd_output_type.as_ref(),
+                    )
                     .map_err(|error| crate::error::Error::Lowlevel(error.to_string()))?
             };
             if needs_block {
@@ -6365,7 +7917,8 @@ impl ActionInferTypes {
     /// Returns the out varnode arc if the propagation changed its temp type.
     // Ghidra: coreaction.cc:5074 ActionInferTypes::propagateTypeEdge
     fn propagate_type_edge(
-        op: &crate::op::PcodeOp,
+        op_arc: &Arc<RwLock<crate::op::PcodeOp>>,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         active_path: &std::collections::HashSet<u64>,
         inslot: i32,
@@ -6374,22 +7927,41 @@ impl ActionInferTypes {
         ptr_size: usize,
         type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-        if inslot == outslot {
-            return None; // don't backtrack
-        }
         // Resolve the incoming varnode + its temp type.
-        let in_vn_arc: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+        let in_vn_arc: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+            let op = op_arc.read().unwrap();
             if inslot == -1 {
                 op.output.clone()
             } else {
                 op.inrefs.get(inslot as usize).cloned()
-            };
-        let in_vn_arc = in_vn_arc?;
+            }
+        };
         let alttype = {
-            let inv = in_vn_arc.read().unwrap();
+            let inv = in_vn_arc.as_ref()?.read().unwrap();
             temps.get(&vn_id(&inv)).cloned()
         };
         let alttype = alttype?;
+
+        // cc:5081-5084: "Always give incoming data-type a chance to resolve,
+        // even if it would not otherwise propagate" — resolveInFlow runs
+        // BEFORE the backtrack check, so even a backtracking edge populates
+        // fd.union_map (a visible side effect ScoreUnionFields consults
+        // later). The op guard is released: the scorer takes its own.
+        let alttype = if alttype.needs_resolution() {
+            crate::unionresolve::resolve_in_flow(
+                fd,
+                &alttype,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                inslot,
+            )
+        } else {
+            alttype
+        };
+
+        if inslot == outslot {
+            return None; // don't backtrack
+        }
+        let op = op_arc.read().unwrap();
 
         // Resolve the outgoing varnode.
         let out_vn_arc = if outslot < 0 {
@@ -6431,7 +8003,7 @@ impl ActionInferTypes {
         // The per-opcode propagateType dispatch (op.cc propagateType). Returns
         // the new type for the output, if any.
         let newtype = Self::propagate_type(
-            op,
+            &op,
             &alttype,
             inslot,
             outslot,
@@ -6541,43 +8113,242 @@ impl ActionInferTypes {
                 Some(alttype.clone())
             }
 
-            // MULTIEQUAL (phi): Ghidra has NO TypeOpMultiequal::propagateType
-            // override — the base TypeOp::propagateType (typeop.cc:317-321)
-            // returns null, so types NEVER flow across a phi's edges during
-            // ActionInferTypes. The earlier `Some(alttype)` here let a
-            // locked CALL output type leak through the phi into sibling
-            // inputs (my_fwrite: fopen's FILE* overwrote the LOAD-out temp
-            // and then lost to the inferred char*), diverging from the
-            // oracle where phi members keep their independent temps and the
-            // HighVariable::getTypeRepresentative merge (variable.cc:377-395)
-            // alone decides the high type.
-            OpCode::CPUI_MULTIEQUAL => None,
-
-            // INDIRECT (typeop.cc:2005-2020 TypeOpIndirect::propagateType):
-            // see the dedicated arm below.
-
-            // Zero-extending: output carries input's type (forward).
-            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
-                if outslot == -1 {
-                    Some(alttype.clone())
-                } else {
-                    None
+            // MULTIEQUAL (typeop.cc:1951-1965 TypeOpMulti::propagateType):
+            // the phi IS transparent in the locked oracle — a type flows
+            // between the output and any input (exactly one of
+            // inslot/outslot is -1); a SPACEBASE source is rewrapped as a
+            // pointer-to-unknown1 whose size is the alttype's size
+            // (getTypePointer(alttype->getSize(), getBase(1,TYPE_UNKNOWN),
+            // default-data-space wordsize); ram wordsize is 1 here, same
+            // literal as the COPY arm above). The base
+            // TypeOp::propagateType (typeop.cc:317-319) is the null default,
+            // but TypeOpMulti overrides it — SB-ORD186-PTRARITH-0001: the
+            // 2026-08-26 my_f_write session replaced the earlier transparent
+            // arm with `None` on the false premise that no override exists;
+            // that severed pointer propagation through phis and cost the
+            // ordinal-186 oppool2 ptrarith fire (next_url 0x50db: MULTIEQUAL
+            // RBP base stayed int-typed while the oracle converted the
+            // INT_ADD to PTRADD).
+            OpCode::CPUI_MULTIEQUAL => {
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
                 }
+                let src_is_spacebase = if inslot == -1 {
+                    op.get_out().cloned()
+                } else {
+                    op.inrefs.get(inslot as usize).cloned()
+                }
+                .map(|v| v.read().unwrap().is_spacebase())
+                .unwrap_or(false);
+                if src_is_spacebase {
+                    let factory = type_factory?;
+                    let unknown1 = factory
+                        .read()
+                        .unwrap()
+                        .get_base(1, TypeMetatype::Unknown)
+                        .unwrap_or_else(|| {
+                            std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                                crate::type_system::datatype::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            ))
+                        });
+                    return Some(std::sync::Arc::new(
+                        crate::type_system::datatype::Datatype::Pointer(
+                            crate::type_system::datatype::TypePointer::new(
+                                alttype.get_size(),
+                                unknown1,
+                                1,
+                            ),
+                        ),
+                    ));
+                }
+                Some(alttype.clone())
             }
 
-            // Subpiece: if extracting a full piece, forward the type.
+            // INDIRECT (typeop.cc:2005-2020 TypeOpIndirect::propagateType):
+            // transparent like COPY between the output and slot-0 input, but
+            // never along the slot-1 (target) edge, and never for indirect
+            // creations. A SPACEBASE source is rewrapped exactly as in COPY.
+            OpCode::CPUI_INDIRECT => {
+                if op.is_indirect_creation() {
+                    return None;
+                }
+                if inslot == 1 || outslot == 1 {
+                    return None;
+                }
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
+                }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
+            }
+
+            // INT_ZEXT / INT_SEXT: the locked oracle has NO propagateType
+            // override for either op (typeop.cc:1115-1165 declares only
+            // getInputCast; the base TypeOp::propagateType at typeop.cc:317-321
+            // returns null) — nothing propagates through an extension. The
+            // former arm here forwarded the input type unchanged, stamping a
+            // 4-byte type onto the 8-byte extension output and manufacturing
+            // size-mismatch casts in setcasts (Phase 2 ordinal 332,
+            // SB-ORD332-SETCASTS-0001). Fell through to `_ => None`.
+
+            // SUBPIECE (typeop.cc:2161-2186 TypeOpSubpiece::propagateType):
+            // propagation is in0 -> output only; the alttype walks
+            // getSubType from the lsb byte offset (little endian) until it
+            // lands at offset 0 with the output's size. A UNION /
+            // PARTIALUNION source resolves through resolveTruncation (Rust
+            // stub returns None → no propagation; residual, see metadata).
+            // The near/far-pointer resize arm (cc:2164-2172) needs
+            // getSizeOfAltPointer, which is 0 on this arch — unreachable,
+            // residual.
             OpCode::CPUI_SUBPIECE => {
-                if inslot == 0 && outslot == -1 {
-                    // Only forward if sizes match (whole varnode extracted).
-                    if let Some(out) = op.get_out() {
-                        if out.read().unwrap().get_size() == alttype.get_size() {
-                            return Some(alttype.clone());
+                if inslot != 0 || outslot != -1 {
+                    return None; // Propagation must be from in0 to out
+                }
+                let mut byte_off: i64 = op
+                    .get_in(1)
+                    .map(|vn| vn.read().unwrap().get_offset() as i64)
+                    .unwrap_or(0);
+                let mut current: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> =
+                    Some(alttype.clone());
+                // cc:2176-2181: a UNION/PARTIALUNION source first resolves
+                // the truncated field. TypePartialUnion::resolveTruncation is
+                // the Funcdata-union-cache stub (returns None); full
+                // TypeUnion::resolveTruncation has no Rust port yet — both
+                // end propagation here (registered residual).
+                if let TypeMetatype::PartialUnion = alt_meta {
+                    if let crate::type_system::datatype::Datatype::PartialUnion(pu) =
+                        alttype.as_ref()
+                    {
+                        if let Some((field, new_off)) =
+                            pu.resolve_truncation(byte_off, Some(op), 1)
+                        {
+                            byte_off = new_off;
+                            current = Some(field.type_ptr);
+                        } else {
+                            current = None;
                         }
                     }
-                    None
-                } else {
-                    None
+                } else if let TypeMetatype::Union = alt_meta {
+                    current = None;
                 }
+                let Some(out_size) = op.get_out().map(|o| o.read().unwrap().get_size())
+                else {
+                    return None;
+                };
+                let Some(mut cur) = current else {
+                    return None;
+                };
+                let mut off = byte_off;
+                while off != 0 || cur.get_size() != out_size {
+                    let (next, new_off) = cur.get_sub_type(off);
+                    match next {
+                        Some(n) => {
+                            cur = n;
+                            off = new_off;
+                        }
+                        None => return None,
+                    }
+                }
+                Some(cur)
+            }
+
+            // PIECE (typeop.cc:2074-2094 TypeOpPiece::propagateType):
+            // output -> input only (inslot == -1); the composite output type
+            // walks getSubType from the receiving input's byte offset
+            // (little endian: slot 0 sits above slot 1, cc:2104-2114) until
+            // it lands at offset 0 with the receiving input's size. The
+            // near/far pointer resize arm (cc:2077-2087) is unreachable on
+            // this arch (no alt pointer) — residual.
+            OpCode::CPUI_PIECE => {
+                if inslot != -1 {
+                    return None; // Only propagate output to an input
+                }
+                let Some(recv_vn) = op.get_in(outslot.max(0) as usize) else {
+                    return None;
+                };
+                let recv_size = recv_vn.read().unwrap().get_size();
+                let mut byte_off: i64 = if outslot == 0 {
+                    op.get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size() as i64)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let mut cur = alttype.clone();
+                let mut off = byte_off;
+                while off != 0 || cur.get_size() != recv_size {
+                    let (next, new_off) = cur.get_sub_type(off);
+                    match next {
+                        Some(n) => {
+                            cur = n;
+                            off = new_off;
+                        }
+                        None => return None,
+                    }
+                }
+                Some(cur)
+            }
+
+            // SEGMENTOP (typeop.cc:2431-2441 TypeOpSegment::propagateType):
+            // slot-2 <-> output only, pointer types only, resized to the
+            // output varnode's size.
+            OpCode::CPUI_SEGMENTOP => {
+                if inslot == 0 || inslot == 1 || outslot == 0 || outslot == 1 {
+                    return None;
+                }
+                if Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
+                if alt_meta != TypeMetatype::Pointer {
+                    return None;
+                }
+                let out_size = Self::edge_dest_varnode(op, outslot)
+                    .map(|v| v.read().unwrap().get_size())?;
+                let factory = type_factory?;
+                Some(factory.write().unwrap().resize_pointer(alttype, out_size))
+            }
+
+            // NEW (typeop.cc:2501-2513 TypeOpNew::propagateType): in0 ->
+            // output only, and only when in0 is a cpoolref result (the
+            // allocated type rides the cpool record).
+            OpCode::CPUI_NEW => {
+                if inslot != 0 || outslot != -1 {
+                    return None;
+                }
+                let vn0_written = op
+                    .get_in(0)
+                    .map(|vn| vn.read().unwrap().is_written())
+                    .unwrap_or(false);
+                if !vn0_written {
+                    return None; // Don't propagate
+                }
+                let def_is_cpoolref = op
+                    .get_in(0)
+                    .and_then(|vn| {
+                        vn.read()
+                            .unwrap()
+                            .def
+                            .as_ref()
+                            .and_then(|d| d.upgrade())
+                            .map(|d| d.read().unwrap().opcode == OpCode::CPUI_CPOOLREF)
+                    })
+                    .unwrap_or(false);
+                if !def_is_cpoolref {
+                    return None;
+                }
+                Some(alttype.clone()) // Propagate cpool result as result of new operator
             }
 
             // PTRSUB (typeop.cc:2366-2378 TypeOpPtrsub::propagateType): a
@@ -6680,14 +8451,23 @@ impl ActionInferTypes {
                 if inslot == -1 && outslot == 1 {
                     // output type → address becomes pointer to it.
                     // Ghidra TypeOpLoad::propagateType (typeop.cc:493-496)
-                    // wraps via propagateToPointer (typeop.cc:186-198),
-                    // which truncates a pointer alttype to unknown* — the
-                    // raw ptr-of-ptr here typed my_fwrite's
+                    // wraps via propagateToPointer (typeop.cc:186-198): the
+                    // pointer is sized by the ADDRESS varnode (outvn), a
+                    // pointer alttype is demoted to unknown* (the raw
+                    // ptr-of-ptr here typed my_fwrite's
                     // `stream->_IO_read_ptr` address FILE** (out FILE* →
                     // make_ptr(FILE*)), which outranked the downChain field
                     // type char** in the typeOrder competition and
-                    // suppressed the golden `(FILE *)`/`(char *)` casts.
-                    return Some(crate::typeop::propagate_to_pointer(alttype));
+                    // suppressed the golden `(FILE *)`/`(char *)` casts),
+                    // and the product is factory-interned.
+                    let addr_size = op
+                        .get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size())?;
+                    return Some(crate::typeop::propagate_to_pointer_sized(
+                        alttype,
+                        addr_size,
+                        type_factory,
+                    ));
                 }
                 None
             }
@@ -6703,65 +8483,212 @@ impl ActionInferTypes {
                         dereference_size);
                 }
                 if inslot == 2 && outslot == 1 {
-                    // value → address: propagateToPointer truncation, same
-                    // as the LOAD arm (TypeOpStore::propagateType,
-                    // typeop.cc:563-566).
-                    return Some(crate::typeop::propagate_to_pointer(alttype));
+                    // value → address: propagateToPointer with the ADDRESS
+                    // varnode's size, same as the LOAD arm
+                    // (TypeOpStore::propagateType, typeop.cc:563-566).
+                    let addr_size = op
+                        .get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size())?;
+                    return Some(crate::typeop::propagate_to_pointer_sized(
+                        alttype,
+                        addr_size,
+                        type_factory,
+                    ));
                 }
                 None
             }
 
-            // TypeOpEqual::propagateAcrossCompare (typeop.cc:961-989):
-            // comparisons propagate ACROSS THE INPUTS only (`if (inslot == -1
-            // || outslot == -1) return 0`) — a typed operand lends its type
-            // to the sibling (so `value != 0` types the constant char*);
-            // the boolean output never participates.
+            // TypeOpEqual::propagateAcrossCompare (typeop.cc:961-986):
+            // EQUAL/NOTEQUAL/LESS/LESSEQUAL propagate ACROSS THE INPUTS only
+            // (`if (inslot == -1 || outslot == -1) return 0`) — a typed
+            // operand lends its type to the sibling; the boolean output never
+            // participates. A SPACEBASE source is rewrapped to
+            // ptr(altsize, unknown1, ws). The PointerRel demotion
+            // (cc:972-982) has no Rust TypePointerRel — unreachable,
+            // residual. FLOAT_* comparisons have NO oracle override (the
+            // override set is only these four + SLESS/SLESSEQUAL) and fall
+            // through to the null base default.
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_INT_LESS
-            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESSEQUAL
-            | OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_FLOAT_EQUAL
-            | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
-            | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                if inslot >= 0 && outslot >= 0 {
-                    Some(alttype.clone())
-                } else {
-                    None
+            | OpCode::CPUI_INT_LESSEQUAL => {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
                 }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
             }
 
-            // Boolean ops: bool everywhere.
-            OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
-            | OpCode::CPUI_BOOL_XOR => Some(int_types.bool.clone()),
-
-            // Arithmetic/logical on ints: the common int type flows.
-            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV
-            | OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM | OpCode::CPUI_INT_AND
-            | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
-            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
-            | OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
-            | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG
-            | OpCode::CPUI_FLOAT_ABS | OpCode::CPUI_FLOAT_SQRT
-            | OpCode::CPUI_FLOAT_CEIL | OpCode::CPUI_FLOAT_FLOOR
-            | OpCode::CPUI_FLOAT_ROUND => {
-                if alt_meta == TypeMetatype::Pointer {
-                    return None; // don't propagate pointers through generic arith
+            // TypeOpIntSless/SlessEqual::propagateType (typeop.cc:1033-1039,
+            // 1059-1065): across the inputs only, and only SIGNED types
+            // (metatype TYPE_INT) propagate — unlike propagateAcrossCompare.
+            OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
                 }
-                if outslot == -1 {
-                    Some(alttype.clone())
-                } else if outslot >= 0 {
-                    // Forward to sibling input if both are same-size ints.
-                    if let Some(out) = op.get_out() {
-                        let out_sz = out.read().unwrap().get_size();
-                        if alttype.get_size() == out_sz {
-                            return Some(alttype.clone());
-                        }
+                if alt_meta != TypeMetatype::Int {
+                    return None; // Only propagate signed things
+                }
+                Some(alttype.clone())
+            }
+
+            // TypeOpIntAnd/IntXor::propagateType (typeop.cc:1455-1472,
+            // 1422-1439): only ENUM types, or FLOAT types under a sign-bit
+            // manipulation (floatSignManipulation, typeop.cc:153-176: AND
+            // with the sign-bit-clear mask → FLOAT_ABS; XOR with the
+            // sign-bit mask → FLOAT_NEG), propagate — in either direction
+            // between the inputs and the output. A SPACEBASE source is
+            // rewrapped as in COPY.
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_XOR => {
+                if !alttype.is_enum_type() {
+                    if alt_meta != TypeMetatype::Float {
+                        return None;
                     }
-                    None
-                } else {
-                    None
+                    if Self::float_sign_manipulation(op) == OpCode::CPUI_MAX {
+                        return None;
+                    }
                 }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
             }
+
+            // TypeOpIntOr::propagateType (typeop.cc:1488-1500): only ENUM
+            // types propagate; SPACEBASE rewrap as above.
+            OpCode::CPUI_INT_OR => {
+                if !alttype.is_enum_type() {
+                    return None; // Only propagate enums
+                }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
+            }
+
+            // INT_MULT/DIV/SDIV/REM/SREM/NEGATE/LEFT/RIGHT/SRIGHT, the
+            // BOOL_* ops, and every FLOAT_* arithmetic op have NO
+            // propagateType override in the locked oracle (override set:
+            // COPY, LOAD, STORE, EQUAL/NOTEQUAL/LESS/LESSEQUAL,
+            // SLESS/SLESSEQUAL, INT_ADD, AND, OR, XOR, MULTIEQUAL,
+            // INDIRECT, PIECE, SUBPIECE, PTRADD, PTRSUB, SEGMENT, NEW — see
+            // typeop.cc) — the base TypeOp::propagateType (typeop.cc:317-321)
+            // returns null and nothing propagates. The former generic
+            // int/bool/float-forwarding arms here were invented propagation
+            // (SB-ORD332-SETCASTS-0001).
 
             _ => None,
+        }
+    }
+
+    /// The edge SOURCE varnode of a propagateType edge
+    /// (coreaction.cc:5080): the op output when `inslot == -1`, else the
+    /// input at `inslot`.
+    // RUGRA-GLUE: edge-source accessor mirroring coreaction.cc:5080 invn selection
+    fn edge_src_varnode(
+        op: &crate::op::PcodeOp,
+        inslot: i32,
+    ) -> Option<std::sync::Arc<RwLock<crate::varnode::Varnode>>> {
+        if inslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(inslot as usize).cloned()
+        }
+    }
+
+    /// The edge DESTINATION varnode of a propagateType edge: the op output
+    /// when `outslot == -1`, else the input at `outslot`.
+    // RUGRA-GLUE: edge-destination accessor mirroring propagateTypeEdge outvn selection
+    fn edge_dest_varnode(
+        op: &crate::op::PcodeOp,
+        outslot: i32,
+    ) -> Option<std::sync::Arc<RwLock<crate::varnode::Varnode>>> {
+        if outslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(outslot as usize).cloned()
+        }
+    }
+
+    /// SPACEBASE rewrap shared by the COPY/MULTIEQUAL/INDIRECT/acrossCompare
+    /// arms: `tlst->getTypePointer(alttype->getSize(), getBase(1,
+    /// TYPE_UNKNOWN), defaultDataSpace->getWordSize())` — the pointer is
+    /// sized by the alttype, the pointee is unknown1, and the ram data space
+    /// wordsize is 1 (typeop.cc:968-971 and parallels).
+    // RUGRA-GLUE: shared helper for the spacebase rewrap in typeop.cc propagateType overrides
+    fn spacebase_rewrap(
+        alttype: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        let factory = type_factory?;
+        let unknown1 = factory
+            .read()
+            .unwrap()
+            .get_base(1, crate::type_system::datatype::TypeMetatype::Unknown)
+            .unwrap_or_else(|| {
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                    crate::type_system::datatype::TypeBase::new(
+                        "unknown".to_string(),
+                        1,
+                        crate::type_system::datatype::TypeMetatype::Unknown,
+                    ),
+                ))
+            });
+        Some(std::sync::Arc::new(
+            crate::type_system::datatype::Datatype::Pointer(
+                crate::type_system::datatype::TypePointer::new(
+                    alttype.get_size(),
+                    unknown1,
+                    1,
+                ),
+            ),
+        ))
+    }
+
+    /// `TypeOp::floatSignManipulation` (typeop.cc:153-176): an INT_AND whose
+    /// slot-1 constant is the sign-bit-clear mask reads as FLOAT_ABS; an
+    /// INT_XOR whose slot-1 constant is the sign-bit mask reads as
+    /// FLOAT_NEG; anything else is CPUI_MAX (not a sign manipulation).
+    // Ghidra: typeop.cc:153 TypeOp::floatSignManipulation
+    fn float_sign_manipulation(op: &crate::op::PcodeOp) -> OpCode {
+        match op.opcode {
+            OpCode::CPUI_INT_AND => {
+                if let Some(cvn) = op.get_in(1) {
+                    let vn = cvn.read().unwrap();
+                    if vn.is_constant() {
+                        let size = vn.get_size();
+                        let val = crate::address::calc_mask(size) >> 1;
+                        if val == vn.get_offset() {
+                            return OpCode::CPUI_FLOAT_ABS;
+                        }
+                    }
+                }
+                OpCode::CPUI_MAX
+            }
+            OpCode::CPUI_INT_XOR => {
+                if let Some(cvn) = op.get_in(1) {
+                    let vn = cvn.read().unwrap();
+                    if vn.is_constant() {
+                        let size = vn.get_size();
+                        let val = crate::address::calc_mask(size)
+                            ^ (crate::address::calc_mask(size) >> 1);
+                        if val == vn.get_offset() {
+                            return OpCode::CPUI_FLOAT_NEG;
+                        }
+                    }
+                }
+                OpCode::CPUI_MAX
+            }
+            _ => OpCode::CPUI_MAX,
         }
     }
 
@@ -6772,6 +8699,7 @@ impl ActionInferTypes {
     fn propagate_one_type(
         &self,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
@@ -6860,10 +8788,13 @@ impl ActionInferTypes {
                 edge
             };
 
+            // The op guard is released before propagate_type_edge so the
+            // union resolveInFlow path can take its own guards (the edge fn
+            // re-acquires for its read-only sections).
             let next_vn = {
-                let op = edge.op.read().unwrap();
                 Self::propagate_type_edge(
-                    &op,
+                    &edge.op,
+                    fd,
                     temps,
                     &active_path,
                     edge.inslot,
@@ -6916,7 +8847,7 @@ impl ActionInferTypes {
     // Ghidra: coreaction.cc:5342 ActionInferTypes::propagateAcrossReturns
     fn propagate_across_returns(
         &self,
-        fd: &Funcdata,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
@@ -6990,8 +8921,266 @@ impl ActionInferTypes {
             if improved {
                 temps.insert(id, base_ct.clone());
                 let rv2 = rv.clone();
-                self.propagate_one_type(&rv2, temps, int_types, ptr_size, type_factory);
+                self.propagate_one_type(&rv2, fd, temps, int_types, ptr_size, type_factory);
             }
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::propagateRef` (coreaction.cc:5208-5256).
+    /// Given a Varnode that is a likely pointer and an Address that is a
+    /// known alias of the pointer, propagate the pointer's pointee data-type
+    /// to every Varnode overlapping that address, as an exact piece of the
+    /// pointee (`TypeFactory::getExactPiece`). Assignments go to the temp
+    /// store and are then pushed across data-flow edges by
+    /// [`Self::propagate_one_type`], mirroring the `setTempType` +
+    /// `propagateOneType` pair at coreaction.cc:5248-5252.
+    // Ghidra: coreaction.cc:5208 ActionInferTypes::propagateRef
+    #[allow(clippy::too_many_arguments)]
+    fn propagate_ref(
+        &self,
+        fd: &mut Funcdata,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        addr: crate::address::Address,
+        walk_space: crate::space::AddressSpace,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+        type_factory: Option<
+            &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        >,
+    ) {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        // Datatype *ct = vn->getTempType(); if (ct->getMetatype() != TYPE_PTR) return;
+        let ct_ptr = {
+            let id = vn_id(&vn.read().unwrap());
+            match temps.get(&id) {
+                Some(t) => t.clone(),
+                None => return,
+            }
+        };
+        let Datatype::Pointer(ptr) = &*ct_ptr else {
+            // if (ct->getMetatype() != TYPE_PTR) return;
+            return;
+        };
+        let ct = ptr.ptr_to.clone();
+        // if (ct->getMetatype() == TYPE_SPACEBASE) return;
+        if ct.get_metatype() == TypeMetatype::Spacebase {
+            return;
+        }
+        // if (ct->getMetatype() == TYPE_UNKNOWN) return;
+        if ct.get_metatype() == TypeMetatype::Unknown {
+            return;
+        }
+        let Some(factory_arc) = type_factory else {
+            return;
+        };
+        let ct_size = ct.get_size() as u64;
+        let off = addr.as_u64();
+        let end = off.wrapping_add(ct_size);
+        let wrapped = end < off; // Ghidra: address wrapped -> run to end of space
+        let mut lastoff: u64 = 0;
+        let mut lastsize: usize = ct.get_size();
+        let mut lastct: Option<Arc<Datatype>> = Some(ct.clone());
+        // Snapshot the location tree: the loop inserts temp types and pushes
+        // them across edges, which must not invalidate the iteration.
+        // coreaction.cc:5224-5229: `iter = data.beginLoc(addr)` ..
+        // `enditer = data.endLoc(endaddr)` — an INCLUSIVE lower bound at
+        // `addr`. A varnode whose offset is below `addr` is never visited,
+        // even when its size partially overlaps the walk window: feeding it
+        // through the `curoff = voff - off` subtraction wraps to a huge
+        // unsigned value, and the accidental `curoff + vsize` re-wrap let
+        // partial-overlap-below candidates reach get_exact_piece with a
+        // NEGATIVE offset — a state the oracle's beginLoc ordering never
+        // produces. The `voff >= off` gate restores the half-open window
+        // [addr, addr+ct_size).
+        let candidates: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .filter(|vn_arc| {
+                let g = vn_arc.read().unwrap();
+                if g.get_space() != walk_space {
+                    return false;
+                }
+                let voff = g.get_offset();
+                if voff < off {
+                    // beginLoc(addr): strictly below the walk address.
+                    return false;
+                }
+                if !wrapped {
+                    voff < end
+                } else {
+                    true // endLoc(space) — accept the rest of the space
+                }
+            })
+            .collect();
+        for vn_arc in candidates {
+            // Skip annotation / dead / typelock / symbol-mapped varnodes
+            // (coreaction.cc:5236-5240).
+            let (voff, vsize) = {
+                let g = vn_arc.read().unwrap();
+                if g.is_annotation()
+                    || (!g.is_written() && g.has_no_descend())
+                    || g.is_type_lock()
+                    || g.get_symbol_entry().is_some()
+                {
+                    continue;
+                }
+                (g.get_offset(), g.get_size())
+            };
+            let curoff = voff.wrapping_sub(off);
+            // if (curoff + cursize > ct->getSize()) continue; (uintb wrap-safe)
+            if curoff.wrapping_add(vsize as u64) > ct_size {
+                continue;
+            }
+            if vsize != lastsize || curoff != lastoff {
+                lastoff = curoff;
+                lastsize = vsize;
+                let mut factory = factory_arc.write().unwrap();
+                lastct = factory.get_exact_piece(ct.clone(), curoff as i64, vsize);
+            }
+            let Some(piece) = lastct.clone() else {
+                continue;
+            };
+            let id = vn_id(&vn_arc.read().unwrap());
+            let current = match temps.get(&id) {
+                Some(t) => t.clone(),
+                // buildLocaltypes seeds every eligible varnode; the fallback
+                // mirrors Ghidra's default UNKNOWN base for the comparison.
+                None => factory_arc
+                    .read()
+                    .unwrap()
+                    .get_base(vsize, TypeMetatype::Unknown)
+                    .unwrap_or_else(|| {
+                        Arc::new(Datatype::Base(TypeBase::new(
+                            "undefined".to_string(),
+                            vsize,
+                            TypeMetatype::Unknown,
+                        )))
+                    }),
+            };
+            // if (0>lastct->typeOrder(*curvn->getTempType())) set + propagate
+            if piece.type_order(&current) < 0 {
+                temps.insert(id, piece);
+                self.propagate_one_type(&vn_arc, fd, temps, int_types, ptr_size, type_factory);
+            }
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::propagateSpacebaseRef`
+    /// (coreaction.cc:5258-5306). Walks the direct descendants of the
+    /// spacebase (stack pointer) input register; for constant-offset
+    /// COPY/INT_ADD/PTRSUB/PTRADD pointers whose output carries a known
+    /// pointer temp-type, propagates the pointee into the varnodes at the
+    /// addressed stack range via [`Self::propagate_ref`].
+    // Ghidra: coreaction.cc:5265 ActionInferTypes::propagateSpacebaseRef
+    fn propagate_spacebase_ref(
+        &self,
+        fd: &mut Funcdata,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+        type_factory: Option<
+            &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        >,
+    ) {
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::Datatype;
+        // AddrSpace *spcid = data.getScopeLocal()->getSpaceId();
+        // Varnode *spcvn = data.findSpacebaseInput(spcid);
+        let Some(spcvn) = fd.find_spacebase_input(fd.stack_pointer_space) else {
+            return;
+        };
+        // Datatype *spctype = spcvn->getType(); — absolute property, no temp.
+        let spc_type = spcvn
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| t.clone());
+        let Some(spc_type_arc) = spc_type else {
+            return;
+        };
+        let Datatype::Pointer(ptr) = &*spc_type_arc else {
+            // if (spctype->getMetatype() != TYPE_PTR) return;
+            return;
+        };
+        let Datatype::Spacebase(sb) = ptr.ptr_to.as_ref() else {
+            // if (spctype->getMetatype() != TYPE_SPACEBASE) return;
+            return;
+        };
+        // TypeSpacebase::getAddress resolves through the indexed space
+        // (type.cc:3063 resolveConstant: wordsize conversion + wrap).
+        let sb_space = sb.spaceid.unwrap_or(crate::space::AddressSpace::Stack);
+        let walk_space = if sb_space.is_stack() {
+            sb_space
+        } else {
+            // The stack-pointer spacebase indexes the stack space; anything
+            // else cannot be walked with Rugra's stack-varnode model.
+            return;
+        };
+        let descendants: Vec<_> = spcvn.read().unwrap().descend_iter().collect();
+        for op in descendants {
+            let (opcode, op_addr) = {
+                let g = op.read().unwrap();
+                (g.opcode, g.get_addr())
+            };
+            let addr = match opcode {
+                // case CPUI_COPY: addr = sbtype->getAddress(0, in(0)->getSize(), op->getAddr());
+                OpCode::CPUI_COPY => {
+                    let sz = op
+                        .read()
+                        .unwrap()
+                        .get_in(0)
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0) as i32;
+                    sb.get_address(0, sz, op_addr)
+                }
+                // case CPUI_INT_ADD/CPUI_PTRSUB: constant in(1) offsets.
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB => {
+                    let in1 = op.read().unwrap().get_in(1).cloned();
+                    let Some(in1) = in1 else {
+                        continue;
+                    };
+                    let (is_const, off, sz) = {
+                        let r = in1.read().unwrap();
+                        (r.is_constant(), r.get_offset(), r.get_size() as i32)
+                    };
+                    if !is_const {
+                        continue;
+                    }
+                    sb.get_address(off, sz, op_addr)
+                }
+                // case CPUI_PTRADD: off = in(1)->getOffset() * in(2)->getOffset()
+                OpCode::CPUI_PTRADD => {
+                    let g = op.read().unwrap();
+                    let Some(in1) = g.get_in(1) else { continue };
+                    let Some(in2) = g.get_in(2) else { continue };
+                    let (is_const, off1, sz) = {
+                        let r = in1.read().unwrap();
+                        (r.is_constant(), r.get_offset(), r.get_size() as i32)
+                    };
+                    if !is_const {
+                        continue;
+                    }
+                    let off2 = in2.read().unwrap().get_offset();
+                    sb.get_address(off1.wrapping_mul(off2), sz, op_addr)
+                }
+                _ => continue,
+            };
+            let Some(out_vn) = op.read().unwrap().output.clone() else {
+                continue;
+            };
+            self.propagate_ref(
+                fd,
+                &out_vn,
+                addr,
+                walk_space,
+                temps,
+                int_types,
+                ptr_size,
+                type_factory,
+            );
         }
     }
 }
@@ -7046,6 +9235,21 @@ impl Action for ActionInferTypes {
                 self.local_count += 1;
             }
             return Ok(action_status::NO_CHANGE);
+        }
+
+        // coreaction.cc:5398: data.getScopeLocal()->applyTypeRecommendations()
+        // — drain the type-recommendation store (varmap.cc:1574-1584) ahead
+        // of buildLocaltypes, exactly the oracle's position. The store's
+        // only current producer is collect_name_recs' "this"-pointer arm
+        // (varmap.cc:374); with no name-lock-only localdb symbols it is
+        // empty and this is a no-op (HTTPDMAIN-F7-NAMERECOMMEND-0001
+        // mechanism half).
+        {
+            let mut scope_taken = fd.scope.take();
+            if let Some(scope) = scope_taken.as_mut() {
+                scope.apply_type_recommendations(fd);
+            }
+            fd.scope = scope_taken;
         }
 
         // Build the cached base types, preferring the architecture's
@@ -7127,6 +9331,7 @@ impl Action for ActionInferTypes {
 
                 self.propagate_one_type(
                     root,
+                    fd,
                     &mut temps,
                     &int_types,
                     ptr_size,
@@ -7137,6 +9342,14 @@ impl Action for ActionInferTypes {
 
         // 5. propagateAcrossReturns.
         self.propagate_across_returns(fd, &mut temps, &int_types, ptr_size, type_factory.as_ref());
+
+        // 5.5 propagateSpacebaseRef (coreaction.cc:5407-5410): after the
+        // data-flow propagation pass, walk the spacebase register's
+        // constant-offset aliases and feed the pointed-to stack range with
+        // exact-piece temp types. This is the source of the piece-structured
+        // (TypePartialStruct) types that gate RuleSubRight's special-print
+        // branch (ruleaction.cc:7256) and RuleSplitCopy's field granularity.
+        self.propagate_spacebase_ref(fd, &mut temps, &int_types, ptr_size, type_factory.as_ref());
 
         // 6. writeBack: commit temp types to v_type.
         if self.write_back(fd, &temps) {
@@ -7434,6 +9647,113 @@ impl ActionNameVars {
             }
         }
     }
+
+    // Ghidra: coreaction.cc:2779 ActionNameVars::lookForBadJumpTables
+    /// Name the Varnode which seems to be the putative switch variable for
+    /// an unrecovered jump-table with a special name. Faithful to
+    /// `lookForBadJumpTables` (coreaction.cc:2779-2803): scan the call specs
+    /// in registration order; for each bad-jump-table call take the in(0)
+    /// target varnode, unwrap one CAST level (implied && written only), and
+    /// — gated on the varnode being non-free, its high carrying a symbol
+    /// that is not name-locked and lives in the local scope — rename that
+    /// symbol to `makeNameUnique("UNRECOVERED_JUMPTABLE")`.
+    fn look_for_bad_jump_tables(fd: &mut Funcdata) {
+        // cc:2782: int4 numfunc = data.numCalls() — registration order.
+        let mut rename_targets: Vec<usize> = Vec::new();
+        for i in 0..fd.num_calls() {
+            // cc:2786: if (fc->isBadJumpTable()) — the flag is produced by
+            // FlowInfo::truncateIndirectJump's default failure arm
+            // (flow.cc:754) when a BRANCHIND turns into a CALLIND.
+            let is_bad = fd
+                .get_call_specs(i)
+                .map(|fc| fc.bad_jump_table())
+                .unwrap_or(false);
+            if !is_bad {
+                continue;
+            }
+            // cc:2787: PcodeOp *op = fc->getOp();
+            let Some(call_op) = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd))
+            else {
+                continue;
+            };
+            // cc:2788: Varnode *vn = op->getIn(0);
+            let Some(mut vn) = call_op.0.read().unwrap().get_in(0).cloned() else {
+                continue;
+            };
+            // cc:2789-2793: if (vn->isImplied() && vn->isWritten()) —
+            // skip any cast into the function; single level only (the
+            // makeRec cc:2822-2828 idiom).
+            let unwrapped = {
+                let vn_r = vn.read().unwrap();
+                if vn_r.is_implied() && vn_r.is_written() {
+                    if let Some(def) = vn_r.get_def() {
+                        let def_r = def.read().unwrap();
+                        if def_r.opcode == OpCode::CPUI_CAST {
+                            def_r.get_in(0).cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(in0) = unwrapped {
+                vn = in0;
+            }
+            // cc:2794: if (vn->isFree()) continue;
+            if vn.read().unwrap().is_free() {
+                continue;
+            }
+            // cc:2795-2796: Symbol *sym = vn->getHigh()->getSymbol();
+            // if (sym == (Symbol *)0) continue; — Rugra's local-scope
+            // symbol channel is fd.high_symbols (populated by linkSymbol's
+            // attach bridge); an absent entry models BOTH the null-symbol
+            // gate and the cc:2798 getScope() != localmap gate (global
+            // database symbols attach through the high.symbol Arc channel
+            // and are never in ScopeLocal).
+            let Some(high) = vn.read().unwrap().high.clone() else {
+                continue;
+            };
+            let high_ptr = Arc::as_ptr(&high) as usize;
+            let Some(&sym_idx) = fd.high_symbols.get(&high_ptr) else {
+                continue;
+            };
+            // cc:2797: if (sym->isNameLocked()) continue; — override any
+            // unlocked name only.
+            let name_locked = fd
+                .scope
+                .as_ref()
+                .and_then(|s| s.symbols.get(sym_idx))
+                .map(|s| s.namelock)
+                .unwrap_or(true);
+            if name_locked {
+                continue;
+            }
+            rename_targets.push(sym_idx);
+        }
+        // cc:2799-2800: sym->getScope()->renameSymbol(sym,
+        //   localmap->makeNameUnique("UNRECOVERED_JUMPTABLE")). The
+        //   renames run in call-registration order so later makeNameUnique
+        //   calls see earlier renames, exactly like Ghidra's single
+        //   in-loop rename (the read-phase gates above observe no name
+        //   state, so the two-phase split is observationally identical).
+        // make_name_unique returning None is Ghidra's LowlevelError
+        // ("Unable to uniquify name"); like lookForFuncParamNames'
+        //   consumer it is unreachable below 100000 same-named symbols.
+        if rename_targets.is_empty() {
+            return;
+        }
+        if let Some(scope) = fd.scope.as_mut() {
+            for sym_idx in rename_targets {
+                if let Some(unique) = scope.make_name_unique("UNRECOVERED_JUMPTABLE") {
+                    scope.rename_symbol(sym_idx, &unique);
+                }
+            }
+        }
+    }
 }
 impl Action for ActionNameVars {
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:482
@@ -7452,14 +9772,28 @@ impl Action for ActionNameVars {
         Self::link_symbols(fd, &mut namerec);
 
         // cc:2984: data.getScopeLocal()->recoverNameRecommendationsForSymbols()
-        // — make sure recommended names hit before subfunc. RUGRA-GAP: no
-        // name-recommendation store is ported yet (no override framework).
+        // — make sure recommended names hit before subfunc. The store is
+        // ScopeLocal::name_recommend/dyn_recommend (varmap.hh:214-215),
+        // filled by collect_name_recs at the localdb-decode boundary
+        // (ActionRestructureVarnode's scope construction, the varmap.cc:476
+        // ScopeLocal::decode → collectNameRecs order) and drained here.
+        // HTTPDMAIN-F7-NAMERECOMMEND-0001: the former RUGRA-GAP ("no
+        // name-recommendation store is ported yet") is closed by the
+        // varmap.cc:1507-1618 port (recover_name_recommendations_for_symbols
+        // + add_recommend_name + collect_name_recs).
+        {
+            let mut scope_taken = fd.scope.take();
+            if let Some(scope) = scope_taken.as_mut() {
+                scope.recover_name_recommendations_for_symbols(fd);
+            }
+            fd.scope = scope_taken;
+        }
 
-        // cc:2985: lookForBadJumpTables — scan calls for bad jump tables and
-        // rename the associated symbol to "UNRECOVERED_JUMPTABLE".
-        // Rugra: implemented conservatively (no isBadJumpTable flag on
-        // FuncCallSpecs yet, so this is a no-op that matches Ghidra's
-        // behavior when no bad jump tables are detected).
+        // cc:2985: lookForBadJumpTables(data) — rename the putative switch
+        // variable symbol of each bad jump-table call site to
+        // UNRECOVERED_JUMPTABLE (coreaction.cc:2779-2803; the flag is set
+        // by truncateIndirectJump's default failure arm, flow.cc:754).
+        Self::look_for_bad_jump_tables(fd);
 
         // cc:2986: lookForFuncParamNames(data, namerec) — propagate locked
         // prototype parameter names onto the namerec symbols
@@ -7923,69 +10257,132 @@ impl Action for ActionRestrictLocal {
     // Ghidra: coreaction.cc:1957 ActionRestrictLocal::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestrictLocal::apply (coreaction.cc:1957-2001).
-        // Collect all mark_not_mapped ranges first, then apply to scope
-        // at the end to avoid borrow conflicts.
+        // Ghidra calls ScopeLocal::markNotMapped inline; Rugra's scope lives
+        // in fd.scope, so the calls are buffered and replayed in collection
+        // order once the fd borrows are dropped (the examinations below
+        // never read scope state, so deferral is observationally identical).
         let mut unmap_ranges: Vec<(u64, i32, bool)> = Vec::new();
 
-        // Loop 1: For each call with locked stack params, markNotMapped.
-        // Faithful to coreaction.cc:1967-1981.
+        // Loop 1 (cc:1967-1981): for each call with locked inputs and a
+        // resolved spacebase offset, every parameter whose storage address
+        // is in the spacebase (stack) space marks the caller-side
+        // outgoing-argument slot unmapped with parameter=true:
+        //   off = addr.getSpace()->wrapOffset(fc->getSpacebaseOffset()
+        //                                      + addr.getOffset())
+        // (cc:1977-1979). Rugra's AddressSpace::Stack is the stack
+        // spacebase space (IPTR_SPACEBASE); wrapOffset for the 64-bit
+        // stack is the modulo-2^64 wrap of the i128 sum.
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            let fc = match fd.get_call_specs(i) { Some(fc) => fc, None => continue ,
+            let (spacebase_offset, param_decisions): (i64, Vec<(crate::space::AddressSpace, u64, i32)>) = {
+                let fc = match fd.get_call_specs(i) {
+                    Some(fc) => fc,
+                    None => continue,
+                };
+                if !fc.is_input_locked() {
+                    continue;
+                }
+                // cc:1972: if (fc->getSpacebaseOffset() ==
+                // FuncCallSpecs::offset_unknown) continue;
+                if !fc.has_spacebase_offset() {
+                    continue;
+                }
+                let decisions = fc
+                    .prototype
+                    .parameters
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.address_space,
+                            p.address.as_u64(),
+                            p.data_type.get_size() as i32,
+                        )
+                    })
+                    .collect();
+                (fc.get_spacebase_offset(), decisions)
             };
-            if !fc.is_input_locked() { continue; }
-            if !fc.has_spacebase_offset() { continue; }
-            let so = fc.get_spacebase_offset();
-            for p in &fc.prototype.parameters {
-                if p.address.as_u64() > 0x7FFF_FFFF {
-                    let off = (so as u64).wrapping_add(p.address.as_u64());
-                    unmap_ranges.push((off, p.data_type.get_size() as i32, true));
+            for (space, paddr, size) in param_decisions {
+                // cc:1977: if (addr.getSpace()->getType() != IPTR_SPACEBASE)
+                //   continue;
+                if space != crate::space::AddressSpace::Stack {
+                    continue;
                 }
+                let off = ((spacebase_offset as i128 + paddr as i128)
+                    .rem_euclid(1i128 << 64)) as u64;
+                unmap_ranges.push((off, size, true));
             }
         }
 
-        // Loop 2: For each saved-register effect, find COPY ops writing to
-        // stack and mark those locations as not-mapped.
-        // Faithful to coreaction.cc:1983-2000.
-        let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effects.clone();
+        // Loop 2 (cc:1983-2000): for each non-killedbycall effect record of
+        // the function's own prototype, find the INPUT varnode of that
+        // storage; if it is unaffected (the saved-register case), every COPY
+        // descendant writing stack storage — the spill slot
+        // (isUnaffectedStorage, varmap.hh:244: out space == scope space) —
+        // marks that slot unmapped with parameter=false.
+        // Ghidra coreaction.cc:1983-1985: iterate through
+        // `data.getFuncProto().effectBegin()/effectEnd()` — which fall back
+        // to the resolved ProtoModel's effect list when the prototype-local
+        // list is empty (fspec.cc:4243-4247). Reading the raw local field
+        // here showed analysis-time prototypes (no local records) an empty
+        // list, so the saved-register spill walk never marked the
+        // unaffected-register push slots unmapped.
+        let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effect_iter().to_vec();
         for effect in &effects {
-            if effect.get_type() == crate::fspec::EffectType::KilledByCall { continue; }
-            let effect_offset = effect.get_offset();
-            let effect_size = effect.get_size();
-            // Look for COPY ops from this register to stack storage
-            for op_ref in &fd.obank.alivelist {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY { continue; }
-                let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+            // cc:1986: if ((*eiter).getType() == EffectRecord::killedbycall)
+            //   continue;
+            if effect.get_type() == crate::fspec::EffectType::KilledByCall {
+                continue;
+            }
+            // cc:1987: vn = data.findVarnodeInput(size, address) — the
+            // EffectRecord address is (space, offset); the bank lookup is
+            // space-qualified. (BANK-FINDINPUT-SPACE-0001)
+            let Some(vn_arc) =
+                fd.find_varnode_input(effect.get_size() as usize, effect.space, crate::address::Address::new(effect.get_offset()))
+            else {
+                continue;
+            };
+            // cc:1988: if ((vn != 0) && (vn->isUnaffected()))
+            if !vn_arc.read().unwrap().is_unaffected() {
+                continue;
+            }
+            let descend_refs: Vec<_> = {
+                let vn = vn_arc.read().unwrap();
+                vn.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for op_ref in descend_refs {
+                let (is_copy, out_stack, out_off, out_size) = {
+                    let op = op_ref.read().unwrap();
+                    if op.opcode != OpCode::CPUI_COPY {
+                        continue;
+                    }
+                    let Some(out_vn) = op.output.clone() else {
+                        continue;
+                    };
+                    let out = out_vn.read().unwrap();
+                    (
+                        true,
+                        out.get_space() == crate::space::AddressSpace::Stack,
+                        out.get_offset(),
+                        out.get_size() as i32,
+                    )
                 };
-                let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => continue ,
-                };
-                let in_g = in_vn.read().unwrap();
-                if !in_g.is_input() { continue; }
-                if in_g.get_offset() != effect_offset { continue; }
-                if in_g.get_size() as i32 != effect_size { continue; }
-                drop(in_g);
-                let out_g = out_vn.read().unwrap();
-                if out_g.get_space() == crate::space::AddressSpace::Register {
-                    unmap_ranges.push((out_g.get_offset(), out_g.get_size() as i32, false));
+                let _ = is_copy;
+                // cc:1995: if (!data.getScopeLocal()->isUnaffectedStorage(
+                //   outvn)) continue;  — varmap.hh:244: vn->getSpace()==space
+                if !out_stack {
+                    continue;
                 }
+                unmap_ranges.push((out_off, out_size, false));
             }
         }
 
-        // Apply collected unmap ranges to scope
-        let mut change = 0;
+        // Replay the buffered markNotMapped calls in collection order.
         if let Some(scope) = fd.scope.as_mut() {
             for (off, sz, param) in &unmap_ranges {
                 scope.mark_not_mapped(*off, *sz, *param);
-                change += 1;
             }
         }
-
-        if change > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "restrictlocal" mirrors ctor at coreaction.hh:813
     fn get_name(&self) -> &str { "restrictlocal" }
@@ -8534,17 +10931,19 @@ impl Action for ActionConstbase {
 
         for ctx in &trackset {
             // Ghidra: coreaction.cc:697 — Address addr(ctx.loc.space,ctx.loc.offset);
-            // (Funcdata::new_varnode_out pins the Register space for the
-            // defined varnode — correct for every pspec register-resolved
-            // tracked loc like DF register:0x20a; a non-register tracked
-            // loc needs the space-aware vbank create first.)
+            // The tracked loc's storage triple: a pspec <set> resolves either
+            // through the register map (name arm → the register's own space,
+            // x86-64 DF) or an explicit space attribute, so ctx.loc.space IS
+            // the oracle's ctor space; new_varnode_out_full threads it
+            // exactly (the old Register pin only coincided for
+            // register-resolved locs).
             let addr = crate::address::Address::new(ctx.loc.offset);
             // Ghidra: coreaction.cc:698 — PcodeOp *op = data.newOp(1,bb->getStart());
             let op = fd.new_op(
                 1, bb.read().expect("entry block read lock").get_start_addr(),
             );
             // Ghidra: coreaction.cc:699 — data.newVarnodeOut(ctx.loc.size,addr,op);
-            fd.new_varnode_out(ctx.loc.size as usize, addr, &op);
+            fd.new_varnode_out_full(ctx.loc.size as usize, ctx.loc.space, addr, &op);
             // Ghidra: coreaction.cc:700 — Varnode *vnin = data.newConstant(ctx.loc.size,ctx.val);
             let vnin = fd.new_constant(ctx.loc.size as usize, ctx.val);
             // Ghidra: coreaction.cc:701 — data.opSetOpcode(op,CPUI_COPY);
@@ -8562,10 +10961,55 @@ impl Action for ActionConstbase {
     fn get_name(&self) -> &str { "constbase" }
 }
 
+// RUGRA-GLUE: bank_has_input_intersection (VarnodeBank::hasInputIntersection,
+// varnode.cc:1536-1554, borrowed as a free function to keep the write-set
+// inside the calling action file). Ghidra probes the input-flagged def subset
+// with the query address: the first def at-or-after the address and the one
+// before it are the only candidates for intersection; both must be inputs in
+// the same space overlapping [offset, offset+size-1]. For the input class the
+// def order is (space, offset, size) — the same order as the loc tree — so the
+// probe folds to a partition_point over the loc-ordered input varnodes.
+fn bank_has_input_intersection(
+    fd: &Funcdata,
+    space: crate::space::AddressSpace,
+    offset: u64,
+    size: usize,
+) -> bool {
+    let end = offset.wrapping_add(size.saturating_sub(1) as u64);
+    // Same-space projection only: the query address pins the space, and the
+    // def/loc orders agree on the offset within one space.
+    let inputs: Vec<_> = fd
+        .vbank
+        .loc_tree
+        .iter()
+        .map(|e| e.0.clone())
+        .filter(|vn| {
+            let guard = vn.read().unwrap();
+            guard.is_input() && guard.get_space() == space
+        })
+        .collect();
+    // First entry at-or-after offset within the space.
+    let pos = inputs
+        .iter()
+        .position(|vn| vn.read().unwrap().get_offset() >= offset)
+        .unwrap_or(inputs.len());
+    let intersects = |vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+        let guard = vn.read().unwrap();
+        let last = guard.get_offset() + guard.get_size().saturating_sub(1) as u64;
+        guard.get_offset() <= end && last >= offset
+    };
+    if pos < inputs.len() && intersects(&inputs[pos]) {
+        return true;
+    }
+    if pos > 0 && intersects(&inputs[pos - 1]) {
+        return true;
+    }
+    false
+}
+
 /// Input prototype analysis. Faithful to `ActionInputPrototype`
 /// (coreaction.cc).
-pub struct ActionInputPrototype;
-impl ActionInputPrototype {
+pub struct ActionInputPrototype;impl ActionInputPrototype {
     // Ghidra: coreaction.hh:892 ActionInputPrototype (constructor mirror)
     pub fn new() -> Self { Self }
 }
@@ -8578,75 +11022,242 @@ impl Action for ActionInputPrototype {
     // Ghidra: coreaction.cc:4707 ActionInputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
-        // If the function's input prototype is NOT locked, derive it from
-        // the input varnodes:
-        // 1. Create ParamActive and register trials for each input varnode
-        //    that could be a parameter (register-based, not spacebase/persist)
-        // 2. Mark active trials (varnodes with descendants)
-        // 3. Resolve the model and derive the input map
-        // 4. Create unreferenced input varnodes for unused param slots
-        if fd.funcp.is_input_locked() {
-            return Ok(action_status::NO_CHANGE);
+        // cc:4714 — data.getScopeLocal()->clearCategory(Symbol::fake_input).
+        // Rugra's ScopeLocal lives on fd.scope (created by the earlier
+        // ActionRestructureVarnode pass); a missing scope is the no-scope
+        // glue state, where the clear is vacuous.
+        if let Some(scope) = fd.scope.as_mut() {
+            scope.clear_category(crate::varmap::symbol_category::FAKE_INPUT);
         }
-        // Collect input varnodes that could be parameters
-        let input_vns: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .filter(|v| {
-                let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
-            })
-            .collect();
-        if input_vns.is_empty() {
-            return Ok(action_status::NO_CHANGE);
-        }
-        // Build ParamActive and register trials
-        let mut active = crate::fspec::ParamActive::new(false);
-        for vn_arc in &input_vns {
-            let vn = vn_arc.read().unwrap();
-            let slot = active.get_num_trials();
-            active.register_trial_in_space(
-                vn.get_space(),
-                crate::address::Address::new(vn.get_offset()),
-                vn.get_size() as i32,
-            );
-            // Mark active if the varnode has descendants (is used)
-            if vn.count_descends() > 0 {
-                // Faithful: active.getTrial(slot).markActive()
-                // Rugra doesn't expose trial mutably, so we count active inputs
+        // cc:4715 — data.getFuncProto().clearUnlockedInput()
+        fd.funcp.clear_unlocked_input();
+        // cc:4715 store tail — FuncProto::clearUnlockedInput (fspec.cc:3994)
+        // routes through the ScopeLocal-backed ProtoStoreSymbol:
+        // store->clearAllInputs() → ProtoStoreSymbol::clearAllInputs →
+        // scope->clearCategory(0) (fspec.cc:3233-3236).
+        // The flat store folds the category clear here; without it every
+        // re-run of this action (action restart cycles) would accumulate
+        // stale function_parameter symbols against re-derived storage.
+        if !fd.funcp.is_input_locked() {
+            if let Some(scope) = fd.scope.as_mut() {
+                scope.clear_category(crate::varmap::symbol_category::FUNCTION_PARAMETER);
             }
         }
-        // deriveInputMap would assign types and finalize params.
-        // For now, update the function's parameter count to match active inputs.
-        let active_count = input_vns
-            .iter()
-            .filter(|v| v.read().unwrap().count_descends() > 0)
-            .count();
-        // Only update if we found params and the prototype is empty
-        if active_count > 0 && fd.funcp.parameters.is_empty() {
-            // Create basic ProtoParameters for each active input
+        if !fd.funcp.is_input_locked() {
+            // cc:4717-4730 — iterate the VarnodeDefSet for Varnode::input in
+            // def order (VarnodeCompareDefLoc: space, offset, size) and
+            // register a trial for every input whose storage the model
+            // accepts as a possible input parameter.
+            let input_vns: Vec<_> = fd
+                .vbank
+                .def_tree
+                .iter()
+                .map(|r| r.0.clone())
+                .filter(|v| v.read().unwrap().is_input())
+                .collect();
+            let mut active = crate::fspec::ParamActive::new(false);
+            let mut triallist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+                Vec::new();
             for vn_arc in &input_vns {
-                let vn = vn_arc.read().unwrap();
-                if vn.count_descends() == 0 { continue; }
-                let dt = std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(),
-                            vn.get_size(),
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        )
-                    ,
-                )
-                );
-                fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", fd.funcp.parameters.len() + 1),
-                    dt,
-                    crate::address::Address::new(vn.get_offset()),
-                ));
+                let (space, offset, size) = {
+                    let vn = vn_arc.read().unwrap();
+                    (vn.get_space(), vn.get_offset(), vn.get_size())
+                };
+                // cc:4723 — data.getFuncProto().possibleInputParam(...)
+                if fd
+                    .funcp
+                    .possible_input_param(offset, size as i32, space)
+                {
+                    // cc:4724 — int4 slot = active.getNumTrials() (the index
+                    // of the trial registerTrial is about to push).
+                    let slot = active.get_num_trials();
+                    // cc:4725 — active.registerTrial(vn->getAddr(),vn->getSize())
+                    active.register_trial_in_space(
+                        space,
+                        crate::address::Address::new(offset),
+                        size as i32,
+                    );
+                    // cc:4726-4727 — if (!vn->hasNoDescend()) markActive()
+                    if vn_arc.read().unwrap().count_descends() > 0 {
+                        active.get_trial_mut(slot).mark_active();
+                    }
+                    triallist.push(vn_arc.clone());
+                }
+            }
+            // FuncProto::setScope fallback (fspec.cc:3879-3885 guarantees a
+            // model is attached by falling back to the Architecture's
+            // defaultfp): bind the registry model for the prototype's
+            // convention name, else the Architecture default, before the
+            // model dispatches below — the same precedence as varmap's
+            // func_proto_param_range glue.
+            if !fd.funcp.has_model() {
+                if let Some(arch) = &fd.arch {
+                    let name = fd.funcp.get_model_name().to_string();
+                    let resolved = arch
+                        .proto_models
+                        .get(&name)
+                        .cloned()
+                        .or_else(|| arch.defaultfp.clone());
+                    if let Some(model) = resolved {
+                        fd.funcp.set_model(Some(model));
+                    }
+                }
+            }
+            // cc:4731 — data.getFuncProto().resolveModel(&active)
+            fd.funcp.resolve_model();
+            // cc:4732 — data.getFuncProto().deriveInputMap(&active)
+            fd.funcp.derive_input_map(&mut active);
+            // cc:4733-4749 — create any unreferenced input varnodes for
+            // model-required slots that fillinMap marked used.
+            for i in 0..active.get_num_trials() {
+                let (is_unref, is_used) = {
+                    let trial = active.get_trial(i);
+                    (trial.is_unref(), trial.is_used())
+                };
+                if !is_unref || !is_used {
+                    continue;
+                }
+                let (space, addr, size) = {
+                    let trial = active.get_trial(i);
+                    (trial.get_space(), trial.get_address(), trial.get_size())
+                };
+                // cc:4737 — data.hasInputIntersection(paramtrial.getSize(),
+                // paramtrial.getAddress()): VarnodeBank::hasInputIntersection
+                // (varnode.cc:1536-1554) — the def-order next/previous probe
+                // folded over the loc-ordered input bank.
+                if bank_has_input_intersection(fd, space, addr.as_u64(), size as usize) {
+                    // cc:4738-4739 — something in the way: don't create it.
+                    active.get_trial_mut(i).mark_no_use();
+                } else {
+                    // cc:4742-4743 — vn = data.newVarnode(size,addr);
+                    // vn = data.setInputVarnode(vn)
+                    let vn = fd.new_varnode_in_space(size as usize, space, addr);
+                    let vn = fd.set_input_varnode(vn);
+                    // cc:4744-4746 — slot = triallist.size(); push; setSlot
+                    let slot = triallist.len();
+                    triallist.push(vn);
+                    active.get_trial_mut(i).set_slot((slot + 1) as i32);
+                }
+            }
+            // cc:4750-4753 — updateInputTypes (high phase on) or
+            // updateInputNoTypes. ActionAssignHigh (analysis group) runs
+            // before fixateproto, so highs exist here as in Ghidra.
+            //
+            // The FuncProto store fold: Ghidra's `this` FuncProto carries a
+            // ScopeLocal-backed ProtoStoreSymbol (FuncProto::setScope,
+            // fspec.cc:3879-3885, constructed with restricted_usepoint =
+            // baseaddr-1 at funcdata.cc:69), so every store->setInput in
+            // updateInputTypes/NoTypes installs the function_parameter
+            // category symbol into the ScopeLocal (fspec.cc:3147-3183) that
+            // ActionNameVars::linkSymbols then attaches to the input high
+            // (queryProperties at the input's entry-1 usepoint) — the
+            // symbol that names the parameter `param_N` in the body.
+            // Rust's FuncProto keeps only the flat `parameters` store, so
+            // the symbol install is folded into this closure, passed down
+            // and invoked at exactly the store->setInput call points.
+            // Split borrow for the store fold below: fd.scope backs the
+            // symbol install while fd.funcp carries the flat update.
+            let mut scope_opt = fd.scope.as_mut();
+            let baseaddr_minus1 = fd.baseaddr.as_u64().wrapping_sub(1);
+            let mut store_install =
+                |count: usize, pieces: &crate::fspec::ParameterPieces| {
+                    // No-scope glue state (same as the cc:4714 note above):
+                    // Ghidra's FuncProto always carries the ScopeLocal-backed
+                    // store (setScope at funcdata.cc:69), so a Rust Funcdata
+                    // without a scope has no store side effect to fold.
+                    if scope_opt.is_none() {
+                        return;
+                    }
+                    // fspec.cc:3151-3161 — existing category symbol at slot
+                    // count; keep it when storage matches, removeSymbol on
+                    // drift.
+                    let mut existing = scope_opt
+                        .as_ref()
+                        .and_then(|s| {
+                            s.get_category_symbol(
+                                crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                                count as i32,
+                            )
+                        });
+                    if let Some(idx) = existing {
+                        let drift = {
+                            let sym = &scope_opt.as_ref().unwrap().symbols[idx];
+                            sym.space != pieces.space
+                                || sym.start != pieces.addr.as_u64()
+                                || sym.size
+                                    != pieces
+                                        .ty
+                                        .as_ref()
+                                        .map(|t| t.get_size() as i32)
+                                        .unwrap_or(1)
+                        };
+                        if drift {
+                            scope_opt.as_mut().unwrap().remove_symbol(idx);
+                            existing = None;
+                        }
+                    }
+                    if existing.is_none() {
+                        // fspec.cc:3163-3174 — the addSymbol usepoint:
+                        // discoverScope's walk keeps the INVALID usepoint
+                        // only when a scope's range tree owns the storage
+                        // (the resetLocalWindow localRange ∪ paramRange
+                        // window, i.e. MEMORY-class stack params); register
+                        // storage and anything unowned falls back to
+                        // restricted_usepoint = baseaddr-1 (fspec.hh:1288,
+                        // funcdata.cc:69). The uselimit difference drives
+                        // Scope::addMap's addrtied rule (database.cc:
+                        // 1149-1150): stack params addrtied, register
+                        // params single-point {baseaddr-1} — the same
+                        // ProtoStoreSymbol usepoint semantics the
+                        // input-locked bootstrap install applies
+                        // (ActionRestructureVarnode platform-parameter
+                        // path).
+                        let in_scope = scope_opt
+                            .as_ref()
+                            .map(|s| {
+                                s.in_scope(
+                                    pieces.space,
+                                    pieces.addr.as_u64(),
+                                    pieces.ty.as_ref().map(|t| t.get_size()).unwrap_or(1)
+                                        as i64,
+                                )
+                            })
+                            .unwrap_or(false);
+                        let param_usepoint =
+                            if in_scope { None } else { Some(baseaddr_minus1) };
+                        let nm = format!("param_{}", count + 1);
+                        let idx = scope_opt.as_mut().unwrap().add_symbol(
+                            pieces.space,
+                            &nm,
+                            pieces.ty.clone(),
+                            pieces.addr.as_u64(),
+                            param_usepoint,
+                        );
+                        scope_opt.as_mut().unwrap().set_category(
+                            idx,
+                            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                            count as i32,
+                        );
+                        // pieces.flags == 0 on both updateInputTypes paths,
+                        // so the indirectstorage/hiddenretparm/typelock/
+                        // namelock mirror arms (fspec.cc:3175-3191) are
+                        // unreachable here.
+                    }
+                };
+            if (fd.flags & crate::funcdata::funcdata_flags::HIGHLEVEL_ON) != 0 {
+                fd.funcp.update_input_types(&triallist, &active, &|_vn| {
+                    // persist-branch findDisjointCover stand-in: the mirror
+                    // corpus registers no persist inputs; the (addr,size)
+                    // fold matches the varnode's own cover.
+                    let guard = _vn.read().unwrap();
+                    (guard.get_addr().clone(), guard.get_size() as i32)
+                }, &mut store_install);
+            } else {
+                fd.funcp.update_input_no_types(&triallist, &active, &mut store_install);
             }
         }
+        // cc:4755 — data.clearDeadVarnodes()
+        fd.clear_dead_varnodes();
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "inputprototype" mirrors ctor at coreaction.hh:892
@@ -8668,58 +11279,51 @@ impl Action for ActionOutputPrototype {
 
     // Ghidra: coreaction.cc:4765 ActionOutputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
-        // If the return type is NOT locked, derive it from the first RETURN op.
-        // If RETURN has >1 input, the function has a return value (slot 1).
-        // Update FuncProto.return_type based on the return varnode's size/type.
-        use crate::opcodes::OpCode;
-
-        // Find the first RETURN op with a return value.
-        let return_vn = fd.obank.alivelist.iter()
-            .find_map(|r| {
-                let op = r.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_RETURN { return None; }
-                if op.is_dead() { return None; }
-                if op.num_input() < 2 { return None; }
-                op.inrefs.get(1).cloned()
-            });
-
-        if let Some(vn_arc) = return_vn {
-            let vn = vn_arc.read().unwrap();
-            let size = vn.get_size();
-            // Determine return type from varnode size
-            let new_return_type = match size {
-                0 => fd.funcp.return_type.clone(), // Keep existing
-                1 => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "byte".to_string(), 1,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-                4 => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "int".to_string(), 4,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-                _ => std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(), size,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        ),
-                )),
-            };
-            // Only update if the current return type is void or unknown
-            let is_void = matches!(
-                fd.funcp.return_type.as_ref(),
-                crate::type_system::datatype::Datatype::Void(_)
-            );
-            if is_void {
-                fd.funcp.return_type = new_return_type;
-            }
+        // Faithful port of ActionOutputPrototype::apply (coreaction.cc:4765
+        // -4782). When the output parameter is not type-locked (Rugra models
+        // Ghidra's isSizeTypeLocked as output_type_locked with a size-derived
+        // TYPE_UNKNOWN return; update_output_types applies the same
+        // size-lock override rule), rebuild the return value from the first
+        // non-dead, non-halt RETURN op's inputs (coreaction.cc:4769-4775
+        // getFirstReturnOp + the 1..numInput input walk) via
+        // FuncProto::updateOutputTypes (fspec.cc:4136-4159):
+        //   - empty trial list -> clearOutput() (void return);
+        //   - otherwise pieces.type = the RETURN input's high type, which in
+        //     Ghidra is the varnode's own type — every untyped varnode is
+        //     CREATED with getBase(size,TYPE_UNKNOWN) (Funcdata::newVarnode/
+        //     newUnique/newConstant, funcdata_varnode.cc:83/148/…), so an
+        //     unconstrained return value yields `undefined8` — the locked
+        //     12.0.4 witness for the httpd switchD_0017766d::default stub
+        //     (`undefined8 ...(void) { return 0xfffffffd; }`). The former
+        //     simplified int/long size table printed `long` there.
+        if !fd.funcp.output_type_locked {
+            // Funcdata::getFirstReturnOp (funcdata.cc): first RETURN in the
+            // code-list's insertion order, skipping dead and halt ops.
+            let first_return_inputs: Vec<
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            > = fd
+                .obank
+                .returnlist
+                .iter()
+                .find(|op_ref| {
+                    let op = op_ref.0.read().unwrap();
+                    // Funcdata::getFirstReturnOp: skip isDead() and
+                    // getHaltType()!=0 (the Rugra HALT flag stands in for
+                    // Ghidra's halt marker).
+                    !op.is_dead() && (op.flags & crate::op::pcodeop_flags::HALT) == 0
+                })
+                .map(|op_ref| {
+                    let op = op_ref.0.read().unwrap();
+                    op.inrefs.iter().skip(1).cloned().collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            fd.funcp
+                .update_output_types(&first_return_inputs, &|_proto| {
+                    // Size-lock override lookups are unreachable on this
+                    // path (output_type_locked == false); the callback is a
+                    // dead parameter for the not-locked entry branch.
+                    (crate::address::Address::new(0), 0, false)
+                });
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -8748,35 +11352,37 @@ impl Action for ActionPrototypeTypes {
         // 3. If output locked: insert return varnodes for each RETURN
         // 4. Else: init active output gathering
 
-        // Step 1 (coreaction.cc:4615-4619, FUNCPROTO-MODEL-BIND-0001):
+        // Step 1 (coreaction.cc:4615-4619, PLTSTUB-WARNLOSS-0001 adjudication):
         //   ProtoModel *evalfp = data.getArch()->evalfp_current;
         //   if (evalfp == 0) evalfp = data.getArch()->defaultfp;
-        //   if ((!data.getFuncProto().isModelLocked()) && !hasMatchingModel(evalfp))
+        //   if ((!data.getFuncProto().isModelLocked()) && !data.getFuncProto().hasMatchingModel(evalfp))
         //     data.getFuncProto().setModel(evalfp);
-        // The locked guard is load-bearing: a model-locked prototype (DWARF/
-        // PLT locked storage) is never overridden by the evaluation model.
+        // The gate is the single conjunction: a model-locked prototype is
+        // NEVER given the evaluation model — not even to repair a modelless
+        // state. Ghidra maintains "locked => model != NULL" at the
+        // signature-decode boundary instead (FuncProto::decode ATTRIB_MODEL,
+        // fspec.cc:4690-4698: an unrecognized convention name maps to
+        // createUnknownModel — an UnknownProtoModel cloning the default
+        // model's behavior while reporting isUnknown(), architecture.cc
+        // :1159-1166), so the locked unknown-model identity survives here
+        // and stays observable to ActionPrototypeWarnings
+        // (coreaction.cc:4901-4908). The earlier "install the default model
+        // when modelless, even if locked" arm inverted this oracle stance
+        // and destroyed that identity (PLT/DWARF overlays lost their
+        // "Unknown calling convention" warning headers). setInputLock(true)
+        // already couples to model_locked exactly as fspec.cc:3924-3925
+        // ("Locking input locks the model"), so a locked overlay keeps its
+        // identity through this action; a modelless+locked FuncProto (a
+        // Rugra-only transitional form Ghidra cannot reach) likewise keeps
+        // its identity rather than being silently repaired here.
         if let Some(arch) = fd.get_arch() {
             let evalfp = arch
                 .evalfp_current
                 .clone()
                 .or_else(|| arch.defaultfp.clone());
             if let Some(evalfp) = evalfp {
-                if !fd.funcp.has_model() {
-                    // Ghidra's FuncProto always carries a resolved model
-                    // (FuncProto::decode resolves the name; unknown names map
-                    // to createUnknownModel, fspec.cc:4697). Rugra's
-                    // DWARF/PLT locked-signature path can leave model=None
-                    // while model_locked=true, which breaks every model
-                    // consult downstream. Restore the invariant by
-                    // installing the default model; the lock only guards
-                    // against replacement, which this is not.
-                    fd.funcp.set_model(Some(evalfp.clone()));
-                }
-                if !fd.funcp.is_model_locked() {
-                    let matches = fd.funcp.has_matching_model(&evalfp);
-                    if !matches {
-                        fd.funcp.set_model(Some(evalfp));
-                    }
+                if !fd.funcp.is_model_locked() && !fd.funcp.has_matching_model(&evalfp) {
+                    fd.funcp.set_model(Some(evalfp));
                 }
             }
         }
@@ -8897,7 +11503,6 @@ impl Action for ActionActiveParam {
         let mut aliascheck = crate::varmap::AliasChecker::new(1);
         aliascheck.gather_internal(fd);
         let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
-        let has_active_output = fd.active_output.is_some();
         let n_calls = fd.num_calls();
         let debug = std::env::var("RUGRA_DEBUG_ACTIVEPARAM").is_ok();
         if debug && n_calls > 0 { eprintln!("[ACTIVEPARAM-DBG] {} n_calls={}", fd.name, n_calls); }
@@ -8923,10 +11528,34 @@ impl Action for ActionActiveParam {
             };
             // Ghidra line 1742-1743: checkInputTrialUse if !fullyChecked.
             if !fully_checked_before {
-                let replace_slots = if let (Some(op_ref), Some(mut fc)) =
-                    (&op_ref, fd.get_call_specs_mut(i))
+                let replace_slots = if let (Some(op_ref), Some(fc_arc)) =
+                    (&op_ref, fd.callspecs.get(i).cloned())
                 {
-                    fc.check_input_trial_use(op_ref, has_active_output, &aliascheck, maxancestor)
+                    // Ghidra hands both `fc` and `data` into checkInputTrialUse
+                    // as plain pointers. Rust cannot hold this spec's write
+                    // guard across the walk: checkCallDoubleUse (deep inside
+                    // onlyOpUse) resolves other call specs through
+                    // Funcdata::getCallSpecs, whose fallback scan re-enters
+                    // every spec lock including this one. Park the spec value
+                    // out of its RwLock for the walk instead — the parked slot
+                    // holds a placeholder with a dangling op Weak, so the
+                    // identity scans can never match it, exactly like Ghidra
+                    // where no concurrent mutation exists.
+                    let mut spec = {
+                        let mut guard = fc_arc.write().unwrap();
+                        let placeholder = crate::fspec::FuncCallSpecs::new(
+                            crate::address::Address::new(0),
+                            guard.prototype.clone(),
+                        );
+                        std::mem::replace(&mut *guard, placeholder)
+                    };
+                    let slots =
+                        spec.check_input_trial_use(fd, op_ref, &aliascheck, maxancestor);
+                    {
+                        let mut guard = fc_arc.write().unwrap();
+                        *guard = spec;
+                    }
+                    slots
                 } else {
                     Vec::new()
                 };
@@ -9355,75 +11984,121 @@ impl Action for ActionParamDouble {
 
 /// Unjustified parameters. Faithful to `ActionUnjustifiedParams`
 /// (coreaction.cc).
-pub struct ActionUnjustifiedParams;
+pub struct ActionUnjustifiedParams {
+    /// Ghidra's inherited protected `Action::count`: bumped once per
+    /// adjustInputVarnodes (cc:4826) while the apply return stays 0
+    /// (cc:4828); externalized to the executor through `take_count_delta`
+    /// (drives lcount<count → count_apply/repeat, action.cc:298).
+    pub count: i32,
+}
 impl ActionUnjustifiedParams {
     // Ghidra: coreaction.hh:918 ActionUnjustifiedParams (constructor mirror)
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionUnjustifiedParams {
     // Ghidra: coreaction.cc:4784 ActionUnjustifiedParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
-        // Find input varnodes whose storage is not fully covered by the
-        // prototype's parameter list. These are "unjustified" inputs that
-        // need to be adjusted (e.g. by creating a larger container param).
-        //
-        // Simplified: scan input varnodes, find any whose (space, offset)
-        // doesn't match a declared parameter. For each, create a placeholder
-        // ProtoParameter if the varnode has descendants (is used).
-        if fd.funcp.is_input_locked() {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let input_vns: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .filter(|v| {
-                let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
-            })
-            .collect();
-
-        let mut change = 0;
-        for vn_arc in &input_vns {
-            let vn = vn_arc.read().unwrap();
-            let vn_offset = vn.get_offset();
-            let vn_size = vn.get_size();
-
-            // Check if this input matches any declared parameter
-            let is_justified = fd
-                .funcp
-                .parameters
+        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4828).
+        // Walk the input VarnodeDefSet; for each input whose storage is
+        // UNJUSTIFIED within a model/locked parameter container (i.e. it
+        // occupies not-the-least-significant bytes of the container), grow
+        // the container over earlier overlapping inputs and rejustify via
+        // Funcdata::adjustInputVarnodes, then restart the walk (additions
+        // and deletions invalidate the iterator, cc:4823-4825). This action
+        // NEVER creates prototype parameters — that is ActionInputPrototype's
+        // job (fixateproto).
+        'walk: loop {
+            let input_vns: Vec<_> = fd
+                .vbank
+                .def_tree
                 .iter()
-                .any(|p| p.address.as_u64() == vn_offset
-            );
-
-            if !is_justified && vn.count_descends() > 0 {
-                // This input is used but not declared as a parameter.
-                // Create a ProtoParameter for it.
-                let dt = std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(),
-                            vn_size,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        )
-                    ,
-                )
-                );
-                fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", fd.funcp.parameters.len() + 1),
-                    dt,
-                    crate::address::Address::new(vn_offset),
-                ));
-                change += 1;
+                .map(|r| r.0.clone())
+                .filter(|v| v.read().unwrap().is_input())
+                .collect();
+            for (idx, vn_arc) in input_vns.iter().enumerate() {
+                let (space, offset, size) = {
+                    let vn = vn_arc.read().unwrap();
+                    (vn.get_space(), vn.get_offset(), vn.get_size())
+                };
+                let mut vdata = crate::fspec::VarnodeData {
+                    space,
+                    offset,
+                    size: size as i32,
+                };
+                // cc:4796 — if (!proto.unjustifiedInputParam(...)) continue
+                if !fd
+                    .funcp
+                    .unjustified_input_param(space, offset, size as i32, &mut vdata)
+                {
+                    continue;
+                }
+                // cc:4798-4820 — grow the container over earlier overlapping
+                // inputs until it stops growing / stays justified.
+                loop {
+                    let mut overlaps = false;
+                    // cc:4803-4815 — `iter2 = iter` (one PAST the current
+                    // varnode, already advanced at cc:4794) then
+                    // `while (iter2 != begiter) { --iter2; vn = *iter2; }`:
+                    // the scan starts ON the current varnode itself and
+                    // walks BACKWARD (descending def order) to the first
+                    // input. Chained straddles must complete in this one
+                    // pass — a higher input extending vdata.offset downward
+                    // turns a still-lower input into an overlap that only
+                    // this descending order observes against the updated
+                    // boundary (CR4 MISMATCH-1: an ascending exclusive scan
+                    // would permanently miss it if the grown container
+                    // rejustifies and breaks the do-while).
+                    for prev_arc in input_vns[..=idx].iter().rev() {
+                        let prev = prev_arc.read().unwrap();
+                        if prev.get_space() != vdata.space {
+                            continue;
+                        }
+                        let last = prev.get_offset() + (prev.get_size() - 1) as u64;
+                        if last >= vdata.offset && prev.get_offset() < vdata.offset {
+                            overlaps = true;
+                            let endpoint = vdata.offset + vdata.size as u64;
+                            vdata.offset = prev.get_offset();
+                            vdata.size = (endpoint - vdata.offset) as i32;
+                        }
+                    }
+                    if !overlaps {
+                        break; // cc:4817 — go with the current container
+                    }
+                    // cc:4819 — rejustify the grown container.
+                    if !fd.funcp.unjustified_input_param(
+                        vdata.space,
+                        vdata.offset,
+                        vdata.size,
+                        &mut vdata,
+                    ) {
+                        break;
+                    }
+                }
+                // cc:4822 — data.adjustInputVarnodes(vdata.getAddr(),vdata.size)
+                fd.adjust_input_varnodes(vdata.space, vdata.offset, vdata.size as usize)?;
+                // cc:4826 — count += 1: one change signal per adjust, riding
+                // the inherited count channel (harvested via
+                // take_count_delta; the apply return stays 0, cc:4828).
+                self.count += 1;
+                // cc:4823-4825 — additions and deletions happened: reset the
+                // iteration to the adjusted address by restarting the walk.
+                continue 'walk;
             }
+            break;
         }
-
+        // cc:4828 — return 0: the per-adjust change signal rides the count
+        // channel, not the return value.
         Ok(action_status::NO_CHANGE)
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:4826 `count += 1` per adjustInputVarnodes) into the
+    // Rust ActionState accumulator harvested by Action::perform
+    // (action.rs:338-339 — drives lcount<count → count_apply/repeat).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
+
     // RUGRA-GLUE: Rust Action trait get_name; "unjustparams" mirrors ctor at coreaction.hh:920 (Action(0,"unjustparams",g))
     fn get_name(&self) -> &str { "unjustparams" }
 }
@@ -9792,6 +12467,18 @@ impl ActionFuncLink {
         //   ProtoParameter *outparam = fc->getOutput();
         //   int4 sz = outparam->getSize();
         let sz = return_type.get_size().max(1);
+        // coreaction.cc:1543-1544: a 1-byte TYPE_BOOL locked output marks
+        // the call op as producing a calculated boolean. The mark fires
+        // BEFORE the storage read (cc:1545), so it survives both the
+        // spacebase-delay path (cc:1546-1550) and the immediate
+        // newVarnodeOut path (cc:1551). `isTypeRecoveryOn` channel: the
+        // per-run root reset reaches ActionStartTypes::reset
+        // (coreaction.hh:77 → setTypeRecovery(true)) before funclink runs
+        // (ifacedecomp.cc:907-908 reset-then-perform), so the flag is on in
+        // the production pipeline, matching the oracle default.
+        if sz == 1 && meta == TypeMetatype::Bool && fd.is_type_recovery_on() {
+            fd.op_mark_calculated_bool(op);
+        }
         let output_storage = match fd.get_call_specs(fc_idx) {
             Some(fc) => fc.get_output_storage(),
             None => return,
@@ -9814,10 +12501,13 @@ impl ActionFuncLink {
                 return;
             }
             // coreaction.cc:1551: data.newVarnodeOut(sz, addr, callop) —
-            // the return varnode lives at the recorded storage offset
-            // (Rugra's new_varnode_out creates it in the register space,
-            // the registered transitional divergence).
-            fd.new_varnode_out(sz, crate::address::Address::new(off), op);
+            // addr = outparam->getAddress() (cc:1545) is the output
+            // parameter's FULL storage address: RAX/register for scalars,
+            // Join for split-register returns (the trial-commit lock
+            // records the varnode's own space via set_output_parameter).
+            // The space threads through exactly; the old Register pin was
+            // wrong for Join-space locked outputs.
+            fd.new_varnode_out_full(sz, spc, crate::address::Address::new(off), op);
         } else {
             // Transitional no-storage fallback: RAX = register offset 0x0
             // (x86_lift.rs encoding), for locked prototypes whose storage
@@ -10449,38 +13139,130 @@ impl StackSolver {
 
 // Ghidra: coreaction.cc:261 ActionStackPtrFlow::analyzeExtraPop
 /// Calculate stack-pointer change across undetermined sub-functions.
-/// Structurally corresponds to `ActionStackPtrFlow::analyzeExtraPop`
-/// (coreaction.cc:261-318). It uses StackSolver to build and solve the equation
-/// system for the stack pointer, but currently only counts solved changes.
+/// Faithful to `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:261-318).
 ///
-/// **Status**: structural skeleton. D0 supplies exact callspec identity, but
-/// effective_extrapop storage and this solver's mutating write-back are still
-/// absent under `CALLSPEC-0001`. StackSolver's equation/solve core is present,
-/// but its known-extrapop INDIRECT branch and this consumer are incomplete.
+/// cc:264-267: reads the architecture's `evalfp_called` (or `defaultfp`)
+/// model and returns immediately when its extra-pop is known — the solver
+/// only runs for unknown-extrapop platforms. cc:269-279: StackSolver
+/// build+solve. cc:281-316: for each solved variable (index 1..n, index 0
+/// is the stack-pointer input): solution 65535 prints one header warning
+/// per call; a variable defined by a call-attached INDIRECT gets
+/// `fc->setEffectiveExtraPop(soln-soln2)` (companion solution, 0 when
+/// absent); every solved variable's defining op is rewritten to
+/// `INT_ADD(spcbaseInput, soln)` via opSetOpcode+opSetAllInput.
 pub fn analyze_extra_pop(
-    data: &crate::funcdata::Funcdata,
+    fd: &mut Funcdata,
     stackspace_spacebase: crate::address::Address,
     spacebase_size: usize,
     _spcbase: i32,
-) -> i32 {
-    let mut solver = StackSolver::new();
-    solver.build(data, stackspace_spacebase, spacebase_size);
-    solver.solve();
-    let mut numchange = 0;
-    // Ghidra cc:303-316: walk solutions, for each INDIRECT-companion varnode
-    // with a valid solution, set the callspec's extrapop. Exact owner lookup is
-    // available, but effective_extrapop/write-back is CALLSPEC-0001; count the
-    // changes without mutating the owner.
-    for i in 0..solver.get_num_variables() {
-        let sol = solver.get_solution(i);
-        let comp = solver.get_companion(i);
-        if sol != StackSolver::UNSOLVED && comp >= 0 {
-            // Would write: fc->setEffectiveExtraPop(sol-sol2) on the exact
-            // callspec for vnlist[i]'s INDIRECT op. CALLSPEC-0001.
-            numchange += 1;
+) {
+    use crate::opcodes::OpCode;
+    // cc:264-267: ProtoModel *myfp = evalfp_called ?: defaultfp;
+    //               if (myfp->getExtraPop() != extrapop_unknown) return;
+    // No Architecture bound (legacy fixtures): no model can certify a known
+    // extrapop, so the solver path stays reachable exactly as a null-model
+    // oracle would never take the early-out.
+    let myfp_extrapop = fd.get_arch().and_then(|arch| {
+        arch.evalfp_called
+            .clone()
+            .or_else(|| arch.defaultfp.clone())
+            .map(|m| m.extrapop)
+    });
+    if let Some(epop) = myfp_extrapop {
+        if epop != crate::fspec::EXTRAPOP_UNKNOWN_FULL {
+            return;
         }
     }
-    numchange
+    // cc:269-277: solver.build inside try/catch LowlevelError — a build
+    // failure warns and returns. Rugra's StackSolver::build reports gaps
+    // through the missed-variables counter instead of failing closed; the
+    // "not setup normally" header-warning path has no faithful trigger.
+    let mut solver = StackSolver::new();
+    solver.build(fd, stackspace_spacebase, spacebase_size);
+    // cc:278: nothing to solve.
+    if solver.get_num_variables() == 0 {
+        return;
+    }
+    // cc:279
+    solver.solve();
+
+    // cc:281: Varnode *invn = solver.getVariable(0);
+    let Some(invn) = solver.get_variable(0).cloned() else {
+        return;
+    };
+    // cc:282: bool warningprinted = false;
+    let mut warningprinted = false;
+
+    // cc:284: for(int4 i=1;i<solver.getNumVariables();++i)
+    for i in 1..solver.get_num_variables() {
+        let Some(vn) = solver.get_variable(i).cloned() else {
+            continue;
+        };
+        // cc:286: int4 soln = solver.getSolution(i);
+        let soln = solver.get_solution(i);
+        // cc:287-293: 65535 = unable to track; one header warning total.
+        if soln == StackSolver::UNSOLVED {
+            if !warningprinted {
+                // cc:289: "Unable to track spacebase fully for "
+                //         + stackspace->getName()
+                fd.warning_header("Unable to track spacebase fully for stack");
+                warningprinted = true;
+            }
+            continue;
+        }
+        // cc:294: PcodeOp *op = vn->getDef();
+        let def_arc = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let Some(def_arc) = def_arc else {
+            continue;
+        };
+        let op = crate::op::PcodeOpRef(def_arc);
+
+        // cc:296-309: INDIRECT whose iop input references a CALL op →
+        // setEffectiveExtraPop(soln - soln2) on that call's FuncCallSpecs.
+        if op.0.read().unwrap().opcode == OpCode::CPUI_INDIRECT {
+            let iopvn = op.0.read().unwrap().inrefs.get(1).cloned();
+            if let Some(iopvn) = iopvn {
+                let is_iop = iopvn.read().unwrap().get_space().is_iop();
+                if is_iop {
+                    // cc:299: PcodeOp *iop = PcodeOp::getOpFromConst(...)
+                    if let Some(iop) = fd.get_op_from_const(&iopvn) {
+                        // cc:300: FuncCallSpecs *fc = data.getCallSpecs(iop)
+                        for ci in 0..fd.num_calls() {
+                            let attached = fd
+                                .get_call_specs(ci)
+                                .and_then(|fc| fc.op.upgrade())
+                                .map(|o| std::sync::Arc::ptr_eq(&o, &iop.0))
+                                .unwrap_or(false);
+                            if !attached {
+                                continue;
+                            }
+                            // cc:302-305: soln2 from the companion equation,
+                            // 0 when there is no companion.
+                            let comp = solver.get_companion(i);
+                            let soln2 = if comp >= 0 {
+                                solver.get_solution(comp as usize)
+                            } else {
+                                0
+                            };
+                            // cc:306: fc->setEffectiveExtraPop(soln-soln2)
+                            if let Some(mut fc) = fd.get_call_specs_mut(ci) {
+                                fc.set_effective_extrapop(soln - soln2);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // cc:310-315: rewrite the defining op to INT_ADD(invn, soln).
+        let sz = invn.read().unwrap().get_size();
+        let paramlist = vec![
+            invn.clone(),
+            fd.new_constant(sz, (soln as u64) & crate::address::calc_mask(sz)),
+        ];
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        fd.op_set_all_input(&op, &paramlist);
+    }
 }
 
 /// (coreaction.cc:261-499). Repairs "stack pointer clogs": an INT_ADD on the
@@ -10763,18 +13545,14 @@ impl Action for ActionStackPtrFlow {
             self.count += 1;
         }
         if numchange == 0 {
-            // cc:495 analyzeExtraPop. The cc:264-267 guard reads the
-            // architecture's evalfp_called/defaultfp proto model and elides
-            // the solver when the model's extra-pop is known; Rugra reads the
-            // function prototype's resolved extra_pop (same "known" answer in
-            // the default pipeline once the model is installed). The unknown
-            // path runs StackSolver — its callspec write-back is still
-            // unwired (see analyze_extra_pop), tracked by
-            // PIPE-STACKSTALL-COUNT-0001's solver residual.
-            if fd.funcp.get_extra_pop() == crate::fspec::EXTRAPOP_UNKNOWN_FULL {
-                if let Some((spacebase_addr, spacebase_size)) = spacebase_loc {
-                    analyze_extra_pop(fd, spacebase_addr, spacebase_size, 0);
-                }
+            // cc:495 analyzeExtraPop. The cc:264-267 guard (evalfp_called /
+            // defaultfp model extrapop known → elide the solver) now lives
+            // inside analyze_extra_pop itself, exactly as in the oracle; the
+            // earlier funcp-based read here was a projection of the same
+            // "known" answer, retired with the write-back port
+            // (HTTPD-CALL-PUSH-0001 RC3).
+            if let Some((spacebase_addr, spacebase_size)) = spacebase_loc {
+                analyze_extra_pop(fd, spacebase_addr, spacebase_size, 0);
             }
             // cc:496 — analysis finished on a clean pass.
             self.analysis_finished = true;
@@ -10921,6 +13699,7 @@ impl Action for ActionExtraPopSetup {
         let sb_size = arch.stack_pointer_size;
 
         let n = fd.num_calls();
+        let mut set_eff_pops: Vec<(usize, i32)> = Vec::new();
         for i in 0..n {
             // cc:1447-1448: fc = data.getCallSpecs(i); skip when extraPop==0.
             let (call_op, extra_pop) = {
@@ -10937,10 +13716,19 @@ impl Action for ActionExtraPopSetup {
                 None => continue,
             };
             let op_addr = call_op.0.read().unwrap().get_addr();
-            // cc:1449-1451: op = newOp(2, call addr); out = newVarnodeOut(sb)
-            // — a REGISTER-space varnode at the stack-pointer address.
+            // cc:1443-1451: sb_addr = Address(point.space, point.offset)
+            // from stackspace->getSpacebase(0) — the out varnode lives in
+            // the spacebase point's OWN space. arch.stack_pointer_space IS
+            // point.space (decoded from <stackpointer> register record,
+            // x86-64 RSP in the register space, so the old Register pin
+            // coincided); the space now threads explicitly like cc:1444.
             let op = fd.new_op(2, op_addr);
-            fd.new_varnode_out(sb_size, crate::address::Address::new(sb_offset), &op);
+            fd.new_varnode_out_full(
+                sb_size,
+                sb_space,
+                crate::address::Address::new(sb_offset),
+                &op,
+            );
             // cc:1452: in(0) = newVarnode(sb) — a FREE register-space varnode
             // at the same address; heritage links it to the most recent RSP
             // definition before the call.
@@ -10949,10 +13737,11 @@ impl Action for ActionExtraPopSetup {
                 .create_with_space(sb_size, sb_space, sb_offset);
             fd.op_set_input(&op, invn, 0);
             if extra_pop != crate::fspec::EXTRAPOP_UNKNOWN_FULL {
-                // cc:1453-1457: setEffectiveExtraPop (bookkeeping; Rugra's
-                // FuncCallSpecs has no effective_extrapop field yet — the
-                // value is only read back by FuncCallSpecs consumers that
-                // Rugra has not ported) + INT_ADD form inserted AFTER call.
+                // cc:1453-1454: we know exactly how the stack pointer is
+                // changed — record it on the callspec
+                // (`fc->setEffectiveExtraPop(fc->getExtraPop())`), then the
+                // INT_ADD form is inserted AFTER the call (cc:1455-1457).
+                set_eff_pops.push((i, extra_pop));
                 fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
                 let pop_c = fd.new_constant(sb_size, extra_pop as u64);
                 fd.op_set_input(&op, pop_c, 1);
@@ -10964,6 +13753,13 @@ impl Action for ActionExtraPopSetup {
                 let iop_vn = fd.new_varnode_iop(&call_op);
                 fd.op_set_input(&op, iop_vn, 1);
                 fd.op_insert_before(&op, &call_op);
+            }
+        }
+        // cc:1454 write-back deferred until after the loop so the callspec
+        // registry is not mutably borrowed while `find_call_op` walks it.
+        for (i, epop) in set_eff_pops {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
+                fc.set_effective_extrapop(epop);
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -11367,29 +14163,52 @@ impl ActionConditionalConst {
     // Ghidra: coreaction.cc:4201 ActionConditionalConst::placeCopy
     /// Create a COPY op assigning `const_vn` at the bottom of block `bl`,
     /// before any branch. Returns the output Varnode of the COPY.
+    /// Faithful to placeCopy (cc:4201-4225): pick the insert position per
+    /// cc:4204-4218 (empty block → endOp + the alternate op's address; last
+    /// op is a branch → insert before it at its address; otherwise → endOp
+    /// at the last op's address), then `data.opInsert(copyOp, bl, iter)`
+    /// (cc:4223) so the COPY is attached to the block — the former port
+    /// only pushed onto the alivelist, leaving the op unattached (SNAP
+    /// d=1, PARSECONFIG-CONDCONST-PHI-0001 op-line divergence).
     fn place_copy(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
         bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
     ) -> Arc<RwLock<crate::varnode::Varnode>> {
-        let addr = {
+        // cc:4204-4218: insert iterator + address selection.
+        let (addr, iter_index) = {
             let bl_r = bl.read().unwrap();
             let bb = match bl_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
                 Some(b) => b,
-                None => return fd.new_unique_out(const_vn.read().unwrap().get_size(), op),
+                None => {
+                    // Non-basic blocks cannot host the COPY; keep the legacy
+                    // unattached fallback (unreachable for bblocks graphs).
+                    return fd.new_unique_out(const_vn.read().unwrap().get_size(), op);
+                }
             };
-            if let Some(last_op) = bb.ops.last() {
-                last_op.0.read().unwrap().start.addr
-            } else {
-                op.0.read().unwrap().start.addr
+            match bb.ops.last() {
+                None => (op.0.read().unwrap().start.addr, None),
+                Some(last) => {
+                    let last_r = last.0.read().unwrap();
+                    let addr = last_r.start.addr; // lastOp->getAddr()
+                    if last_r.is_branch() {
+                        // lastOp->getBasicIter(): insert before the branch.
+                        (addr, Some(bb.ops.len() - 1))
+                    } else {
+                        // bl->endOp(): insert at the end.
+                        (addr, None)
+                    }
+                }
             }
         };
         let copy_op = fd.new_op(1, addr);
         fd.op_set_opcode(&copy_op, crate::opcodes::OpCode::CPUI_COPY);
         let out_vn = fd.new_unique_out(const_vn.read().unwrap().get_size(), &copy_op);
         fd.op_set_input(&copy_op, const_vn.clone(), 0);
-        fd.obank.alivelist.push(copy_op.clone());
+        // cc:4223: data.opInsert(copyOp, bl, iter) — attach to the block
+        // (also moves the op off the deadlist via mark_alive).
+        fd.op_insert(&copy_op, bl, iter_index);
         out_vn
     }
 
@@ -11530,6 +14349,16 @@ impl ActionConditionalConst {
                                 .map(|o| o.read().unwrap().is_addr_tied())
                                 .unwrap_or(false);
                             if out_addr_tied { continue; }
+                            // test_alternate_path takes its own read lock
+                            // on this op (cc:4349 form); release this
+                            // iteration's guard first — a nested read
+                            // under a live guard deadlocks once a writer
+                            // queues (std RwLock; CURLWIRE-CR-F1 audit).
+                            // No op mutation sits inside this window: the
+                            // oracle records phiNodeEdges only (cc:4414),
+                            // the rewiring happens later in
+                            // handle_phi_nodes.
+                            drop(op_r);
                             if Self::test_alternate_path(&var_vn, op_arc, in_slot, 2) { continue; }
                             let op_ptr = Arc::as_ptr(op_arc) as usize;
                             phi_node_edges.push((op_ptr, in_slot as usize));
@@ -11774,50 +14603,40 @@ impl Action for ActionConditionalConst {
         //    d. propagateConstant: replace reads of the constant-path Varnode
         //       with the constant, within blocks dominated by the const edge.
         //
-        // Safety guards (Rugra-specific, see propagateConstant and the
-        // CONVERGENCE GUARD below):
+        // Note on remaining Rugra-side guards (see propagateConstant):
         //  - propagateConstant replaces an input only when the op's block is
         //    dominated by the const block, matching Ghidra's
         //    `constBlock->dominates(op->getParent())` check.
         //  - A value-level idempotency guard skips replacements where the slot
-        //    already holds the same constant (avoids non-convergence under
-        //    repeatapply, since each new_constant allocates a fresh Arc).
-        //  - The IR-mutating work runs at most once per function (cond_const_done
-        //    flag), because re-propagating after downstream CFG reshaping does
-        //    not converge for some functions.
+        //    already holds the same constant (each new_constant allocates a
+        //    fresh Arc; the value guard is behavior-neutral because Ghidra's
+        //    Varnode bank canonicalizes constants, varnode.cc
+        //    setConstantCollect).
         //  - op_set_input already does constant dedup + descend-link fixup, so
         //    no dangling references are produced.
-        //  - MULTIEQUAL/phi-node replacement (handlePhiNodes -> placeCopy) is
-        //    disabled (use_multiequal forced false) because op-insertion under
-        //    the repeatapply mainloop does not converge.
         use crate::block::FlowBlock;
         use crate::opcodes::OpCode;
 
         self.count = 0;
 
-        // CONVERGENCE GUARD (Rugra-specific): the implied-boolean propagation
-        // path below mutates the IR by replacing CBRANCH-condition reads with
-        // constants. Re-running this on later mainloop iterations (after the
-        // downstream ActionConditionalExe/branch-folding has reshaped the CFG)
-        // does not converge for some functions — each pass finds fresh
-        // propagation targets and the repeatapply loop never settles (5/24 curl
-        // timeouts). Gate the IR-mutating work to run at most once per function.
-        // The detect/scan still happens every pass (harmless), but once we've
-        // mutated, subsequent passes skip. This mirrors Ghidra's effective
-        // single-pass behaviour within one mainloop cycle.
-        let already_done = fd.cond_const_done;
-        fd.cond_const_done = true;
+        // NOTE (PARSECONFIG-CONDCONST-PHI-0001): the former Rugra-only
+        // guards are removed — (a) the once-per-function cond_const_done
+        // gate and (b) the `use_multiequal = false` hard override — both
+        // suppressed the oracle's MULTIEQUAL/phi-node path
+        // (coreaction.cc:4401-4426 + handlePhiNodes cc:4299-4337), which
+        // is exactly the parseconfig ordinal-83 firing: placeCopy of the
+        // constant down the conditional edge + phi input rewrite. Ghidra
+        // runs this path unconditionally per mainloop pass (repeatapply
+        // convergence is handled by the perform() count state machine,
+        // action.cc:298-362, mirrored in src/action.rs); any remaining
+        // non-convergence is a downstream port defect to chase in
+        // Ghidra source, not a reason to keep the gate (铁律 1.5).
 
-        // cc:4517-4525: useMultiequal gate based on stack heritage passes.
-        let use_multiequal = fd.num_heritage_passes() > 0;
-        // SAFETY GATE (progressive enablement): the MULTIEQUAL / phi-node
-        // replacement path (handlePhiNodes -> placeCopy) inserts new ops into
-        // the IR, and under Rugra's repeatapply mainloop this does not converge
-        // — it causes 12/24 curl functions to time out. Disable it until the
-        // op-insertion + deadcode convergence is hardened. The non-MULTIEQUAL
-        // dominance-based constant replacement is retained (safe: it only calls
-        // op_set_input, which is idempotent via the cc:107 early-out).
-        let use_multiequal = false;
+        // cc:4517-4525: useMultiequal gate — `stackSpace != null &&
+        // numHeritagePasses(stackSpace) > 0` (coreaction.cc:4522, the
+        // per-space delay-adjusted count heritage.cc:2779-2788; the raw
+        // Funcdata wrapper ignored the Stack delay and is not used here).
+        let use_multiequal = fd.heritage.num_heritage_passes(fd.stack_space) > 0;
 
         let n_blocks = fd.bblocks.get_size();
         for i in 0..n_blocks {
@@ -11887,14 +14706,13 @@ impl Action for ActionConditionalConst {
 
             // cc:4537-4541: if boolVn is read more than once (no lone descend),
             // push implied-constant points (bool=0 down false edge, bool=1 down true).
-            // SAFETY GATE (progressive enablement): the implied-boolean path
-            // propagates the CBRANCH's own boolean (0/1) into downstream reads.
-            // Under Rugra's mainloop, this disrupts ActionConditionalExe / branch
-            // folding convergence for several functions (5/24 curl timeouts).
-            // Ghidra tolerates this because its condexe+deadcode immediately fold
-            // the now-redundant branch; Rugra's do not. Disabled until that
-            // downstream convergence is hardened. The findConstCompare path below
-            // (var==const propagation) is retained — it is safe and useful.
+            // The implied-boolean path (cc:4537-4541) propagates the
+            // CBRANCH's own boolean (0/1) into downstream reads. It was
+            // historically gated off for condexe/folding convergence but
+            // now runs unconditionally, matching the oracle; the
+            // historical convergence problem was downstream and is
+            // resolved on the current baseline (curl/httpd E2E + next_url/
+            // match_url/parseconfig projections all stable with it on).
             if bool_vn.read().unwrap().lone_descend().is_none() {
                 // Need the false/true out-blocks. Ghidra uses getFalseOut/getTrueOut
                 // which account for the boolean flip. bl_out is indexed [0,1] =
@@ -11936,9 +14754,8 @@ impl Action for ActionConditionalConst {
                 flip_edge,
             );
 
-            // cc:4543: propagateConstant (the IR-mutating step).
-            // Guarded by the once-per-function flag (see comment above).
-            if !already_done && !points.is_empty() {
+            // cc:4543: propagateConstant (the IR-mutating step), every pass.
+            if !points.is_empty() {
                 let mut pts = points;
                 self.propagate_constant(fd, &mut pts, use_multiequal);
             }
@@ -12293,15 +15110,137 @@ impl Action for ActionLaneDivide {
 ///    for multi-register returns).
 /// 5. `clearActiveOutput`.
 ///
-/// Rugra gap: the function-level `guardReturns` heritage pass that registers
-/// RETURN trials is still a stub (see heritage.rs `guard_returns`), so
-/// `active_output` frequently arrives empty. To keep behaviour faithful AND
-/// functional we seed the active-output trials from the calling-convention
-/// model's `output_entries` (Rugra's `ProtoModel::default_x86_64`) when the
-/// container is present but empty. This replaces the previous hard-coded
-/// "scan for any write of Register offset 0x0" heuristic with the model-driven
-/// trial list while preserving the same end effect on the common RAX case.
+/// Rugra note: the function-level `guardReturns` heritage pass that registers
+/// RETURN trials and inserts their input varnodes is ported in heritage.rs
+/// (`Heritage::guard_returns`), so the active-output container arrives
+/// populated exactly like Ghidra's and no trial seeding happens here.
 pub struct ActionReturnRecovery { pub count: i32 ,
+}
+// Ghidra: translate.cc:817 AddrSpaceManager::constructJoinAddress
+/// Build the joined storage address for the two-piece RETURN
+/// concatenation of `ActionReturnRecovery::buildReturnOutput`
+/// (coreaction.cc:1855-1857), mirroring
+/// `AddrSpaceManager::constructJoinAddress` (translate.cc:817-860) over
+/// the trial storage quadruples:
+/// 1. `usejoinspace` (cc:823-830): a spacebase (stack) or
+///    default-code-space (ram) piece joins in its own mappable space;
+///    register pieces keep the join space.
+/// 2. Contiguous pieces (address.cc:173 `Address::isContiguous` — same
+///    space + wrapOffset arithmetic): a mappable space returns the
+///    earliest address (LE lo / BE hi, cc:832-835); a register space
+///    first checks `Translate::getRegisterName` for a covering parent
+///    register (sleighbase.cc:144-168) and returns that piece's address
+///    when named (cc:837-845) — x86-64 return pairs like RDX:RAX are
+///    non-contiguous and unnamed, so they fall through.
+/// 3. Otherwise `findAddJoin(pieces=[hi,lo],0)` (translate.cc:671-715):
+///    the JOIN space at the record's unified offset (cc:848-859).
+///
+/// The oracle's LowlevelError guard (cc:824-826 — a piece outside the
+/// spacebase/processor spaces throws "Trying to join in appropriate
+/// locations") is structurally unreachable here: output trials are
+/// register storage. A violating quadruple is logged loudly and still
+/// joins instead of aborting the run.
+fn return_join_address(
+    arch: Option<&std::sync::Arc<crate::arch::Architecture>>,
+    hi: (crate::space::AddressSpace, u64, i32),
+    lo: (crate::space::AddressSpace, u64, i32),
+) -> (crate::space::AddressSpace, u64) {
+    let (hi_space, hi_off, hi_sz) = hi;
+    let (lo_space, lo_off, lo_sz) = lo;
+    // cc:821-826: spacetype membership. Rugra enum model: Stack =
+    // IPTR_SPACEBASE; Ram/Register/Overlay/Other = IPTR_PROCESSOR.
+    let joinable = |spc: crate::space::AddressSpace| {
+        !matches!(
+            spc,
+            crate::space::AddressSpace::Unique
+                | crate::space::AddressSpace::Const
+                | crate::space::AddressSpace::Join
+                | crate::space::AddressSpace::Iop
+        )
+    };
+    if !joinable(hi_space) || !joinable(lo_space) {
+        eprintln!(
+            "[COREACTION] return_join_address: trial outside joinable spaces hi={:?} lo={:?} (translate.cc:826 LowlevelError arm)",
+            hi_space, lo_space
+        );
+    }
+    // cc:827-830: usejoinspace = false for spacebase or default-code-space
+    // pieces (the x86-64 default code space is ram).
+    let use_join_space = hi_space != crate::space::AddressSpace::Stack
+        && lo_space != crate::space::AddressSpace::Stack
+        && hi_space != crate::space::AddressSpace::Ram
+        && lo_space != crate::space::AddressSpace::Ram;
+    // address.cc:173-188 Address::isContiguous(hisz, loaddr, losz): same
+    // space; LE wraps lo.offset+losz onto this offset, BE the reverse.
+    let contiguous = hi_space == lo_space
+        && if hi_space.is_big_endian() {
+            hi_off.wrapping_add(hi_sz as u64) == lo_off
+        } else {
+            lo_off.wrapping_add(lo_sz as u64) == hi_off
+        };
+    if contiguous {
+        let big_endian = hi_space.is_big_endian();
+        if !use_join_space {
+            // cc:832-835: mappable space — earliest address.
+            return if big_endian { (hi_space, hi_off) } else { (lo_space, lo_off) };
+        }
+        // cc:837-845: register space — a covering parent register name wins
+        // (LE names at the lo piece, BE at the hi piece).
+        let (name_space, name_off) = if big_endian { (hi_space, hi_off) } else { (lo_space, lo_off) };
+        let covering_name = arch
+            .map(|a| a.get_register_name(name_space, name_off, hi_sz + lo_sz))
+            .unwrap_or_default();
+        if !covering_name.is_empty() {
+            return (name_space, name_off);
+        }
+    }
+    // cc:848-859: findAddJoin([hi,lo],0) → Address(joinspace, unified.offset).
+    (crate::space::AddressSpace::Join, join_unified_offset(hi, lo))
+}
+
+// RUGRA-GLUE: join_unified_offset — deterministic stand-in for the
+// manager-global `joinallocate` counter of AddrSpaceManager::findAddJoin
+// (translate.cc:699-712); residual registered on COREACTION-JOINSPACE-0001.
+/// Unified join-space offset for the piece quadruple (hi first, lo second —
+/// findAddJoin's most-significant-first piece order). A stateless
+/// splitmix64-style mix keeps the semantics downstream consumers observe
+/// from Ghidra's splitset dedup: identical pieces always map to the
+/// identical join address (merge identity across RETURN ops,
+/// laned-map/loc-tree storage keys), distinct pieces to distinct offsets.
+/// The oracle instead allocates sequential 16-byte-aligned counter slots
+/// from a mutable process-global table; Rugra's production Architecture
+/// exposes no mutable join table (the legacy `join_db` is read-only through
+/// the shared Arc), and a stateless derivation is also race-free where the
+/// example drivers decompile functions on parallel threads. Offsets keep
+/// findAddJoin's 16-byte slot alignment (translate.cc:708 roundsize); the
+/// numeric values differ from the oracle's counter sequence — unobservable
+/// today because `join_db` stays empty, so no findJoin consumer can
+/// compare offsets.
+fn join_unified_offset(
+    hi: (crate::space::AddressSpace, u64, i32),
+    lo: (crate::space::AddressSpace, u64, i32),
+) -> u64 {
+    // RUGRA-GLUE: splitmix64 finalizer — pure arithmetic mixer with no
+    // Ghidra counterpart (the oracle's offset comes from the joinallocate
+    // counter, not a hash); fully specified for cross-toolchain stability.
+    fn mix(mut z: u64) -> u64 {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    let mut acc = 0u64;
+    for (space, off, sz) in [hi, lo] {
+        acc = mix(
+            acc ^ mix(
+                (space.space_id() as u64) << 56
+                    ^ off
+                    ^ (((sz as u64) & 0xFFFF) << 32),
+            ),
+        );
+    }
+    // translate.cc:708: roundsize = (totalsize + 15) & ~15 — 16-byte slots.
+    (acc >> 4) << 4
 }
 impl ActionReturnRecovery {
     // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
@@ -12334,8 +15273,11 @@ impl ActionReturnRecovery {
             if !curtrial.is_used() { break; }
             let slot = curtrial.get_slot() as usize;
             if slot >= num_input { break; }
-            let vn = retop.0.read().unwrap().get_in(slot).cloned();
-            newparam_push_unique(&mut newparam, vn);
+            // cc:1846: plain push_back of the trial slot's varnode (slots
+            // are strictly increasing so no duplicate can occur).
+            if let Some(vn) = retop.0.read().unwrap().get_in(slot).cloned() {
+                newparam.push(vn);
+            }
         }
 
         if newparam.len() <= 2 {
@@ -12347,18 +15289,36 @@ impl ActionReturnRecovery {
             let hivn = newparam[2].clone();
             let triallo = active.get_trial(0);
             let trialhi = active.get_trial(1);
-            // Rugra has no constructJoinAddress; the joined address is cosmetic
-            // (it labels the synthetic whole varnode). Use the min of the two
-            // piece offsets, which matches little-endian RAX:RDX layout.
-            let lo_off = lovn.read().unwrap().get_offset();
-            let hi_off = hivn.read().unwrap().get_offset();
-            let join_off = lo_off.min(hi_off);
+            // Ghidra cc:1855-1857: joinaddr = getArch()->constructJoinAddress(
+            // translate, trialhi.getAddress(),trialhi.getSize(),
+            // triallo.getAddress(),triallo.getSize()) — the TRIAL storage
+            // addresses feed AddrSpaceManager::constructJoinAddress
+            // (translate.cc:817-860, mirrored by `return_join_address`
+            // below): non-contiguous unnamed register pairs like RDX:RAX
+            // join in the JOIN space, not the register space the spaceless
+            // adapter pinned (COREACTION-JOINSPACE-0001).
+            let (join_space, join_off) = return_join_address(
+                fd.get_arch(),
+                (
+                    trialhi.get_space(),
+                    trialhi.get_address().as_u64(),
+                    trialhi.get_size(),
+                ),
+                (
+                    triallo.get_space(),
+                    triallo.get_address().as_u64(),
+                    triallo.get_size(),
+                ),
+            );
             let total_size = (trialhi.get_size() + triallo.get_size()) as usize;
             let ret_addr = retop.0.read().unwrap().get_addr();
             let newop = fd.new_op(2, ret_addr);
             fd.op_set_opcode(&newop, OC::CPUI_PIECE);
-            // Ghidra cc:1860: newVarnodeOut(size, joinaddr, newop). Register space.
-            let join_vn = fd.new_varnode_out(total_size, Addr::new(join_off), &newop);
+            // Ghidra cc:1860: newVarnodeOut(trialhi.getSize()+triallo.getSize(),
+            // joinaddr, newop) — the full join address (join space + unified
+            // offset, or the covering/earliest piece address from the
+            // constructJoinAddress fast paths).
+            let join_vn = fd.new_varnode_out_full(total_size, join_space, Addr::new(join_off), &newop);
             // Ghidra cc:1861: newwhole->setWriteMask().
             join_vn.write().unwrap().set_write_mask();
             // Ghidra cc:1862: opInsertBefore(newop, retop).
@@ -12421,156 +15381,21 @@ impl ActionReturnRecovery {
 impl Action for ActionReturnRecovery {
     // Ghidra: coreaction.cc:1908 ActionReturnRecovery::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra cc:4637-4651: if the output is type-locked the prototype is
-        // authoritative and return-value recovery must not run.
-        if fd.funcp.output_type_locked {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // Ghidra cc:1911: the whole body is guarded by
+        // cc:1911: the whole body is guarded by
         // `if (active != (ParamActive*)0)`; apply returns 0 when the
-        // container is absent. The ONLY creation point is
+        // container is absent AND when it did work (cc:1954 `return 0;` —
+        // the change count lives in the protected count field, drained by
+        // take_count_delta). The ONLY creation point is
         // ActionPrototypeTypes (cc:4651, onceperfunc); after
-        // clearActiveOutput sets it to NULL it is never re-created, which is
-        // what lets the mainloop converge.
-        if fd.active_output.is_none() {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // Seed trials from the calling-convention model when the container is
-        // empty. This substitutes for the (stub) function-level guardReturns
-        // pass that, in Ghidra, calls `active->registerTrial(addr, size)` for
-        // each candidate return storage location.
-        let need_seed = fd
-            .active_output
-            .as_ref()
-            .map(|a| a.get_num_trials() == 0)
-            .unwrap_or(true);
-        if need_seed {
-            seed_output_trials(fd);
-        }
-
-        let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
-
-        // Snapshot RETURN ops (cc:1919-1921 iterates beginOp/endOp(CPUI_RETURN)).
-        let return_ops: Vec<crate::op::PcodeOpRef> = fd
-            .obank
-            .returnlist
-            .iter()
-            .filter(|r| !r.0.read().unwrap().is_dead())
-            .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
-            .cloned()
-            .collect();
-        if return_ops.is_empty() {
-            // Ghidra's walk loop is a natural no-op with zero RETURNs, but the
-            // lifecycle tail still runs: finishPass, the maxPass check, and —
-            // once fully checked — deriveOutputMap + clearActiveOutput with
-            // the single finalize count (cc:1937-1951). Completing the
-            // lifecycle here (instead of early-returning) is what lets the
-            // mainloop converge and clears the container exactly once.
-            let fully_checked = {
-                let active = fd.active_output.as_mut().unwrap();
-                active.finish_pass();
-                if active.get_num_passes() > active.get_max_pass() {
-                    active.mark_fully_checked();
-                }
-                active.is_fully_checked()
-            };
-            let mut count = 0;
-            if fully_checked {
-                derive_func_output_map(fd);
-                fd.active_output = None; // Ghidra cc:1950: clearActiveOutput.
-                count += 1;
-            }
-            self.count += count;
-            return if count > 0 {
-                Ok(action_status::CHANGE)
-            } else {
-                Ok(action_status::NO_CHANGE)
-            };
-        }
-
-        // Ghidra cc:1919-1935: per-RETURN, per-trial liveness analysis.
-        let trial_count = fd
-            .active_output
-            .as_ref()
-            .map(|a| a.get_num_trials())
-            .unwrap_or(0);
-        // Ghidra cc:1935: count += 1 for every unchecked trial processed,
-        // accumulated across the whole walk and carried into the finalize
-        // count below.
-        let mut count = 0;
-        if trial_count > 0 {
-            let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-            for retop in &return_ops {
-                // Gather unchecked trial indices first so we never hold a
-                // borrow on active while mutating trials or fd.
-                let pending: Vec<usize> = (0..trial_count)
-                    .filter(|&i| !fd.active_output.as_ref().unwrap().get_trial(i).is_checked())
-                    .collect();
-                for i in pending {
-                    let slot = fd.active_output.as_ref().unwrap().get_trial(i).get_slot();
-                    // The trial varnode for a RETURN is the op input at the
-                    // trial's slot. If absent (RETURN has no return-value
-                    // operand yet), synthesise a candidate varnode at the
-                    // trial address so the ancestor walk has something to
-                    // chase — mirroring guardReturns' opInsertInput of a fresh
-                    // varnode. Only insert when the slot is missing.
-                    let op_num_input = retop.0.read().unwrap().num_input();
-                    if slot as usize >= op_num_input {
-                        let (addr, size) = {
-                            let t = fd.active_output.as_ref().unwrap().get_trial(i);
-                            (t.get_address(), t.get_size())
-                        };
-                        let cand = fd.vbank.create_with_space(
-                            size as usize, crate::space::AddressSpace::Register, addr.as_u64(),
-                        );
-                        cand.write().unwrap().set_active_heritage();
-                        fd.op_insert_input(retop, cand, slot as usize);
-                    }
-                    let success_real = {
-                        let active = fd.active_output.as_mut().unwrap();
-                        ancestor_real.execute(retop, slot, active.get_trial_mut(i), false)
-                    };
-                    // Ghidra cc:1935: count += 1 — every unchecked trial
-                    // processed increments the count exactly once.
-                    count += 1;
-                    if success_real {
-                        // Ghidra cc:1931-1932: ancestorOpUse(op, vn) -> markActive.
-                        let vn_opt = retop.0.read().unwrap().get_in(slot as usize).cloned();
-                        if let Some(vn) = vn_opt {
-                            let used = crate::funcdata::ancestor_op_use(
-                                true, maxancestor, &vn, retop, slot, 0, 0,
-                            );
-                            if used {
-                                fd.active_output
-                                    .as_mut()
-                                    .unwrap()
-                                    .get_trial_mut(i)
-                                    .mark_active();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Ghidra cc:1937-1939: finishPass + maxPass check.
-        let fully_checked = {
-            let active = fd.active_output.as_mut().unwrap();
-            active.finish_pass();
-            if active.get_num_passes() > active.get_max_pass() {
-                active.mark_fully_checked();
-            }
-            active.is_fully_checked()
-        };
-
-        let mut count = count; // carry the per-trial count from cc:1935
-        if fully_checked {
-            // Ghidra cc:1942: deriveOutputMap resolves USED trials.
-            derive_func_output_map(fd);
-            // Ghidra cc:1943-1949: buildReturnOutput for every RETURN.
-            let return_ops_again: Vec<crate::op::PcodeOpRef> = fd
+        // clearActiveOutput sets it to NULL it is never re-created, which
+        // is what lets the mainloop converge.
+        if fd.active_output.is_some() {
+            // cc:1918: maxancestor = data.getArch()->trim_recurse_max.
+            let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
+            // cc:1919-1921: iterate beginOp..endOp(CPUI_RETURN) — the live
+            // op list in creation order; dead and special-halt RETURNs are
+            // skipped inside the loop body (cc:1923-1924).
+            let return_ops: Vec<crate::op::PcodeOpRef> = fd
                 .obank
                 .returnlist
                 .iter()
@@ -12578,79 +15403,95 @@ impl Action for ActionReturnRecovery {
                 .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
                 .cloned()
                 .collect();
-            // Take the active container out of fd so we can read its final
-            // USED-trial state while mutating fd inside buildReturnOutput.
-            let active = fd.active_output.take().unwrap();
-            for retop in &return_ops_again {
-                Self::build_return_output(fd, &active, retop);
+            // Take the container out of fd so trial mutation and the fd
+            // reads inside ancestorOpUse never alias.
+            let mut active = fd.active_output.take().unwrap();
+            let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
+            for retop in &return_ops {
+                for i in 0..active.get_num_trials() {
+                    // cc:1927: already checked trials are skipped.
+                    if active.get_trial(i).is_checked() {
+                        continue;
+                    }
+                    let slot = active.get_trial(i).get_slot();
+                    // cc:1929: vn = op->getIn(slot). The slot is populated
+                    // by Heritage::guardReturns' opInsertInput for every
+                    // RETURN that existed at heritage time; a Rust-side
+                    // missing input can only mean the RETURN was created
+                    // after registration, which Ghidra never observes.
+                    let vn = match {
+                        let op_rg = retop.0.read().unwrap();
+                        op_rg.get_in(slot as usize).cloned()
+                    } {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    // cc:1930-1932: markActive only when both the ancestor
+                    // walk sees realistic movement AND the trial varnode is
+                    // only used by this RETURN.
+                    if ancestor_real.execute(retop, slot, active.get_trial_mut(i), false) {
+                        if crate::funcdata::ancestor_op_use(
+                            fd,
+                            maxancestor,
+                            &vn,
+                            retop,
+                            active.get_trial_mut(i),
+                            0,
+                            0,
+                            None,
+                        ) {
+                            active.get_trial_mut(i).mark_active();
+                        }
+                    }
+                    // cc:1933: count += 1 for every unchecked trial
+                    // processed, regardless of the verdicts above.
+                    self.count += 1;
+                }
             }
-            // Ghidra cc:1950-1951: clearActiveOutput (taken == cleared); the
-            // single count += 1 fires once here, NOT per RETURN op.
-            count += 1;
-        }
 
-        self.count += count;
-        if count > 0 {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+            // cc:1937: active->finishPass().
+            active.finish_pass();
+            // cc:1938-1939: once the pass count exceeds the model-derived
+            // maxPass (Funcdata::initActiveOutput), no new trials are
+            // expected and the map can be finalized.
+            if active.get_num_passes() > active.get_max_pass() {
+                active.mark_fully_checked();
+            }
+
+            if active.is_fully_checked() {
+                // cc:1942: data.getFuncProto().deriveOutputMap(active).
+                if let Some(model) = fd.funcp.get_model_arc() {
+                    model.derive_output_map(&mut active);
+                }
+                // cc:1943-1949: rebuild the input list of every live
+                // non-halt RETURN from the USED trials.
+                for retop in &return_ops {
+                    Self::build_return_output(fd, &active, retop);
+                }
+                // cc:1950: data.clearActiveOutput() — the container taken
+                // above is simply not put back.
+                // cc:1951: count += 1 — the single finalize increment.
+                self.count += 1;
+            } else {
+                fd.active_output = Some(active);
+            }
         }
+        // cc:1954: apply always returns 0.
+        Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:1933/1951) into the Rust ActionState accumulator;
+    // apply itself returns 0 exactly like the oracle.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "returnrecovery" mirrors ctor at coreaction.hh:799
     fn get_name(&self) -> &str { "returnrecovery" }
 }
 
-// Push a varnode into newparam unless it duplicates the current last element
-// (guards against copying slot 0 twice). Mirrors Ghidra's vector push_back
-// inside buildReturnOutput's trial loop (cc:1846), which never duplicates
-// because trial slots are strictly increasing.
-// RUGRA-GLUE: ANN-F; Rust Option<Arc> adapter for Ghidra's inline push_back; duplicate suppression is tracked by OPBANK-0001/FSPEC-0002.
-fn newparam_push_unique(
-    newparam: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-    vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-) {
-    if let Some(v) = vn {
-        let already_last = newparam
-            .last()
-            .map(|last| std::sync::Arc::ptr_eq(last, &v))
-            .unwrap_or(false);
-        if !already_last { newparam.push(v); }
-    }
-}
 
-// Ghidra analogue: Heritage::guardReturns (heritage.cc:1653-1676) registers a
-// ParamActive trial for each candidate return storage location described by
-// the calling-convention model. Rugra's function-level guardReturns is a stub,
-// so we perform the equivalent registration here, driven by
-// ProtoModel::output_entries (the x86-64 SysV default's sole output entry is
-// RAX at Register offset 0x0, size 8).
-// RUGRA-GLUE: ANN-F; fallback seeds default-model outputs because Heritage::guardReturns is not wired; relocation is tracked by HERITAGE-0001/FSPEC-0002.
-fn seed_output_trials(fd: &mut Funcdata) {
-    use crate::address::Address;
-    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
-    let active = match fd.active_output.as_mut() {
-        Some(a) => a,
-        None => return,
-    };
-    for entry in &model.output_entries {
-        let addr = Address::new(entry.base);
-        if active.which_trial_in_space(entry.space, addr, entry.size) < 0 {
-            active.register_trial_in_space(entry.space, addr, entry.size);
-        }
-    }
-}
 
-// Ghidra analogue: data.getFuncProto().deriveOutputMap(active) (coreaction.cc:1942)
-// delegates to ProtoModel::deriveOutputMap -> ParamListStandard::fillinMap.
-// Rugra's FuncProto has no ProtoModel pointer, so resolve the default model
-// directly and call its derive_output_map.
-// RUGRA-GLUE: ANN-F; calls a default ProtoModel because FuncProto lacks oracle model ownership; replacement is tracked by FSPEC-0001/FSPEC-0002.
-fn derive_func_output_map(fd: &mut Funcdata) {
-    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
-    if let Some(active) = fd.active_output.as_mut() {
-        model.derive_output_map(active);
-    }
-}
+
 
 /// Calculate the non-zero mask property on all Varnode objects. Faithful
 /// to `ActionNonzeroMask` (coreaction.hh:293-301, coreaction.cc:5507).
@@ -12877,10 +15718,17 @@ impl Action for ActionAssignHigh {
 /// Choose the dominant COPY in the merge phase (rule_onceperfunc).
 ///
 /// Faithful to `ActionDominantCopy` (coreaction.hh:1001). Ghidra's `apply`
-/// calls `data.getMerge().processCopyTrims()`, which walks the copyTrims
-/// list accumulated by the snip/trim machinery in ActionMergeRequired.
-/// Rugra's `Merge::process_copy_trims` is a faithful no-op: copyTrims is
-/// never populated (Rugra lacks the snip/trim data-flow rewrite subsystem).
+/// (coreaction.hh:1008) is exactly `data.getMerge().processCopyTrims();
+/// return 0;` — it walks the copyTrims list accumulated by the snip
+/// machinery of the forced-merge path (ActionMergeRequired) and replaces
+/// groups of ≥2 COPYs into the same HighVariable with a single dominant
+/// COPY. Rugra mirrors this with a transient `Merge` that attaches the
+/// persistent `fd.merge_state.copy_trims` channel. In the standard pipeline
+/// the merge phase (`Merge::merge_all` step 6) consumes the trims first, so
+/// this standalone application normally sees an empty list; the traversal
+/// order inside `process_copy_trims` is the deterministic copyTrims
+/// first-seen order (merge.cc:1418-1435; DETERM-COPYTRIM-0001 /
+/// DETERM-DOMINANTCOPY-0001 fixed there).
 pub struct ActionDominantCopy;
 
 impl ActionDominantCopy {
@@ -12893,8 +15741,9 @@ impl ActionDominantCopy {
 impl Action for ActionDominantCopy {
     // Ghidra: coreaction.hh:1008 ActionDominantCopy::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims();
-        // copyTrims is empty in Rugra (no snip machinery) → faithful no-op.
+        // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims().
+        // The transient Merge attaches fd.merge_state.copy_trims; typically
+        // already consumed by merge_all step 6 (same oracle call site).
         let mut merge = crate::merge::Merge::new();
         merge.process_copy_trims(fd);
         Ok(action_status::NO_CHANGE)
@@ -13422,7 +16271,7 @@ impl ActionPreferComplement {
         }
     }
 
-    // Ghidra: block.cc:2381 BlockBasic::flipInPlaceExecute / block.cc:3007 BlockCondition::flipInPlaceExecute
+    // Ghidra: block.cc:2378 BlockBasic::flipInPlaceExecute / block.cc:3007 BlockCondition::flipInPlaceExecute
     /// Execute the conditional flip on this block: BlockBasic flips the
     /// `fallthru_true` op flag and swaps its outgoing edges; BlockCondition
     /// exchanges AND<->OR and flips both children's split points.
@@ -13511,8 +16360,8 @@ impl ActionPreferComplement {
         block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
         use crate::block::{
-            BlockCondition, BlockDoWhile, BlockIf, BlockInfLoop, BlockList, BlockSwitch,
-            BlockWhileDo,
+            BlockCondition, BlockDoWhile, BlockGoto, BlockIf, BlockInfLoop, BlockList,
+            BlockMultiGoto, BlockSwitch, BlockWhileDo,
         };
         let bl = block.read().unwrap();
         let mut out: Vec<
@@ -13541,6 +16390,26 @@ impl ActionPreferComplement {
             out.extend(bsw.cases.iter().cloned());
             if let Some(dc) = &bsw.default_case {
                 out.push(dc.clone());
+            }
+        } else if let Some(bg) = bl.as_any().downcast_ref::<BlockGoto>() {
+            // Ghidra `BlockGoto : BlockGraph` (block.hh:547): exactly one
+            // component — the wrapped block, moved in by
+            // `identifyInternal(ret,[bl])` (block.cc:1706-1708, newBlockGoto).
+            // The oracle's ActionPreferComplement BFS (blockaction.cc:2155-
+            // 2160) descends via getSize()/getBlock(i), so a BlockGoto's
+            // wrapped child IS visited and enqueued; skipping it starved
+            // prefer_complement of every BlockIf nested inside a goto-wrapped
+            // subtree (httpd main configtest if/else orientation, F5).
+            if let Some(w) = &bg.wrapped {
+                out.push(w.clone());
+            }
+        } else if let Some(bmg) = bl.as_any().downcast_ref::<BlockMultiGoto>() {
+            // Same one-component shape: `BlockMultiGoto : BlockGraph`
+            // (block.hh:573), wrapped block installed by
+            // `identifyInternal(ret,[bl])` (block.cc:1736-1739,
+            // newBlockMultiGoto).
+            if let Some(w) = &bmg.wrapped {
+                out.push(w.clone());
             }
         }
         out
@@ -13583,6 +16452,16 @@ impl Action for ActionPreferComplement {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (incremented at blockaction.cc:2163 inside apply, reset by
+    // Action::perform at action.cc:306) into the Rust ActionState
+    // accumulator — the same member-count adapter the other struct-count
+    // actions use. Without it the stage projection's @END reads
+    // ActionState.count=0 even though the flip executed.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
+
     // RUGRA-GLUE: Rust Action trait get_name; "prefercomplement" mirrors ctor at blockaction.hh:302
     fn get_name(&self) -> &str {
         "prefercomplement"
@@ -13620,6 +16499,248 @@ impl ActionStructureTransform {
     pub fn new() -> Self {
         Self { count: 0 }
     }
+    // Ghidra: printlanguage.cc:218 PrintLanguage::pushVnExplicit (name slice)
+    // (the emitExpression(op) product for the two canonical loop forms).
+    /// Name a for-header varnode the way printc's pushVnExplicit name slice
+    /// does (printlanguage.cc:218-262 → printc.rs push_varnode Priority 1):
+    /// the HighVariable name — symbol-backed names verbatim, typed
+    /// `<prefix>Var<n>` names as-is. Returns None when the high is unnamed
+    /// or carries a raw register name (printc rewrites those through its own
+    /// tables, which the action-time renderer cannot consult faithfully).
+    ///
+    /// Registered edge (GETPARAM-FORLOOP-GAPSET-0001 ⑤): the oracle
+    /// name resolution goes through pushSymbolDetail
+    /// (printlanguage.cc:238-262), which emits scope-qualified
+    /// whole/partial/mismatch SYMBOL forms for symbol-backed highs; this
+    /// slice renders only the plain high/symbol name. Loop counters in the
+    /// current corpus are plain locals, so no observable divergence today.
+    fn for_header_var_name(
+        vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<String> {
+        let vn_rg = vn.read().unwrap();
+        let high_arc = vn_rg.high.clone()?;
+        let high = high_arc.read().unwrap();
+        let name = high.get_name();
+        if name.is_empty() {
+            return None;
+        }
+        if high.symbol.is_some() {
+            return Some(name.to_string());
+        }
+        // Typed auto-name (`lVar11`-style): the type prefix already matches
+        // the print form (maybe_apply_type_prefix is the identity for a
+        // prefix that agrees with the propagated type). Accept only that
+        // shape; anything else (raw register names, glue names) bails.
+        if Self::for_header_is_typed_auto_name(name) {
+            Some(name.to_string())
+        } else {
+            None
+        }
+    }
+
+    // RUGRA-GLUE: shape gate for the typed auto-name grammar `<base>Var<n>`
+    /// Recognize printc's typed local-variable auto-name shape
+    /// (`[a-z]+Var<digits>`, e.g. `lVar11`, `pcVar7`) — the form whose type
+    /// prefix agrees with the propagated type and therefore prints verbatim.
+    fn for_header_is_typed_auto_name(name: &str) -> bool {
+        if let Some(pos) = name.rfind("Var") {
+            let (prefix, digits) = name.split_at(pos + 3);
+            !prefix.is_empty()
+                && prefix.ends_with("Var")
+                && prefix[..pos]
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase())
+                && !digits.is_empty()
+                && digits.chars().all(|ch| ch.is_ascii_digit())
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer (constant text core)
+    /// Render an integer constant the way push_integer does for a plain
+    /// (no Symbol display format, no forced mods) context: signed types
+    /// flip to the negated value when the two's-complement sign bit is set,
+    /// values ≤ 10 print decimal, everything else prints hex exactly when
+    /// mostNaturalBase is 16.
+    ///
+    /// Registered edge (GETPARAM-FORLOOP-GAPSET-0001 ④): the full
+    /// push_integer consults the high's Symbol for equate substitution and
+    /// displayFormat (printc.cc:1297-1320) plus force_unsigned_token/
+    /// force_sized_token (vn->isUnsignedPrint()/isLongPrint()) — none of
+    /// which this slice mirrors. Loop-counter constants carry no equate
+    /// symbols in the current corpus; a counter named via an equate would
+    /// render differently.
+    fn for_header_const_text(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<String> {
+        let vn_rg = vn.read().unwrap();
+        if !vn_rg.is_constant() {
+            return None;
+        }
+        let sz = vn_rg.get_size();
+        let mut v = vn_rg.get_offset();
+        let signed = vn_rg
+            .v_type
+            .as_ref()
+            .map(|t| t.get_metatype() == crate::type_system::TypeMetatype::Int)
+            .unwrap_or(false);
+        let mut neg = false;
+        if signed {
+            let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
+            let flip = v ^ mask;
+            if flip < v {
+                neg = true;
+                v = flip.wrapping_add(1);
+            }
+        }
+        // printc.cc:1325-1337 with displayFormat==0 and no force mods:
+        // val<=10 → decimal; mostNaturalBase(val)==16 → hex; else decimal.
+        let use_hex = v > 10 && crate::printlanguage::most_natural_base(v) == 16;
+        let mut t = String::new();
+        if neg {
+            t.push('-');
+        }
+        if use_hex {
+            t.push_str(&format!("0x{:x}", v));
+        } else {
+            t.push_str(&format!("{}", v));
+        }
+        Some(t)
+    }
+
+    // Ghidra: printc.cc:2957 PrintC::emitForLoop (initializer statement text)
+    /// `emitExpression(initializeOp)` for the COPY-const initializer form:
+    /// `<name(out)> = <const>`.
+    fn render_for_header_copy_const(op: &crate::op::PcodeOpRef) -> Option<String> {
+        let op_rg = op.0.read().unwrap();
+        if op_rg.opcode != OpCode::CPUI_COPY || op_rg.num_input() < 1 {
+            return None;
+        }
+        let out = op_rg.output.as_ref()?.clone();
+        let in0 = op_rg.get_in(0)?.clone();
+        let name = Self::for_header_var_name(&out)?;
+        let cnst = Self::for_header_const_text(&in0)?;
+        Some(format!("{} = {}", name, cnst))
+    }
+
+    // Ghidra: printc.cc:2957 PrintC::emitForLoop (iterator statement text)
+    /// `emitExpression(iterateOp)` for the INT_ADD(var, const) iterator
+    /// form: `<name(out)> = <name(var)> + <const>`.
+    fn render_for_header_int_add(op: &crate::op::PcodeOpRef) -> Option<String> {
+        let op_rg = op.0.read().unwrap();
+        if op_rg.opcode != OpCode::CPUI_INT_ADD || op_rg.num_input() < 2 {
+            return None;
+        }
+        let out = op_rg.output.as_ref()?.clone();
+        let in0 = op_rg.get_in(0)?.clone();
+        let in1 = op_rg.get_in(1)?.clone();
+        let lhs = Self::for_header_var_name(&out)?;
+        let (var_vn, const_vn) = if in1.read().unwrap().is_constant() {
+            (in0, in1)
+        } else if in0.read().unwrap().is_constant() {
+            (in1, in0)
+        } else {
+            return None;
+        };
+        let rhs_var = Self::for_header_var_name(&var_vn)?;
+        let rhs_const = Self::for_header_const_text(&const_vn)?;
+        Some(format!("{} = {} + {}", lhs, rhs_var, rhs_const))
+    }
+
+    // Ghidra: block.cc:3256 BlockWhileDo::testTerminal (explicit/printable half)
+    /// The testTerminal gates that are checkable without the op-relocation
+    /// machinery: the loopDef input at `slot` must be written, its root op
+    /// must not already be marked non-printing, the root varnode must be
+    /// EXPLICIT (:3271 `vn->isExplicit()`), and — per :3263-3269 — a
+    /// notPrinted COPY root is dug through to the COPY input's def, which
+    /// must then live in the same block as the COPY. The lastOp/
+    /// moveRespectingCover terminality half (:3277-3290) is registered as
+    /// GETPARAM-FORLOOP-GAPSET-0001 ①.
+    fn test_terminal_statement(
+        loop_def: &crate::op::PcodeOpRef,
+        slot: usize,
+    ) -> bool {
+        use crate::op::pcodeop_flags::NONPRINTING;
+        let slot_vn = match loop_def.0.read().unwrap().get_in(slot) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let mut vn = slot_vn;
+        let mut res_op = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return false, // cc:3261: !vn->isWritten()
+        };
+        // cc:3264-3269: `if (finalOp->code()==CPUI_COPY && finalOp->notPrinted())`
+        // — dig through a suppressed COPY to the value it forwards. Any dig
+        // failure (input unwritten, or the dug root outside the COPY's
+        // block) rejects, mirroring the `return 0` arms.
+        enum Dig {
+            NotNeeded,
+            Found(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                  std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>),
+            Reject,
+        }
+        let dig = {
+            let fg = res_op.read().unwrap();
+            if fg.opcode == crate::opcodes::OpCode::CPUI_COPY
+                && (fg.flags & NONPRINTING) != 0
+            {
+                match fg.get_in(0) {
+                    // cc:3265-3266: vn = finalOp->getIn(0); must be written.
+                    Some(dug) => {
+                        let dug_def = dug.read().unwrap().get_def();
+                        match dug_def {
+                            Some(dd) => {
+                                // cc:3267-3268: resOp must live in the same
+                                // block as the COPY (the slot's parent
+                                // block).
+                                let copy_parent =
+                                    fg.parent.as_ref().and_then(|w| w.upgrade());
+                                let dug_parent = dd
+                                    .read()
+                                    .unwrap()
+                                    .parent
+                                    .as_ref()
+                                    .and_then(|w| w.upgrade());
+                                let same_block = match (copy_parent, dug_parent) {
+                                    (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+                                    _ => false,
+                                };
+                                if same_block {
+                                    Dig::Found(dug.clone(), dd)
+                                } else {
+                                    Dig::Reject
+                                }
+                            }
+                            None => Dig::Reject,
+                        }
+                    }
+                    None => Dig::Reject,
+                }
+            } else {
+                Dig::NotNeeded
+            }
+        };
+        match dig {
+            Dig::NotNeeded => {}
+            Dig::Found(dug_vn, dug_def) => {
+                vn = dug_vn;
+                res_op = dug_def;
+            }
+            Dig::Reject => return false,
+        }
+        // cc:3271: if (!vn->isExplicit()) return 0;
+        if !vn.read().unwrap().is_explicit() {
+            return false;
+        }
+        // cc:3272-3273: if (resOp->notPrinted()) return 0; — the statement
+        // MUST still be printable (the extraction marks happen after this
+        // gate, mirroring finalizePrinting's order).
+        if (res_op.read().unwrap().flags & NONPRINTING) != 0 {
+            return false;
+        }
+        true
+    }
+
 }
 
 impl Action for ActionStructureTransform {
@@ -13657,355 +16778,18 @@ impl Action for ActionStructureTransform {
         if !analyze_for_loops {
             return Ok(action_status::NO_CHANGE);
         }
-        // BlockGraph::finalTransform (block.cc:1355-1362) recursively visits
-        // every component in list order before the enclosing BlockWhileDo
-        // performs its own transform (block.cc:3356). Rugra stores each
-        // structured subtype's components directly, so build the same
-        // post-order explicitly. The pointer set only guards malformed/shared
-        // Rust stand-ins; Ghidra's component hierarchy is a tree.
-        let mut transform_order = Vec::new();
-        let mut transform_stack = fd
-            .sblocks
-            .blocks
-            .iter()
-            .rev()
-            .map(|block| (block.clone(), false))
-            .collect::<Vec<_>>();
-        let mut discovered = std::collections::HashSet::new();
-        while let Some((block, children_done)) = transform_stack.pop() {
-            let identity = Arc::as_ptr(&block) as *const () as usize;
-            if children_done {
-                transform_order.push(block);
-                continue;
-            }
-            if !discovered.insert(identity) {
-                continue;
-            }
-            let children = {
-                let rg = block.read().unwrap();
-                match rg.get_type() {
-                    BlockType::List => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockList>()
-                        .map(|list| list.children.clone())
-                        .unwrap_or_default(),
-                    BlockType::Condition => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockCondition>()
-                        .map(|condition| vec![condition.first.clone(), condition.second.clone()])
-                        .unwrap_or_default(),
-                    BlockType::If => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockIf>()
-                        .map(|if_block| {
-                            let mut components = vec![if_block.condition.clone()];
-                            // A one-component BlockIf is the unstructured
-                            // if-goto form (block.hh:652-655).
-                            if if_block.goto_target.is_none() {
-                                components.push(if_block.if_body.clone());
-                                if let Some(else_body) = &if_block.else_body {
-                                    components.push(else_body.clone());
-                                }
-                            }
-                            components
-                        })
-                        .unwrap_or_default(),
-                    BlockType::WhileDo => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockWhileDo>()
-                        .map(|while_do| vec![while_do.condition.clone(), while_do.body.clone()])
-                        .unwrap_or_default(),
-                    BlockType::DoWhile => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockDoWhile>()
-                        .map(|do_while| vec![do_while.condition.clone()])
-                        .unwrap_or_default(),
-                    BlockType::InfLoop => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockInfLoop>()
-                        .map(|inf_loop| vec![inf_loop.body.clone()])
-                        .unwrap_or_default(),
-                    BlockType::Switch => rg
-                        .as_any()
-                        .downcast_ref::<crate::block::BlockSwitch>()
-                        .map(|switch| {
-                            let mut components = vec![switch.control.clone()];
-                            components.extend(switch.cases.iter().cloned());
-                            if let Some(default_case) = &switch.default_case {
-                                if !components
-                                    .iter()
-                                    .any(|component| Arc::ptr_eq(component, default_case))
-                                {
-                                    components.push(default_case.clone());
-                                }
-                            }
-                            components
-                        })
-                        .unwrap_or_default(),
-                    _ => Vec::new(),
-                }
-            };
-            transform_stack.push((block, true));
-            for child in children.into_iter().rev() {
-                transform_stack.push((child, false));
-            }
-        }
-        for bl_arc in transform_order {
-            // Downcast to BlockWhileDo (block.rs:1449). WhileDo has named
-            // `condition` (head) and `body` (tail) fields.
-            let wd = {
-                let rg = bl_arc.read().unwrap();
-                if rg.get_type() != BlockType::WhileDo {
-                    continue;
-                }
-                let any = rg.as_any();
-                let Some(wd) = any.downcast_ref::<crate::block::BlockWhileDo>() else {
-                    continue;
-                };
-                if wd.has_overflow_syntax() {
-                    continue;
-                }
-                // Clone the Arcs out so we can drop the borrow before mutating.
-                (wd.condition.clone(), wd.body.clone())
-            };
-            let (condition_arc, body_arc) = wd;
-
-            // block.cc:3362-3365: getFrontLeaf() yields the BlockCopy at the
-            // front of the loop condition; subBlock(0) is its live Basic.
-            let Some(copy_leaf) = crate::block::front_leaf(&bl_arc) else {
-                continue;
-            };
-            let head_arc = {
-                let leaf = copy_leaf.read().unwrap();
-                if leaf.get_type() != BlockType::Copy {
-                    continue;
-                }
-                let Some(head) = leaf.sub_block(0) else {
-                    continue;
-                };
-                head
-            };
-            let head_ops = {
-                let head = head_arc.read().unwrap();
-                if head.get_type() != BlockType::Basic {
-                    continue;
-                }
-                head.get_ops()
-            };
-
-            // block.cc:3371-3372 uses the condition subtree's virtual
-            // lastOp(), not a concrete BlockBasic downcast.
-            let cbranch = {
-                let condition = condition_arc.read().unwrap();
-                let Some(cbranch) = condition.last_op() else {
-                    continue;
-                };
-                let is_cb = cbranch.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
-                if !is_cb {
-                    continue;
-                }
-                cbranch
-            };
-
-            // block.cc:3366-3376 obtains the body subtree's virtual lastOp,
-            // then follows the op's parent to the actual tail Basic.
-            let body_last = {
-                let body = body_arc.read().unwrap();
-                let Some(last) = body.last_op() else {
-                    continue;
-                };
-                last
-            };
-            let Some(tail_arc) = body_last
-                .0
-                .read()
-                .unwrap()
-                .parent
-                .as_ref()
-                .and_then(|parent| parent.upgrade())
-            else {
-                continue;
-            };
-            let tail_slot = {
-                let tail = tail_arc.read().unwrap();
-                if tail.get_type() != BlockType::Basic || tail.size_out() != 1 {
-                    continue;
-                }
-                let Some(edge) = tail.get_out(0) else {
-                    continue;
-                };
-                if !Arc::ptr_eq(&edge.point, &head_arc) || edge.reverse_index < 0 {
-                    continue;
-                }
-                edge.reverse_index as usize
-            };
-            let last_op = if body_last.0.read().unwrap().is_branch() {
-                let Some(previous) = body_last
-                    .0.read()
-                    .unwrap()
-                    .previous_op_in_block(&fd.obank)
-                else {
-                    continue;
-                };
-                previous
-            } else {
-                body_last
-            };
-            // findLoopVariable (block.cc:3164-3213): the CBRANCH condition
-            // (slot 1) must be written by a comparison; one of that
-            // comparison's inputs must be defined by a MULTIEQUAL living in the
-            // head block, and that MULTIEQUAL's tail-slot input must be defined
-            // by our iterate op in the tail block.
-            //   cbranch.in[1].def  = comparison op
-            //   comparison.in[k].def = MULTIEQUAL (in head)
-            //   MULTIEQUAL.in[tailslot].def = iterate op (in tail)
-            let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
-            let Some(cond_vn) = cond_vn else { continue };
-            let comparison = cond_vn.read().unwrap().get_def();
-            let Some(comparison) = comparison else { continue ;
-            };
-            // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
-            // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
-            // non-MULTIEQUAL defs; for the common `i < N` form the loop
-            // variable is a direct comparison input, which we handle here.
-            let mut found: Option<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = None;
-            let comp_ref = crate::op::PcodeOpRef(comparison.clone());
-            let comp_incount = comp_ref.0.read().unwrap().num_input();
-            for k in 0..comp_incount {
-                let vn = match comp_ref.0.read().unwrap().get_in(k) {
-                    Some(v) => v.clone(),
-                    None => continue,
-                };
-                let multieq = vn.read().unwrap().get_def();
-                let Some(multieq) = multieq else { continue };
-                // The MULTIEQUAL must live in the head block. Compare by Arc
-                // pointer identity with head_ops.
-                let me_parent = multieq
-                    .read()
-                    .unwrap()
-                    .parent
-                    .as_ref()
-                    .and_then(|w| w.upgrade());
-                let in_head = me_parent
-                    .as_ref()
-                    .map(|p| Arc::ptr_eq(p, &head_arc))
-                    .unwrap_or(false)
-                    || head_ops.iter().any(|o| Arc::ptr_eq(&o.0, &multieq));
-                if !in_head {
-                    continue;
-                }
-                let me_ref = crate::op::PcodeOpRef(multieq.clone());
-                // block.cc:3174/3190 selects the MULTIEQUAL input whose slot
-                // is the tail edge's reciprocal slot at the loop head.
-                let Some(tivn) = me_ref.0.read().unwrap().get_in(tail_slot).cloned() else {
-                    continue;
-                };
-                let Some(idef) = tivn.read().unwrap().get_def() else {
-                    continue;
-                };
-                let iparent = idef
-                    .read()
-                    .unwrap()
-                    .parent
-                    .as_ref()
-                    .and_then(|parent| parent.upgrade());
-                if !iparent
-                    .as_ref()
-                    .map(|parent| Arc::ptr_eq(parent, &tail_arc))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                if idef.read().unwrap().is_marker() {
-                    continue;
-                }
-                // Rugra still lacks the full PcodeOp::isMoveable closure.
-                // Preserve the existing conservative INT_ADD gate whenever
-                // the candidate is not already the tail's final statement.
-                if !Arc::ptr_eq(&idef, &last_op.0)
-                    && idef.read().unwrap().opcode != OpCode::CPUI_INT_ADD
-                {
-                    continue;
-                }
-                found = Some((me_ref, crate::op::PcodeOpRef(idef)));
-                break;
-            }
-            let Some((loop_def, iterate_op)) = found else {
-                continue;
-            };
-            // iterateOp located (block.cc:3379). Build the for-loop init/iter
-            // expressions and set them on the BlockWhileDo so printc can emit
-            // for(init;cond;iter) instead of while(cond).
-            // Init: the MULTIEQUAL input opposite the tail reciprocal slot.
-            // Iter: the iterate op expression (e.g. "i + 1").
-            let init_str = {
-                let mut result = String::new();
-                if tail_slot <= 1 {
-                    let entry_slot = 1 - tail_slot;
-                    if let Some(entry_vn) = loop_def.0.read().unwrap().get_in(entry_slot) {
-                        let vn_rg = entry_vn.read().unwrap();
-                        if vn_rg.is_constant() {
-                            result = format!("#{}", vn_rg.get_offset());
-                        } else {
-                            result = format!("var_{:x}", vn_rg.get_offset());
-                        }
-                    }
-                }
-                result
-            };
-            // Iter: the iterate op's expression. For INT_ADD(i, #1) → "i + 1".
-            let iter_str = {
-                let io = iterate_op.0.read().unwrap();
-                if io.opcode == OpCode::CPUI_INT_ADD && io.num_input() >= 2 {
-                    let in0 = io.get_in(0).map(|v| v.clone());
-                    let in1 = io.get_in(1).map(|v| v.clone());
-                    let out = io.output.as_ref().map(|v| v.clone());
-                    let lhs = out
-                        .map(|v| {
-                        let vr = v.read().unwrap();
-                        format!("var_{:x}", vr.get_offset())
-                    })
-                        .unwrap_or_default();
-                    let rhs = match (&in0, &in1) {
-                        (Some(a), Some(b)) => {
-                            let ar = a.read().unwrap();
-                            let br = b.read().unwrap();
-                            if br.is_constant() {
-                                format!("var_{:x} + {}", ar.get_offset(), br.get_offset())
-                            } else if ar.is_constant() {
-                                format!("var_{:x} + {}", br.get_offset(), ar.get_offset())
-                            } else {
-                                format!("var_{:x} + var_{:x}", ar.get_offset(), br.get_offset())
-                            }
-                        }
-                        _ => String::new(),
-                    };
-                    if !lhs.is_empty() && !rhs.is_empty() {
-                        format!("{} = {}", lhs, rhs)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                }
-            };
-            // Rugra can suppress the iterator only when it can also carry
-            // both expressions into its for-loop printer. Otherwise keep the
-            // statement visible, matching Ghidra's fail-closed transform.
-            if init_str.is_empty() || iter_str.is_empty() {
-                continue;
-            }
-            iterate_op.0.write().unwrap().flags |= NONPRINTING;
-            let mut bl_write = bl_arc.write().unwrap();
-            if let Some(wd) = bl_write
-                .as_any_mut()
-                .downcast_mut::<crate::block::BlockWhileDo>()
-            {
-                wd.for_init = Some(init_str);
-                wd.for_iter = Some(iter_str);
-            }
-            self.count += 1;
-        }
+        // The WhileDo for-header extraction (findLoopVariable /
+        // findInitializer / finalizePrinting, block.cc:3158-3423) does NOT
+        // run here. Ghidra's finalTransform at this position RELOCATES the
+        // iterate/initialize ops to be terminal statements of their blocks
+        // via opUninsert/opInsertAfter (block.cc:3381-3396) — a move
+        // Rugra's op bank cannot express and which stays UNDONE
+        // (registered: GETPARAM-FORLOOP-OPMOVE-0001). The header statements
+        // themselves are extracted later, at the oracle's
+        // ActionFinalStructure::apply → graph.finalizePrinting slot
+        // (blockaction.cc:2192, pipeline :5736 — see the placement note on
+        // `for_loop_finalize_printing` for Rugra's ActionPrototypeWarnings
+        // :5737 stand-in and the relocation plan).
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
     }
@@ -14076,6 +16860,216 @@ impl ActionReturnSplit {
         }
         true
     }
+
+    /// Faithful port of `ActionReturnSplit::gatherReturnGotos`
+    /// (blockaction.cc:2205-2234): for each in-edge source of the RETURN
+    /// block `parent`, follow `getCopyMap()` into the structured tree and
+    /// walk the ancestor chain; the edge is a \e goto predecessor iff the
+    /// chain contains a `t_goto` block whose `gotoPrints()` holds and whose
+    /// goto target resolves to `parent`, or a `t_if` block whose (if-goto)
+    /// `getGotoTarget()` resolves to `parent` (cc:2215-2229, target descent
+    /// `while(ret->getType()!=t_basic) ret=ret->subBlock(0)` at cc:2223-2224
+    /// — `BlockCopy::subBlock` returns the mirrored ORIGINAL basic,
+    /// block.hh:524, so the comparison is original-block pointer identity).
+    ///
+    /// Rugra's structured tree keeps components via typed fields without
+    /// bottom-up parent wiring, so the ancestor-chain walk is realized as
+    /// the equivalent top-down subtree scan: an in-edge source is selected
+    /// iff its structured copy is a leaf under a qualifying node. The
+    /// oracle's per-block marks (`setMark`/`clearMark`, scoped to a single
+    /// RETURN's gather→select→clear cycle within cc:2283-2306) are carried
+    /// as the `active_ancestors` path counter of the walk — observably
+    /// identical because no state escapes between set and clear.
+    ///
+    /// `gotoPrints()` is evaluated live exactly as the oracle's mid-pipeline
+    /// virtual call does (block.cc:2881-2890), via the per-parent-type
+    /// `nextFlowAfter` dispatch (block.cc:1335/2899/3053/3127/3341/3448/
+    /// 3476/3639) — not the `prints_precomputed` transport, which
+    /// ActionFinalStructure only fills later in the pipeline.
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos
+    fn gather_return_gotos(
+        fd: &Funcdata,
+        parent: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        in_count: usize,
+    ) -> Vec<bool> {
+        let mut walk = GatherReturnGotosWalk {
+            parent_ptr: Arc::as_ptr(parent) as *const u8 as usize,
+            selected_leaves: std::collections::HashSet::new(),
+            active_ancestors: 0,
+            gotoblocks: 0,
+        };
+        let roots = fd.sblocks.blocks.clone();
+        // Root level = BlockGraph::nextFlowAfter sibling rule (block.cc:1335-
+        // 1353): each root's successor is the next root's front leaf; the
+        // last root defers to the (null) parent — the oracle's null at root.
+        // Shared dispatch source with the goto-prints walk (block.rs).
+        let root_succs = crate::block::graph_sibling_successors(&roots, None);
+        for (root, succ) in roots.into_iter().zip(root_succs) {
+            walk.visit(&root, succ);
+        }
+        // Selection walk (cc:2291-2303): in-edge i is split iff the copy-map
+        // chain of its source holds a marked node ⟺ the copy is a leaf under
+        // a qualifying subtree.
+        let mut marked = vec![false; in_count];
+        let parent_rg = parent.read().unwrap();
+        for i in 0..in_count {
+            let Some(edge) = parent_rg.get_in(i) else { continue };
+            let copy = edge
+                .point
+                .read()
+                .unwrap()
+                .get_copy_map()
+                .and_then(|weak| weak.upgrade());
+            if let Some(copy) = copy {
+                if walk
+                    .selected_leaves
+                    .contains(&(Arc::as_ptr(&copy) as *const u8 as usize))
+                {
+                    marked[i] = true;
+                }
+            }
+        }
+        marked
+    }
+}
+
+/// Per-parent traversal state of the gather walk (`gatherReturnGotos`'s
+/// mark vec + ancestor-chain bookkeeping). `gotoblocks` mirrors the oracle's
+/// `vec` size for the cc:2285 `gotoblocks.empty()` decision (recorded while
+/// scanning; the selected-edge vector already encodes the same predicate).
+// RUGRA-GLUE: mark-set transport for blockaction.cc:2205 gatherReturnGotos
+/// (Ghidra marks live on FlowBlock flags; Rugra composites default the
+/// setMark/clearMark trait to a no-op, so the marks ride the walk instead —
+/// same set/gather/select/clear scope, cc:2213-2306).
+struct GatherReturnGotosWalk {
+    parent_ptr: usize,
+    selected_leaves: std::collections::HashSet<usize>,
+    active_ancestors: usize,
+    gotoblocks: usize,
+}
+
+impl GatherReturnGotosWalk {
+    /// One node of the cc:2210-2232 chain walk, realized top-down: qualify
+    /// the node (cc:2213-2229), record copy leaves under qualifying
+    /// ancestors, then recurse into the component list with the
+    /// parent-type-aware successors.
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos (chain walk)
+    fn visit(
+        &mut self,
+        node: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        succ: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+    ) {
+        use crate::block::{BlockGoto, BlockIf, BlockType};
+        let bt = node.read().unwrap().get_type();
+        // cc:2213-2229: qualification — t_goto needs gotoPrints + target,
+        // t_if only a (non-null) if-goto target; both then descend the
+        // target to its original basic and compare against `parent`.
+        let qualified = match bt {
+            BlockType::Goto => {
+                // cc:2215-2217: if (((BlockGoto*)bl)->gotoPrints())
+                //   ret = ((BlockGoto*)bl)->getGotoTarget();
+                let target = node
+                    .read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockGoto>()
+                    .and_then(|g| g.target_dyn.clone());
+                match target {
+                    Some(t) => {
+                        self.goto_prints(&t, &succ) && Self::front_basic_hits(&t, self.parent_ptr)
+                    }
+                    None => false,
+                }
+            }
+            BlockType::If => {
+                // cc:2219-2221: ret = ((BlockIf*)bl)->getGotoTarget(); —
+                // null for a proper if, set only by newBlockIfGoto
+                // (block.cc:1808).
+                let target = node
+                    .read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockIf>()
+                    .and_then(|b| b.goto_target.clone());
+                match target {
+                    Some(t) => Self::front_basic_hits(&t, self.parent_ptr),
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        if qualified {
+            self.active_ancestors += 1;
+            self.gotoblocks += 1;
+        }
+        // cc:2212 + 2292-2302: a copy leaf whose ancestor chain contains a
+        // marked node is a selected goto-predecessor source.
+        if bt == BlockType::Copy && self.active_ancestors > 0 {
+            self.selected_leaves.insert(Arc::as_ptr(node) as *const u8 as usize);
+        }
+        let components = crate::block::BlockGraph::component_list_dyn(node);
+        if !components.is_empty() {
+            let succs =
+                crate::block::next_flow_after_successors(node, &components, succ);
+            for (child, child_succ) in components.into_iter().zip(succs) {
+                self.visit(&child, child_succ);
+            }
+        }
+        if qualified {
+            self.active_ancestors -= 1;
+        }
+    }
+
+    /// `BlockGoto::gotoPrints` (block.cc:2881-2890), live parent-present
+    /// arm: `gotobl = getGotoTarget()->getFrontLeaf(); nextbl =
+    /// <parent's nextFlowAfter(this)>; return gotobl != nextbl`. Both leaves
+    /// sit at the BlockCopy level (getFrontLeaf stops at t_copy, block.cc:344);
+    /// None-vs-None compares equal (C++ null == null).
+    // Ghidra: block.cc:2881 BlockGoto::gotoPrints
+    fn goto_prints(
+        &self,
+        target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        succ: &Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+    ) -> bool {
+        let gotobl = crate::block::front_leaf(target);
+        match (gotobl, succ.clone()) {
+            (Some(a), Some(b)) => !Arc::ptr_eq(&a, &b),
+            (None, None) => false,
+            _ => true,
+        }
+    }
+
+    /// Target descent of cc:2222-2225: `if (ret != 0) { while
+    /// (ret->getType() != t_basic) ret = ret->subBlock(0); if (ret == parent)
+    /// ... }` — walk `subBlock(0)` (BlockCopy::subBlock = the mirrored
+    /// original, block.hh:524) down to the original basic block and compare
+    /// pointer identity with the RETURN's parent. A broken (componentless)
+    /// chain yields false; the oracle cannot express that case (it would
+    /// deref null), so this is the same predicate on every non-broken chain.
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos (target descent)
+    fn front_basic_hits(
+        target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        parent_ptr: usize,
+    ) -> bool {
+        use crate::block::BlockType;
+        let mut cur = target.clone();
+        loop {
+            let (is_basic, next) = {
+                let rg = cur.read().unwrap();
+                (
+                    rg.get_type() == BlockType::Basic,
+                    rg.sub_block(0),
+                )
+            };
+            if is_basic {
+                return Arc::as_ptr(&cur) as *const u8 as usize == parent_ptr;
+            }
+            match next {
+                Some(n) => cur = n,
+                None => return false,
+            }
+        }
+    }
 }
 
 impl Action for ActionReturnSplit {
@@ -14093,15 +17087,14 @@ impl Action for ActionReturnSplit {
         // substitute could never reproduce (its clones shared the original
         // RETURN's pre-value placeholder).
         //
-        // gatherReturnGotos (blockaction.cc:2212-2240) walks the STRUCTURED
-        // copy-map chain for t_goto (gotoPrints) / t_if (gotoTarget) blocks.
-        // Rugra's structurer keeps BlockGoto/BlockIf goto targets implicit
-        // (goto_target: None) and never sets the originals' copy maps, so
-        // the structured form is unavailable; the basic-block proxy (in-edge
-        // source ending in an explicit BRANCH/CBRANCH = the edge is an
-        // unstructured branch, i.e. what the structurer renders as goto)
-        // is used instead — the same detection the previous substitute used,
-        // only the transform is now the real nodeSplit.
+        // gatherReturnGotos (blockaction.cc:2205-2234, ported in
+        // `gather_return_gotos` above): the goto-predecessor detection walks
+        // the STRUCTURED copy-map tree for t_goto (gotoPrints) / t_if
+        // (if-goto gotoTarget) blocks whose target resolves to the RETURN
+        // block — only edges the structurer actually left unstructured are
+        // split. The former substitute (any in-edge source ending in an
+        // explicit BRANCH/CBRANCH) fired on structured if/else edges too and
+        // was removed (ACTION-TRAVERSAL-144-0001 / TRAVERSAL144 §4).
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
@@ -14139,30 +17132,11 @@ impl Action for ActionReturnSplit {
             if !Self::is_splittable(&ops) {
                 continue;
             }
-            // gatherReturnGotos: mark each in-edge source that ends in an
-            // explicit branch (the goto-predecessor proxy).
-            let mut marked: Vec<bool> = vec![false; *in_count];
-            let mut any_marked = false;
-            {
-                let parent_rg = parent_arc.read().unwrap();
-                for slot in 0..*in_count {
-                    let Some(edge) = parent_rg.get_in(slot) else { continue ;
-                    };
-                    let pred_arc = edge.point.clone();
-                    let last_op = pred_arc.read().unwrap().get_ops().into_iter().last();
-                    let is_goto = match last_op {
-                        Some(o) => {
-                            let opc = o.0.read().unwrap().opcode;
-                            opc == OpCode::CPUI_BRANCH || opc == OpCode::CPUI_CBRANCH
-                        }
-                        None => false,
-                    };
-                    if is_goto {
-                        marked[slot] = true;
-                        any_marked = true;
-                    }
-                }
-            }
+            // gatherReturnGotos (blockaction.cc:2284): per in-edge, does the
+            // structured copy-map chain of the source contain a goto-printing
+            // BlockGoto / if-goto BlockIf targeting this RETURN block.
+            let marked = Self::gather_return_gotos(fd, parent_arc, *in_count);
+            let any_marked = marked.iter().any(|&m| m);
             if !any_marked {
                 continue; // gotoblocks.empty() (blockaction.cc:2287)
             }
@@ -14184,20 +17158,25 @@ impl Action for ActionReturnSplit {
             }
         }
 
-        let mut splits = 0;
         for i in 0..splitedge.len() {
             fd.node_split(&retnode[i], splitedge[i]);
+            // cc:2317 `count += 1` per nodeSplit — carried by the inherited
+            // member, harvested via take_count_delta (action.cc:319/361).
             self.count += 1;
-            splits += 1;
         }
-        // Ghidra's apply returns 0 but does `count += 1` per split, which
-        // Action::perform translates into a rule_repeatapply re-entry of the
-        // fullloop (action.cc:332 lcount<count) — that re-entry is what
-        // re-structures the CFG after nodeSplit's structureReset. Rugra's
-        // Action trait carries the change through apply's return value (the
-        // sanctioned count-bridge; same convention as ActionMarkImplied),
-        // so the split count is returned instead of a bare 0.
-        Ok(splits)
+        // Ghidra's apply returns 0 unconditionally (cc:2323 `return 0;`);
+        // perform's lcount<count check (action.cc:327) reads the member,
+        // which take_count_delta below drains into ActionState (a positive
+        // return would feed state.count a second time).
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (blockaction.cc:2317 `count += 1` per nodeSplit) into the Rust
+    // ActionState accumulator harvested by Action::perform (action.cc:319
+    // calls apply, 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "returnsplit" mirrors ctor at blockaction.hh:337
@@ -14860,6 +17839,16 @@ impl Action for ActionNodeJoin {
     fn get_name(&self) -> &str {
         "nodejoin"
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (incremented at blockaction.cc:2355 inside apply) into the Rust
+    // ActionState accumulator — same adapter as ActionConstantPtr et al.
+    // Without it the stage projection under-reports nodejoin's result/
+    // count/apply even though the join executed identically
+    // (PARSECONFIG-NODEJOIN-COUNT-0001, ordinal-81 divergence).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -14948,6 +17937,83 @@ mod tests {
             fd.funcp.return_type.as_ref(),
             crate::type_system::datatype::Datatype::Void(_)
         ));
+    }
+
+    // Ghidra: coreaction.cc:2779-2803 ActionNameVars::lookForBadJumpTables
+    /// Trigger proof for the bad-jump-table consumer (CALLSPEC-0001 (c)):
+    /// a CALLIND whose FuncCallSpecs carries `isbadjumptable=true` (set by
+    /// truncateIndirectJump's default failure arm, flow.cc:754) renames the
+    /// ScopeLocal symbol of the in(0) switch-variable high to
+    /// UNRECOVERED_JUMPTABLE via makeNameUnique; with the flag false —
+    /// the production default until the flow setter lands — the symbol is
+    /// untouched (the E2E corpora show the same 0-trigger dormancy).
+    #[test]
+    fn test_namevars_look_for_bad_jump_tables_rename_fires_on_flag() {
+        use crate::fspec::FuncCallSpecs;
+
+        // CALLIND with output RAX and in(0)=RSI (the putative switch
+        // variable the truncation leaves as the call target).
+        let mut raw = crate::pcoderaw::PcodeOpRaw::new(
+            crate::opcodes::OpCode::CPUI_CALLIND as i32);
+        raw.set_output(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Register,
+            0x0,
+            8,
+        ));
+        raw.add_input(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Register,
+            0x30,
+            8,
+        ));
+        let mut fd = Funcdata::new("badjt", crate::address::Address::new(0x2000), 0x10);
+        fd.scope = Some(crate::varmap::ScopeLocal::new());
+        fd.inject_raw_ops(&[raw]);
+        fd.set_high_level();
+
+        // Attach the callspec the way the truncate boundary does
+        // (new_for_op + add_call_specs_owner; the CALLIND spec takes no
+        // in(0) swap — flow.cc:708/736).
+        let call_op = fd
+            .obank
+            .optree
+            .iter()
+            .find(|op| op.0.read().unwrap().opcode == OpCode::CPUI_CALLIND)
+            .cloned()
+            .expect("injected CALLIND present");
+        let fc = FuncCallSpecs::new_for_op(
+            &call_op,
+            crate::flow::default_call_spec_proto(),
+        );
+        fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+
+        // Link a ScopeLocal symbol onto the in(0) high (the linkSymbols
+        // cc:2963 path that precedes lookForBadJumpTables in apply).
+        let in0 = call_op.0.read().unwrap().get_in(0).cloned().expect("in(0)");
+        let sym_idx = fd.link_symbol(&in0).expect("local symbol created");
+        let before = fd.scope.as_ref().unwrap().symbols[sym_idx].name.clone();
+
+        // (1) Dormant state — flag false (production default: the flow
+        // setter handover is pending) — no rename.
+        ActionNameVars::look_for_bad_jump_tables(&mut fd);
+        assert_eq!(fd.scope.as_ref().unwrap().symbols[sym_idx].name, before);
+
+        // (2) Triggered state — setBadJumpTable(true) (flow.cc:754) —
+        // rename to makeNameUnique("UNRECOVERED_JUMPTABLE").
+        fd.callspecs[0].write().unwrap().set_bad_jump_table(true);
+        ActionNameVars::look_for_bad_jump_tables(&mut fd);
+        assert_eq!(
+            fd.scope.as_ref().unwrap().symbols[sym_idx].name,
+            "UNRECOVERED_JUMPTABLE"
+        );
+        // The rename is visible through the local-scope channel that
+        // ActionNameVars' write-back bridge publishes to the high.
+        let high = in0.read().unwrap().high.clone().expect("high assigned");
+        let high_ptr = std::sync::Arc::as_ptr(&high) as usize;
+        assert_eq!(
+            fd.high_symbols.get(&high_ptr),
+            Some(&sym_idx),
+            "local-scope symbol channel intact after rename"
+        );
     }
 
     // Ghidra: coreaction.cc:4901-4909 ActionPrototypeWarnings::apply (isModelUnknown arm)
@@ -15645,6 +18711,97 @@ mod tests {
         assert_eq!(op_ref.0.read().unwrap().num_input(), 3);
     }
 
+    /// funcLinkOutput coreaction.cc:1543-1544: a locked 1-byte TYPE_BOOL
+    /// return marks the call op as calculated-boolean when type recovery is
+    /// on (the per-run reset default).
+    #[test]
+    fn test_funclink_output_marks_calculated_bool() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto};
+        let bool_t = std::sync::Arc::new(crate::type_system::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "bool".into(), 1, crate::type_system::TypeMetatype::Bool,
+            ),
+        ));
+        let proto = FuncProto::new("callee".into(), bool_t.clone());
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x9000, 8),
+        ));
+        let mut call_op = crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x2000), 0),
+            crate::opcodes::OpCode::CPUI_CALL,
+        );
+        call_op.inrefs = vec![target_vn];
+        let op_ref = crate::op::PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(
+            call_op,
+        )));
+        fd.obank.alivelist.push(op_ref.clone());
+        let fc = FuncCallSpecs::new_for_op(&op_ref, proto);
+        fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+        // new_for_op deliberately drops the caller proto (CALLSPEC-0001);
+        // install the locked bool return the way the signature channel does.
+        {
+            let mut fc_mut = fd.get_call_specs_mut(0).unwrap();
+            fc_mut.prototype.return_type = bool_t;
+            fc_mut.prototype.set_output_lock(true);
+        }
+        // Type recovery ON (per-run reset default) → mark fires.
+        fd.set_type_recovery_on(true);
+        ActionFuncLink::func_link_output(&mut fd, 0, &op_ref);
+        assert!(
+            op_ref.0.read().unwrap().is_calculated_bool(),
+            "sz==1 TYPE_BOOL locked output must mark the call op"
+        );
+    }
+
+    /// coreaction.cc:1543-1544 channel gates: recovery off, or size != 1,
+    /// or non-BOOL metatype → no mark.
+    #[test]
+    fn test_funclink_output_bool_mark_gates() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto};
+        use crate::type_system::TypeMetatype;
+        let mk = |name: &str, sz: usize, meta: TypeMetatype| {
+            std::sync::Arc::new(crate::type_system::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(name.into(), sz, meta),
+            ))
+        };
+        for (name, sz, meta, recovery_on) in [
+            ("bool", 1usize, TypeMetatype::Bool, false),
+            ("bool", 2, TypeMetatype::Bool, true),
+            ("int", 1, TypeMetatype::Int, true),
+        ] {
+            let proto = FuncProto::new("callee".into(), mk(name, sz, meta));
+            let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+            let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_constant(0x9000, 8),
+            ));
+            let mut call_op = crate::op::PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 0),
+                crate::opcodes::OpCode::CPUI_CALL,
+            );
+            call_op.inrefs = vec![target_vn];
+            let op_ref = crate::op::PcodeOpRef(std::sync::Arc::new(
+                std::sync::RwLock::new(call_op),
+            ));
+            fd.obank.alivelist.push(op_ref.clone());
+            let fc = FuncCallSpecs::new_for_op(&op_ref, proto);
+            fd.add_call_specs_owner(std::sync::Arc::new(std::sync::RwLock::new(fc)));
+            {
+                let mut fc_mut = fd.get_call_specs_mut(0).unwrap();
+                fc_mut.prototype.return_type = mk(name, sz, meta);
+                fc_mut.prototype.set_output_lock(true);
+            }
+            fd.set_type_recovery_on(recovery_on);
+            ActionFuncLink::func_link_output(&mut fd, 0, &op_ref);
+            assert!(
+                !op_ref.0.read().unwrap().is_calculated_bool(),
+                "{name}(sz={sz}) with recovery_on={recovery_on} must NOT mark"
+            );
+        }
+    }
+
     /// FuncCallSpecs.is_input_locked: true when all params type-locked.
     #[test]
     fn test_funcspecs_is_input_locked() {
@@ -15667,6 +18824,137 @@ mod tests {
         let fc = FuncCallSpecs::new(Address::new(0x1000), proto);
         assert!(fc.is_input_locked());
     }
+
+    /// Helper: INT_LESS(typed uint constant, constant) -> non-explicit outvn
+    /// with a lone descendant op of the given opcode, wired so that
+    /// ActionSetCasts::mark_explicit_unsigned reaches the lone-reader arm
+    /// (cast.cc:63-66).
+    fn build_mark_unsigned_scenario(
+        fd: &mut Funcdata,
+        lone_opcode: OpCode,
+    ) -> (
+        crate::op::PcodeOpRef,
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let pc = crate::address::Address::new(0x1000);
+        let op = fd.new_op(2, pc);
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_LESS);
+        let c0 = fd.new_constant(4, 5);
+        let c1 = fd.new_constant(4, 7);
+        fd.op_set_input(&op, c0.clone(), 0);
+        fd.op_set_input(&op, c1, 1);
+        let outvn = fd.new_unique_out(4, &op);
+        let lone = fd.new_op(2, crate::address::Address::new(0x1002));
+        fd.op_set_opcode(&lone, lone_opcode);
+        let _lone_out = fd.new_unique_out(4, &lone);
+        fd.op_set_input(&lone, outvn.clone(), 0);
+        let c = fd.new_constant(4, 0);
+        fd.op_set_input(&lone, c, 1);
+        fd.obank.alivelist.push(op.clone());
+        fd.obank.alivelist.push(lone);
+        // UINT read-facing type on the slot-0 constant and INT on the other
+        // side (cast.cc:47-50 / cc:53-58 gates). An untyped constant reports
+        // UNKNOWN — which is unsigned-family — so cc:56 would reject with
+        // "other side forces unsigned"; the INT makes the other side inert.
+        // Set AFTER wiring: op_set_input must keep the very Arc it was given
+        // (single descendant ⇒ no constant dedup copy).
+        let typed_in = op
+            .0
+            .read()
+            .unwrap()
+            .get_in(0)
+            .cloned()
+            .expect("slot 0 wired");
+        let other_in = op.0.read().unwrap().get_in(1).cloned().expect("slot 1 wired");
+        assert!(
+            std::sync::Arc::ptr_eq(&typed_in, &c0),
+            "no constant dedup may swap the typed input"
+        );
+        let tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let uint_dt = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Uint)
+            .expect("uint base type");
+        typed_in.write().unwrap().v_type = Some(uint_dt);
+        let int_dt = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .expect("int base type");
+        other_in.write().unwrap().v_type = Some(int_dt);
+        (op, c0, outvn)
+    }
+
+    /// markExplicitUnsigned lone-reader arm (cast.cc:63-66): an output whose
+    /// lone descendant does not inherit sign blocks the mark (false, no
+    /// UNSIGNED_PRINT flag); a sign-inheriting lone descendant lets the mark
+    /// land (true + flag).
+    #[test]
+    fn test_mark_explicit_unsigned_lone_arm_semantics() {
+        let strategy = crate::type_system::cast::CastStrategyC::new(4);
+
+        let mut fd1 = Funcdata::new("t_markunsigned_neg", crate::address::Address::new(0), 8);
+        let (op1, c0_1, _out1) =
+            build_mark_unsigned_scenario(&mut fd1, OpCode::CPUI_SUBPIECE);
+        assert!(
+            !ActionSetCasts::mark_explicit_unsigned(&fd1, &op1, 0, &strategy),
+            "SUBPIECE lone reader does not inherit sign => false (cast.cc:65)"
+        );
+        assert_eq!(
+            c0_1.read().unwrap().addlflags & crate::varnode::addl_flags::UNSIGNED_PRINT,
+            0,
+            "blocked arm must not set unsignedprint"
+        );
+
+        let mut fd2 = Funcdata::new("t_markunsigned_pos", crate::address::Address::new(0), 8);
+        let (op2, c0_2, _out2) = build_mark_unsigned_scenario(&mut fd2, OpCode::CPUI_INT_ADD);
+        assert!(
+            ActionSetCasts::mark_explicit_unsigned(&fd2, &op2, 0, &strategy),
+            "INT_ADD lone reader inherits sign => true (cast.cc:69-70)"
+        );
+        assert_ne!(
+            c0_2.read().unwrap().addlflags & crate::varnode::addl_flags::UNSIGNED_PRINT,
+            0,
+            "vn->setUnsignedPrint() must have run"
+        );
+    }
+
+    /// Lock-hygiene pin for the lifted scrutinee in mark_explicit_unsigned
+    /// (family: ER ruleaction SubRight / EW castInput / EM3 cover_dirty).
+    /// The exact production call shape must release the outvn read guard at
+    /// the `let` statement, so a write lock on outvn taken while inspecting
+    /// the lone descendant (the body shape that deadlocked ER/EW in
+    /// production) completes instead of self-deadlocking. Run in a worker
+    /// thread with a hard timeout so a regression to the scrutinee-guard
+    /// shape fails fast instead of hanging the harness.
+    #[test]
+    fn test_mark_explicit_unsigned_lone_arm_guard_released_before_body() {
+        let mut fd = Funcdata::new("t_markunsigned_pin", crate::address::Address::new(0), 8);
+        let (_op, _c0, outvn) =
+            build_mark_unsigned_scenario(&mut fd, OpCode::CPUI_SUBPIECE);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let outvn_thread = outvn.clone();
+        let handle = std::thread::spawn(move || {
+            // Exact production call shape of the lifted arm:
+            let lone_descend = outvn_thread.read().unwrap().lone_descend();
+            if let Some(lone) = lone_descend {
+                // Pre-lift `if let Some(x) = outvn.read().unwrap()...` kept
+                // the read guard alive here, so this write self-deadlocks
+                // (std RwLock is non-reentrant) — the exact ER/EW failure.
+                let _guard = outvn_thread.write().unwrap();
+                assert!(!ActionSetCasts::op_inherits_sign(
+                    lone.read().unwrap().opcode
+                ));
+                tx.send(()).unwrap();
+            } else {
+                panic!("lone descendant must exist");
+            }
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+            "scrutinee read guard must be released before the if-let body"
+        );
+        handle.join().unwrap();
+    }
 }
 
     /// ActionRestructureVarnode now calls sync_varnodes_with_symbols.
@@ -15679,6 +18967,87 @@ mod tests {
         let status = action.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");
+    }
+
+    /// SETVARNODE-SCOPELOCAL-CONSUMER-0001: the platform parameter-symbol
+    /// install mirrors ProtoStoreSymbol::setInput's usepoint choice
+    /// (fspec.cc:3153, 3166-3169). A register-storage param — storage no
+    /// scope window owns — falls back to `restricted_usepoint` = function
+    /// entry − 1 (funcdata.cc:69 `funcp.setScope(localmap, baseaddr + -1)`,
+    /// fspec.hh:1288): the symbol is NOT address-tied and its one-point
+    /// uselimit {fd−1} admits queries only at the function entry (the input
+    /// varnode's own usepoint, varnode.cc:696-703) — later op outputs at
+    /// the param register no longer fold the entry flags. A MEMORY-class
+    /// stack param inside the resetLocalWindow tree (localRange ∪
+    /// paramRange, varmap.cc:441-458) keeps the INVALID usepoint → the
+    /// empty-uselimit addMap branch → address-tied symbol
+    /// (database.cc:1149-1150).
+    #[test]
+    fn test_action_restructure_param_symbol_usepoint() {
+        use crate::address::Address;
+        use crate::fspec::{protoparam_flags, FuncProto, ProtoParameter};
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        use std::sync::Arc;
+
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let long_t = Arc::new(Datatype::Base(TypeBase::new(
+            "long".to_string(), 8, TypeMetatype::Int,
+        )));
+
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let mut proto = FuncProto::new("t".into(), long_t.clone());
+        let mut p_reg =
+            ProtoParameter::new("regp".into(), int_t.clone(), Address::new(0x30));
+        p_reg.flags |= protoparam_flags::TYPE_LOCKED | protoparam_flags::NAME_LOCKED;
+        let mut p_stk =
+            ProtoParameter::new("stkp".into(), long_t.clone(), Address::new(0x8));
+        p_stk.address_space = AddressSpace::Stack;
+        p_stk.flags |= protoparam_flags::TYPE_LOCKED | protoparam_flags::NAME_LOCKED;
+        proto.add_parameter(p_reg);
+        proto.add_parameter(p_stk);
+        fd.funcp = proto;
+        assert!(fd.funcp.is_input_locked());
+
+        let mut action = ActionRestructureVarnode::new();
+        action.apply(&mut fd).unwrap();
+
+        let scope = fd.scope.as_ref().expect("scope built");
+        let regp = scope
+            .symbols
+            .iter()
+            .find(|s| s.name == "regp")
+            .expect("register param symbol installed");
+        let stkp = scope
+            .symbols
+            .iter()
+            .find(|s| s.name == "stkp")
+            .expect("stack param symbol installed");
+
+        // Register param: restricted_usepoint = 0x1000 − 1, NOT addrtied
+        // (fspec.cc:3167-3168 → database.cc:1149 gate closed).
+        assert_eq!(regp.usepoint, Some(0xfff));
+        assert!(!regp.addrtied);
+        // The entry answers a query at the function entry (the input
+        // varnode's usepoint) but NOT at a later op address.
+        assert!(
+            scope
+                .find_container_entry(AddressSpace::Register, 0x30, 4, Some(0xfff))
+                .is_some()
+        );
+        assert!(
+            scope
+                .find_container_entry(AddressSpace::Register, 0x30, 4, Some(0x1234))
+                .is_none()
+        );
+
+        // Stack param inside paramRange [0,511]: INVALID usepoint survives
+        // (discoverScope hit) → empty uselimit → addrtied (cc:3167 keeps
+        // the default; database.cc:1149-1150 sets the flag).
+        assert_eq!(stkp.usepoint, None);
+        assert!(stkp.addrtied);
     }
 
     // ---- ActionSetCasts tests ----
@@ -16745,11 +20114,61 @@ mod tests {
         // Build the live CFG shape consumed by block.cc:3362-3378. The entry
         // edge is inserted before the tail back-edge so the latter occupies
         // head incoming slot 1, matching MULTIEQUAL input slot 1 above.
-        let entry = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        let entry_bb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             2,
             Address::new(0x0800),
-        ))) as std::sync::Arc<
+        )));
+        let entry = entry_bb.clone() as std::sync::Arc<
             std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        // Initializer statement in the entry block: i_init = COPY(#5),
+        // mirroring the real induction loop (block.cc:3218 findInitializer
+        // requires the loopDef entry input to be defined in the block that
+        // flows only into the head).
+        let five_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(5, 4)));
+        let mut init_copy = PcodeOp::new(
+            SeqNum::new(Address::new(0x0804), 0),
+            OpCode::CPUI_COPY,
+        );
+        init_copy.parent = Some(std::sync::Arc::downgrade(&(
+            entry_bb.clone() as std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >
+        )));
+        init_copy.inrefs = vec![five_vn];
+        init_copy.output = Some(i_init.clone());
+        let init_copy_ref =
+            PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(init_copy)));
+        i_init.write().unwrap().def =
+            Some(std::sync::Arc::downgrade(&init_copy_ref.0));
+        entry_bb.write().unwrap().add_op(init_copy_ref.clone());
+        // Named highs (typed auto-name grammar) so the late renderer can
+        // resolve for-header variable names the way printc would.
+        {
+            let int4 = std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "int".to_string(),
+                    4,
+                    crate::type_system::TypeMetatype::Int,
+                ),
+            ));
+            let make_high = |vn: &std::sync::Arc<std::sync::RwLock<Varnode>>, nm: &str| {
+                let mut h = crate::variable::HighVariable::new(int4.clone());
+                h.name = nm.to_string();
+                h.instances = vec![vn.clone()];
+                let ha = std::sync::Arc::new(std::sync::RwLock::new(h));
+                vn.write().unwrap().high = Some(ha);
+            };
+            make_high(&i_init, "iVar2");
+            make_high(&i_vn, "iVar3");
+            make_high(&i_update, "iVar4");
+        }
+        // Post-ActionMarkImplied state (oracle OPFLAGS witness: the init
+        // COPY output and iterate INT_ADD output are both explicit when
+        // finalizePrinting runs). testTerminal's isExplicit gate
+        // (block.cc:3271) reads these flags, so the fixture simulates the
+        // :5720 product directly.
+        i_init.write().unwrap().set_explicit();
+        i_update.write().unwrap().set_explicit();
         let exit = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             3,
             Address::new(0x3000),
@@ -16791,15 +20210,53 @@ mod tests {
         fd.sblocks.add_block(list);
         // iterate op (INT_ADD) must be printable before.
         assert_eq!(add_ref.0.read().unwrap().flags & NONPRINTING, 0);
+        // ActionStructureTransform (:5715) only relocates ops in Ghidra and
+        // does NOT extract the header statements (that is finalizePrinting,
+        // block.cc:3399, at print time). Its apply must leave the block
+        // untouched.
         let mut a = ActionStructureTransform::new();
         let _ = a.apply(&mut fd).unwrap();
-        // After the transform the iterate op is marked non-printing, and a
-        // candidate was counted.
-        assert_eq!(a.count, 1, "one for-loop detected");
+        assert_eq!(a.count, 0, "structuretransform never counts (blockaction.cc:2110-2115)");
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(
+                wd.for_init.is_none() && wd.for_iter.is_none(),
+                "structuretransform does not extract for-headers (finalizePrinting's job)"
+            );
+        }
+        assert_eq!(
+            add_ref.0.read().unwrap().flags & NONPRINTING,
+            0,
+            "iterate op stays printable until finalizePrinting"
+        );
+        // The late extraction (Rugra placement of BlockWhileDo::
+        // finalizePrinting, hooked at ActionPrototypeWarnings :5737).
+        crate::coreaction::for_loop_finalize_printing(&mut fd);
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(wd.for_init.is_some() && wd.for_iter.is_some(), "one for-loop detected");
+            assert_eq!(
+                wd.for_init.as_deref(),
+                Some("iVar2 = 5"),
+                "init slot renders <name> = <const>"
+            );
+            assert_eq!(
+                wd.for_iter.as_deref(),
+                Some("iVar4 = iVar3 + 1"),
+                "iterate slot renders <name> = <name> + <const>"
+            );
+        }
         assert_ne!(
             add_ref.0.read().unwrap().flags & NONPRINTING,
             0,
-            "iterate op must be marked non-printing (for-loop semantics)"
+            "iterate op must be marked non-printing (block.cc:3421)"
+        );
+        assert_ne!(
+            init_copy_ref.0.read().unwrap().flags & NONPRINTING,
+            0,
+            "initializer must be marked non-printing (block.cc:3422-3423)"
         );
 
         // block.cc:3361 refuses overflow syntax before inspecting the loop.
@@ -16811,9 +20268,15 @@ mod tests {
             wd.for_iter = None;
             wd.set_overflow_syntax();
         }
-        let mut overflow_action = ActionStructureTransform::new();
-        let _ = overflow_action.apply(&mut fd).unwrap();
-        assert_eq!(overflow_action.count, 0, "overflow loop must be skipped");
+        crate::coreaction::for_loop_finalize_printing(&mut fd);
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(
+                wd.for_init.is_none() && wd.for_iter.is_none(),
+                "overflow loop must be skipped"
+            );
+        }
         assert_eq!(
             add_ref.0.read().unwrap().flags & NONPRINTING,
             0,
@@ -16822,16 +20285,26 @@ mod tests {
     }
 
     /// ActionReturnSplit must synthesize a new RETURN op at each goto
-    /// predecessor of a multi-in-edge splittable RETURN block.
+    /// predecessor of a multi-in-edge splittable RETURN block — where
+    /// "goto predecessor" is the structured-tree detection of
+    /// gatherReturnGotos (blockaction.cc:2205-2234), NOT the removed
+    /// BRANCH/CBRANCH proxy. Phase A: BRANCH-ending in-edge sources with no
+    /// goto structure → no split (regression for the proxy). Phase B: the
+    /// same CFG with the sources' structured copies wrapped in BlockGotos
+    /// targeting the RETURN block → both edges qualify, "can't split ALL"
+    /// pops one, exactly one nodeSplit runs.
     #[test]
     fn test_returnsplit_creates_return_at_goto_pred() {
         use crate::address::{Address, SeqNum};
-        use crate::block::BlockBasic;
+        use crate::block::{BlockBasic, BlockCopy, BlockGoto, FlowBlock};
         use crate::op::{PcodeOp, PcodeOpRef};
         use crate::opcodes::OpCode;
         use crate::varnode::Varnode;
+        type DynBlk = std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
-        // Two goto predecessors (b1, b2) each ending in a BRANCH, both flowing
+        // Two predecessors (b1, b2) each ending in a BRANCH, both flowing
         // into the RETURN block (ret). ret has >1 in-edge and is splittable
         // (only a RETURN op with constant-ish inputs).
         let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
@@ -16849,13 +20322,17 @@ mod tests {
         Varnode::new_constant(0, 1),
     ))];
         let ro_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(ro)));
-        ro_ref.0.write().unwrap().parent =
-            Some(std::sync::Arc::downgrade(
-        &(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
-    ));
+        let ret_dyn: DynBlk = ret.clone();
+        ro_ref
+            .0
+            .write()
+            .unwrap()
+            .parent
+            .replace(std::sync::Arc::downgrade(&ret_dyn));
         ret.write().unwrap().add_op(ro_ref.clone());
         fd.obank.alivelist.push(ro_ref.clone());
-        // b1 ends in BRANCH, b2 ends in BRANCH (goto predecessors).
+        // b1 ends in BRANCH, b2 ends in BRANCH — under the faithful
+        // gatherReturnGotos this alone must NOT mark them as goto preds.
         for (blk, addr) in [(&b1, 0x1100u64), (&b2, 0x1200u64)] {
             let mut br = PcodeOp::new(SeqNum::new(Address::new(addr), 0), OpCode::CPUI_BRANCH);
             br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(
@@ -16872,14 +20349,80 @@ mod tests {
         fd.bblocks.add_block(ret.clone());
         fd.bblocks.add_edge(b1.clone(), ret.clone());
         fd.bblocks.add_edge(b2.clone(), ret.clone());
-        // sblocks must be non-empty (the early-out).
-        fd.sblocks
-        .add_block(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+
+        // Structured mirrors (buildCopy, block.cc:1925-1938): a BlockCopy per
+        // original, each original's copy_map pointing at its copy.
+        let mk_copy = |source: &DynBlk, idx: i32| -> DynBlk {
+            std::sync::Arc::new(std::sync::RwLock::new(BlockCopy {
+                index: idx,
+                flags: 0,
+                parent: None,
+                self_ref: None,
+                original: source.clone(),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                immed_dom: None,
+                copy_map: None,
+                visit_count: 0,
+                num_desc: -1,
+                dom_depth: -1,
+                dom_children: Vec::new(),
+                dom_frontier: std::collections::HashSet::new(),
+            }))
+        };
+        let b1_dyn: DynBlk = b1.clone();
+        let b2_dyn: DynBlk = b2.clone();
+        let copy_b1 = mk_copy(&b1_dyn, 1);
+        let copy_b2 = mk_copy(&b2_dyn, 2);
+        let copy_ret = mk_copy(&ret_dyn, 3);
+        b1.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_b1)));
+        b2.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_b2)));
+        ret.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_ret)));
+
+        // Phase A: structure WITHOUT goto wrappers — plain copies only.
+        // The BRANCH-ending in-edges must not be selected (proxy removed).
+        fd.sblocks.clear();
+        fd.sblocks.add_block(copy_ret.clone());
+        fd.sblocks.add_block(copy_b1.clone());
+        fd.sblocks.add_block(copy_b2.clone());
         let alives_before = fd.obank.alivelist.len();
         let mut a = ActionReturnSplit::new();
+        let res_a = a.apply(&mut fd).unwrap();
+        assert_eq!(a.count, 0, "no structured goto → no split");
+        assert_eq!(res_a, 0, "apply reports no change without goto structure");
+        assert_eq!(
+            fd.obank.alivelist.len(),
+            alives_before,
+            "phase A must not create ops"
+        );
+
+        // Phase B: same CFG, sources wrapped in BlockGotos targeting the
+        // RETURN's copy ([copy_ret, goto1, goto2] root order: goto1 prints
+        // because its successor leaf copy_b2 != target copy_ret; goto2 is
+        // last → null successor → prints — block.cc:2881-2890).
+        let mk_goto = |wrapped: &DynBlk, target: &DynBlk, idx: i32| -> DynBlk {
+            std::sync::Arc::new(std::sync::RwLock::new(BlockGoto {
+                index: idx,
+                flags: 0,
+                parent: None,
+                goto_target: None,
+                target_dyn: Some(target.clone()),
+                wrapped: Some(wrapped.clone()),
+                goto_type: crate::block::goto_type::GOTO_GOTO,
+                prints_precomputed: false,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+            }))
+        };
+        let goto1 = mk_goto(&copy_b1, &copy_ret, 1);
+        let goto2 = mk_goto(&copy_b2, &copy_ret, 2);
+        fd.sblocks.clear();
+        fd.sblocks.add_block(copy_ret.clone());
+        fd.sblocks.add_block(goto1.clone());
+        fd.sblocks.add_block(goto2.clone());
         let _ = a.apply(&mut fd).unwrap();
-        // One goto predecessor gets its own RETURN (the other is kept as the
-        // original — Ghidra can't split ALL in edges). count == 1.
+        // Both goto predecessors qualify, but Ghidra can't split ALL in
+        // edges (blockaction.cc:2309-2312), so exactly one nodeSplit runs.
         assert_eq!(a.count, 1, "one RETURN synthesized");
         assert!(
             fd.obank.alivelist.len() > alives_before,
@@ -17639,7 +21182,7 @@ mod tests {
         assert!(!ActionSetCasts::is_op_identical(&td_int8, &int8, None));
     }
 
-    // Ghidra: coreaction.cc:2673 ActionSetCasts::castInput arm order
+    // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput arm order
     /// The double-cast guard is TWO nested levels: the outer arm
     /// `isWritten && def==CAST` (cc:2673) consumes the branch regardless of
     /// implied, and only the inner level tests isImplied (cc:2674). A

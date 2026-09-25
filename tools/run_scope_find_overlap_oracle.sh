@@ -21,7 +21,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=9ea2a78
+rugra_base_commit=94789db
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/scope_find_overlap_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/scope_find_overlap_1204.cc"
@@ -29,7 +29,24 @@ rust_fixture="$repo_root/tests/oracle/scope_find_overlap_1204.rs"
 funcdata_rs="$repo_root/src/funcdata.rs"
 doc_funcdata="$repo_root/docs/api/funcdata.md"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+# 2026-08-30: the pre-reboot canonical system slot is preferred; after a
+# reboot the hash-pinned blob from the /tmp oracle env extraction is
+# accepted (identical f9ca64d0 content) so the gate cannot silently rot.
+bfd_library=""
+for bfd_candidate in \
+  /usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so \
+  "$bfd_include/../lib/x86_64-linux-gnu/libbfd-2.38-system.so"; do
+  if [[ -f "$bfd_candidate" && ! -L "$bfd_candidate" ]] && \
+     [[ "$(sha256sum -- "$bfd_candidate" | cut -d' ' -f1)" == \
+        f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e ]]; then
+    bfd_library="$bfd_candidate"
+    break
+  fi
+done
+if [[ -z "$bfd_library" ]]; then
+  echo "no libbfd-2.38-system.so matching f9ca64d0... in the known slots" >&2
+  exit 1
+fi
 
 oracle_tmp=$(mktemp -d /tmp/rugra-scope-find-overlap-1204.XXXXXX)
 cleanup() {
@@ -68,6 +85,8 @@ mkdir -p "$rugra_workspace"
 git -C "$repo_root" archive "$rugra_base_commit" -- \
   Cargo.toml Cargo.lock build.rs README.md src sleigh_shim benches \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
+  tests/oracle/infertypes_settle_1204.rs tests/oracle/varmap_dupdecl_1204.rs \
+  tests/oracle/funcdata_nodesplit_space_1204.rs \
   | tar -x -C "$rugra_workspace"
 cp "$funcdata_rs" "$rugra_workspace/src/funcdata.rs"
 mkdir -p "$rugra_workspace/ghidra"
@@ -130,7 +149,8 @@ rustc --edition=2021 "$rust_fixture" \
   -L "dependency=$oracle_tmp/cargo-target/debug/deps" \
   -o "$oracle_tmp/scope_find_overlap_1204_rust"
 
-"$oracle_tmp/scope_find_overlap_1204_cpp" \
+LD_LIBRARY_PATH="$(dirname -- "$bfd_library")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$oracle_tmp/scope_find_overlap_1204_cpp" \
   "$repo_root/sleigh_specs" "$repo_root/examples/curl" \
   >"$oracle_tmp/ghidra.stdout" 2>"$oracle_tmp/ghidra.stderr"
 "$oracle_tmp/scope_find_overlap_1204_rust" \

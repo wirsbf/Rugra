@@ -1,0 +1,42 @@
+# B2BANK projection bank entry (mechanism B2 solidified fixture).
+# Frozen anchor: any byte change to the two .projection files must go
+# through re-capture from both producers and re-verification.
+function = "strcmp"
+corpus = "httpd"
+entry = "0x2ad70"
+# PLT thunk: httpd is stripped, so the slot carries no BFD symbol in any
+# table; captured through the oracle harness address-only arm
+# (STAGE_PROJ_ADDR registration, console "load <addr>" mirror) and on the
+# rugra side through the driver stage ledger PLT-thunk arm
+# (HBANK-DRIVER-STAGELEDGER-0001, address-form selector). func_name META
+# differs by construction (oracle nameFunction default vs driver ledger
+# spelling) and is advisory under the bisect contract, like the constprop
+# spellings and the curl PLT entries.
+
+[oracle]
+side = "oracle"
+commit = "e40ed13014025f82488b1f8f7bca566894ac376b"
+tag = "Ghidra_12.0.4_build"
+producer_blob = "24a4bec28f2786d0b0f4b23e540c67228519b92f"
+capture_command = "RUGRA_STAGE_PROJECTION_OUT=tests/fixtures/projections/httpd_plt_strcmp/oracle.projection bash tools/run_stage_projection_oracle.sh httpd 2ad70 -"
+pin_mode = "bank-sha256"
+date = "2026-09-25"
+
+[rugra]
+side = "rugra"
+driver_commit = "534f9802640119dbdc96a64554f086a3fc930356"
+driver_profile = "fast-release"
+capture_command = "RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=0x2ad70 RUGRA_STAGE_PROJ_OUT=tests/fixtures/projections/httpd_plt_strcmp/rugra.projection cargo run --profile fast-release --example httpd_decompile"
+date = "2026-09-25"
+
+[verification]
+tool = "tools/run_stage_bisect.sh (stage_bisect.py --v1 strict offsets)"
+status = "MATCH"
+stages = 186
+ops = 742
+date = "2026-09-25"
+
+[integrity]
+oracle_sha256 = "279433e24fb18944241dc1e7bc935ee75d6fca5cc08730c4013c05d205f16e7e"
+rugra_sha256 = "d5a2c3aa4ecbd9ea933e5e58fba3e5e65ea5752aef6bb93ebaace9a47e0ca3a7"
+binary_sha256 = "805f89cdbdce827f8b6ccd877aa7c344ff1105713b7bf7b0e6f313affa93b1c1"

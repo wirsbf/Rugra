@@ -170,7 +170,7 @@ impl RangeHint {
             let (next, newoff) = sub.get_sub_type(cur_mod);
             match next {
                 Some(n) => {
-                    sub = Arc::new(n.clone());
+                    sub = n;
                     cur_mod = newoff;
                 }
                 None => break,
@@ -439,7 +439,18 @@ impl RangeHint {
         if self.high_ind < 0 {
             return false;
         }
-        let settype = match &self.dtype {
+        // Datatype *settype = type; (varmap.cc:180) — a LOCAL stand-in for
+        // this range's type. The oracle commits `type = settype` only at
+        // varmap.cc:208, AFTER the `diffsz > highind` bounds check rejects
+        // an out-of-limits absorb. Writing self.dtype before that check
+        // (the old `self.dtype = Some(b_dt)` at the keep_b arm) leaked b's
+        // type into this range even when the join was rejected — the
+        // GENSMOKE-S2-TYPEINFER-METATYPE-0001 poison entry: the -0x40 int8
+        // canary hint rejected at diffsz=4 > highind=3 still flipped the
+        // -0x60 open range from xunknown8 to int8, and the caller's
+        // `cur.size = next->sstart - cur.sstart` + createEntry stamped
+        // int8[4] into the symbol layer, seeding the whole feedback loop.
+        let mut settype = match &self.dtype {
             Some(t) => t.clone(),
             None => return false,
         };
@@ -485,7 +496,12 @@ impl RangeHint {
                 }
             };
             if keep_b {
-                self.dtype = Some(b_dt);
+                // settype = b->type; (varmap.cc:192) — local reassignment
+                // only; self.dtype is NOT touched here. The diffsz modulo
+                // below then uses the (possibly new) settype's align size,
+                // exactly as the oracle reads settype->getAlignSize() at
+                // varmap.cc:205 after the reassignment.
+                settype = b_dt;
             }
         }
         if self.is_type_lock() {
@@ -503,6 +519,9 @@ impl RangeHint {
         if diffsz > self.high_ind as i64 {
             return false;
         }
+        // type = settype; (varmap.cc:208) — commit the (possibly replaced)
+        // type only now that every check has passed.
+        self.dtype = Some(settype);
         self.absorb(b);
         true
     }
@@ -929,7 +948,22 @@ fn resolve_rsp_offset_via_bank(
     None
 }
 
-// Ghidra: varmap.hh:137 AliasChecker::resolveRspOffsetSigned
+// RUGRA-GLUE: no single Ghidra counterpart. Rugra's x86 lift keeps stack
+// accesses as RSP-derived address expressions instead of Ghidra's stack-space
+// varnodes (see gather_spacebase below), so this backward-walking resolver
+// substitutes for that visibility. Its per-opcode semantics mirror the two
+// oracle kin it must stay consistent with:
+//   - AliasChecker::gatherAdditiveBase (varmap.cc:741) walks forward from the
+//     spacebase through COPY/INT_ADD/INT_SUB/PTRADD/PTRSUB/SEGMENTOP
+//     (PTRSUB arm cc:791, PTRADD arm cc:783-789);
+//   - AliasChecker::gatherOffset (varmap.cc:817) computes constant offsets:
+//     PTRSUB like INT_ADD (cc:830-834), PTRADD const-index*stride with the
+//     non-constant index followed only when stride==1 (cc:839-849).
+// Unlike gatherOffset's lenient partial sums, this resolver is strict (it
+// returns None unless the whole chain resolves to a constant offset): its
+// caller synthesizes *fixed* RangeHints, which in the oracle come from
+// constant-address varnodes only (MapState::gatherVarnodes varmap.cc:1124);
+// variable-index (open) references enter through gather_open instead.
 /// Signed-offset variant: returns the offset relative to RSP as i64, then the
 /// caller masks to u64. This lets additive chains compose correctly.
 fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)> {
@@ -988,11 +1022,66 @@ fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)>
             drop(op);
             resolve_rsp_offset_signed(&in0)
         }
+        // Ghidra's AliasChecker::gatherOffset (varmap.cc:830-834) treats
+        // PTRSUB exactly like INT_ADD: base offset + the constant byte
+        // offset. Without this arm, every PTRSUB-addressed stack access
+        // (the form Rugra's rules produce for `lea`-shaped loads/stores)
+        // was invisible to the gather_spacebase hint synthesis.
+        OpCode::CPUI_PTRSUB => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term_const = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some(i1.get_offset() as i64)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term_const) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_add(tc), w)),
+                _ => None,
+            }
+        }
+        // gatherOffset's PTRADD arm (varmap.cc:839-849): a constant index
+        // contributes `index * stride` bytes; a non-constant index is only
+        // followed when the stride is 1 (a plain ADD in disguise — "we only
+        // follow getIn(1) if the PTRADD multiply is by 1"). Any other shape
+        // (variable index with stride != 1) cannot be resolved to a fixed
+        // stack offset.
+        OpCode::CPUI_PTRADD => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            let stride = op
+                .inrefs
+                .get(2)
+                .map(|v| v.read().unwrap().get_offset())
+                .unwrap_or(1);
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term: Option<i64> = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some((i1.get_offset() as i64).wrapping_mul(stride as i64))
+                } else if stride == 1 {
+                    drop(i1);
+                    resolve_rsp_offset_signed(in1).map(|(o, _)| o)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_add(tc), w)),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
 
-// Ghidra: varmap.cc:942 MapState::addFixedType / varmap.cc:1438 ScopeLocal::fakeInputSymbols
+// Ghidra: varmap.cc:926 MapState::addFixedType / varmap.cc:1438 ScopeLocal::fakeInputSymbols
 /// Resolve the unknown base type of `size` bytes for RangeHint typing.
 /// Ghidra draws these from the Architecture TypeFactory
 /// (`types->getBase(size,TYPE_UNKNOWN)`, varmap.cc:942/1031/1438); Rugra
@@ -1190,7 +1279,7 @@ fn param_range_in_range(paramrange: &crate::address::RangeList, offset: u64) -> 
     }
 }
 
-// Ghidra: database.cc:2571 ScopeInternal::makeNameUnique (suffix parsing)
+// Ghidra: database.cc:2553 ScopeInternal::makeNameUnique (suffix parsing)
 /// Parse the `_NN` (2-digit) or `_xNNNNN` (5-digit) uniquifier suffix that
 /// `makeNameUnique` (database.cc:2571-2593) accepts on an existing name:
 /// `bname` must be at least `nm.len()+3` chars, hold '_' at `nm.len()`, and
@@ -1434,7 +1523,8 @@ impl MapState {
 
     // Ghidra: varmap.cc:896 MapState::addRange
     /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896):
-    /// a null/zero-size type falls back to the default type, then the
+    /// a null/zero-size type is SUBSTITUTED with the default type and the
+    /// flow continues (varmap.cc:899-900 — never dropped), then the
     /// FULL extent `[st, st+sz-1]` must fit inside one range of the
     /// analysis window (`range.inRange(Address(spaceid,st),sz)`,
     /// varmap.cc:902 — address.cc:468-487) or the hint is dropped;
@@ -1446,9 +1536,19 @@ impl MapState {
     /// (-1 if not an array reference).
     pub fn add_range(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32,
                      rt: RangeType, high_ind: i32) {
-        let dtype = dtype.or_else(|| self.default_type.clone());
+        // varmap.cc:899-900: (ct == (Datatype *)0) || (ct->getSize() == 0)
+        // → ct = defaultType — a zero-size Some is SUBSTITUTED with the
+        // default type and the flow CONTINUES; it is never dropped. The
+        // default-less `MapState::new` constructor (test-only; the oracle
+        // always threads getBase(1,TYPE_UNKNOWN) here, varmap.cc:1261)
+        // cannot substitute and keeps the historical anonymous size-1
+        // fallback of the map_or below.
+        let dtype = match dtype {
+            Some(d) if d.get_size() != 0 => Some(d),
+            _ => self.default_type.clone(),
+        };
+        // varmap.cc:901: int4 sz = ct->getSize();
         let size = dtype.as_ref().map_or(1, |d| d.get_size() as i32);
-        if size <= 0 { return; }
         // if (!range.inRange(Address(spaceid,st),sz)) return; (varmap.cc:902)
         if !window_in_range(&self.range, start, size as u64) { return; }
         // intb sst = byteToAddress(st, wordSize); sst = sign_extend(sst,
@@ -1799,11 +1899,22 @@ impl MapState {
         // getTypeReadFacing(op) resolves union pointers via
         // TypePointer::findResolve (type.cc:1192-1202), so the op form is
         // required; getIn(1) is read at slot 1 (op->getSlot(this) == 1).
+        // Ghidra's Varnode ALWAYS carries a data-type — every construction
+        // path installs the factory's getBase(s,TYPE_UNKNOWN)
+        // (funcdata_varnode.cc:107 newVarnodeOut, :132 newUniqueOut,
+        // :153-154 newVarnode) and getTypeReadFacing returns `type`
+        // verbatim for non-unions (varnode.cc:639-645) — so the oracle's
+        // addGuard never sees a null ct (varmap.cc:1009-1038 has no
+        // null-ct early return). Rust models the untyped varnode as
+        // v_type=None: stand in the factory's unknown base of the address
+        // varnode's SIZE, the exact value getIn(1)->getTypeReadFacing
+        // returns in the oracle, instead of dropping the guard hint.
         let mut ct: Option<Arc<Datatype>> = {
             let op = op_arc.read().unwrap();
             let Some(in1) = op.inrefs.get(1) else { return; };
             let vn = in1.read().unwrap();
             vn.get_type_read_facing_op(&op, 1)
+                .or_else(|| Some(make_int_type(types, vn.get_size())))
         };
         // if (ct->getMetatype() == TYPE_PTR) { ct = ptrTo;
         // while (ct->getMetatype() == TYPE_ARRAY) ct = base; } (cc:1010-1014)
@@ -1815,8 +1926,6 @@ impl MapState {
                 }
                 ct = Some(base);
             }
-        } else {
-            return;
         }
         let Some(ct) = ct else { return };
         // int4 outSize; if (opc == CPUI_STORE) outSize = getIn(2)->getSize();
@@ -2125,6 +2234,18 @@ pub struct LocalSymbol {
     /// qp_scope_symbol_victim construction-order case). Accumulates across
     /// the symbol's mappings (`|=` per addMap, like the C++ flags word).
     pub property_flags: u32,
+    /// Ghidra Symbol::symbolId (database.hh:184): the database id of the
+    /// original Symbol a name recommendation came from. `ScopeLocal::
+    /// recoverNameRecommendationsForSymbols` writes it back onto the
+    /// renamed Symbol via `Scope::setSymbolId` (database.hh:557) so the
+    /// recovered Symbol keeps the recommended name's identity.
+    pub symbol_id: u64,
+    /// Ghidra Symbol::dispflags & is_this_ptr (database.hh:208): set from
+    /// ATTRIB_THISPTR at localdb decode (database.cc:445). `collectNameRecs`
+    /// (varmap.cc:367) preserves a "this" pointer's struct-pointed data-type
+    /// as a TypeRecommendation before downgrading the Symbol to a name
+    /// recommendation.
+    pub this_ptr: bool,
 }
 
 impl LocalSymbol {
@@ -2155,6 +2276,8 @@ impl LocalSymbol {
             hash: 0,
             persist: false,
             property_flags: 0,
+            symbol_id: 0,
+            this_ptr: false,
         }
     }
 
@@ -2300,6 +2423,67 @@ pub struct QueryPropertiesOutcome {
     pub final_scope: QueryFinalScope,
 }
 
+// Ghidra: varmap.hh:36 class NameRecommend
+/// A symbol name recommendation with its associated storage location.
+///
+/// The name is associated with a static Address and use point in the code.
+/// Symbols present at the end of function decompilation without a name can
+/// acquire this name if their storage matches. Faithful to `NameRecommend`
+/// (varmap.hh:36-50): `addr` keeps Rugra's split (space, offset) form since
+/// ScopeLocal symbols may live outside the stack space (linkSymbol-created
+/// register/unique/ram entries, varmap.hh storage model); `useaddr`'s
+/// invalid `Address()` is `None`.
+#[derive(Clone, Debug)]
+pub struct NameRecommend {
+    /// The starting address of the storage location (varmap.hh:37 `addr`).
+    pub space: crate::space::AddressSpace,
+    /// Storage offset (the `Address::offset` half of varmap.hh:37).
+    pub offset: u64,
+    /// The code address at the point of use; `None` = invalid Address
+    /// (varmap.hh:38 `useaddr`).
+    pub usepoint: Option<u64>,
+    /// An optional/recommended size for the variable being stored
+    /// (varmap.hh:39).
+    pub size: i32,
+    /// The local symbol name recommendation (varmap.hh:40).
+    pub name: String,
+    /// Id associated with the original Symbol (varmap.hh:41).
+    pub symbol_id: u64,
+}
+
+// Ghidra: varmap.hh:56 class DynamicRecommend
+/// A name recommendation for a particular dynamic storage location.
+///
+/// The storage is identified using the DynamicHash mechanism and may or may
+/// not exist. Faithful to `DynamicRecommend` (varmap.hh:56-68).
+#[derive(Clone, Debug)]
+pub struct DynamicRecommend {
+    /// Use point of the Symbol (varmap.hh:57 `usePoint`).
+    pub use_point: u64,
+    /// Hash encoding the Symbols environment (varmap.hh:58).
+    pub hash: u64,
+    /// The local symbol name recommendation (varmap.hh:59).
+    pub name: String,
+    /// Id associated with the original Symbol (varmap.hh:60).
+    pub symbol_id: u64,
+}
+
+// Ghidra: varmap.hh:74 class TypeRecommend
+/// Data-type for a storage location when there is no Symbol (yet).
+///
+/// Allow a data-type to be fed into a specific storage location. Currently
+/// this only applies to input Varnodes. Faithful to `TypeRecommend`
+/// (varmap.hh:74-82).
+#[derive(Clone, Debug)]
+pub struct TypeRecommend {
+    /// Storage address of the Varnode (varmap.hh:75), Rugra split form.
+    pub space: crate::space::AddressSpace,
+    /// Storage offset (the `Address::offset` half).
+    pub offset: u64,
+    /// Data-type to assign to the Varnode (varmap.hh:76).
+    pub dtype: Arc<Datatype>,
+}
+
 /// ScopeLocal: the local variable scope for a function.
 /// Corresponds to Ghidra's ScopeLocal (varmap.hh:212) extending
 /// ScopeInternal (database.hh:795).
@@ -2394,6 +2578,21 @@ pub struct ScopeLocal {
     /// no-symbol branch, database.cc:1274-1275). Production ScopeLocal
     /// instances keep this false.
     pub is_global_scope: bool,
+    /// Ghidra ScopeLocal::nameRecommend (varmap.hh:214): symbol name
+    /// recommendations for specific addresses — the store filled by
+    /// `collectNameRecs`/`addRecommendName` (varmap.cc:357/1600) and drained
+    /// by `recoverNameRecommendationsForSymbols` (varmap.cc:1507). List
+    /// order = SymbolNameTree collection order.
+    pub name_recommend: Vec<NameRecommend>,
+    /// Ghidra ScopeLocal::dynRecommend (varmap.hh:215): symbol name
+    /// recommendations for dynamic (hash-identified) locations.
+    pub dyn_recommend: Vec<DynamicRecommend>,
+    /// Ghidra ScopeLocal::typeRecommend (varmap.hh:216): data-types for
+    /// input storage locations with no Symbol, filled by the "this"-pointer
+    /// arm of `collectNameRecs` (varmap.cc:374) and consumed by
+    /// `applyTypeRecommendations` (varmap.cc:1574) from ActionInferTypes
+    /// (coreaction.cc:5398).
+    pub type_recommend: Vec<TypeRecommend>,
 }
 
 impl ScopeLocal {
@@ -2422,6 +2621,9 @@ impl ScopeLocal {
             pending_lowlevel_error: None,
             mapentry_log: Vec::new(),
             is_global_scope: false,
+            name_recommend: Vec::new(),
+            dyn_recommend: Vec::new(),
+            type_recommend: Vec::new(),
         }
     }
 
@@ -2537,6 +2739,389 @@ impl ScopeLocal {
             if entry.sym > idx {
                 entry.sym -= 1;
             }
+        }
+    }
+
+    // Ghidra: varmap.cc:1590 ScopeLocal::addTypeRecommendation
+    /// Associate a data-type with a particular storage address. If we see
+    /// an input Varnode at this address, if no other info is available, the
+    /// given data-type is applied. Faithful to `addTypeRecommendation`
+    /// (varmap.cc:1590-1594): `typeRecommend.push_back(TypeRecommend(addr,
+    /// dt))` — a plain list append, no dedup.
+    pub fn add_type_recommendation(
+        &mut self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        dt: Arc<Datatype>,
+    ) {
+        self.type_recommend.push(TypeRecommend { space, offset, dtype: dt });
+    }
+
+    // Ghidra: varmap.hh:264 ScopeLocal::hasTypeRecommendations
+    /// Are there any data-type recommendations on this scope? Faithful to
+    /// `hasTypeRecommendations` (varmap.hh:264 `!typeRecommend.empty()`).
+    /// The oracle's second producer (`Funcdata::checkParamTypeRecommendations`,
+    /// funcdata_varnode.cc:1725-1742) consults it before adding a "this"-
+    /// pointer recommendation; Rugra's param-analysis path does not build
+    /// that producer yet — registered as VARMAP-PARAMTYPERECOMM-0001 (the
+    /// store's only current producer is the collectNameRecs "this"-pointer
+    /// arm).
+    pub fn has_type_recommendations(&self) -> bool {
+        !self.type_recommend.is_empty()
+    }
+
+    // Ghidra: varmap.cc:1574 ScopeLocal::applyTypeRecommendations
+    /// Run through the recommended list, search for an input Varnode
+    /// matching the storage address and try to apply the data-type to it.
+    /// Do not override existing type lock. Faithful to
+    /// `applyTypeRecommendations` (varmap.cc:1574-1584):
+    /// `vn = fd->findVarnodeInput(dt->getSize(), (*iter).getAddress());`
+    /// `if (vn != 0) vn->updateType(dt, true, false);`
+    pub fn apply_type_recommendations(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        for rec in &self.type_recommend {
+            let vn = fd.find_varnode_input(
+                rec.dtype.get_size(),
+                rec.space,
+                crate::address::Address::new(rec.offset),
+            );
+            if let Some(vn) = vn {
+                // cc:1582: vn->updateType(dt, true, false) — lock the
+                // recommendation in, never override an existing lock
+                // (varnode.cc:474-489 updateType's override=false arm).
+                vn.write().unwrap().update_type_lock(rec.dtype.clone(), true, false);
+            }
+        }
+    }
+
+    // Ghidra: varmap.cc:1600 ScopeLocal::addRecommendName
+    /// The symbol is stored as a name recommendation and then removed from
+    /// the scope. Name recommendations are associated either with a storage
+    /// address and usepoint, or a dynamic hash. The name may be reattached
+    /// to a Symbol after decompilation. Faithful to `addRecommendName`
+    /// (varmap.cc:1600-1618):
+    ///   entry = sym->getFirstWholeMap(); if null return;
+    ///   if (entry->isDynamic()) dynRecommend.emplace_back(firstUseAddress,
+    ///     hash, name, id); else { usepoint = invalid or first UseLimit
+    ///     range; nameRecommend.emplace_back(addr, usepoint, size, name,
+    ///     id); } if (sym->getCategory() < 0) removeSymbol(sym);
+    /// Rugra's LocalSymbol carries the first whole map directly (start/
+    /// size/space/usepoint/is_dynamic/hash — the SymbolEntry projection
+    /// ScopeLocal::add_symbol installs), so `getFirstWholeMap` is the
+    /// symbol itself; a symbol with no map (the oracle's null entry) cannot
+    /// occur through ScopeLocal's own constructors (add_symbol always
+    /// installs one), and the guard keeps the decode-boundary contract.
+    pub fn add_recommend_name(&mut self, sym_idx: usize) {
+        let Some(sym) = self.symbols.get(sym_idx) else { return };
+        let category = sym.category;
+        if sym.is_dynamic {
+            // cc:1606: dynRecommend.emplace_back(entry->getFirstUseAddress(),
+            //   entry->getHash(), sym->getName(), sym->getId()).
+            self.dyn_recommend.push(DynamicRecommend {
+                use_point: sym.usepoint.unwrap_or(0),
+                hash: sym.hash,
+                name: sym.name.clone(),
+                symbol_id: sym.symbol_id,
+            });
+        } else {
+            // cc:1609-1613: usepoint = invalid Address, or the first
+            //   UseLimit range's (space, first) — LocalSymbol::usepoint is
+            //   exactly that first-use address (None = no uselimit range).
+            self.name_recommend.push(NameRecommend {
+                space: sym.space,
+                offset: sym.start,
+                usepoint: sym.usepoint,
+                size: sym.size,
+                name: sym.name.clone(),
+                symbol_id: sym.symbol_id,
+            });
+        }
+        // cc:1616-1617: if (sym->getCategory() < 0) removeSymbol(sym).
+        if category < 0 {
+            self.remove_symbol(sym_idx);
+        }
+    }
+
+    // Ghidra: varmap.cc:357 ScopeLocal::collectNameRecs
+    /// Turn any symbols that are name locked but not type locked into name
+    /// recommendations, removing the symbol in the process. This allows the
+    /// decompiler to decide on how the stack is layed out without forcing
+    /// specific variables to be mapped. But, if the decompiler does create
+    /// a variable at the specific location, it will use the original name.
+    /// Faithful to `collectNameRecs` (varmap.cc:357-381):
+    ///   nameRecommend.clear(); dynRecommend.clear();
+    ///   for sym in nametree order: if (sym->isNameLocked() &&
+    ///   !sym->isTypeLocked()) { [this-pointer arm: preserve a struct-
+    ///   pointed "this" type via addTypeRecommendation] addRecommendName(
+    ///   sym); }
+    /// The oracle walks the SymbolNameTree with a stable iterator while
+    /// `addRecommendName` removes the current symbol. The Rust port
+    /// snapshots the candidate indices in nametree order, then replays
+    /// `add_recommend_name` with immediate removal in that same order,
+    /// adjusting each snapshot index by the number of prior removals below
+    /// it (the pointer-stability seam) — the append order, the removal
+    /// timing, and the end state are identical to the oracle's single loop.
+    /// The "this"-pointer type recommendations run as a first pass over
+    /// the same snapshot (before any index shift); they land on the
+    /// separate `type_recommend` list, so the interleaving with the name
+    /// appends is unobservable to both consumers (varmap.cc:1574/1507
+    /// iterate the lists independently).
+    pub fn collect_name_recs(&mut self) {
+        self.name_recommend.clear();
+        self.dyn_recommend.clear();
+
+        // Snapshot pass (SymbolNameTree order — (name, nameDedup),
+        // database.hh:358 SymbolCompareName).
+        let mut picks: Vec<usize> = Vec::new();
+        let mut this_recs: Vec<(crate::space::AddressSpace, u64, Arc<Datatype>)> = Vec::new();
+        for &sym_idx in self.nametree.values() {
+            let sym = &self.symbols[sym_idx];
+            if !(sym.namelock && !sym.typelock) {
+                continue;
+            }
+            // cc:367-377: the "this"-pointer arm — if there is a "this"
+            // pointer whose type is a pointer to a struct, preserve the
+            // data-type even though the symbol is not preserved. Collected
+            // in nametree order and appended after the walk (the separate
+            // type_recommend list makes the interleaving with the name
+            // appends unobservable to either consumer).
+            if sym.this_ptr {
+                if let Some(dt) = sym.dtype.clone() {
+                    if let Datatype::Pointer(tp) = &*dt {
+                        if tp.ptr_to.get_metatype() == TypeMetatype::Struct {
+                            // cc:373-374: entry = sym->getFirstWholeMap();
+                            //   addTypeRecommendation(entry->getAddr(), dt).
+                            this_recs.push((sym.space, sym.start, dt));
+                        }
+                    }
+                }
+            }
+            picks.push(sym_idx);
+        }
+        for (space, offset, dt) in this_recs {
+            self.add_type_recommendation(space, offset, dt);
+        }
+        // Replay pass: addRecommendName in nametree order with immediate
+        // removal (cc:378), each snapshot index corrected by the prior
+        // removals below it.
+        let mut removed_below: Vec<usize> = Vec::new();
+        for snap_idx in picks {
+            let shift = removed_below.iter().filter(|&&j| j < snap_idx).count();
+            let live_idx = snap_idx - shift;
+            if live_idx >= self.symbols.len() {
+                continue;
+            }
+            // cc:1616-1617 arm inside addRecommendName: only category < 0
+            // symbols are removed, so only those shift later indices.
+            let will_remove = self.symbols[live_idx].category < 0;
+            self.add_recommend_name(live_idx);
+            if will_remove {
+                removed_below.push(snap_idx);
+            }
+        }
+    }
+
+    // Ghidra: varmap.cc:1507 ScopeLocal::recoverNameRecommendationsForSymbols
+    /// Run through name recommendations, checking if any match unnamed
+    /// symbols. Unlocked symbols that are presented to the decompiler are
+    /// stored off as recommended names. These can be reattached after the
+    /// decompiler makes a determination of what the final Symbols are.
+    /// This method runs through the recommended names and checks if they
+    /// can be applied to an existing unnamed Symbol. Faithful to
+    /// `recoverNameRecommendationsForSymbols` (varmap.cc:1507-1570):
+    ///   param_usepoint = fd->getAddress() - 1;
+    ///   for each nameRecommend: [invalid-usepoint arm: findOverlap entry,
+    ///     matching addr, addrtied symbol, findLinkedVarnode] |
+    ///     [valid-usepoint arm: param_usepoint -> findVarnodeInput, else
+    ///     findVarnodeWritten; symbol not addrtied; first whole map size
+    ///     match]; then renameSymbol(makeNameUnique(name)) +
+    ///     setSymbolId + namelock + remapVarnode. The dynamic tail walks
+    ///     dynRecommend through DynamicHash::findVarnode with the same
+    ///     rename/lock/remap chain.
+    pub fn recover_name_recommendations_for_symbols(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        // cc:1510: Address param_usepoint = fd->getAddress() - 1.
+        let param_usepoint = fd.baseaddr.as_u64().wrapping_sub(1);
+        for rec_idx in 0..self.name_recommend.len() {
+            let rec = self.name_recommend[rec_idx].clone();
+            let (sym_idx, vn): (usize, Option<Arc<RwLock<Varnode>>>) = match rec.usepoint {
+                None => {
+                    // cc:1518-1527: usepoint invalid — recover any Symbol
+                    // regardless of usepoint.
+                    let Some(entry) =
+                        self.find_overlap_entry(rec.space, rec.offset, rec.size)
+                    else { continue };
+                    // cc:1521-1522: entry->getAddr() must equal the
+                    // recommendation address.
+                    if entry.start != rec.offset || entry.space != rec.space {
+                        continue;
+                    }
+                    let sym_idx = entry.sym;
+                    // cc:1524-1525: the Symbol must be address tied to
+                    // match this name recommendation.
+                    if !self.symbols[sym_idx].addrtied {
+                        continue;
+                    }
+                    // cc:1526: vn = fd->findLinkedVarnode(entry).
+                    // CR-F7NAME A: the entry's own getFirstUseAddress
+                    // (database.cc:122-127): an EMPTY uselimit is the
+                    // invalid Address() — findLinkedVarnode then takes the
+                    // "first varnode at (size,addr), must be addr-tied,
+                    // else null" branch (funcdata_varnode.cc:1233-1241) —
+                    // a use-limited entry passes its first range's first
+                    // address into the usepoint-in-range scan
+                    // (funcdata_varnode.cc:1242-1249). The cc:1524-1525
+                    // addrtied gate makes the empty-uselimit form the
+                    // branch's reachable population (the SYMBOL-level
+                    // addrtied flag is set exactly when a static mapping
+                    // has an empty uselimit, database.cc:1149-1150), but
+                    // the branch itself keys on the ENTRY, so both forms
+                    // are carried. Rugra's find_linked_varnode seam marks
+                    // the invalid usestart as Address::new(0).
+                    let first_use_addr = match entry.uselimit.first() {
+                        None => crate::address::Address::new(0),
+                        Some(&(_space_idx, first, _last)) => {
+                            crate::address::Address::new(first)
+                        }
+                    };
+                    let vn = fd.find_linked_varnode(
+                        entry.start,
+                        entry.size.max(0) as usize,
+                        false,
+                        first_use_addr,
+                        0,
+                    );
+                    (sym_idx, vn)
+                }
+                Some(usepoint) => {
+                    // cc:1529-1532: the param slot (usepoint == entry
+                    // address - 1) resolves through findVarnodeInput; any
+                    // other usepoint through findVarnodeWritten.
+                    let found = if usepoint == param_usepoint {
+                        fd.find_varnode_input(
+                            rec.size.max(0) as usize,
+                            rec.space,
+                            crate::address::Address::new(rec.offset),
+                        )
+                    } else {
+                        // cc:1532: fd->findVarnodeWritten(size, addr,
+                        //   usepoint) = vbank.find(s, loc, pc, ~0)
+                        //   (funcdata.hh:333). The bank's loc comparison is
+                        //   offset-keyed (BANK-FINDINPUT-SPACE-0001's
+                        //   spaceless seam); ScopeLocal recommendations
+                        //   are stack-space in practice.
+                        fd.vbank.find_vn(
+                            rec.size.max(0) as usize,
+                            crate::address::Address::new(rec.offset),
+                            crate::address::Address::new(usepoint),
+                            u32::MAX,
+                        )
+                    };
+                    let Some(vn_found) = found else { continue };
+                    // cc:1534-1535: sym = vn->getHigh()->getSymbol(); null
+                    //   -> skip. Rugra's high→symbol link is
+                    //   Funcdata::high_symbols (populated by linkSymbols
+                    //   against this same scope — the oracle's
+                    //   `sym->getScope() != this` guard holds by
+                    //   construction).
+                    let high = {
+                        let vn_r = vn_found.read().unwrap();
+                        vn_r.high.clone()
+                    };
+                    let Some(high) = high else { continue };
+                    let high_ptr = Arc::as_ptr(&high) as usize;
+                    let Some(&sym_idx) = fd.high_symbols.get(&high_ptr) else { continue };
+                    // cc:1536-1537: an address-tied symbol cannot use an
+                    //   untied varnode as its primary map.
+                    if self.symbols[sym_idx].addrtied {
+                        continue;
+                    }
+                    // cc:1538-1540: entry = sym->getFirstWholeMap(); the
+                    //   entry's size must match the recommendation (the
+                    //   entry's addr need NOT match, cc:1539 comment).
+                    if self.symbols[sym_idx].size != rec.size {
+                        continue;
+                    }
+                    (sym_idx, Some(vn_found))
+                }
+            };
+            // cc:1542: if (!sym->isNameUndefined()) continue.
+            if !self.symbols[sym_idx].is_name_undefined() {
+                continue;
+            }
+            // cc:1543-1545: renameSymbol(sym, makeNameUnique(name)) +
+            //   setSymbolId + setAttribute(namelock). makeNameUnique's
+            //   failure is Ghidra's LowlevelError (unreachable below
+            //   100000 same-named symbols) — the let-else skips the
+            //   remainder of this recommendation on that path.
+            let Some(unique_name) = self.make_name_unique(&rec.name) else {
+                continue;
+            };
+            self.rename_symbol(sym_idx, &unique_name);
+            self.symbols[sym_idx].symbol_id = rec.symbol_id;
+            self.symbols[sym_idx].namelock = true;
+            // cc:1546-1548: if (vn != 0) fd->remapVarnode(vn, sym,
+            //   usepoint) — the oracle passes the Symbol itself
+            //   (funcdata_varnode.cc:1104-1110), which now carries the
+            //   FINAL uniquified name (CR-F7NAME B): the remap records
+            //   the post-rename name, never the pre-unique recommendation
+            //   spelling. The usepoint Address is invalid in the
+            //   invalid-usepoint arm (Address() default), matching the
+            //   oracle passing the recommendation's own useaddr.
+            if let Some(vn) = &vn {
+                let usepoint_addr = crate::address::Address::new(rec.usepoint.unwrap_or(0));
+                fd.remap_varnode(vn, &unique_name, usepoint_addr);
+            }
+        }
+
+        // cc:1551: if (dynRecommend.empty()) return.
+        if self.dyn_recommend.is_empty() {
+            return;
+        }
+        // cc:1553-1569: the dynamic tail.
+        let mut dhash = crate::dynamic::DynamicHash::new();
+        for rec_idx in 0..self.dyn_recommend.len() {
+            let rec = self.dyn_recommend[rec_idx].clone();
+            // cc:1556-1558: dhash.clear(); vn = dhash.findVarnode(fd,
+            //   dynEntry.getAddress(), dynEntry.getHash()).
+            let Some(vn_found) = dhash.find_varnode(
+                fd,
+                crate::address::Address::new(rec.use_point),
+                rec.hash,
+            ) else { continue };
+            // cc:1560: if (vn->isAnnotation()) continue.
+            if vn_found.read().unwrap().is_annotation() {
+                continue;
+            }
+            // cc:1561-1563: sym = vn->getHigh()->getSymbol(); null or
+            //   foreign-scope -> skip.
+            let high = {
+                let vn_r = vn_found.read().unwrap();
+                vn_r.high.clone()
+            };
+            let Some(high) = high else { continue };
+            let high_ptr = Arc::as_ptr(&high) as usize;
+            let Some(&sym_idx) = fd.high_symbols.get(&high_ptr) else { continue };
+            // cc:1564: if (!sym->isNameUndefined()) continue.
+            if !self.symbols[sym_idx].is_name_undefined() {
+                continue;
+            }
+            // cc:1565-1567: renameSymbol(makeNameUnique(name)) +
+            //   setAttribute(namelock) + setSymbolId. CR-F7NAME B: the
+            //   uniquified final name flows into the remap below (the
+            //   oracle passes the Symbol itself, funcdata_varnode.cc:
+            //   1120-1126, whose name is the post-rename spelling).
+            let Some(unique_name) = self.make_name_unique(&rec.name) else {
+                continue;
+            };
+            self.rename_symbol(sym_idx, &unique_name);
+            self.symbols[sym_idx].namelock = true;
+            self.symbols[sym_idx].symbol_id = rec.symbol_id;
+            // cc:1568: fd->remapDynamicVarnode(vn, sym, address, hash).
+            fd.remap_dynamic_varnode(
+                &vn_found,
+                &unique_name,
+                crate::address::Address::new(rec.use_point),
+                rec.hash,
+            );
         }
     }
 
@@ -2919,7 +3504,7 @@ impl ScopeLocal {
             .collect();
     }
 
-    // Ghidra: varmap.cc:1260 ScopeLocal::restructureVarnode (MapState construction)
+    // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode (MapState construction)
     /// Build the MapState exactly as `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1260-1261) does: the analysis range is the scope's range
     /// tree (the union installed by `reset_local_window`) with every param
@@ -2965,7 +3550,11 @@ impl ScopeLocal {
     /// annotateRawStackPtr placeholder (:1284-1285). `fd` is mutable
     /// because annotateRawStackPtr inserts PTRSUB ops (newOpBefore/
     /// opSetInput, varmap.cc:405-406).
-    pub fn restructure_varnode(&mut self, fd: &mut crate::funcdata::Funcdata) {
+    pub fn restructure_varnode(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        aliasyes: bool,
+    ) {
         // Ghidra varmap.cc:1259 `clearUnlockedCategory(-1)`（1275 为 function_parameter 另一调用） — NOT a blanket
         // clear: symbols with category >= 0 (function parameters, equates)
         // survive unconditionally (database.cc:2086 `if
@@ -3046,14 +3635,21 @@ impl ScopeLocal {
             .and_then(|a| a.types.clone())
             .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
 
-        // resetLocalWindow (varmap.cc:432-460) — the Funcdata lifecycle calls
-        // it right after scope construction (funcdata.cc:70); Rugra's
-        // restructure_varnode owns a fresh ScopeLocal per pass (coreaction.rs),
-        // which matches that lifecycle point on the FIRST pass / after a
-        // clear — from the 2nd RULE_REPEATAPPLY pass on, Ghidra keeps the
-        // narrowed window and accumulated min/max while Rugra reinstalls the
-        // full window (VARMAP-CROSSPASS-PERSISTENCE-0001).
-        self.reset_local_window(fd);
+        // resetLocalWindow (varmap.cc:432-460) is a Funcdata-lifecycle call:
+        // Ghidra runs it exactly once right after scope construction
+        // (funcdata.cc:70; again from Funcdata::clear, funcdata.cc:106) and
+        // NEVER from restructureVarnode. The scope persists across
+        // restructure passes, so the window narrowing done by
+        // markNotMapped (outgoing call-parameter slots via
+        // FuncCallSpecs::buildInputFromTrials fspec.cc:5737 and saved-register
+        // spills via ActionRestrictLocal coreaction.cc:1979/1997) survives
+        // into the next pass's MapState, where addRange's
+        // `range.inRange(Address(spaceid,st),sz)` gate (varmap.cc:902) drops
+        // hints for those slots. Rugra re-installed the full window here per
+        // pass, resurrecting entries for unmapped slots and (through
+        // markUnaliased) their varnodes' nolocalalias flag
+        // (SB-MATCHURL-ORD70-0001); reset_local_window now runs only at
+        // scope creation (coreaction.rs ActionRestructureVarnode).
 
         // Build the MapState with a default unknown base type (1 byte),
         // matching Ghidra's MapState construction (varmap.cc:1260-1261),
@@ -3105,11 +3701,14 @@ impl ScopeLocal {
         let aliases = state.get_alias().to_vec();
         // if (aliasyes) { markUnaliased(state.getAlias());
         // checkUnaliasedReturn(state.getAlias()); } (varmap.cc:1280-1282) —
-        // Rugra threads aliasyes implicitly true (the coreaction caller
-        // does not yet pass its numpass-derived flag; registered at
-        // coreaction.rs ActionRestructureVarnode TODO).
-        self.mark_unaliased(&aliases);
-        self.check_unaliased_return(fd, &aliases);
+        // aliasyes = (numpass != 0) from ActionRestructureVarnode
+        // (coreaction.cc:2279): alias calculations are not reliable on the
+        // first pass, so pass 0 skips both the unaliased marking and the
+        // return-storage check entirely.
+        if aliasyes {
+            self.mark_unaliased(&aliases);
+            self.check_unaliased_return(fd, &aliases);
+        }
         // if (!state.getAlias().empty() && state.getAlias()[0] == 0)
         //   annotateRawStackPtr(); (varmap.cc:1284-1285) — a zero offset use
         // of the stack pointer gets the placeholder PTRSUB.
@@ -3168,7 +3767,7 @@ impl ScopeLocal {
         }
     }
 
-    // Ghidra: database.cc:2022 ScopeInternal::clearCategory (cat >= 0)
+    // Ghidra: database.cc:2020 ScopeInternal::clearCategory (cat >= 0)
     /// Remove every symbol of the given category, mirroring
     /// `ScopeInternal::clearCategory` (database.cc:2022-2029) for the
     /// `cat >= 0` branch `restructureVarnode` uses with
@@ -3480,34 +4079,48 @@ impl ScopeLocal {
         // int4 num = a.size/ct->getAlignSize(); if (num>1) ct = getTypeArray(num,ct);
         let align = ct.get_align_size().max(1) as i32;
         let num = hint.size / align;
-        // NOTE: Ghidra wraps the array through glb->types->getTypeArray
-        // (varmap.cc:625), whose factory deduplication is not yet ported
-        // (no TypeFactory::getTypeArray in Rust); the array shell is built
-        // locally around the factory-owned element type. Registered as a
-        // TYPE-WIRING-0001 residual.
+        // varmap.cc:625 `ct = glb->types->getTypeArray(num,ct);` — the
+        // factory call (type.cc:3902-3909, ported as
+        // `TypeFactory::get_type_array`) mints an ANONYMOUS deduped shell
+        // (TypeArray ctor type.hh:937: name "", size = num × element
+        // ALIGN-SIZE, alignment inherited from the element). The former local
+        // shell was NAMED (`"{elem}[{num}]"`), which leaked the bracket into
+        // the type name: buildTypeStack's named-break (printc.cc:148-151)
+        // stopped at the array layer and declarations spelled `char[8] x`
+        // instead of the oracle's `char x [8]` postsurround form
+        // (array_expr printc.cc:76). TYPE-WIRING-0001 residual closed.
+        // — the array shell's size is num × ELEMENT ALIGN-SIZE, never the
+        // raw hint extent: the non-integral tail of an over-extended open
+        // hint (varmap.cc:1315) stays unmapped (余数留洞).
+        // (VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001)
         let final_dt: Arc<Datatype> = if num > 1 {
-            Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
-                base: crate::type_system::datatype::TypeBase::new(
-                    format!("{}[{}]", ct.get_name(), num),
-                    hint.size as usize,
-                    TypeMetatype::Array,
-                ),
-                array_of: ct.clone(),
-                num_elements: num as usize,
-            }))
+            types
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_type_array(num as usize, ct.clone())
         } else {
             ct
         };
 
         // addSymbol("",ct,addr,usepoint) — usepoint is the default invalid Address.
+        // The symbol's byte size is the (possibly array-wrapped) TYPE size,
+        // exactly as Ghidra's addSymbol sizes the Symbol from ct
+        // (database.cc: Symbol/SymbolEntry take the mapping extent from the
+        // data-type): varmap.cc:627 passes only the type, never a.size. An
+        // open hint extended past the next symbol's start (varmap.cc:1315
+        // `cur.size = next->sstart-cur.sstart`) routinely carries a
+        // non-integral size — e.g. 12 bytes over undefined8 elements — and
+        // createEntry rounds DOWN to whole elements (num = a.size/align,
+        // varmap.cc:623), leaving the tail bytes unmapped (oracle httpd
+        // main: -0xa8 hint extends to 12, symbol is 8 bytes, [-0xa0,-0x9c)
+        // stays symbol-less). Stamping the raw hint size here (the old
+        // `symbols[idx].size = hint.size`) extended the mapping over the
+        // hole — VARMAP-SPALIAS-RETYPE-0001 drill evidence. add_symbol
+        // already sizes the symbol from final_dt; no post-write.
         let start = hint.start;
-        let size = hint.size;
-        let idx = self.add_symbol(
+        let _ = self.add_symbol(
             crate::space::AddressSpace::Stack, "", Some(final_dt), start, None,
         );
-        // SymbolEntry extent: [start, start+size); kept on LocalSymbol for
-        // Rugra's query_by_addr/find_symbol consumers.
-        self.symbols[idx].size = size;
     }
 
     // Ghidra: varmap.cc:548 ScopeLocal::buildVariableName
@@ -4453,40 +5066,102 @@ impl ScopeLocal {
     }
 
     // Ghidra: varmap.cc:1332 ScopeLocal::markUnaliased
-    /// Mark symbols as unaliased based on alias starting offsets.
-    /// Faithful to `ScopeLocal::markUnaliased` (varmap.cc:1332).
-    ///
-    /// For each symbol, walk the sorted alias offsets: once an alias offset
-    /// reaches or passes the symbol's end, aliasing is "on" for that symbol.
-    /// A symbol far enough (0xffff bytes) past the last alias boundary is
-    /// considered unaliased (varmap.cc:1374). Locked struct/array types can
-    /// block aliasing, but Rugra does not yet model `alias_block_level`, so
-    /// only the distance heuristic is applied here.
     fn mark_unaliased(&mut self, aliases: &[u64]) {
-        if aliases.is_empty() {
-            // No aliases → all unaliased.
-            for sym in &mut self.symbols {
-                sym.unaliased = true;
-            }
-            return;
-        }
+        // int4 alias_block_level = glb->alias_block_level; (varmap.cc:1347) —
+        // default 2 = "block structs and arrays" (architecture.cc:1430). The
+        // fixture fallback 0 ("block none") only applies to scope probes
+        // without an attached Architecture.
+        let alias_block_level = self
+            .arch_lookup
+            .as_ref()
+            .map(|a| a.alias_block_level)
+            .unwrap_or(0);
 
-        for sym in &mut self.symbols {
-            let curoff = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
-            // Find the largest alias offset <= curoff.
-            let mut aliason = false;
-            let mut curalias = 0u64;
-            for &a in aliases {
-                if a <= curoff {
-                    aliason = true;
-                    curalias = a;
-                }
+        // EntryMap *rangemap = maptable[space->getIndex()]; — the per-space
+        // symbol-entry rangemap, iterated in (first, size, subsort) order
+        // (varmap.cc:1333-1334). Materializing from the insertion log
+        // reproduces the oracle's multiset order.
+        let entries: Vec<(u64, i32, usize)> = self
+            .materialize_maptable(self.space)
+            .iter()
+            .map(|e| (e.start, e.size, e.sym))
+            .collect();
+
+        // set<Range>::const_iterator rangeIter = getRangeTree().begin();
+        // (varmap.cc:1339) — the scope's symboltab range tree (union of the
+        // prototype's localRange/paramRange, narrowed by markNotMapped),
+        // already (first, last) inclusive and sorted by first. The iterator
+        // is STATEFUL across entries — it never resets inside the walk.
+        let ranges = self.local_range.clone();
+
+        let mut aliason = false;
+        let mut curalias = 0u64;
+        let mut i = 0usize;
+        let mut range_iter = 0usize;
+
+        for &(start, size, symi) in &entries {
+            let curoff = start.wrapping_add(size as u64).wrapping_sub(1);
+            // while ((i<alias.size()) && (alias[i] <= curoff)) { aliason =
+            // true; curalias = alias[i++]; } (varmap.cc:1358-1361) — the
+            // cursor i is shared across entries; aliason is sticky.
+            while i < aliases.len() && aliases[i] <= curoff {
+                aliason = true;
+                curalias = aliases[i];
+                i += 1;
             }
-            // Distance heuristic: far enough past the last alias → unaliased.
-            if aliason && curoff.saturating_sub(curalias) > 0xffff {
+            // Aliases shouldn't go thru unmapped regions of the local
+            // variables (varmap.cc:1363-1375): walking the (stateful) range
+            // iterator, an alias is turned off when the symbol sits in a
+            // mapped region that starts past the last alias, or when a
+            // passed-over region ends beyond the last alias. `break` leaves
+            // range_iter AT the containing range (no advance).
+            while range_iter < ranges.len() {
+                let (first, last) = ranges[range_iter];
+                if first > curalias && curoff >= first {
+                    aliason = false;
+                }
+                if last >= curoff {
+                    break; // Check if symbol past end of mapped range
+                }
+                if last > curalias {
+                    // If past end of range AND past last alias offset,
+                    // turn aliases off
+                    aliason = false;
+                }
+                range_iter += 1;
+            }
+            // Distance heuristic (varmap.cc:1378): a symbol far enough
+            // (0xffff) past the last alias turns aliasing off — and the
+            // mutation is sticky for subsequent entries.
+            if aliason && curoff.wrapping_sub(curalias) > 0xffff {
                 aliason = false;
             }
-            sym.unaliased = !aliason;
+            // if (!aliason) symbol->getScope()->setAttribute(symbol,
+            // Varnode::nolocalalias); (varmap.cc:1379) — setAttribute ORs
+            // the flag in (database.cc:2200-2207): it is never cleared, so
+            // a later pass that judges the symbol aliased keeps the mark.
+            if !aliason {
+                self.symbols[symi].unaliased = true;
+            }
+            // Locked data-types can block aliasing for subsequent entries
+            // (varmap.cc:1381-1390): level 3 blocks everything, level >= 1
+            // blocks structs, level > 1 (the default 2) also blocks arrays.
+            let sym = &self.symbols[symi];
+            if sym.typelock && alias_block_level != 0 {
+                if alias_block_level == 3 {
+                    aliason = false;
+                } else {
+                    let meta = sym.dtype.as_ref().map(|t| t.get_metatype());
+                    if meta == Some(crate::type_system::datatype::TypeMetatype::Struct) {
+                        aliason = false;
+                    } else if meta
+                        == Some(crate::type_system::datatype::TypeMetatype::Array)
+                        && alias_block_level > 1
+                    {
+                        aliason = false;
+                    }
+                }
+            }
         }
     }
 
@@ -4731,6 +5406,375 @@ mod tests {
     /// "int"/"char" type yields the i/c prefixes of Ghidra's variable names.
     fn named_dt(nm: &str, size: usize, mt: TypeMetatype) -> Arc<Datatype> {
         Arc::new(Datatype::Base(TypeBase::new(nm.into(), size, mt)))
+    }
+
+    // --- collectNameRecs / addRecommendName (varmap.cc:357/1600) ---
+
+    #[test]
+    fn test_collect_name_recs_downgrades_name_locked_only() {
+        // varmap.cc:366: a name-locked but NOT type-locked symbol becomes a
+        // name recommendation and is removed (category < 0); a name+type-
+        // locked symbol stays a symbol; an unlocked symbol stays.
+        let mut scope = ScopeLocal::new();
+        let rec = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "cust_name",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[rec].namelock = true; // NOT typelock
+        let locked = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "cust_lock",
+            Some(int_dt(4, TypeMetatype::Int)), 0x44, None);
+        scope.symbols[locked].namelock = true;
+        scope.symbols[locked].typelock = true;
+        let plain = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "auto_var",
+            Some(int_dt(4, TypeMetatype::Int)), 0x48, None);
+        scope.collect_name_recs();
+        // The recommendation is stored with the symbol's storage + name.
+        assert_eq!(scope.name_recommend.len(), 1);
+        assert_eq!(scope.name_recommend[0].name, "cust_name");
+        assert_eq!(scope.name_recommend[0].offset, 0x40);
+        assert_eq!(scope.name_recommend[0].size, 4);
+        assert!(scope.name_recommend[0].usepoint.is_none());
+        // The name-locked-only symbol was removed; the other two survive.
+        let names: Vec<&str> = scope.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["cust_lock", "auto_var"]);
+        // Re-running collect is idempotent on the lists (clear + rewalk).
+        scope.collect_name_recs();
+        assert_eq!(scope.name_recommend.len(), 0);
+        let _ = plain;
+    }
+
+    #[test]
+    fn test_collect_name_recs_nametree_order_and_index_shift() {
+        // Two name-locked-only symbols collected in SymbolNameTree order
+        // (name, then nameDedup); the in-loop removals must not corrupt the
+        // later pick's index (the pointer-stability seam).
+        let mut scope = ScopeLocal::new();
+        // Insert out of nametree order: "zzz" first, "aaa" second — the
+        // walk must still record aaa before zzz, and both must land.
+        let zzz = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "zzz",
+            Some(int_dt(8, TypeMetatype::Int)), 0x80, None);
+        let aaa = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "aaa",
+            Some(int_dt(8, TypeMetatype::Int)), 0x90, None);
+        let _ = (zzz, aaa);
+        for sym in scope.symbols.iter_mut() {
+            sym.namelock = true;
+        }
+        scope.collect_name_recs();
+        assert_eq!(scope.name_recommend.len(), 2);
+        assert_eq!(scope.name_recommend[0].name, "aaa");
+        assert_eq!(scope.name_recommend[1].name, "zzz");
+        assert!(scope.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_collect_name_recs_param_category_survives() {
+        // varmap.cc:1616: category >= 0 symbols (function parameters) are
+        // downgraded to recommendations but NOT removed from the scope.
+        let mut scope = ScopeLocal::new();
+        let param = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "cust_param",
+            Some(int_dt(4, TypeMetatype::Int)), 0x10, None);
+        scope.symbols[param].namelock = true;
+        scope.set_category(param, symbol_category::FUNCTION_PARAMETER, 0);
+        scope.collect_name_recs();
+        assert_eq!(scope.name_recommend.len(), 1);
+        assert_eq!(scope.symbols.len(), 1);
+        assert_eq!(scope.symbols[0].name, "cust_param");
+    }
+
+    #[test]
+    fn test_recover_name_recommendation_static_usepoint() {
+        // varmap.cc:1507 static arm: after the restructure recreates a
+        // symbol at the recommended address, recover renames it with the
+        // recommended name, name-locks it, and writes the symbol id back.
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 0xabcd,
+        });
+        // The restructured symbol: undefined name, address-tied whole map.
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert!(scope.symbols[sym].namelock);
+        assert_eq!(scope.symbols[sym].symbol_id, 0xabcd);
+    }
+
+    #[test]
+    fn test_recover_invalid_usepoint_arm_has_no_size_gate() {
+        // varmap.cc:1518-1527: the invalid-usepoint arm matches on
+        // findOverlap + entry addr + symbol addrtied ONLY — the whole-map
+        // size check (cc:1540) lives in the VALID-usepoint arm. An 8-byte
+        // recommendation whose address equals a 4-byte addrtied symbol's
+        // start therefore DOES rename (oracle-faithful: findOverlap hits
+        // the smaller entry at the same first address).
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 8,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+    }
+
+    #[test]
+    fn test_recover_non_matching_address_skips() {
+        // varmap.cc:1521-1522: the overlapping entry's address must EQUAL
+        // the recommendation address — a recommendation landing inside a
+        // larger symbol (entry.start < rec.offset) is skipped.
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x42,
+            usepoint: None,
+            size: 2,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(8, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "$$undef00000001");
+    }
+
+    // --- CR-F7NAME A: the real-vbank two-sided fixture for the
+    // invalid-usepoint arm's vn resolution (funcdata_varnode.cc:1218-1251).
+    // The first-use address comes from the ENTRY's own uselimit
+    // (database.cc:122-127): empty → the invalid Address() → the
+    // addr-tied-scan branch (:1233-1241); a range → the
+    // usepoint-in-range scan (:1242-1249). ---
+
+    /// Side 1: an unrestricted (empty-uselimit) entry resolves through the
+    /// addr-tied scan — positive (addr-tied varnode matches, remap records
+    /// the FINAL uniquified name, CR-F7NAME B) and negative (a non-tied
+    /// varnode at the same storage yields no vn; the rename still lands,
+    /// the remap does not).
+    #[test]
+    fn test_recover_invalid_usepoint_resolves_via_addr_tied_scan() {
+        // Positive: addr-tied varnode at (4, stack, 0x40).
+        let mut scope = ScopeLocal::new();
+        // Two same-named recommendations force makeNameUnique's dedup on
+        // the second — the remap must record the FINAL name (B).
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x50,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 2,
+        });
+        let sym1 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        let sym2 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000002",
+            Some(int_dt(4, TypeMetatype::Int)), 0x50, None);
+        scope.symbols[sym1].addrtied = true;
+        scope.symbols[sym2].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new(
+            "t", crate::address::Address::new(0x1000), 0x100);
+        let vn1 = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x40);
+        vn1.write().unwrap().set_flags(
+            crate::varnode::varnode_flags::ADDRTIED
+                | crate::varnode::varnode_flags::INSERT);
+        let vn2 = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x50);
+        vn2.write().unwrap().set_flags(
+            crate::varnode::varnode_flags::ADDRTIED
+                | crate::varnode::varnode_flags::INSERT);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        // Both symbols renamed; the second through the dedup suffix.
+        assert_eq!(scope.symbols[sym1].name, "cust_name");
+        let second_name = scope.symbols[sym2].name.clone();
+        assert_ne!(second_name, "cust_name");
+        assert!(second_name.starts_with("cust_name"));
+        // CR-F7NAME B: the remaps record the FINAL names, not the
+        // pre-unique recommendation spelling.
+        assert_eq!(fd.symbol_table.get(&0x40), Some(&"cust_name".to_string()));
+        assert_eq!(fd.symbol_table.get(&0x50), Some(&second_name));
+
+        // Negative: a non-tied varnode at the storage — the addr-tied scan
+        // returns null (funcdata_varnode.cc:1238-1239), so the rename
+        // still lands but the remap never records the slot.
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new(
+            "t", crate::address::Address::new(0x1000), 0x100);
+        let vn = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x40);
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INSERT);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert!(!fd.symbol_table.contains_key(&0x40));
+    }
+
+    /// Side 2: a use-limited entry (the only mapping at the recommendation
+    /// address, on a SYMBOL whose addrtied flag comes from a disjoint
+    /// unrestricted whole map) resolves through the usepoint-in-range scan
+    /// — the first-use address is the entry's first uselimit range offset,
+    /// NOT the storage offset. An unwritten varnode's use point is
+    /// fd.baseaddr - 1 (varnode.cc getUsePoint), so the two fd bases below
+    /// pick the match and the miss.
+    #[test]
+    fn test_recover_use_limited_entry_resolves_via_usepoint_scan() {
+        let build = |fd_base: u64| -> (ScopeLocal, usize, crate::funcdata::Funcdata) {
+            let mut scope = ScopeLocal::new();
+            scope.name_recommend.push(NameRecommend {
+                space: crate::space::AddressSpace::Stack,
+                offset: 0x40,
+                usepoint: None,
+                size: 4,
+                name: "cust_name".to_string(),
+                symbol_id: 1,
+            });
+            // The addrtied whole map [0x80,0x87] sets the SYMBOL flag
+            // (database.cc:1149-1150, addMap's empty-uselimit rule) without
+            // overlapping the recommendation address.
+            let sym = scope.add_symbol(
+                crate::space::AddressSpace::Stack, "$$undef00000001",
+                Some(int_dt(8, TypeMetatype::Int)), 0x80, None);
+            assert!(scope.symbols[sym].addrtied); // the addMap rule fired
+            // The use-limited 4-byte piece [0x40,0x43] with the uselimit
+            // range [0x2000,0x2fff] — the only entry overlapping the
+            // recommendation, so findOverlap returns it unambiguously and
+            // its own uselimit drives the scan branch.
+            let ram_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
+            scope.add_map_entry(
+                sym,
+                crate::space::AddressSpace::Stack,
+                0x40,
+                4,
+                0,
+                crate::varnode::varnode_flags::MAPPED,
+                vec![(ram_index, 0x2000, 0x2fff)],
+            );
+            let mut fd = crate::funcdata::Funcdata::new(
+                "t", crate::address::Address::new(fd_base), 0x100);
+            let vn = fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Stack, 0x40);
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INSERT);
+            (scope, sym, fd)
+        };
+        // Positive: fd base 0x3000 → the unwritten varnode's use point is
+        // 0x2fff, inside [0x2000,0x2fff] → the scan matches → remap runs.
+        let (mut scope, sym, mut fd) = build(0x3000);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert_eq!(fd.symbol_table.get(&0x40), Some(&"cust_name".to_string()));
+        // Negative: fd base 0x2000 → use point 0x1fff < 0x2000 → the scan
+        // misses → rename lands, remap does not. (With the pre-CR form —
+        // the storage offset 0x40 as the first-use address — BOTH cases
+        // matched; this side is what pins the fix.)
+        let (mut scope, sym, mut fd) = build(0x2000);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert!(!fd.symbol_table.contains_key(&0x40));
+    }
+
+    #[test]
+    fn test_recover_name_recommendation_named_symbol_skips() {
+        // varmap.cc:1542: an already-named symbol is never overridden.
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "already_named",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "already_named");
+    }
+
+    #[test]
+    fn test_type_recommendation_store_and_flags() {
+        // varmap.cc:1590/1574: the "this"-pointer arm's store — an input
+        // varnode at the recommended address takes the type (locked, no
+        // override); hasTypeRecommendations gates the second producer.
+        let mut scope = ScopeLocal::new();
+        assert!(!scope.has_type_recommendations());
+        scope.add_type_recommendation(
+            crate::space::AddressSpace::Stack, 0x20, int_dt(8, TypeMetatype::Int));
+        assert!(scope.has_type_recommendations());
+        assert_eq!(scope.type_recommend.len(), 1);
+        // apply_type_recommendations with no matching input varnode is a
+        // no-op (find_varnode_input finds nothing on a bare Funcdata).
+        let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
+        scope.apply_type_recommendations(&mut fd); // must not panic
+    }
+
+    #[test]
+    fn test_collect_name_recs_this_pointer_type_preserved() {
+        // varmap.cc:367-377: a "this"-pointer symbol (pointer to a struct)
+        // downgraded to a name recommendation ALSO leaves a type
+        // recommendation for its storage address.
+        let mut scope = ScopeLocal::new();
+        let struct_dt = Arc::new(Datatype::Struct(
+            crate::type_system::datatype::TypeStruct {
+                base: TypeBase::new("MyClass".into(), 16, TypeMetatype::Struct),
+                fields: Vec::new(),
+            }));
+        let ptr_dt = Arc::new(Datatype::Pointer(
+            crate::type_system::datatype::TypePointer::new(8, struct_dt, 1)));
+        let this_sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "this", Some(ptr_dt), 0x60, None);
+        scope.symbols[this_sym].namelock = true;
+        scope.symbols[this_sym].this_ptr = true;
+        scope.collect_name_recs();
+        assert_eq!(scope.name_recommend.len(), 1);
+        assert_eq!(scope.name_recommend[0].name, "this");
+        assert_eq!(scope.type_recommend.len(), 1);
+        assert_eq!(scope.type_recommend[0].offset, 0x60);
+        assert!(scope.symbols.is_empty());
     }
 
     // --- compare (varmap.cc:321): signed offset, then size small-first ---
@@ -5107,9 +6151,10 @@ mod tests {
     #[test]
     fn test_mark_unaliased_no_aliases() {
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(LocalSymbol::new("a", 0, 4, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(4, TypeMetatype::Int)), 0, None);
         scope.mark_unaliased(&[]);
-        assert!(scope.symbols[0].unaliased);
+        assert!(scope.symbols[s].unaliased);
     }
 
     #[test]
@@ -5117,9 +6162,10 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0,8), alias at offset 4 → curoff=7, alias<=7 → aliased,
         // and distance (7-4)=3 <= 0xffff → stays aliased.
-        scope.symbols.push(LocalSymbol::new("a", 0, 8, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(8, TypeMetatype::Int)), 0, None);
         scope.mark_unaliased(&[4]);
-        assert!(!scope.symbols[0].unaliased);
+        assert!(!scope.symbols[s].unaliased);
     }
 
     #[test]
@@ -5127,9 +6173,36 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0x20000, 4), alias at offset 4 → curoff=0x20003,
         // distance = 0x20003-4 > 0xffff → unaliased (distance heuristic).
-        scope.symbols.push(LocalSymbol::new("a", 0x20000, 4, None, symbol_category::NO_CATEGORY));
+        let s = scope.add_symbol(crate::space::AddressSpace::Stack, "a",
+            Some(int_dt(4, TypeMetatype::Int)), 0x20000, None);
         scope.mark_unaliased(&[4]);
-        assert!(scope.symbols[0].unaliased);
+        assert!(scope.symbols[s].unaliased);
+    }
+
+    #[test]
+    // Ghidra: varmap.cc:1363-1375 markUnaliased range-tree walk
+    /// Aliases do not pass through unmapped regions: with an alias at 0x20
+    /// inside mapped range [0x10,0x2f], a symbol in a separate mapped range
+    /// [0x100,0x107] is UNALIASED — the stateful range walk turns aliasing
+    /// off when it passes the end of a range beyond the last alias
+    /// (`rng.getLast() > curalias`, varmap.cc:1371-1374). The helpf
+    /// projection lane (PM-HF) pinned this on the locked oracle: entry
+    /// -0xf8 unaliased despite aliases at -0x230..-0x220 within 0xffff.
+    fn test_mark_unaliased_range_gap_clears_alias() {
+        let mut scope = ScopeLocal::new();
+        // Two mapped regions: [0x10,0x2f] (alias zone) and [0x100,0x107].
+        scope.local_range = vec![(0x10, 0x2f), (0x100, 0x107)];
+        let in_zone = scope.add_symbol(crate::space::AddressSpace::Stack, "in_zone",
+            Some(int_dt(8, TypeMetatype::Int)), 0x20, None);
+        let beyond_gap = scope.add_symbol(crate::space::AddressSpace::Stack, "beyond",
+            Some(int_dt(8, TypeMetatype::Int)), 0x100, None);
+        scope.mark_unaliased(&[0x20]);
+        // In-zone symbol: alias 0x20 consumed, distance 7 <= 0xffff → aliased.
+        assert!(!scope.symbols[in_zone].unaliased);
+        // Beyond-gap symbol: sticky aliason from the zone, but the walk
+        // passes range [0x10,0x2f] whose last (0x2f) > curalias (0x20) →
+        // aliases off; the next range starts past curalias too.
+        assert!(scope.symbols[beyond_gap].unaliased);
     }
 
     // --- ScopeLocal.restructure via adjust_fit (varmap.cc:1294, 587) ---
@@ -5226,6 +6299,52 @@ mod tests {
         assert_eq!(scope.symbols.len(), 1);
         assert_eq!(scope.symbols[0].start, 0);
         assert_eq!(scope.symbols[0].size, 4);
+    }
+
+    // --- RANGEHINT-CR-F2: a zero-size Some is substituted, never dropped ---
+
+    #[test]
+    fn test_mapstate_add_range_zero_size_substitutes_default() {
+        // varmap.cc:899-900: a ct with getSize()==0 → ct = defaultType, and
+        // the flow CONTINUES — the hint is collected with the default type
+        // and its size. Pre-fix behavior: the Some(zero-size) input was
+        // silently dropped (the `size <= 0` early return).
+        let mut state =
+            MapState::new_with_default(vec![(0, 0xfffff)], int_dt(4, TypeMetatype::Int));
+        state.add_range(
+            0x20,
+            Some(int_dt(0, TypeMetatype::Int)),
+            0,
+            RangeType::Fixed,
+            -1,
+        );
+        assert_eq!(state.hint_count(), 1, "zero-size Some must not be dropped");
+        assert_eq!(state.hints()[0].start, 0x20);
+        assert_eq!(state.hints()[0].size, 4, "size comes from the substituted default");
+        assert_eq!(
+            state.hints()[0].dtype.as_ref().map(|d| d.get_size()),
+            Some(4),
+            "dtype is the substituted default"
+        );
+    }
+
+    #[test]
+    fn test_mapstate_add_range_zero_size_bare_constructor_keeps_flow() {
+        // The default-less `MapState::new` (test-only; the oracle always has
+        // defaultType, varmap.cc:1261) cannot substitute: the flow still
+        // continues with the historical anonymous size-1 shape instead of
+        // dropping the hint (pre-fix: dropped).
+        let mut bare = MapState::new(vec![(0, 0xfffff)]);
+        bare.add_range(
+            0x40,
+            Some(int_dt(0, TypeMetatype::Int)),
+            0,
+            RangeType::Fixed,
+            -1,
+        );
+        assert_eq!(bare.hint_count(), 1, "flow continues even without a default");
+        assert_eq!(bare.hints()[0].size, 1);
+        assert!(bare.hints()[0].dtype.is_none());
     }
 
     // --- SCOPE-FINDOVERLAP-KEY-0001 (F1/F2/F3) ---

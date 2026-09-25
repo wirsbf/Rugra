@@ -1,5 +1,208 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-25：PRINTC-EMIT-TAGLINE-ABS-0001 — `tagLine(int4)` 绝对形独立成 `tag_line_indent`
+
+oracle 的 Emit 基类有两个**分离的**换行 virtual（prettyprint.hh:173/180）：无参
+`tagLine()`（相对——当前缩进级：EmitNoMarkup 印 `indentlevel` 个空格，hh:557-558；
+EmitPrettyPrint 发 bump_t 令牌，hh:918-920）与带参 `tagLine(int4 indent)`（**绝对**——
+endl + 恰好 `indent` 个空格：EmitNoMarkup hh:559-560；EmitPrettyPrint 发 line_t 令牌，
+hh:922-924，break 路径 cc:674-676 `spaceremain = maxlinesize - indentbump` 后
+`lowlevel->tagLine(indentbump)`）。Rugra 的单一 `tag_line(indent)` 入口把两者合一：
+`indent==0` 落相对形——而 printc.cc:3211 `emitLabelStatement` 的 `emit->tagLine(0)`
+恰恰是**带参绝对形**（goto 标签 `LAB_…:`/`switchD_…_caseD_…:` 恒列 0 顶格，与嵌套
+深度无关），导致 curl 32 处/httpd 34 处标签行带缩进、canon 全部顶格。
+
+本提交按 oracle 结构拆分：`Emitter` trait 新增 `tag_line_indent(indent)`（带参绝对形，
+默认 no-op 对应 stub emitter），`EmitNoMarkup` 实现为换行 + `indent.max(0)` 个单空格，
+`EmitPrettyPrint` 实现为 emit_pending + checkbreak + line_t 令牌（cc:928-933 顺序）。
+`tag_line(indent)` 收窄为纯相对形（遗留 `indent>0` 绝对臂删除；全部剩余调用点传 0 =
+oracle 无参形态，debug_assert 钉死）。生产调用面：printc.rs 标签三调用点
+（emit_label_statement/emit_any_label_statement 两臂）`tag_line_indent(0)`；
+emit_line_comment 两处 fallback `tag_line_indent(indent)`（printlanguage.cc:597 亦带参
+绝对形——EmitNoMarkup downcast 臂字节原样，非 NoMarkup emitter 走 trait 绝对形）。
+后处理层（死区/P16 标签清除）全部基于 `trim()`，列不敏感，无需改动。
+
+## 2026-09-25：P9 ` )` trim 豁免扩展到 BlockInfLoop 尾行（GENSMOKE-T6，wt/vshfix）
+
+第九遍结构清理（P9）的引号外 `" )"`→`")"` trim 与双空格折叠自
+MAIN-RC3-STRUCTURED-EMIT-0001 起豁免 `while(` 开头的行（紧凑 while-do 溢出
+头 `while( true )`，printc.cc:3023-3028）。本提交把豁免扩到
+`} while( true );` ——`PrintC::emitBlockInfLoop`（printc.cc:3111-3120）的
+do-while 无限循环尾行：closeBraceIndent + spaces(1) + KEYWORD_WHILE +
+openParen + spaces(1) + KEYWORD_TRUE + spaces(1) + closeParen + SEMICOLON，
+`tagLine`/`closeBrace` 强制行界，trim 后恒行首；这是 Ghidra 发射序列中
+**第二个也是仅剩的**字节含 ` )` 的形态。修复前 Rugra 尾行被 trim 成
+`} while( true);`（vsh 镜脸 7 行、curl canon 2 行）。行为验证：vsh 镜脸
+skeleton 549→55（T6 族归零）；curl canon 脸两行
+`} while( true);`→`} while( true );` ==canon golden 1049/2362 行逐字节，
+487→481/0/0。真实 do-while（`while (cond);`，printc.cc:3086-3093）不含
+` )` 字节、不受豁免影响。
+
+## 2026-09-24：DRIVER-SWITCHD-LABEL-0001 — P9 goto→尾调用改写排除 `switchD_` 标号族
+
+驱动符号层（`examples/curl_decompile.rs`/`examples/httpd_decompile.rs` 的
+code_labels 层，EX2 LAB_ 同机制）开始为 jumptable case 目标合成
+`switchD_<dispatch 8位hex>_caseD_<case值hex>`/`switchD_<...>_default` 名
+（headless DecompilerSwitchAnalysis 分析器行为：消费 jumptable.cc:2764-2791
+`JumpTable::encode` 的 `<jumptable>` XML，在 case 目标建 LABEL 符号；
+printc.cc:3164-3193 `emitLabel` 经 queryCodeLabel 命中打印全限定拼写）。
+该族与 `LAB_`/`code_r0x…` 同类——goto 目标标号，永不是被调函数；golden 双语料
+0 处 `return switchD`。P9 的"goto 已知 libc 名→`return f();` 尾调用"改写以
+小写首字母+无 `code_`/`joined_`/`dup_` 前缀识别函数名,小写 `s` 开头的
+`switchD_` 若不排除会整体改写成隐式声明调用 `return switchD_...();`（gcc
+拒绝）。排除规则：`!func_name.starts_with("switchD_")`。
+
+## 2026-09-22：WARN-EMIT2 R4 — 签名启发式排除比较运算符（glob_range 重复声明 0→6→0）
+
+`backfill_missing_locals`（RUGRA-GLUE，无 oracle 对应）的签名形状启发式第四次
+误命中：HERITAGE-PROMOTE-SYMBOLTAIL-0001 使 gp/glob 家族出现多行 if 条件续行
+`iVar5 < *(int *)((int *)&((URLPattern *)(uVar4 + 0x50) + iVar8)->content + 4))) {`
+——不以 `(` 开头（绕过 R3）、无分号（绕过 MAIN-IVAR4-DUP）、含 `(` 且含
+`*`、以 `{` 结尾，被当作函数签名 → if 体被当嵌套函数，`int iVar5; … long
+uVar4;` 六条重复声明注入块内（glob_range numbering 0→6）。R4 门：C 函数签名
+永不含比较/逻辑运算符（`<` `>` `==` `!=` `&&` `||`；`>` 同时覆盖只出现在
+表达式里的 `->` 字段链），全部排除出签名检测。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P22 签名改写的词边界修复（glob_url 回归 golden）
+
+W3 对 P22（`fix_unary_deref_declarations`）活跃突变的排查结论（curl 2/2、
+httpd 2/2）：
+
+- **glob_url（curl）= P22 自身缺陷**：体内合法解引用 `*glob` 使 `glob` 入
+  derefed 集；签名内联改写的 `format!("{} {}", ty, name)` 模式（`int glob`）
+  **子串命中了函数名区** `int glob_url(`，把返回类型改写成
+  `char *glob_url(...)`——golden 保持 `int glob_url`，且 `return 0;` 随之
+  变成从 char* 函数返回 int 的病态形态。修复：模式匹配加**词边界**（匹配
+  前后字符均不得为 `[A-Za-z0-9_]`，前侧继续排除 `*`）——与
+  `count_word_occurrences` 同一边界契约。修后 curl 输出恰一行变化
+  （`char *glob_url(` → `int glob_url(`，与 golden 签名逐字节一致），
+  curl 差分 3091→**3089**/0/0，httpd 字节不变；P22 计数 curl 2/2→**1/1**。
+- **glob_set（curl）/ ap_stripprefix、ap_count_dirs（httpd）= 非 emit 层根因**
+  （保留突变）：`int pos`→`char *pos`、`long param_1`→`char *param_1` 的根因
+  是 FuncProto 参数类型为标量而 IR 有 `*param` 解引用（golden 中
+  `ap_count_dirs(char *param_1)` 为指针类型）——归 varmap/类型传播域
+  （W5，PTRARITH/TYPEOPFIX 族），printc emit 无对应判定点，本层不动。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P13 void 拆分退役（PRINTC-VOIDCALL-0001 正解落地）
+
+路线图 W3 节（FuncProto void + opReturn/opCall 形态 → P13）。P13（`return f();` →
+`f(); return;` 文本拆分，**硬编码 13 个 libc 名**——机制 D 红旗）按 W1 计数器在
+双语料双轮零突变，但其退役前必须把 void 判定迁回 oracle 真语义，否则表外任何
+void 函数会静默产出非法 C（`return pthread_mutex_lock();` 类 gcc error）。
+
+- **正解（本 commit，printc.rs 侧）**：oracle 中 void 调用语句形态来自 IR——
+  `ActionFuncLink::funcLinkOutput`（coreaction.cc:1521-1541）对 **output-locked
+  void** 被调方保持 CALL 无输出，`PrintC::emitExpression`（printc.cc:2471-2476）
+  的 `outvn != 0` 测试随之不打印赋值 LHS（语句形态 `f(args);`），`opReturn`
+  （printc.cc:758-761）对无值 RETURN 打印裸 `return;`。Rugra 在 print 层加
+  FuncProto-void 投影守卫（详见 `docs/api/printc.md` 同日节）：callspec
+  `prototype.output_type_locked && return_type==Void` 时投影无输出字节。
+- **本文件改动**：删除 P13 拆分块（`void_funcs` 硬编码表 + 行改写循环），P14
+  输入直接改接 P12 输出 `final_out`；计数器 `POSTFIX_PASS_NAMES` 24→23，
+  `PF_P13` 删除（后续索引前移 P14..P27）。幸存名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+- **验证**：curl `801614e0…`/httpd `e18b4503…` 与删除前**逐字节一致**（守卫在
+  现语料上 dormant——`free`/`exit` 调用的输出已被 action 层的
+  `func_link_output` 移除，黄金语料本就按语句形态渲染）；差分
+  curl 3091/0/0 + httpd 2278/0/0 维持；计数器无漂移（P13 字段消失、其余相等）。
+- **dormant 分支回归测试**：`printc.rs` 单测
+  `test_void_callee_call_prints_statement_and_bare_return`（构造"CALL 输出幸存
+  + callspec output-locked void"形态，断言语句形态 + 裸 return + 无
+  `return f();`）与负向对照 `test_nonvoid_locked_callee_keeps_assignment_lhs`
+  （locked 非 void 保留赋值 LHS）。oracle 侧真值锚点：锁定 golden 语料的
+  `free(pcVar11);` 语句形态（`tests/golden/ghidra_curl_1204.c`）。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W2 — A 队列零突变 pass 退役（尾部先行，一 pass 一 commit）
+
+路线图 W2 节：W1 计数器实证 **A 队列 9 个 pass 双语料双轮零突变**
+（LAB_ 族 P1/P1b/P2/P3/P4/P5/P16 + Pdl + P-wbfold），按管线**尾部先行**逐个删除。
+每刀门禁：curl/httpd E2E 输出 sha256 与删除前**逐字节一致** + RUGRA_POSTFIX_STATS
+计数器重跑（被删 pass 字段消失、其余 pass 计数不变，掩蔽检测）。oracle 依据：
+`EmitNoMarkup`（prettyprint.hh:546-594）直写 emitter、`flush`
+（prettyprint.cc:1193-1210）后零扫描、`docFunction`（printc.cc:2655-2666）以
+flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracle 行为收敛。
+
+- **刀 1（Pdl 重复 LAB_ 去重，管线 31/33）**：删除 `remove_duplicate_labels()`
+  与其插桩点；P26（非法左值删除）输入改接 P25 输出。计数器
+  `POSTFIX_PASS_NAMES` 33→32，`PF_PDL` 删除（后续索引前移）。
+  验证：curl `c889d856…`/httpd `a67155de…` 与基线逐字节一致；计数器其余字段
+  逐项不变（掩蔽零）。
+- **刀 2（P-wbfold while→if 折叠，管线 25/33）**：删除 while-break 折叠 pass
+  及其插桩点（B4 输出直供 P-ecase）；`POSTFIX_PASS_NAMES` 32→31。锁行为测试
+  `pretty_print_while_break_fold_compact_prefix` 同 commit 改造为
+  `pretty_print_while_break_compact_header_unfolded`——不再断言折叠结果
+  `if (true) x = 1;`，改为锁定未折叠字节（紧凑头 `while( true ) {` 原样存活 +
+  `!contains("if (true)")` 守卫退役事实）。PRINTC-WHILEIF-FOLD-PREFIX-0001 的
+  切片逻辑随 pass 消失；MAIN-RC3 的 `while(` 豁免（P9/P17）保留。
+  验证：双语料 sha256 与刀 1 后一致；计数器无漂移。
+- **刀 3（P16 前向 goto→if 折叠，管线 19/33）**：删除 P16 折叠块与其插桩点，
+  `negate_simple_condition()` helper 随之失去唯一调用点同 commit 删除；
+  P16c（折叠后清理，**唯一活跃 LAB_ 族幸存者**，curl `main`=264 行）保留，
+  输入直接改接 P15 输出（`pass15.join("\n")`）。`POSTFIX_PASS_NAMES` 31→30。
+  验证：双语料 sha256 不变；P16c 计数仍 curl 277/3、httpd 0（掩蔽零——
+  P16 零突变被删除后其下游 P16c 输入逐字节不变）。
+- **刀 4（P5 未引用标签删除(2)，管线 7/33）**：删除 P5 块与其插桩点，
+  `final_pass` 直接 move 自 P4 输出 `looped`。`POSTFIX_PASS_NAMES` 30→29。
+  验证：双语料 sha256 不变；计数器无漂移（含索引完整性校验：数组序 ==
+  PF_ 常量值）。
+- **刀 5（P4 回边 goto→do/while 循环转换，管线 6/33）**：删除 P4 转换块
+  （含 5 轮迭代收敛循环）与其插桩点，`looped` 直接 move 自 B1 输出
+  `collapsed`。`POSTFIX_PASS_NAMES` 29→28。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 6（P3 未引用标签删除(1)，管线 4/33）**：删除 P3 块与其插桩点
+  （连同中间 `output_text`/`result_lines` 重 split），`final_result` 直接
+  move 自首扫输出 `result`。`POSTFIX_PASS_NAMES` 28→27。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 7（P2 条件出口 goto→if-break/return，首扫模式 2）**：删除 P2 模式块
+  与其 bump 探针。`POSTFIX_PASS_NAMES` 27→26。`exit_labels` 预扫描暂留
+  （P1b 仍消费，刀 8 一并退役）。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 8（P1b 出口 goto→break/return，首扫模式 1b）**：删除 P1b 模式块与其
+  bump 探针；**配套退役两件附属物**——① `exit_labels` 预扫描
+  （goto_targets/defined_labels/exit_labels,P1b/P2 是其仅有消费者）；
+  ② `has_enclosing_loop_ctx()` helper（P1b/P2 是其仅有调用点，oracle 中
+  break/continue 由 FlowBlock::markUnstructured 结构化发射，从不扫描已发射
+  文本）。`POSTFIX_PASS_NAMES` 26→25。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 9（P1 冗余 goto 剥除，首扫模式 1；A 队列收官）**：删除 P1 模式块与其
+  bump 探针后，首扫 while 循环退化为逐字拷贝——连同 `lines`/`result`/`i`
+  声明整体删除，`final_result` 直接 `input.lines().map(to_string).collect()`
+  构造（与原 `join("\n").lines()` 往返恒等）。`POSTFIX_PASS_NAMES` 25→24。
+  至此 A 队列 9 pass 全部退役，幸存 pass 名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P13 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
+
+路线图 W1 节（`/tmp/rugra-reports/w-postfix-2026-08-30.md` §5）：为 W0 后幸存的
+全部 **33 个**后处理 pass 加突变计数器，作为 W2 零突变退役的判定依据。验收门禁：
+curl/httpd E2E 输出与 master **sha256 逐字节一致**（`f6e35fcd…` / `5200602a…`），
+`cargo test --lib` 17 失败全部为 funcdata 预存项。
+
+- **新增 `PostfixStats` 诊断族**（全部 `// RUGRA-GLUE:`，Ghidra 无对应物——oracle
+  `EmitNoMarkup`（prettyprint.hh:542-594）是无缓冲直写 emitter，发射路径以
+  `flush`（prettyprint.cc:1194-1213）结束，无任何文本后处理）：
+  - `RUGRA_POSTFIX_STATS` 环境变量设置时，`post_process_output_legacy` 每次调用
+    向 stderr 输出一行 `[POSTFIX] pid=<pid> inv=<n> rpt=<0|1> fn=<name> lines=<n>
+    P1=<d> … P27=<d>`（33 个 pass 的行级突变计数）；未设置时全部插桩点短路
+    （不 clone、不比较、不打印），输出字节与未插桩版本完全一致。
+  - 计数语义：等长输入逐行比较（改写型 pass 精确）；不等长输入先裁公共前后缀
+    再计中间差异块（删除/插入型）。**零突变检测在两种度量下均精确**。
+  - 熔合在首扫循环里的 P1/P1b/P2 无法取边界快照，在其三个改写点直接 `bump`
+    （每次 = 删 1 行或改写 1 行）；其余 27 个 pass 在边界快照
+    （`PostfixStats::snap`）→ 输出对比（`observe`/`observe_str`）。
+  - `rpt=1` 标记双重执行（本次输入 == 上次调用的输出，DefaultHasher 指纹）；
+    生产路径存在两类调用轮（curl 190 次调用中 84 次 rpt=1，httpd 102 中 33），
+    W2 判定以 rpt=0（首轮）为准，rpt=1 计数作为幂等性信号。
+- **双语料实证结果**（rpt=0 首轮）：**21/33 pass 双语料双轮全部零突变**
+  （P1 P1b P2 P3 B1 P4 P5 P12 P13 P14 P15 P16 B3 P18 B4 Pwbfold Pecase P24
+  P25 Pdl P26）——含整条 LAB_ goto 族（P16c 除外，curl 单函数 264 行突变）。
+  P13（void 拆分,硬编码 libc 表）在双语料零突变,但按路线图仍须等
+  PRINTC-VOIDCALL-0001 落地后退役。非零 pass 明细见 W1 报告
+  （`/tmp/rugra-reports/w-w1-2026-08-30.md`）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W0 — 死代码清除（字节级零行为差）
 
 路线图 `/tmp/rugra-reports/w-postfix-2026-08-30.md` W0 第一刀：删除全仓零引用的
@@ -670,13 +873,48 @@ E2E:curl `while( true )` ×3 与 golden 逐字节一致,3 处 if-break 保持,
 
 ### 2026-08-30：PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 配套 — PendPrint 槽 + backfill 签名 `;` 门 + while-if 折叠前缀
 
-**PendPrint 槽（Emit trait 4 新方法）**：`set_pending_brace`/`cancel_pending_print`/
-`has_pending_print`/`pending_brace_fired`。oracle 的 PendPrint 槽是 **Emit 基类**状态
+**PendPrint 槽（Emit trait 4 方法）**：`set_pending_brace`/`cancel_pending_print`/
+`has_pending_print_id`/`pending_brace_fired_id`。oracle 的 PendPrint 槽是 **Emit 基类**状态
 （prettyprint.hh:102/446-457），`emitPending` 触发只在 EmitPrettyPrint/EmitMarkup::tagLine
 （prettyprint.cc:920/930/129/136）；EmitNoMarkup::tagLine（hh:557）不触发，故其路径恒为
 "已安装未触发"→ printc.cc:2900-2902 cancel+spaces(1) 合并 else-if。Rugra 两侧均按此实现：
 EmitNoMarkup 只存槽不触发；EmitPrettyPrint 在 tag_line push 前调用私有 `emit_pending()`
 （`open_brace_indent("{", style)`，PendingBrace::callback printc.cc:2872-2876）。
+
+### 2026-09-26：SQATTR-PENDINGBRACE-IDENTITY-0001 — PendPrint 槽身份化（BraceId）
+
+**根因**（本 lane PFLUSH 仪器复钉，与 SQATTR 归因独立收敛）：oracle 的 `PendingBrace` 是
+**每次 `emitBlockIf` 调用一枚栈对象**（printc.cc:2882，printc.hh:347-361，`indentId` 起始
+-1、callback 置 >=0），装/查/关全走**指针身份**——`hasPendingPrint` 比较 `pendPrint == pend`
+（prettyprint.hh:457），`cc:2946-2948` 只关**自己那枚**已触发 brace。Rugra 旧实现把
+`pending_brace_fired` 做成 **emitter 级全局粘性布尔**（set 时清零、fire 时置位、无人复
+位）：嵌套 else-if 子帧触发后，外层帧的 `installed && fired()` 读到子帧的残火 → 对未开
+过 brace 的帧多发一次 `close_brace_indent` → 函数级 startIndent/stopIndent 计数 21/22 失
+衡 → 尾部多余 `}` 弹掉 func_b 缩进级 → `print_token` 相对断行臂在空 indentstack 上
+`unwrap()` panic（prettyprint.rs:3946 家族；sq 2 索引 + sqlite3 27 索引 3/3 轮确定性复现，
+全部有 oracle golden=同输入跑通）。另证：printc.rs 文本捕获惯用法（temp NoMarkup 换
+`self.emit`，如 :4536）会把 fire/cancel 拆到不同 emitter 对象上，全局布尔进一步失真——
+身份化后每枚 emitter 的 id 空间自洽，该裂缝自然闭合。
+
+**修法（1:1 身份模型）**：`pub type BraceId = u64` 顶替栈对象地址。`set_pending_brace` 铸
+新 id 并入槽（`(BraceId, BraceStyle)`，oracle `pendPrint = pend`）；`has_pending_print_id`
+= 槽内 id 相等（hh:457 指针相等）；EmitPrettyPrint 另置 `fired_braces: Vec<(BraceId,
+bool)>` = 每 install 一行的触发记忆（= 栈对象 `indentId` 的 Rust 化身：ctor 行 push
+`(id,false)`，`emit_pending` 清槽**先于** callback（hh:1129-1137 顺序）后翻位）；
+`pending_brace_fired_id` 只答本 id（cc:2946 `getIndentId()>=0`）。`clear()`（cc:1153 无此
+状态——oracle 状态在帧栈对象里，不可跨函数存活）重置槽+记忆+计数器。EmitNoMarkup 同槽
+结构但无触发（hh:557），`pending_brace_fired_id` 恒 false=trait 默认。printc
+`emit_structured_if` 四处改门：install 持帧内 `Option<BraceId>`、cc:2900 合并门按 id 查
+槽、**goto 臂删掉 oracle 没有的 cancel**（cc:2914-2917 无此项——cc:2900-2905 已保证本帧
+槽必先解决）、cc:2946 尾关按 id 查触发。
+
+**验收**（差分门禁机制 B 全过，A/B 亲测=CARGO_TARGET_DIR 双 target 前后二进制对拍）：sq
+609/620 rc=0 + vs golden defects=0/numbering=0（残差仅 `unaff_100000f8` 3 行=GENSMOKE-S4
+既有族）；sqlite3 27/27 panic 索引全清 + 逐函数 defects=0/numbering=0（骨架差全部归入
+CAST/UNAFF/OPNAME 既有登记族）；**五面 A/B 字节恒等**——canon curl 124/124 267/0/0、
+canon httpd 34/34 285/0/0、镜面 curl 78/275、httpd 208/460、vsh 15/55（修复前后同数同
+字节=非 panic 语料上身份门与旧全局旗标行为等价，唯一可观测变化=29 个 panic 函数转正；
+旧记录 369/211/301 系 master 漂移非本修）；bank 391/391。
 
 **backfill_missing_locals 签名 `;` 门（MAIN-IVAR4-DUP 第 2 层）**：MAIN-RC3 翻门暴露的
 `stmt; if (...) {` 同行形态（`(_IO_FILE *)` 命中 `contains(" *")` 臂）曾被误判为函数签名，
@@ -695,3 +933,241 @@ decl 走查为空导致伪 body 内的 iVar4 被重复注入 `  int iVar4;`（nu
 拼写的折叠条件切片：紧凑 `while( true )` 折叠为 `if (true) x = 1;`（无悬垂括号），
 空格 `while (c)` 形态不变。双侧 fixture `printc_pending_brace_emit_1204` 的
 `comparand_sha256.rugra_prettyprint` 随测试加入重钉（runner 重验 overall=MATCH）。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 — P17 孤立 `} while` 判定的深度配对）
+
+`emit_structured_infloop` body 改结构化递归发射（printc.rs，cc:3109 虚分派）后，
+do-while 体恢复为完整结构（数百行的 switch 嵌套）。P17 的孤立 `} while (...)`
+清除判定原是 30 行回看窗口找 `do {`——长体 do 的开括号在窗口外，trailer 被误删,
+函数残留未闭合 `{`（curl gcc 审计提取 107→47 崩塌；getparameter/glob_word +
+httpd main/ap_fini_vhost_config 受害）。
+
+修复:窗口改为**深度感知反向配对**——从 trailer 行反向累计花括号增量（体内部
+净 0）,首次达到 +1 的行即本块开行,判其是否 `do {`。计数器为**字面量感知**
+（与 tools/audit_syntax.py::_brace_delta 同契约）:glob_set/glob_word 比较里的
+`'{'`/`'}'` 字符字面量与 `//`、`/* */` 注释不扰动计数——裸计数在含 `'{'` 字面量
+的函数里反向扫描永远到不了 +1,trailer 仍被删（第二层根因）。
+
+验收:curl 124 函数花括号全部平衡,gcc 审计 81 OK/26 FAIL = master 基线逐位一致;
+httpd 29 函数全部平衡（master 基线因 main 未闭合 brace 整文件提取失败 0 OK/1 FAIL,
+本修复顺带解除）;差分 defects=numbering=0 双语料保持。
+
+## 2026-09-22 追加（SWITCH-CASE-TAIL-0001 — P10 死区启动子误伤折行 if 臂 goto）
+
+**现象**（Lane BW triage 定位，/dev/shm/rugra-tests/sb-switch/GP978_TRIAGE.md §3(a)）：
+curl getparameter.constprop.0 的 switch 内 case 0x23/0x35 尾部
+`::config.httpreq = HTTPREQ_POST/CUSTOM; break;` 整体蒸发（guard-goto 在场、
+直落下一 case），是该 switch 唯一的真语义损失（≈10 行）。
+
+**根因**（非发射层、非结构层——两层的证据链）：
+- 结构层:RUGRA_BS_DUMP+case 树 dump 证明 case 0x23 的 BlockList 尾部
+  `Copy idx=109 @0x42f0`(COPY@42f0 即赋值)在场,CaseOrder chain=-1 正确;
+- 发射层:emit trace 证明语句 token 与 `break;` 全部进入 EmitPrettyPrint 的
+  Oppen tokqueue 并经 print_token→low_print 落入 EmitNoMarkup.output
+  (绕过 post_process 的对照输出完整含尾赋值);
+- **真凶 = post_process_output_legacy 第十遍 "remove dead code after
+  return/break/continue"**:该遍把 `goto …;` 行当作 return 类无条件终结符启动
+  "死区"(其后同缩进语句全部删除直到 case 标签/浅层 `}`)。当 guard 条件足够长
+  被 Oppen 折行时,`goto …;` 独占一行(行首=goto)即命中;单行形态
+  `if (…) goto …;`(如 case 0x41)行首是 `if`,永不命中——故只有两个复合长条件
+  case(0x23/0x35)受害。
+
+**修复**:P10 的 goto 启动子增加折行 if 臂判别——`goto …;` 行的**前一非空行**
+(trim 后)以 `)` 结尾(闭合的 if/while 条件)或等于/以 `else` 结尾时,该 goto 是
+条件臂,其后语句是**活**的 fall-through 路径,不启动死区;其余 goto(前一非空行
+以 `;`/`{`/`}`/`:` 结尾或无前行)仍视为无条件语句,保持原死区行为。新增
+`prev_nonempty_trimmed` 追踪(仅非空行更新)。
+
+**验收**:curl 全文 diff 恰好 +7 行且全部位于 getparameter.constprop.0
+(case 0x23 恢复 3 行:`::config.httpreq = 3; uVar27 = uVar27; break;`;
+case 0x35 恢复 4 行:`::config.httpreq = 5; uVar27 = uVar27; uVar32 = uVar32; break;`),
+零其它函数变化;差分 curl 3661/0/0(base 3654/0/0,+7=恢复行本体,
+golden 侧为 `= HTTPREQ_POST` 枚举名形态——已登记 varmap/符号残差族,非新增缺陷);
+httpd 2459/0/0 与 sb-condreplay 记录基线恒等;gcc 审计 81/26、7/22 双语料不变;
+SetHTTPrequest/parseconfig/my_get_token 逐函数 skeleton 恒等。该层属
+POSTFIX-RETIRE-0001 补偿层(oracle prettyprint.cc 零文本后处理),本修复为层内
+误伤封堵,不改变层的退役路线。
+
+### 2026-09-23：VARMAP-DUPDECL-EXTRAOUT-0001 — 带括号声明行截断两个 GLUE pass 的声明块遍历（httpd numbering 16 的根因）
+
+**背景**：DP 停车链（wt/sb-pushabsorb@764c3036，RC1 CALL 三 op + RC2 cspec +
+RC3 analyzeExtraPop 写回合流后）httpd E2E 2137/0/**16**——numbering 16 全部为
+同名双声明，集中在 ap_parse_vhost_addrs（7）/ap_set_name_virtual_host（6）/
+ap_update_vhost_from_headers（3）。逐符号审计证明 varmap 侧清白：ScopeLocal
+每名字恰一个符号（38 符号/50 输出行），printc `emit_scope_local_var_decls`
+按 (space rank, start, usepoint) 每符号恰发射一次；16 处重复**全部**由本文件
+两个无 oracle 对应物的 GLUE 文本 pass 制造。
+
+**根因**（两 pass 同型缺陷）：printc 按 Symbol dtype 逐字发射的指针-数组/
+函数指针声明形（`undefined1 (*pauVar7) [16];`、`void (*pVar4)();`，
+printc.cc:2503-2506；oracle direct-runner golden 同形
+`xunknown1 (*paxVar11) [16];`）含 `(`——而两个 pass 的声明块遍历把
+`contains('(')` 当"非声明"信号提前 break：
+
+- `has_symbol_driven_decls`（flush_func_remove_unused 的旁路判据）：在带括号
+  声明处 break → 其后才出现的 `undefined*`/`in_*` 证据不可见 → 符号驱动
+  chunk 被判 legacy → flush 的 missing-injection 半臂运行，其 type_ok 表不识
+  别 `uint8`/`uint`/`uint1` 等拼写 → 注入 `int uVarN;` 重复（httpd 侧 9 处）。
+- `backfill_missing_locals` 的 declared 收集：同处 break → 其后所有已声明名
+  判 missing → 按前缀推断类型整组重注入（`long uVar10;`…`int bVar18;`，
+  覆盖全部 16 处——单独旁路 flush 仍剩 9，单独旁路 backfill 归零，实测定位）。
+
+**修复**（跨租约最小化两 hunk + 一 helper，printc.rs 未动）：
+
+1. 新增 `has_symbol_driven_decls_walk_parens()`：同 acceptance 集
+   （`ends_with(';')`、无 `return`、无 `=`）但去掉 `!contains('('')` 拒绝，
+   带括号纯声明行 continue 而非 break。**仅**接入
+   `flush_func_remove_unused` 的旁路（`||` 并联原判据，原判据命中集不减）。
+   P22 掩码（`symbol_driven_function_line_mask` →
+   `fix_unary_deref_declarations`）**刻意**保持原判据：若一并放宽，curl
+   progressbarinit 等函数会新增旁路，丢失 `*param_N` 合法性修复的 legacy
+   补偿（实测签名 `char *param_1`→`long param_1` 翻转、curl E2E 字节漂移；
+   该补偿是 P22 fiction，oracle 为 `ProgressData *bar`，属 FuncProto 参数
+  指针定型域另案）。
+2. `backfill_missing_locals` 的 declared 收集新增带括号纯声明分支：行含
+   `(*` 且无 `=`/`return` 时抽取括号内标识符（`(*pauVar7)` → `pauVar7`），
+   continue 遍历；真 body 语句（含 `=`）仍在上方被拒，非声明形照常 break。
+
+**验收**（fast-release + release 双口径，RUGRA_MIRROR，oracle e40ed130）：
+httpd **2137/0/16 → 2104/0/0**（三目标函数 326/7→311/0、228/6→217/0、
+219/3→212/0；`--func main` 两态均 TIMEOUT=已知
+HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0001 不变）；curl 与基**逐字节相同**
+（4073/0/0，cmp 零差异）；gcc 审计 httpd 1/27、curl 101/19 均不变；
+`cargo test --lib -- --test-threads=1 prettyprint varmap printc` 63/63，
+全量 1650/18 与基逐测试同集（funcdata/heritage 18 失败=基分支预存）。
+该层属 POSTFIX-RETIRE-0001 补偿层（oracle prettyprint.cc 零文本后处理），
+本修复为层内误伤封堵，不改变退役路线。
+
+## 2026-09-23（CHAINFIX lane EY2）：legacy_never_type_evidence 证据集扩宽
+
+- 新增 `legacy_never_type_evidence()`（RUGRA-GLUE，`has_symbol_driven_decls`
+  / `_walk_parens` 共用判据 helper）：原 `undefined*` 前缀之外补入
+  `uint*`/`int1`/`int2`/`int8`/`ushort`/`ulong`/`longlong`/`__int*_t`——
+  均为符号驱动发射器独有拼写（printc.cc:2260-2279 core-type dtype 逐字
+  打印），legacy 文本 pass 只合成 int/long/bool/byte/short/char */void */
+  float/double（flush_func_remove_unused 的 type_ok 表）。
+  CHAINFIX-LEGACY-BYPASS-0001：ActionInputPrototype 的 function_parameter
+  符号安装（本车道）退休了部分 chunk 唯一的 `in_` 名字证据后，这些 chunk
+  落回 legacy pass，其收集器不识别符号拼写、把每个 uVarN 判"缺失"，在
+  签名与 `{` 之间注入 `int uVarN;` K&R 式重复声明（httpd ap_getparents、
+  curl glob_word）。扩宽后该误判消除（curl −5 行全为死声明删除）。plain
+  `int` 不在集合内（legacy 合法拼写），判定方向保持保守。
+
+## 2026-09-24（FULLEMPTY-ELSE lane FZ）：P6 声明删除谓词换用真声明行判据
+
+HTTPD-FULLEMPTY-ELSE-0001 residual（FX 在 9458a61b 父链复现登记，本 lane 于
+亲父 720551db 亲测归因收口）：httpd 全量 470 函数唯一 defect——
+ap_get_server_name L21 空 `else {}`。
+
+**根因（双探针钉死）**：printc 侧 else 臂结构/ops 全部健在（sblocks 树
+If[cond BB2, then BB3, else BB4] 与 oracle 同形；BB4 的 CALL/STORE 活、
+非 implied、parent 正确，主 pass 确实走到 emit_statement——RUGRA_FZRAW
+原始文本层快照实证 else 臂**本已打印**两行：
+`uVar5 = apr_pstrdup(*puVar2,…);` + `*puVar2 + 0xb = uVar5;`）。
+凶手是 P6 单用内联的**声明删除谓词**：`contains(" uVar5;")` 把尾置裸变量的
+使用行（`… = uVar5;`、`return uVar5;`）也判成声明——inline 臂同时删掉
+赋值行与唯一使用行（decl 检查先于 replace_word 且 `continue` 短路），
+双删后 else 臂残空。RUGRA_POSTFIX_STATS 实测该函数 P6=3 突变（31→30 行）。
+
+**修复**：新增 `is_declaration_line(t, var_name)` 判据——`<类型头> uVarN;`
+整行尾匹配 + 类型头字符集仅限 `[A-Za-z0-9_ *]` + 语句关键字黑名单
+（return/goto/break/continue/case/default）；inline 与 dead-elim 两臂统一
+换用。使用行不再被当声明清空，落入 `replace_word` 正常内联为
+`*puVar2 + 0xb = apr_pstrdup(*puVar2,…);`（该地址拼写缺括号为 printc
+STORE 臂既有骨架差，非 defect 类，另案）。
+
+**验收**（fast-release，亲父 720551db 双 worktree 对照亲测）：httpd 全量
+L2 vs direct-runner **38672/1/0 → 38726/0/0**（defects 1→0——空 else 消失；
+skeleton +54 = **55 条被 P6 静默吞掉的真实语句恢复打印**（apr_pstrdup/
+apr_array_make 调用、全局/指针 STORE、`x^x` 清零等，逐行 diff base/fix
+核实全部为 restored-statement 类，11 行删除全为空白行），语句恢复方向与
+golden 一致、文本形态仍异（缺括号 STORE 臂拼写=printc 既有骨架差另案）；
+httpd 门禁面 29 fns **2698/0/0 == 基线恒等**（受影响函数均在门禁面外）；
+curl E2E 与亲父基线**逐字节相同**（P6 谓词变更对 curl 语料零命中）；
+gcc 审计 per-function OK/FAIL 集与基线恒等（101/369，int8 族预存）；
+三投影 next_url/match_url/parseconfig.constprop.0(RUGRA_MIRROR=1)
+stage_bisect --v1 **MATCH×3**。该修复为 POSTFIX-RETIRE-0001 补偿层内
+误伤封堵，不改变退役路线（P6 整层退役时随之消失）。
+
+## 2026-09-24 (Lane MAIN2) — 移除 `+ -N` → `- N` 后处理改写（PRINTC-PLUSNEGLIT-0001）
+
+Ghidra 按位打印负加数：`push_integer`（printc.cc:1288-1368）把负号放进常量
+atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon golden 含
+666 处 `+ -` 形、direct-runner golden 1096 处；本仓后处理把所有 `+ -N` 改写
+成 `- N`，使 Rugra 侧为 0 处——每一行都是骨架差分。该"算术简化"非 Ghidra
+行为（无 oracle 对应物），已删除。删除后 httpd 56 处、curl 相应恢复
+`+ -N` 正典拼写。
+
+## 声明回填 pass：后缀数组声明符识别（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+
+声明回填（backfill）收集已声明名时改为先剥掉尾部的 `[N]` 维度 token（及
+ glued 形）再取名字。旧实现在 `long local_c8 [4];` 上把 `[4]` 当成"声明的
+名字"，于是函数体里的 `local_c8` 使用被误判为未声明、回填注入了
+`int local_c8;` 重复声明（printc.cc:2502 pushTypeStart/pushSymbol 的符号
+声明后缀数组拼写是 C1 种子通道引入的常态形态）。默认路径无后缀数组局部
+声明，输出 cmp 字节恒等亲父。
+
+## 声明回填 pass：未名位置 token 零声明（PRINTC-C3-UNNAMED-SPACE-NAME-0001，2026-09-25，Lane PDOTFORM）
+
+回填注入对四个未名位置 token 前缀（`unique0x`/`register0x`/`stack0x`/
+`ram0x`）跳过。canon（12.0.4 golden）对这些 token **零声明**：它们是
+`PrintC::pushUnnamedLocation`（printc.cc:1938-1945）的表达式级存储槽标签，
+不是 ScopeLocal 符号，oracle 的 emitLocalVarDecls（printc.cc:2260-2279）只
+遍历符号、永不为其发声明（golden 中 stack0x 使用站点 3 处、声明 0 处）。
+printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过会注入
+`long stack0x00000008;` 与 canon 文本分歧（_start 10→11 回退源）。
+
+## 2026-09-25（Lane MIRROR2，merge 去重后与 TAGLINE 车道同条目）：标号绝对缩进统一到 `tag_line_indent`（MIRROR2-LABELINDENT-0001）
+
+- **根因（镜面残差族=label 缩进）**：oracle 的 `PrintC::emitLabelStatement`
+  （printc.cc:3211）调用 `emit->tagLine(0)`——这是与 `tagLine()` **不同的
+  虚函数**（prettyprint.hh:180），token 形态为 `line_t`：触发时以
+  `spaceremain = maxlinesize - indentbump` **绝对列**断行
+  （prettyprint.cc:674-675），与缩进栈无关 → goto 标号恒在列 0
+  （golden httpd 620/620、curl 47/47 全部 `^code_r` 列 0 实证）。
+- **Rugra 旧缺陷**：`Emit` trait 的合并式 `tag_line(indent: i32)` 用
+  `indent > 0` 分支区分两种形态，`tagLine(0)` 被路由到相对 `bump_t`
+  （当前缩进层）→ 标号随嵌套缩进（httpd 42 处、curl 45 处 `^ *code_r`
+  实证，golden 0 处）。语句层 `tag_line(0)`（=oracle 平凡 `tagLine()`）
+  的传输约定不能改——`close_brace_indent`/`open_brace_indent` 等大量
+  站点以 0 表示平凡形式。
+- **修法与去重**：MIRROR2 原交付（7ced32ff）以 `tag_line_at` 独立 trait
+  方法承载该虚函数；TAGLINE 车道（2e2997f4/cdd66875）独立同发现并以
+  `tag_line_indent` 落地（实现逐行同语义：EmitNoMarkup=endl+`indent.max(0)`
+  字面空格、EmitPrettyPrint=无条件 line_t token）。**merge master 后统一到
+  `tag_line_indent` 单通道**——MIRROR2 的 `tag_line_at` trait 方法+双实现
+  删除，标签站点全改调 `tag_line_indent(0)`；TAGLINE 额外覆盖
+  printlanguage.cc:597/616-617 的注释续行两站点并给合并式 `tag_line` 加
+  debug_assert（indent>0 断言）硬化，oracle 生产调用面（标号 3 站点+注释
+  2 站点）全数走绝对形。
+- **效果**：curl 镜 695→683、httpd 镜 1140→1076、vsh 镜 55→51、canon
+  466==466 不回退（canon 标号面由 TAGLINE 同修覆盖）。
+- **修法（历史记录，7ced32ff 原形）**：新增 trait 方法承载该虚函数
+  （EmitPrettyPrint 覆写为无条件 `line_t` token——prettyprint.cc:927-934
+  的逐行对齐；EmitNoMarkup 覆写为 `endl + indent 个字面空格`——
+  prettyprint.hh:558-560），printc 三个标号发射站点（emit_label_statement
+  与 emit_any_label_statement 两臂）改调绝对形。**merge master 后该方法已
+  由 TAGLINE 的 `tag_line_indent` 统一取代**（见上「修法与去重」）。
+
+## 2026-09-25（Lane DOTFIX）：第七趟字符常量文本改写退役（STUBLEAK-CHARPRINT-LOOPCONST-0001）
+
+- **根因**：后处理第七趟持一张 28 项硬编码表，把 `== 0xNN` / `!= 0xNN` /
+  `= 0xNN;` 文本改写为 `'c'` 字符字面量。oracle **不存在任何文本层常量
+  改写**：字符 vs 整数形态由 `PrintC::pushConstant`（printc.cc:1744-1768）
+  按 varnode **传播类型**决定——`isCharPrint()` 走 pushCharConstant，
+  TYPE_UNKNOWN/普通 int/uint 走 push_integer（0x26 经 mostNaturalBase=16
+  印 `0x26`，printc.cc:1325-1337）。文本表无法区分类型，把所有无类型/
+  int 型可打印常量污染成字符字面量：canon golden curl:741 与 direct-runner
+  golden:494 的 `for (lVar13/iVar12 = 0x26; ...)` 均被印成 `'&'`；
+  httpd 镜 `uVar12 != 0x26`（golden:5326）被印成 `'&'`。
+- **修法**：整表删除（连同三向 replace 循环）。typed-char 面
+  （httpd canon golden 30275 `cVar2 != '&'`）是 printc
+  `is_char_print` 类型传播的职责（typeprop 域，GENSMOKE-S2 族），不是
+  后处理文本层的职责。
+- **效果**：四档全降——curl 镜 259→211、httpd 镜 440→412、
+  curl canon 396→388、httpd canon 896→872；defects/numbering 全零。
+  已知连带：httpd canon 1543/1604 两行（ap_pregsub，golden 30275/30286
+  `cVar2 != '&'` 为 typed-char 面）原先经该表印 `'&'`，现印 `0x26`——
+  该两行变量名/结构本已与 golden 分叉，所属函数整体 45→41 仍净降；
+  typed `'&'` 正道是 printc `is_char_print` 类型传播（typeprop 域，
+  GENSMOKE-S2 族），非文本层职责。

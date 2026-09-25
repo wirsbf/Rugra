@@ -32,6 +32,30 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 - `is_whole_feasible` / `is_whole_phi_feasible` — 合并可行性
 - `find_create_whole` / `find_create_output_whole` / `create_joined_whole` — 合并创建
 - `build_lo_from_whole` / `build_hi_from_whole` — 从整体重建半部
+  - **2026-09-26（GEN4-SQ-DBLHI-UNINSERT-0001）**：`build_hi_from_whole` MULTIEQUAL 臂
+    补齐 double.cc:635 `data.opUninsert(hiop)`（重插前先脱块，与 lo 孪生臂 :597 同构）。
+    此前漏抄导致 op 保持挂块 → `op_insert_begin` → `block_insert_op` 的
+    `parent.is_none()` 断言炸（funcdata.rs:4984）；sasquatch 语料 4 函数
+    （progress_bar/read_inode_1/read_inode_3/LzmaEnc_CodeOneBlock.part.0）worker panic。
+    修复后 progress_bar 完整产出（vs golden defects=0/numbering=0）；其余 3 函数越过
+    RuleDoubleIn 后暴露此前被掩盖的下游缺陷（merge 强制合并交集 panic ×2、
+    NULL local type ×1），已登记 GEN4-SQ-MERGE-FORCEDINTERSECT-0001 /
+    GEN4-SQ-NULLLOCALTYPE-0001。
+  - **2026-09-26（GEN4-SQ-NULLLOCALTYPE-0001）**：两个 build_*_from_whole 共用的
+    `set_opcode_and_inputs` 胶水（所有 MULTIEQUAL/INDIRECT/else 臂的
+    `opSetOpcode+opSetAllInput` 对，double.cc:598-599/:607-608/:613-614/:636-637/
+    :645-646/:651-652）此前用裸 `inrefs.clear()` 换输入，漏掉
+    `Funcdata::opSetAllInput`（funcdata_op.cc:276-278）的逐槽 `opUnsetInput` 循环
+    ——每个被换掉的旧输入 varnode 的 descend 表残留指向该 op 的陈旧条目。
+    后果：一个无 def、无符号的输入 varnode（sq LzmaEnc 的 `stack:-0xd8:2`）在
+    6 个 SUBPIECE 读者被改写后仍"看似有后代"，逃过
+    `ActionInferTypes::buildLocaltypes` 的 `(!isWritten)&&(hasNoDescend)` 跳过
+    （coreaction.cc:5019），进入 `Varnode::getLocalType`，无类型可取而抛
+    LowlevelError("NULL local type")——oracle 同路径靠 opUnsetInput 维护的不变量
+    保证该 varnode 早已零后代、被跳过、永不触发 cc:934。修复 = 胶水改调
+    `Funcdata::op_set_all_input`（funcdata.rs，funcdata_op.cc:267-284 的既有忠实
+    移植）；varnode.rs `get_local_type` 本身与 varnode.cc:900-936 逐行一致、
+    零改动（域判定：根因在 double_precis 胶水层，不在 varnode 层）。
 - `adjacent_offsets` — 指针相邻判断
 - `test_contiguous_pointers` — **核心**：成对 LOAD 指针连续性检测 (double.cc)
 - `is_addr_tied_contiguous` / `is_addr_tied_contiguous_result`
@@ -86,6 +110,35 @@ isEntryPoint/getStartBlock/opInsertBegin/constructJoinAddress/newVarnode/combine
 `LowlevelError` 映射后的 `Result`，不再忽略 non-input/non-contiguous 或 bank 删除失败。
 该单点只闭合返回值传播；combine 的 synthetic fixture 证据与未覆盖 Architecture/ProtoModel
 边界记录在 `docs/api/funcdata.md` 和 `VARNODE-INIT-0001` metadata。
+
+### 2026-09-25：空间限定构造收口（FAMILY-AUDIT-SPACELESS-SITES-0001）
+
+三处 Register/RAM 钉死构造改用 oracle 的完整 (space,offset) 源：
+
+1. `SplitVarnode::create_joined_whole`（double.cc:565-578）：oracle `newaddr`
+   是空间限定地址——contiguous 分支 = pieces 自身地址（double.cc:572
+   `res = lo/hi->getAddr()`），join 分支走 `constructJoinAddress`
+   （translate.cc:817-860：spacebase/stack 与 default-code/ram 在偏移连续时
+   保留原空间 cc:827-836，其余落 **join 空间** formal JoinRecord cc:848-859）。
+   Rugra 原 implicit-RAM `new_varnode` 把寄存器/栈 piece 的 whole 伪造成
+   `Ram@offset`（HERITAGE-CROSSSPACE-MERGE 同族垃圾种子）。修复：
+   `(newaddr, whole_space)` 二元组 + `new_varnode_in_space(wholesize,
+   whole_space, newaddr)`；join 分支的 offset 计算保持既有 degraded glue
+   （arch.rs `construct_join_address`，无 join-record 分配/register-name 查询），
+   本审计只钉死空间。
+2. `SplitVarnode::replace_copy_force`（double.cc:1402-1431）双构造点
+   （cc:1416/1423）：oracle `addr` 参数是 `CopyForceForm::verify` 里
+   `isAddrTiedContiguous` 填的 reslo/reshi piece 自身完整地址（double.cc:3158
+   → cc:811/816）。修复：`CopyForceForm` 增 `addr_out_space`（verify 时从
+   reslo 取，double.cc:805 已保证两 piece 同空间），签名加 `space` 参数，
+   两构造点改 `new_varnode_out_full(size, space, addr, op)`。
+
+触发面实证（curl/httpd 默认态 release 探针）：joined-whole 与 copy-force
+双位点 **0 次触发**（双精度恢复路径语料休眠）——恒等 = correct-by-construction；
+一旦触发即按 oracle 空间构造。输出字节恒等见 TODO 板该行验收。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.313316 -->
+
  
+
+- 2026-09-25 (FAMAUDIT integration): constructor sites merged to master; this note records the integration commit touching the module.

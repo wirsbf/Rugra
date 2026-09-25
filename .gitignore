@@ -72,3 +72,6 @@ tools/__pycache__/
 # Local oracle tree symlink (worktrees only; the main repo has ghidra/ as
 # untracked checkout)
 /ghidra/
+
+# deepwork session state
+.slim/deepwork/

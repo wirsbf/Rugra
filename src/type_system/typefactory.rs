@@ -52,6 +52,19 @@ pub struct TypeFactory {
     /// The default size of a pointer for this architecture
     ptr_size: usize,
 
+    /// Live function-local scope handles for local-frame spacebases, keyed
+    /// by the frame (function entry) offset. This is the Rust ownership seam
+    /// for Ghidra's dynamic `TypeSpacebase::getMap` resolution
+    /// (type.cc:2938-2944: `queryFunction(localframe)->getScopeLocal()`):
+    /// the Funcdata owns the restructured `ScopeLocal`, the factory-cached
+    /// spacebase type holds a clone of the shared handle (attached eagerly
+    /// HERE, at type construction, so the cache can never hold a
+    /// stale/unattached local frame), and `ActionRestructureVarnode`
+    /// publishes each restructured scope into the handle contents. The
+    /// handle starts as an empty `ScopeLocal` — the oracle's pre-restructure
+    /// observable.
+    live_local_scopes: BTreeMap<u64, std::sync::Arc<std::sync::RwLock<crate::varmap::ScopeLocal>>>,
+
     /// Side data for `TypePointerRel` instances: the parent container and
     /// offset that do not fit on Rugra's flat `TypePointer`. Mirrors the
     /// `parent`/`offset` fields of Ghidra's `TypePointerRel` (type.hh:647).
@@ -125,6 +138,36 @@ pub enum CoreTypeFlavor {
     Standalone,
 }
 
+// MIRROR2 unkbyte family: the lock-free canonical 1-byte TYPE_UNKNOWN cache
+// (see TypeFactory::canonical_unknown_base_1). Populated eagerly inside
+// `TypeFactory::shared_default`'s construction closure — under no RwLock
+// lease — so factory write-lease holders (e.g. down_chain_pointer reaching
+// TypeSpacebase::get_sub_type's miss arm) always find the fast path armed
+// and never re-enter the shared factory's lock.
+static CANONICAL_UNKNOWN_BASE_1: std::sync::OnceLock<std::sync::Arc<Datatype>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: process-tier probe standing in for Ghidra's architecture-class
+// selection of the core-type table. The oracle has two harness faces:
+// SleighArchitecture::buildCoreTypes (sleigh_arch.cc:204-238) installs the
+// console/standalone table (`xunknownN`/`int4`/`uint1`/`code`) when the
+// architecture description carries no `<coretypes>` element — the direct-
+// runner harness contract; ArchitectureGhidra receives the Java client's
+// `<coretypes>` stream (PcodeDataTypeManager.encodeCoreTypes) and spells
+// `undefinedN`/`int`/`long` — the canonical headless gate. Rugra's drivers
+// select the contract by environment (RUGRA_MIRROR / RUGRA_FLOW_MIRROR for
+// curl/httpd, RUGRA_GEN_MIRROR for the generalization driver; see
+// MIRROR-ENVS-CANONICAL-0001), so every `TypeFactory::new` constructed in
+// such a process must take the standalone table, exactly as the locked
+// direct-runner goldens (tests/golden/*_1204.direct-runner.c) spell it.
+/// Whether this process runs the direct-runner (standalone SLEIGH) oracle
+/// contract instead of the canonical headless contract.
+pub fn direct_runner_tier_active() -> bool {
+    std::env::var_os("RUGRA_MIRROR").is_some()
+        || std::env::var_os("RUGRA_FLOW_MIRROR").is_some()
+        || std::env::var_os("RUGRA_GEN_MIRROR").is_some()
+}
+
 impl TypeFactory {
     // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
     // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
@@ -133,7 +176,12 @@ impl TypeFactory {
     /// # Arguments
     /// * `ptr_size` - Default pointer size for the target architecture (e.g., 4 or 8)
     pub fn new(ptr_size: usize) -> Self {
-        Self::new_flavor(ptr_size, CoreTypeFlavor::DataOrg)
+        let flavor = if direct_runner_tier_active() {
+            CoreTypeFlavor::Standalone
+        } else {
+            CoreTypeFlavor::DataOrg
+        };
+        Self::new_flavor(ptr_size, flavor)
     }
 
     /// Construct with an explicit core-unknown registration flavor; the
@@ -151,6 +199,7 @@ impl TypeFactory {
             type_nochar: RwLock::new(None),
             char_cache: RwLock::new(BTreeMap::new()),
             ptr_size,
+            live_local_scopes: BTreeMap::new(),
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
@@ -205,6 +254,7 @@ impl TypeFactory {
             // uninitialized raw-constructor state.
             ptr_size: 0,
             rel_pointers: BTreeMap::new(),
+            live_local_scopes: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
             size_of_int: 0,
@@ -250,8 +300,22 @@ impl TypeFactory {
         self.init_core_types_flavor(flavor);
     }
 
-    // RUGRA-GLUE: local projection of the compiler-supplied `<coretypes>`
-    // stream used by ArchitectureGhidra::buildCoreTypes (ghidra_arch.cc:328).
+    // RUGRA-GLUE: local projection of the headless Java client's
+    // `<coretypes>` stream (the canon-golden contract). Ghidra's C++ side
+    // receives this from PcodeDataTypeManager.encodeCoreTypes
+    // (PcodeDataTypeManager.java:1238-1256, built by generateCoreTypes
+    // :1154-1228): signed = AbstractIntegerDataType.getSignedDataTypes
+    // (sbyte,short,int3,int,int5,int6,int7,sqword→longlong→long,int16 under
+    // the x86-64 gcc data organization shortSize=2/integerSize=4/longSize=8/
+    // longLongSize=8 — the same-size longlong slot is overwritten by long,
+    // AbstractIntegerDataType.java:544-566), unsigned analogous
+    // (byte,ushort,uint3,uint,uint5,6,7,ulong,uint16, :616-638),
+    // Undefined.getUndefinedDataTypes = undefined1..8 (Undefined.java:31-38),
+    // float(4)/double(8)/longdouble(16), code, char(1,int,ASCII),
+    // wchar_t(4,int,UTF — wide≠2 ⇒ wchar16 unregistered, wide≠4 satisfied by
+    // wchar_t itself), bool, void. The names drive printC spelling and
+    // Datatype::printNameBase prefixes (type.hh:273 — long→'l', short→'s',
+    // byte→'b'), so this table must match the Java names exactly.
     fn init_data_org_core_types(&mut self) {
         // Void type
         let mut void_base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
@@ -266,28 +330,42 @@ impl TypeFactory {
         )));
         self.add_core_type(bool_type);
 
-        // Standard integer types
-        let int_sizes = [1, 2, 4, 8];
-        for &size in &int_sizes {
-            // Signed integers
-            let s_name = if size == 4 { "int".to_string() } else { format!("int{}", size) };
-            let s_type = Arc::new(Datatype::Base(TypeBase::new(
-                s_name, size, TypeMetatype::Int,
-            )));
-            self.add_core_type(s_type);
-
-            // Unsigned integers
-            let u_name = if size == 4 { "uint".to_string() } else { format!("uint{}", size) };
-            let u_type = Arc::new(Datatype::Base(TypeBase::new(
-                u_name, size, TypeMetatype::Uint,
-            )));
-            self.add_core_type(u_type);
+        // Integer types: exact Java coreBuiltin projection (see doc comment).
+        const INT_TYPES: &[(&str, usize, TypeMetatype)] = &[
+            ("sbyte", 1, TypeMetatype::Int),
+            ("short", 2, TypeMetatype::Int),
+            ("int3", 3, TypeMetatype::Int),
+            ("int", 4, TypeMetatype::Int),
+            ("int5", 5, TypeMetatype::Int),
+            ("int6", 6, TypeMetatype::Int),
+            ("int7", 7, TypeMetatype::Int),
+            ("long", 8, TypeMetatype::Int),
+            ("int16", 16, TypeMetatype::Int),
+            ("byte", 1, TypeMetatype::Uint),
+            ("ushort", 2, TypeMetatype::Uint),
+            ("uint3", 3, TypeMetatype::Uint),
+            ("uint", 4, TypeMetatype::Uint),
+            ("uint5", 5, TypeMetatype::Uint),
+            ("uint6", 6, TypeMetatype::Uint),
+            ("uint7", 7, TypeMetatype::Uint),
+            ("ulong", 8, TypeMetatype::Uint),
+            ("uint16", 16, TypeMetatype::Uint),
+        ];
+        for &(name, size, metatype) in INT_TYPES {
+            self.add_core_type(Arc::new(Datatype::Base(TypeBase::new(
+                name.to_string(), size, metatype,
+            ))));
         }
 
         // The locked Java/headless oracle supplies an ASCII `char`.  Register
         // it through setCoreType so TypeChar flags, hash identity, and
         // canonical object selection match the decoded core-type path.
         if let Err(message) = self.set_core_type_result("char", 1, TypeMetatype::Int, true) {
+            panic!("LowlevelError: {message}");
+        }
+        // wchar_t: UTF (ATTRIB_UTF → TypeUnicode on the C++ decode side,
+        // PcodeDataTypeManager.java:1203-1205); x86-64 gcc wchar size is 4.
+        if let Err(message) = self.set_core_type_result("wchar_t", 4, TypeMetatype::Int, true) {
             panic!("LowlevelError: {message}");
         }
 
@@ -300,6 +378,10 @@ impl TypeFactory {
             "double".to_string(), 8, TypeMetatype::Float,
         )));
         self.add_core_type(f_type8);
+        let f_type16 = Arc::new(Datatype::Base(TypeBase::new(
+            "longdouble".to_string(), 16, TypeMetatype::Float,
+        )));
+        self.add_core_type(f_type16);
 
         // The compiler-supplied data organization observed by the canonical
         // headless gate names these `undefined1/2/4/8`.
@@ -495,6 +577,42 @@ impl TypeFactory {
         self.types.get(name).cloned()
     }
 
+    // Ghidra: sleigh_arch.cc:204 SleighArchitecture::buildCoreTypes
+    /// Resolve a DWARF typedef whose NAME is a conventional boolean spelling
+    /// to this factory's registered core boolean type.
+    ///
+    /// Ghidra's DWARF front end maps the conventional C boolean typedef names
+    /// (`bool`/`_Bool`) to its boolean primitive before anything reaches the
+    /// decompiler, so a `typedef bool -> char` in DWARF (curl.h line 394
+    /// `typedef char bool;`, DWARF `DW_TAG_typedef "bool" -> base char`) lands
+    /// in the decompiler as the core `bool` registered by
+    /// `setCoreType("bool",1,TYPE_BOOL,false)` (sleigh_arch.cc:216,
+    /// type.cc:3178-3195), NOT as a renamed char clone. Every downstream
+    /// boolean-literal behavior follows from that metatype:
+    /// `ActionSetCasts::castInput`'s constant arm (coreaction.cc:2687-2691
+    /// `vn->updateType(ct)`) absorbs the requirement type into the constant,
+    /// and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771 ->
+    /// pushBoolConstant printc.cc:1488-1495) prints it `true`/`false` — the
+    /// canonical-oracle behavior witnessed on `::config.showerror = true;`
+    /// (ghidra_curl_1204.c main) for the typedef-bool fields, versus the
+    /// library-level direct-runner golden printing `'\x01'` for the same
+    /// store when no DWARF front end names the type.
+    ///
+    /// Returns the core `bool` only when this factory actually registered one
+    /// with metatype BOOL and size 1 (`setCoreType`'s exact shape); any other
+    /// registration state falls back to the caller's alias materialization.
+    pub fn dwarf_conventional_bool(&self, name: &str) -> Option<Arc<Datatype>> {
+        if !matches!(name, "bool" | "_Bool") {
+            return None;
+        }
+        let core = self.find_by_name(name)?;
+        if core.get_metatype() == TypeMetatype::Bool && core.get_size() == 1 {
+            Some(core)
+        } else {
+            None
+        }
+    }
+
     // Ghidra: type.cc:3631 TypeFactory::getBase
     /// Get a base scalar type of `size` bytes with metatype `m`.
     ///
@@ -533,6 +651,28 @@ impl TypeFactory {
         }
         drop(cache);
 
+        // type.cc:3652-3657: a base request over max_basetype_size becomes an
+        // ARRAY of 1-byte unknowns ("Create array of unknown bytes to match
+        // size"), regardless of the requested metatype — the source of the
+        // oracle's `xunknown1 [280]` input-shadow type, whose TYPE_ARRAY
+        // metatype is what makes RuleSubRight's isPieceStructured test
+        // (ruleaction.cc:7256) fire for large SUBPIECE inputs. The twin
+        // previously built a scalar TypeBase of the raw size, so oversized
+        // inputs typed as scalar INT were never piece-structured and degraded
+        // to the INT_RIGHT shift ladder (VARGROUP-ABSORB-0001 §4-4).
+        if size > self.max_base_type_size {
+            let element = self.get_base(1, TypeMetatype::Unknown)?;
+            let array = self.oversize_unknown_array(size, element)?;
+            // Cache per (size, metatype): every oversize metatype maps to the
+            // same unknown1 array (type.cc:3655 ignores m here).
+            let mut cache = self
+                .base_cache
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.entry(cache_key).or_insert_with(|| array.clone());
+            return Some(array);
+        }
+
         // Ghidra constructs an unnamed TypeBase and canonicalizes it through
         // findAdd when no preferred core entry exists. Its structural key is
         // the plain base sub-metatype, descending size, then id zero.
@@ -562,6 +702,53 @@ impl TypeFactory {
         Some(
             tree.entry(tree_key)
                 .or_insert_with(|| Arc::new(Datatype::Base(TypeBase::new(String::new(), size, m))))
+                .clone(),
+        )
+    }
+
+    // RUGRA-GLUE: the `&self`-twin form of the type.cc:3652-3657 oversize-base
+    // array conversion (mirror of `get_array_result`, type.cc:3902-3908, for
+    /// the unknown1 family): build/find the unnamed array of `element` in
+    /// `base_type_tree` under the same structural key `find_add` uses, so
+    /// both the `&mut` faithful path and this twin hand out the identical
+    /// `Arc` identity.
+    fn oversize_unknown_array(
+        &self,
+        num_elements: usize,
+        element: Arc<Datatype>,
+    ) -> Option<Arc<Datatype>> {
+        // get_array_result strips the element (type.cc:3655 getTypeArray ->
+        // getStripped); unnamed bases have no stripped form, so the element
+        // passes through unchanged.
+        let element =
+            Datatype::get_stripped_arc(&element).unwrap_or(element);
+        let size = num_elements * element.get_align_size();
+        let mut base = TypeBase::new(String::new(), size, TypeMetatype::Array);
+        base.alignment = element.get_alignment() as i32;
+        base.align_size = size;
+        // type.hh:937-944: arraysize==1 sets needs_resolution; oversize
+        // requests have num_elements > 1 here.
+        let candidate = Datatype::Array(TypeArray {
+            base,
+            array_of: element,
+            num_elements,
+        });
+        let tree_key = Self::type_tree_key(&candidate);
+        let tree = self
+            .base_type_tree
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = tree.get(&tree_key) {
+            return Some(existing.clone());
+        }
+        drop(tree);
+        let mut tree = self
+            .base_type_tree
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(
+            tree.entry(tree_key)
+                .or_insert_with(move || Arc::new(candidate))
                 .clone(),
         )
     }
@@ -736,6 +923,19 @@ impl TypeFactory {
     /// This slice projects the complete dependency key for TypeArray and the
     /// three partial variants. Other container comparators remain on the
     /// registered TYPE-0001 residual.
+    // RUGRA-GLUE: DWARF/type-manager import boundary — Ghidra's DWARF
+    // analyzer registers every imported type through the architecture's
+    // single factory (the type.cc:3412 findAdd path below), which is what
+    // makes cross-reference type identity hold; this pub(crate) wrapper
+    // exposes that registration channel to the debugproto importer.
+    pub(crate) fn intern_imported(
+        &mut self,
+        candidate: Datatype,
+    ) -> Result<Arc<Datatype>, String> {
+        self.find_add(candidate, true)
+    }
+
+    // Ghidra: type.cc:3412 TypeFactory::findAdd
     fn find_add(
         &mut self,
         mut candidate: Datatype,
@@ -1844,7 +2044,12 @@ impl TypeFactory {
         spaceid: Option<AddressSpace>,
         frame: Address,
     ) -> Arc<Datatype> {
-        // Rugra dedupes by a synthetic name encoding the space+frame identity.
+        // RUGRA-GLUE dedup: Ghidra canonicalizes spacebases through the
+        // compare-sorted tree in findAdd (type.cc:3996 via
+        // TypeSpacebase::compareDependency type.cc:3045-3055 — base, then
+        // spaceid, then localframe); Rugra's factory is a name-keyed
+        // BTreeMap, so the synthetic key below encodes the space+frame
+        // identity for the map slot. It is NOT the type's display name.
         let key = format!(
             "__spacebase_{}_{}",
             spaceid.map(|s| s.word_size()).unwrap_or(0),
@@ -1853,20 +2058,67 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&key) {
             return existing;
         }
-        let mut base = TypeBase::new(key.clone(), 0, TypeMetatype::Spacebase);
+        // Ghidra `TypeSpacebase(AddrSpace*, const Address&, Architecture*)`
+        // (type.hh:735-736) bases on `Datatype(0,1,TYPE_SPACEBASE)` whose
+        // ctor (type.hh:214) leaves `name` EMPTY — the spacebase is an
+        // ANONYMOUS type. At print time `PrintC::buildTypeStack`
+        // (printc.cc:143-163) stops at an anonymous non-PTR/ARRAY/CODE
+        // type, so `PrintC::pushTypeStart`'s anonymous branch
+        // (printc.cc:280-285) spells `PrintC::genericTypeName` →
+        // "BADSPACEBASE" (printc.cc:3387-3389, returned before the size
+        // suffix), declaring e.g. `BADSPACEBASE *in_RSP`. Rugra previously
+        // carried the synthetic dedup key as the type NAME, leaking
+        // `__spacebase_1_<frame> *in_RSP` into declarations
+        // (SPACEBASE-SYMNAME-0001); the name is now empty like the oracle.
+        let mut base = TypeBase::new(String::new(), 0, TypeMetatype::Spacebase);
         // Ghidra spacebase is a core type (cached on the architecture).
         base.flags |= type_flags::CORETYPE;
+        // getMap's local-frame arm (type.cc:2938-2944) resolves the LIVE
+        // fd->getScopeLocal() on every query. Attach the shared handle
+        // eagerly at construction (VARMAP-STACKBOUNDARY-0001): the registry
+        // entry is created here if absent, so the cached type always carries
+        // the handle and later publishes (restructure passes) only replace
+        // the handle CONTENTS. An empty ScopeLocal is the oracle's
+        // pre-restructure observable.
+        //
+        // Local-frame test: Rugra's legacy `Address::new(frame)` form is
+        // SPACELESS, so `is_invalid()` (null-base) is true for real function
+        // entries too and cannot distinguish — the factory's global
+        // spacebases are always constructed at frame 0 (funcdata
+        // spacebaseConstant mirror, Address::new(0)), so a NONZERO
+        // localframe offset is the local-frame predicate here (and in
+        // TypeSpacebase::get_map).
+        let local_handle = if frame.is_null() {
+            None
+        } else {
+            Some(
+                self.live_local_scopes
+                    .entry(frame.as_u64())
+                    .or_insert_with(|| {
+                        std::sync::Arc::new(std::sync::RwLock::new(
+                            crate::varmap::ScopeLocal::new(),
+                        ))
+                    })
+                    .clone(),
+            )
+        };
         let sb = TypeSpacebase {
             base,
             address: frame.clone(),
-            fd: None,
+            fd: local_handle,
             spaceid,
             localframe: frame,
-            // The getMap projection (type.cc:2935-2945 reads
-            // glb->symboltab->getGlobalScope() dynamically): clone the live
-            // global scope — installed before decompilation and stable
-            // during it — so get_sub_type answers subtype queries with the
-            // oracle's answers (B3-COREACTION-CONSTANTPTR-0001 b).
+            // The getMap projection (type.cc:2935-2945) reads
+            // glb->symboltab->getGlobalScope() dynamically and — for a
+            // valid localframe — resolves queryFunction(localframe) →
+            // fd->getScopeLocal() on EVERY query. This snapshot of the
+            // global scope is only the GLOBAL leg of that projection
+            // (globals are installed before decompilation and stable during
+            // it); local-frame queries must NOT read it — the live ScopeLocal
+            // is restructured during the pipeline (RULEARITH-SPACEBASE-
+            // ARRAYSNAP-0001), so the RulePtrArith query path resolves
+            // datatype::SpacebaseMap::Local from the decompiling Funcdata at
+            // query time instead (ruleaction.rs spacebase_map).
             scope: self.symboltab.as_ref().and_then(|db| {
                 db.read()
                     .unwrap()
@@ -1997,6 +2249,59 @@ impl TypeFactory {
     ) -> Arc<Datatype> {
         self.get_type_pointer_result(size, ptr_to, wordsize, true)
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
+    }
+
+    // Ghidra: type.cc:3902 TypeFactory::getTypeArray(as,ao)
+    /// Find/create an array of `num_elements` elements of `array_of`,
+    /// canonicalized through the factory's structural tree (findAdd /
+    /// findNoName dedup, type.cc:3412/3377). Faithful to the oracle:
+    ///
+    /// - One virtual `getStripped` step on the element type first
+    ///   (type.cc:3905-3906), exactly as `getTypePointer` does.
+    /// - The `TypeArray(int4 n, Datatype *ao)` constructor
+    ///   (type.hh:937-946) builds the ANONYMOUS shell through the 3-arg
+    ///   `Datatype(size, alignment, TYPE_ARRAY)` base constructor
+    ///   (type.hh:215): empty name/display name, `size = n *
+    ///   ao->getAlignSize()`, `alignSize = size`, `alignment =
+    ///   ao->getAlignment()`, `submeta = base2sub[TYPE_ARRAY]`, zero flags —
+    ///   and then sets `needs_resolution` when `n == 1` (a size-1 array
+    ///   should generally be treated as the element data-type).
+    ///
+    /// The anonymous name is load-bearing for printing: `buildTypeStack`
+    /// (printc.cc:148-151) drills an unnamed ARRAY layer, so a declaration
+    /// spells `T name [N]` (array_expr postsurround after the identifier,
+    /// printc.cc:76/294-295) and never bakes the bracket into the type name.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `array_of` moved in; the (possibly
+    ///   stripped) element Arc is stored inside the shell. No caller state
+    ///   mutated beyond the factory trees.
+    /// - Loop bounds/order: none (single construction).
+    /// - Counter/accumulator: none; `num_elements` is the stored arity.
+    /// - Sort/compare key: the findAdd anonymous arm compares through the
+    ///   structural tree key (submeta, dependency pointer, size, id —
+    ///   `DatatypeCompare` type.hh:306), never the name.
+    pub fn get_type_array(&mut self, num_elements: usize, array_of: Arc<Datatype>) -> Arc<Datatype> {
+        let array_of = Datatype::get_stripped_arc(&array_of).unwrap_or(array_of);
+        // type.hh:937: Datatype(n*ao->getAlignSize(), ao->getAlignment(),
+        // TYPE_ARRAY); type.hh:215 sets alignSize = size, id = 0.
+        let size = num_elements * array_of.get_align_size();
+        let mut base =
+            crate::type_system::datatype::TypeBase::new(String::new(), size, TypeMetatype::Array);
+        base.alignment = array_of.get_alignment() as i32;
+        // type.hh:944-945: `if (n == 1) flags |= needs_resolution;`
+        if num_elements == 1 {
+            base.flags |= crate::type_system::datatype::type_flags::NEEDS_RESOLUTION;
+        }
+        self.find_add(
+            Datatype::Array(crate::type_system::datatype::TypeArray {
+                base,
+                array_of,
+                num_elements,
+            }),
+            true,
+        )
+        .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.hh:429 TypePointer::downChain (virtual call site)
@@ -2215,7 +2520,7 @@ impl TypeFactory {
                 let (sub, new_off) = cur.get_sub_type(cur_off);
                 match sub {
                     Some(s) => {
-                        cur = Arc::new(s.clone());
+                        cur = s;
                         cur_off = new_off;
                         if cur_off == 0 {
                             break;
@@ -2432,9 +2737,62 @@ impl TypeFactory {
                 if factory.align_map.is_empty() {
                     factory.set_default_alignment_map();
                 }
-                Arc::new(RwLock::new(factory))
+                let arc = Arc::new(RwLock::new(factory));
+                // Eagerly populate the canonical 1-byte-unknown cache under
+                // NO lease (see canonical_unknown_base_1): once this closure
+                // completes, any factory write lease can exist only after
+                // the cache is filled, so the lock-free fast path is always
+                // armed before a lease-holder can reach the query.
+                let unknown_base_1 = arc
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_base(1, TypeMetatype::Unknown)
+                    .expect("TypeFactory::get_base always produces an unknown base type");
+                let _ = CANONICAL_UNKNOWN_BASE_1.set(unknown_base_1);
+                arc
             })
             .clone()
+    }
+
+    // Ghidra: type.cc:2965-2967 TypeSpacebase::getSubType miss return
+    /// The factory-mediated 1-byte TYPE_UNKNOWN base for the spacebase /
+    /// symbol-table miss and untyped-symbol arms
+    /// (`glb->types->getBase(1,TYPE_UNKNOWN)` — type.cc:2967;
+    /// `sc->getArch()->types->getBase(1,TYPE_UNKNOWN)` — database.cc:629/
+    /// 681/731). In the oracle this always resolves through the
+    /// architecture's TypeFactory, so the standalone console tier answers
+    /// the NAMED core `xunknown1` (sleigh_arch.cc:229, cacheCoreTypes
+    /// typecache slot) and the headless DataOrg tier `undefined1`; the
+    /// former raw-anonymous constructions printed `unkbyte1` via
+    /// PrintC::genericTypeName (printc.cc:3383) — the MIRROR2 unkbyte
+    /// family.
+    ///
+    /// Lock-safety (MIRROR2 deadlock evidence, eu-stack of the hung canon
+    /// worker): the dominant caller chain is
+    /// `TypeFactory::down_chain_pointer` (holding the factory's WRITE
+    /// lease) → `TypeSpacebase::get_sub_type` → here, so this helper MUST
+    /// NOT re-enter `shared_default`'s RwLock while that lease is held
+    /// (self-deadlock via read_contended; the oracle has no locks — any
+    /// factory query from inside a factory method is legal there). The
+    /// cache is therefore populated eagerly inside `shared_default`'s
+    /// construction closure (under no lease) and read lock-free here; the
+    /// on-demand population path can only run when the process-canonical
+    /// factory has never been constructed, in which case no lease on it
+    /// can be held either. Factory identity is preserved (the SAME Arc the
+    /// factory's typecache would answer), keeping downstream
+    /// identity-sensitive decisions (type-propagation ptr-eq, char-print
+    /// flag reads) on the canonical object.
+    pub fn canonical_unknown_base_1() -> Arc<Datatype> {
+        if let Some(base) = CANONICAL_UNKNOWN_BASE_1.get() {
+            return base.clone();
+        }
+        let base = Self::shared_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_base(1, TypeMetatype::Unknown)
+            .expect("TypeFactory::get_base always produces an unknown base type");
+        let _ = CANONICAL_UNKNOWN_BASE_1.set(base.clone());
+        base
     }
 
     // Ghidra: type.cc:4140 TypeFactory::concretize
@@ -3343,7 +3701,7 @@ impl TypeFactory {
             }
             TypeMetatype::Array => {
                 let basic = Datatype::decode_basic(decoder)?;
-                // Ghidra: type.cc:1329 TypeArray::decode rewinds attributes
+                // Ghidra: type.cc:1323 TypeArray::decode rewinds attributes
                 // after decodeBasic before re-reading ATTRIB_ARRAYSIZE —
                 // decodeBasic's attribute loop has otherwise consumed the
                 // element's attributes, and arraysize would stay -1.
@@ -4643,9 +5001,78 @@ mod tests {
             .expect("ordinary one-byte signed core type");
         assert_eq!(preferred_char.get_name(), "char");
         assert!(preferred_char.is_char_print());
-        assert_eq!(non_character.get_name(), "int1");
+        assert_eq!(non_character.get_name(), "sbyte");
         assert!(!non_character.is_char_print());
         assert!(!Arc::ptr_eq(&preferred_char, &non_character));
+    }
+
+    #[test]
+    fn test_data_org_core_inventory_matches_java_coretypes() {
+        // Java coreBuiltin projection (PcodeDataTypeManager.generateCoreTypes
+        // under x86-64 gcc data organization).
+        let factory = TypeFactory::new(8);
+        let expected = [
+            ("sbyte", 1, TypeMetatype::Int),
+            ("short", 2, TypeMetatype::Int),
+            ("int3", 3, TypeMetatype::Int),
+            ("int", 4, TypeMetatype::Int),
+            ("int5", 5, TypeMetatype::Int),
+            ("int6", 6, TypeMetatype::Int),
+            ("int7", 7, TypeMetatype::Int),
+            ("long", 8, TypeMetatype::Int),
+            ("byte", 1, TypeMetatype::Uint),
+            ("ushort", 2, TypeMetatype::Uint),
+            ("uint3", 3, TypeMetatype::Uint),
+            ("uint", 4, TypeMetatype::Uint),
+            ("uint5", 5, TypeMetatype::Uint),
+            ("uint6", 6, TypeMetatype::Uint),
+            ("uint7", 7, TypeMetatype::Uint),
+            ("ulong", 8, TypeMetatype::Uint),
+            ("double", 8, TypeMetatype::Float),
+            ("longdouble", 16, TypeMetatype::Float),
+            ("undefined8", 8, TypeMetatype::Unknown),
+            ("wchar_t", 4, TypeMetatype::Int),
+        ];
+        for (name, size, metatype) in expected {
+            let datatype = factory
+                .find_by_name(name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(
+                (datatype.get_size(), datatype.get_metatype()),
+                (size, metatype)
+            );
+        }
+        // cacheCoreTypes ASCII preference and (submeta,size) cache slots.
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Int)
+                .expect("signed 8-byte core"),
+            &factory.find_by_name("long").expect("long")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Uint)
+                .expect("unsigned 8-byte core"),
+            &factory.find_by_name("ulong").expect("ulong")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(2, TypeMetatype::Int)
+                .expect("signed 2-byte core"),
+            &factory.find_by_name("short").expect("short")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(1, TypeMetatype::Uint)
+                .expect("unsigned 1-byte core"),
+            &factory.find_by_name("byte").expect("byte")
+        ));
+        assert!(Arc::ptr_eq(
+            &factory
+                .get_base(8, TypeMetatype::Float)
+                .expect("8-byte float core"),
+            &factory.find_by_name("double").expect("double")
+        ));
     }
 
     #[test]

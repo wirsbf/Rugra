@@ -22,7 +22,8 @@
 │   .alignment_receipts.json (key=ghidra相对文件名, val=ts+ranges) │
 ├─────────────────────────────────────────────────────────────────┤
 │ Layer 3 (commit 兜底): versioned Git hooks                     │
-│   .githooks/pre-commit → health/doc/annotations/strict refs    │
+│   .githooks/pre-commit → health/doc-sync/annotations/          │
+│   strict refs(def-start)/corpus-markers                        │
 │   .githooks/commit-msg → Alignment Evidence 4/4                │
 ├─────────────────────────────────────────────────────────────────┤
 │ Layer 4 (最终信任边界): CI                                     │
@@ -101,7 +102,8 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
 - `.alignment_session_start` 文件由 SessionStart hook (`align_gate.py --session-start`)
   打时间戳。回执 ts 必须 >= 该时间戳才算 fresh。
 - 若 PostToolUse hook 未生效 (旧 session), agent 可手动
-  `python .zcode/record_receipt.py coreaction.cc 4886 4960` 补回执。
+  `python3 .zcode/record_receipt.py coreaction.cc 4886 4960` 补回执
+  (形态: `<ghidra_file> [<line_start> [<line_end>]]; 本机无 `python` 别名, 用 `python3`)。
 
 ## 跨根编辑语义（GATE-WORKTREE-ROOTMISMATCH-0001）
 
@@ -138,6 +140,46 @@ worktree 文件路径），gate **不再静默放行**，按以下顺序处理�
 无任何 Ghidra 引用的 fn → 不 gate (由 `check_ghidra_annotations.py`
 在 commit 时强制要求加注释)。`// RUGRA-GLUE:` 标注的 fn → 豁免。
 
+## pre-commit 的 refs 门禁语义（TOOLS-REFS-DEFSTART-0001，2026-09-26 REFSDEF lane 更新）
+
+版本化 `.githooks/pre-commit` 的 refs 检查行固定运行：
+
+```bash
+python3 "$REPO_ROOT/tools/check_ghidra_refs.py" --all --strict || exit $?
+```
+
+REFSDEF 车道（commits `9aa565ec`+`ba3f2dc8`）之后，该检查是**两段语义**：
+
+1. **存在性（所有引用形态）**：任何注释里的 `<file>.cc|hh|h :<digits>` 引用，文件
+   必须在锁定 oracle cpp 树内且行号不越界（旧语义，保持不变）；
+2. **定义起始行验证（def-start，新语义）**：头注解
+   `// Ghidra: <file>.cc:<line> <fn>` 中 `<fn>` 若在锁定 oracle 的 `<file>` 定义表
+   内可解析，cited line 必须是 `<fn>` 的**函数定义起始行**——漂移引用（指向调用点、
+   函数体中部、旧 oracle 行号）不再能通过"行号恰好在文件内"的旧检查。
+
+**豁免（脚本计数、不阻塞）**：`.hh`/`.h` 引用保持存在性检查（声明/内联文档惯例）；
+`<fn>` 在被引文件解析不出（类名级代表行、.hh 内联访问器、跨文件调用点引用）→ 计入
+`unresolved` 桶，不算 drift。解析器形态（强制分隔符 + 裸 ctor/析构/operator/模板
+分支 + 调用行/doc 行/关键字返回类型排除）详见 `tools/check_ghidra_refs.py` 头部
+docstring；未来任何 citation 批量工具必须沿用该形态。
+
+**摸底命令**（不阻塞，两种结论下都附普查块）：
+
+```bash
+python3 tools/check_ghidra_refs.py --all --strict --defstart-report
+```
+
+输出五项计数：existence problems / def-start checked / ok / DRIFT /
+unresolved(exempt)，DRIFT 非零时附 per-file 明细。健康树长相示例（2026-09-26 亲测，
+基 `d0e27c14`）：checked 3782 / DRIFT 0 / unresolved 823。注意该工具**没有
+`--help`**——不认识的参数被忽略后直接执行检查（只有 `.rs` 结尾参数被当作文件），
+查参数请读脚本头。
+
+pre-commit 其余检查行（同一 hook 内，顺序执行）：`check_gate_health.py` →
+`check_doc_sync.py --staged` → `check_ghidra_annotations.py --all` → 上面的 refs
+行 → `check_corpus_markers.py --all`（AUDIT-CORPUS-MARKERS-GATE-0001，库生产代码
+零语料标记防复发门禁）。任一非零即拒绝提交。
+
 ## 安装与验证
 
 ```bash
@@ -148,6 +190,7 @@ python3 tools/check_ghidra_annotations.py --self-test
 python3 .zcode/align_gate.py --self-test
 python3 tools/check_ghidra_annotations.py --all
 python3 tools/check_ghidra_refs.py --all --strict
+python3 tools/check_ghidra_refs.py --all --strict --defstart-report   # 摸底普查（不阻塞）
 python3 tools/check_alignment_evidence.py --self-test
 ```
 
@@ -181,8 +224,8 @@ Ghidra), 即生效; 也可查 `.zcode/align_gate.log` 是否有新条目。
 | `.alignment_receipts.json` | 回执存储 (gitignore, 不入库) |
 | `.alignment_session_start` | session 起始时间戳 |
 | `tools/check_gate_health.py` | 锁定 oracle、hook mode/path、ZCode schema 自检 |
-| `tools/check_ghidra_refs.py` | commit/CI 时全库 strict 引用校验 |
+| `tools/check_ghidra_refs.py` | commit/CI 时全库 strict 引用校验（存在性 + REFSDEF 定义起始行验证；`--defstart-report` 摸底） |
 | `tools/check_alignment_evidence.py` | commit-msg Evidence 4/4 严格校验 |
-| `.githooks/pre-commit` | health/doc/annotation/strict-ref 门禁 |
+| `.githooks/pre-commit` | health/doc-sync/annotation/strict-ref(def-start)/corpus-marker 门禁 |
 | `.githooks/commit-msg` | Alignment Evidence 门禁 |
 | `.github/workflows/alignment-gates.yml` | 版本化 CI 最终信任边界 |

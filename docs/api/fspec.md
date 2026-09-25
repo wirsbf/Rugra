@@ -149,6 +149,13 @@ Test the stored model pointer/`Arc`, independently of its printable name.
 Look up a full address-space/range call effect through the local override or
 the shared model fallback.
 
+### `pub fn try_has_effect(&self, space: AddressSpace, offset: u64, size: i32) -> Option<EffectType>`
+
+Non-panicking form of `has_effect` for input registration
+(`Funcdata::setInputVarnode` tail, funcdata_varnode.cc:365). `None` (no
+model and no local override) has no Ghidra counterpart and skips the
+effect-flag writes. Added 2026-09-23 (SB-MATCHURL-ORD70-0001).
+
 ### `pub fn effect_iter(&self) -> &[EffectRecord]`
 
 Iterate the effective local-override or shared-model effect list.
@@ -281,15 +288,26 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - `final_input_check(op_ref)` — 对 hasCondExeEffect 的活跃试验重新运行 AncestorRealistic，失败→markNoUse
 
 **checkInputTrialUse 重写**（fspec.rs，移植自 fspec.cc:5585-5653）：
-- 签名改为 `check_input_trial_use(op_ref, has_active_output, aliascheck, maxancestor) -> Vec<(slot, vn_size)>`
+- 签名改为 `check_input_trial_use(fd, op_ref, aliascheck, maxancestor) -> Vec<(slot, vn_size)>`
+  （Ghidra 原签名持 `Funcdata &data`；`&self` 作为 checkCallDoubleUse 的 match spec
+  以引用传入，trial 走克隆回写以避免借用冲突）
 - Stack 空间试验：aliascheck.hasLocalAlias → markNoUse；否则 AncestorRealistic + ancestorOpUse
 - Register 空间试验：AncestorRealistic(allowFail=true) + ancestorOpUse + condexe 标记
 - 返回 definitelyNotUsed 试验的 (slot, size) 供调用者执行 opSetInput(newConstant)
 
 **ancestorOpUse + onlyOpUse**（funcdata.rs，移植自 funcdata_varnode.cc:1805-1994）：
-- `ancestor_op_use(has_active_output, maxlevel, vn, op, trial_slot, offset, flags) -> bool`
+- `ancestor_op_use(fd, maxlevel, vn, op, trial, offset, flags, match_fc) -> bool`
 - 递归跟随 def 链（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE），调用 only_op_use
 - `only_op_use` — 前向遍历 descend，检测 BRANCH/LOAD/STORE/CALL/RETURN 等"非参数使用"
+
+**FuncProto/ProtoModel getMaxOutputDelay**（fspec.hh:998/1572 + fspec.cc:1153 calcDelay）：
+- `FuncProto::get_max_output_delay()` → `ProtoModelFull::get_max_output_delay()` →
+  `ParamListOutput::get_max_delay()`（ParamListStandard::calcDelay 的 maxdelay）。
+  供 `Funcdata::init_active_output` 使用。
+
+**ActionActiveParam 借用重组**（coreaction.cc:1725-1771 Rust 侧）：
+- checkInputTrialUse 调用改为「取值出锁 → 走 walk → 写回」：spec 值被 park 出 RwLock，
+  占位符的 op Weak 悬空使身份扫描永不匹配（单线程管线语义等价 Ghidra 裸指针）。
 - TraverseNode flags（ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH）
 
 **ActionActiveParam::apply 1:1 重写**（coreaction.rs，移植自 coreaction.cc:1725-1771）：
@@ -912,10 +930,10 @@ INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。
 
 ## 调用实参收敛链（MAINDIFF-CALLPROTO-0001，master 并入）
 
-`FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5668-5741 与
+`FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5685-5741 与
 fspec.hh:310-317/1653-1654：
 
-- `build_input_from_trials(fd, call_op)`（fspec.cc:5668 `buildInputFromTrials`）
+- `build_input_from_trials(fd, call_op)`（fspec.cc:5685 `buildInputFromTrials`）
   完整化：保留 fspec 输入槽 0 → varargs+locked 时 `sort_fixed_position` →
   逐 USED 试验：spacebase 试验按 `stackoffset` 换算 caller 视角、UNREF 试验
   经 `Funcdata::newVarnode`（bank create + assignHigh + queryProperties flag
@@ -973,3 +991,240 @@ type-lock。Rugra 现已通过 `prototype.is_input_locked()` 对齐该门与首�
 scalar x86 input/slot/placeholder 投影。它不批准 `commitNewInputs/Outputs` 的
 完整分支、ParamEntry join/reverse/endian/error 状态、hidden-return pointer、
 ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
+
+
+## 2026-09-23（SB-MATCHURL-ORD164-0001）：`<rule>` fillin 投影接入 output 派发链
+
+- **根因**（match_url Phase 2 ordinal 164，`universal:fullloop:activereturn`
+  op-idx 139）：exit@plt 调用点（0x53ee）的 RDX 输出试探（guardCalls
+  killedbycall 臂 `newIndirectCreation` 的 const0 DELAY_SLOT）被错误提交为
+  CALL 正式输出。链路：oracle `ParamListStandardOut::initialize`
+  （fspec.cc:1614-1627）因 gcc `__stdcall` output 含
+  `<join_dual_class/>`（`MultiSlotDualAssign` 构造器置
+  `fillinOutputActive=true`，modelrules.cc:1143）而得
+  `useFillinFallback=false` → `fillinMap`（fspec.cc:1721-1763）走规则步：
+  `MultiSlotDualAssign::fillinOutputMap`（modelrules.cc:1242-1291）对唯一
+  active 的 RDX 试探因 `!entry->isFirstInClass()`（RAX 才是 general 类
+  首entry，resolveFirst fspec.cc:76-88）拒绝 → `fillinMapFallback(true)`
+  的 firstOnly 过滤（cc:1649）跳过 RDX → 全部 markNoUse →
+  `buildOutputFromTrials`（fspec.cc:5770-5860）在
+  `getNumTrials()==0` 早退，CALL out=- 保持、const0 试探 INDIRECT 存活。
+  Rugra 侧 `initialize` 钉死空规则分支（`use_fillin_fallback=true` 强制
+  legacy）→ `fillin_map_fallback(active,false)` 的 firstOnly=false 让
+  非-first 的 RDX entry 参选 → lone RDX 试探被 markUsed → 输出直连 +
+  DELAY_SLOT 销毁（ordinal 164 分歧形态）。
+- **修复**：`src/fspec.rs` 新增 `ModelRuleFillin`/`FillinAction` ——
+  `<rule>` 元素到 fillin 相关状态的解码投影（`ModelRule::decode`
+  modelrules.cc:1676-1709 只委托 assign action，datatype filter/qualifier/
+  precondition/sideeffect 不进 fillin 路径，结构化跳过保持流位置）。
+  七种 assign action（decodeAction 派发 modelrules.cc:587-614）中五种
+  `fillinOutputActive=true`（GotoStack/MultiSlotAssign/MultiMemberAssign/
+  MultiSlotDualAssign/ConsumeAs），`fillin_output_map` 逐行移植五种
+  trial-walk（cc:731/902/1019/1242/1345）+ 默认 false 两种
+  （ConvertToPointer/HiddenReturn，cc:579）。`ParamListStandard` 增加
+  `model_rules` 字段，`decode` 的 `<rule>` 分支从 skip 改为真解码；
+  `ParamListStandardOut::initialize` 忠实扫描
+  `canAffectFillinOutput()`（仅 legacy 分支强制
+  `auto_killed_by_call=true`）；`fillin_map` 在 `sort_trials` 后按声明序
+  走规则（cc:1746-1761：首个接受的规则把 active 全部 markUsed、
+  inactive markNoUse+清 entry 后 return），否则落
+  `fillin_map_fallback(true)`。
+- **验证**：match_url Phase 2 投影首分歧 164 → **191**（oppool2
+  CROSSBUILD 族，新登记 SB-MATCHURL-ORD191-0001）；三门禁 curl 124
+  函数 defects=0/numbering=0（skeleton 2795=亲父实测基线）、httpd 29/29
+  0/0（2339=基线）、config 域 10 函数逐个 0/0、next_url Phase 2 投影
+  MATCH 保持（335 stages/96457 ops）；cargo test --lib 串行 1650/18
+  失败集与基线逐名一致；gcc 审计 81 OK/26 FAIL=预存基线。
+- **残差**：`ModelRule` 的 forward `assignAddress` 消费端仍属
+  FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 / FSPEC-0002（本投影只覆盖
+  fillin 两入口消费的状态）；`HiddenReturnAssign::decode` 的
+  voidlock/strategy 读入后不入 fillin 状态（oracle 同样无消费）。
+
+### 2026-09-23（HTTPD-CALL-PUSH-0001 RC3）：FuncCallSpecs::effective_extrapop 存储
+- `FuncCallSpecs` 新增 `effective_extrapop: i32` 私有字段 + 
+  `set_effective_extrapop`/`get_effective_extrapop`（fspec.hh:1687-1688 的
+  inline 访问器镜像），构造初始化 `ProtoModel::extrapop_unknown`
+  （fspec.cc:4927，`EXTRAPOP_UNKNOWN_FULL`）。此前该"每个调用点的实际
+  extrapop"无存储面——`ActionExtraPopSetup`（coreaction.cc:1454）与
+  `ActionStackPtrFlow::analyzeExtraPop`（cc:306）两处写回均无落点，
+  CALLSPEC-0001 残差的主要存储半边就此闭合。
+- 写入方：coreaction.rs 的 `ActionExtraPopSetup::apply`（已知 extrapop 分支
+  cc:1454，调用点索引延迟到循环外统一回写避免借用交叉）与
+  `analyze_extra_pop`（StackSolver 解出的 INDIRECT 变量按
+  `soln-soln2` 写回，cc:302-307）。Ghidra 的 clone 携带面
+  （fspec.cc:4971）在 Rugra 无 FuncCallSpecs 克隆路径，无对应物。
+
+## 2026-09-23（BOOMATTR lane）：FuncProto 自函数参数恢复三件套 + updateInputNoTypes
+
+- `FuncProto::resolve_model()`（fspec.cc:3767-3776 镜像）：null model 早退 +
+  非 merged 模型早退——Rugra 的 `ProtoModelFull` 恒为具体模型，merged 分支
+  （`ProtoModelMerged::selectModel`）不可达，保留完整签名面供 merged 支持
+  落地时接通。
+- `FuncProto::derive_input_map(&mut ParamActive)`（fspec.hh:1494-1495 inline
+  `model->deriveInputMap(active)` = fspec.hh:791-792 `input->fillinMap(active)`）：
+  与 `FuncCallSpecs::derive_input_map` 同一 dispatch；modelless FuncProto 是
+  Ghidra 的非法状态（解引用即 fault），Rugra 生产侧由
+  `ActionInputPrototype` 的 setScope-fallback glue 先绑模型，防御性 no-op 兜底。
+- `FuncProto::unjustified_input_param(space,offset,size,res)`（fspec.cc:4426-4453）：
+  锁定参数 justifiedContain 环（ ADDRESS-0001 退化同
+  `characterize_as_input_param`：spaceless legacy Address + 记录的
+  address_space 空间等价守卫替代 address.cc:133 的 `base != op2.base`）+
+  模型 `unjustifiedContainer` 尾（fspec.rs:6946 已有移植首次接通到
+  FuncProto 侧）。
+- `FuncProto::update_input_types`：空类型折叠补齐——Ghidra high 类型永不为
+  null（最少是尺寸派生 TYPE_UNKNOWN），Rugra `Option::None` 折叠为
+  shared_default 工厂的 unknown base（对应 updateInputNoTypes 的
+  fspec.cc:4118 factory 调用）；参数命名折叠为 `param_<count+1>`
+  （ProtoStoreSymbol 的 ScopeInternal 符号在 commit 时按 category
+  function_parameter + catindex 默认命名，database.cc:2481）。
+- `FuncProto::update_input_no_types`（fspec.cc:4097-4128 全量镜像）：
+  与 update_input_types 同 used-trial 走查，仅用尺寸——persist 臂用
+  varnode 自身 (addr,size) 作 findDisjointCover stand-in（同
+  update_input_types 的 persist 臂折叠）。
+
+## 2026-09-23（BOOMATTR lane）：行为边界（实测）
+
+- 调用方 = coreaction `ActionInputPrototype::apply`（fixateproto，见
+  docs/api/coreaction.md 同日条目）。镜像契约下 main 19 参塌缩恢复为
+  2 参（RDI int + RSI int8）、next_url 4→1（RDI）、match_url 3→2、
+  myprogress 6→5、glob_word 9→5——全部与 direct-runner golden
+  （tests/golden/ghidra_curl_1204.direct-runner.c）签名形态一致。
+- 残差：未知类型命名轨道（`undefined8`/`unkbyte1` vs oracle
+  `xunknown8`/`xunknown1`）与返回类型（`long` vs `xunknown8`）不折叠——
+  属 TypeFactory 命名轨道域，非参数恢复语义。
+
+## 2026-09-23（CHAINFIX lane EY2）：update_input_(no_)types 接通 ProtoStoreSymbol::setInput 折叠回调
+
+- `FuncProto::update_input_types` / `FuncProto::update_input_no_types` 新增
+  `store_set_input: &mut dyn FnMut(usize, &ParameterPieces)` 参数，在两处
+  `store->setInput(count, "", pieces)` 调用点（fspec.cc:4079 / fspec.cc:4121）
+  逐字镜像位置回调——Ghidra 的 store 是 ScopeLocal 背书的
+  `ProtoStoreSymbol`（`FuncProto::setScope`，fspec.cc:3879-3885；
+  `funcdata.cc:69` 以 `baseaddr + -1` 构造 restricted_usepoint），其
+  `setInput`（fspec.cc:3147-3214）把 function_parameter category 符号装进
+  ScopeLocal。Rugra 的 FuncProto 只持平铺 `parameters` store，该副作用由
+  调用方（coreaction `ActionInputPrototype`）注入的闭包折叠执行；两函数
+  本体（used-trial 走查、persist 臂、mark 清理、`update_this_pointer`）
+  不变。回调签名 `&mut dyn FnMut` 保持单调用方（ActionInputPrototype）
+  语义；无其他调用方。
+
+## 2026-09-24：update_output_types 的 None→undefined 折叠（Lane GG2）
+
+`pieces.ty = vn0.get_type()` 为 None 时折叠为 `get_base(size, Unknown)`
+（undefined<N>）——对应 Ghidra 高类型永不为空的不变量：每个无类型 Varnode
+自创建即携 `getBase(size,TYPE_UNKNOWN)`（Funcdata::newVarnode/newUnique/
+newConstant，funcdata_varnode.cc:83/148/…），未约束返回值因此定型
+`undefined8`（锁定 oracle 见证）。与输入侧 fspec.cc:4118 折叠约定一致。
+此前 None 走 set_output_parameter 的保留旧值路径（void）。
+
+## 2026-09-24（CR29 返工）：update_output_types 空表臂真 void 复位
+
+fspec.cc:4142 的 `store->clearOutput()` 是**无条件 void 输出**（ProtoStoreInternal
+:3389-3395 `ParameterBasic(voidtype)`；ProtoStoreSymbol:3262-3270 `getTypeVoid()`），
+此前委托 `clear_unlocked_output`（仅清锁标志）保留了陈旧 return_type——af6c5ee2
+Evidence 断言了未实现的行为（机制 D 红旗，CR29 件④子项①）。修正为该臂直接复位
+return_type=void 基类型。另登记 PROTOSTORE-SIZELOCK-UPGRADE-0001（locked+
+TYPE_UNKNOWN 态 Ghidra 可经 isSizeTypeLocked 臂升级而 Rugra 合流建模不可达；
+含 fspec.rs:1608 合流的解除条件）。
+
+## 2026-09-25（SPACEFIX lane）：buildInputFromTrials SUBPIECE 输出空间修正（FSPEC-DEALLOC-SPACE-0001）
+
+CR-XCROSS 复核登记的 P2 空间钉死残留位：`build_input_from_trials` 过大参数
+SUBPIECE 截断臂（fspec.cc:5720-5732，x86-64 little-endian 臂 cc:5726）此前经
+spaceless 适配器 `new_varnode_out` 把 outvn 钉死 Register 空间。oracle 的
+`data.newVarnodeOut(sz,vn->getAddr(),newop)` 中 `vn->getAddr()` 是**当前参数
+varnode 的完整存储地址**（空间+偏移）——栈传参即 stack 空间、寄存器传参即
+register 空间。修正为在读锁快照内一并捕获 `vn_r.get_space()`，改走
+`new_varnode_out_full(sz, vn_space, vn_off, newop)`（与 XCROSS/OPZERO 同族
+三元组同源修法：size 用参数型 sz、space/offset 用 vn 自身存储）。
+
+- 探针实证（已回滚）：curl / httpd-default / httpd-SYMDB 三态 0 次触发
+  （触发条件=USED 试验的现 varnode 大于参数型且需截断；现语料 call 参数
+  均按槽位精确装载）——位点语料休眠，correct-by-construction。
+- 门禁：三态输出与亲父 e452244d cmp 字节恒等（curl 1099/0/0、httpd
+  1472/0/0、SYMDB 1328/0/0）；bank 26/26。
+
+## 2026-09-25（CALLSPEC lane）：FuncCallSpecs badjumptable 数据面建模（CALLSPEC-0001）
+
+JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
+参数命名缺口）的 fspec 侧数据面补齐——四件落地，零行为变化（无 setter
+调用点/无消费者接线，Rugra 生产侧恒 false = oracle 构造初值）：
+
+- `is_bad_jump_table` 字段（fspec.hh:1660 `isbadjumptable`），置于
+  `is_stack_output_locked` 之前保持 oracle 字段序（1658-1661:
+  isinputactive/isoutputactive/isbadjumptable/isstackoutputlock）。
+- 构造初值 `false`（fspec.cc:4945 `isbadjumptable = false`）。
+- `set_bad_jump_table(bool)` / `bad_jump_table()` 访问器
+  （fspec.hh:1701/1702 内联原样）。oracle 生产者 =
+  `FlowInfo::truncateIndirectJump` 默认失败臂（flow.cc:754
+  `fc->setBadJumpTable(true)`，Rugra 侧 flow.rs 截断臂仍 TODO 登记——
+  flow 租约不在本 lane 写域）；oracle 消费者 =
+  `ActionNameVars::lookForBadJumpTables`（coreaction.cc:2779-2803，按
+  `sym->getScope()==localmap && !isNameLocked` 门把 CALLIND in(0) 的符号
+  重命名 `UNRECOVERED_JUMPTABLE`，coreaction 侧同属移交）。
+- `clone_for_op` 携带（fspec.cc:4974 `res->isbadjumptable =
+  isbadjumptable`），文档注释同步撤下"isbadjumptable not modelled"。
+
+### CALLSPEC 族残差量化与根因（车道证据，移交在案）
+
+- 亲测基线（默认脸 1123/0/0，PDOTFORM 后）：ap_vhost_iterate_given_conn
+  diff=50。族残差四桶：①循环路径真实 CALLIND（0x2daa5 `call *%r12`）
+  零实参（canon/direct-runner 双 golden 均 3 实参
+  `(param_3,param_1,iVar2)`）；②param_2 命名 `void(*)()param_2` vs
+  `code *UNRECOVERED_JUMPTABLE`；③返回 join RDX:RAX 16B 存活
+  （`auVar8._0_8_` 截断）vs canon 8B `xVar3`；④push 门店面
+  （`*puVar6=0x2daa8` + puVar6/puVar7/uStack_40/auStack_38 追踪链）。
+- ①的根因（本 lane A/B 亲证）：`inject_raw_ops` 相位 1.5 锚定环只认
+  `CPUI_CALL`（funcdata.rs，CALLSPEC-DRIVER-0001 时代注释"lifter 只产
+  CALL"已过期——iced lifter 对寄存器间接调用产 `CPUI_CALLIND`，
+  x86_lift.rs:4890-4894），lifter 出生 CALLIND 全程无 FuncCallSpecs →
+  ActionFuncLink 不激活输入恢复 → heritage guardCalls 不注册
+  RDI/RSI/RDX 试验 → 打印零实参。补 CALLIND 锚定臂（flow.cc:340-342
+  xrefControlFlow CALLIND 臂 → setupCallindSpecs 无 in(0) 换写的镜像）
+  A/B 实测：ap_vhost 50→**14**、main 间接调用点
+  `(*(code *)pVar8)();`→`iVar2 = (*(code *)pVar8)((long)plVar9+0x34,*plVar9);`
+  （==canon 逐形），curl 727/0/0 与 bank 391/391 不动；但 httpd 总量
+  1123→**1175**（main +88 = MERGE-COPYNOISE-DIFFHIGH-0001 吸收缺口的
+  新表面：canon 把 killedbycall 栈重载拷贝吸收进命名高变量
+  `strcasecmp(pcVar13,...)`，Rugra 读槽位 `strcasecmp(plVar9[3],...)` +
+  自赋值店面换形 + 对齐回声）——违反默认脸不回退门，**该锚定臂已回滚
+  暂存于车道证据**，解锁条件=MERGE-COPYNOISE 吸收域（merge 相 Cover）
+  落地后重放。
+- ②需 flow.rs 截断臂 setter + coreaction lookForBadJumpTables 消费者
+  （均不在本 lane 写域，随本字段一并在案）；③=activereturn/processJoins
+  存根（COREACTION-JOINSPACE 残差行）；④与 ①同根（无 spec →
+  callOpIndirectEffect 极性保守 → 栈屏障 INDIRECT 全开）。
+
+### 2026-09-25：opCall entry 空间通道填充侧（PRINTC-OPCALL-ENTRYSPACE-0001 fspec 半项，Lane FSPECW）
+
+- **记录点带空间**：`FuncCallSpecs::new_for_op` 的 entry 快照（varnode 守卫
+  先释再锁 callspec 的锁序保持不变）此前产 `Address::new(offset)`——无空间
+  legacy 形。oracle 的记录点是 fspec.cc:4934
+  `entryaddress = call_op->getIn(0)->getAddr()`：CALL 注解化**前**的 in(0)
+  varnode 完整地址（空间+offset）。Rugra 的 in(0) varnode 只携带 flat
+  `AddressSpace` enum（`loc` 恒 spaceless），故经新增 RUGRA-GLUE 桥
+  `entry_address_with_space(space, offset)` 以 ADDRESS-0001 tag 形重建完整
+  地址：per-variant stand-in 句柄（thread-local 单例表，携带该 variant 的
+  name/addrsize/wordsize）+ 原offset。
+- **行为面**：offset 通道逐字节不变（annotation varnode 的
+  compatibility_offset、fspec_print_raw 十六进制、encode offset 全走
+  `as_u64()`）；空间通道激活——printc 的 `entry_addr_dims`
+  （`fc->getEntryAddress()` 消费侧，NAMFIX 已落）从 flat Ram 兜底改为解析
+  stand-in 的真实 dims；`space_name_for_addr`（fspec.cc:2132-2133
+  `writeSpace` 镜像）从硬编码 "ram" 改为读 tag 名，legacy spaceless 形
+  （set_funcdata/deindirect 调用方传入的 ADDRESS-0001 phase-1 形）保留
+  "ram" 占位。CALLIND 仍 None（fspec.cc:4942 间接调用不记录）；克隆臂
+  （in(0) 已是 FSPEC 注解）仍经 typed Weak 恢复原 spec 的 entry（fspec.cc:
+  4935-4940，含其空间 tag）。
+- **休眠正确化**：当前双语料（curl/httpd）所有直接 CALL 的 in(0) 均为 ram
+  空间（SLEIGH `*[ram]` export 与 iced `VarnodeRaw(Ram,…)` 两路同形），
+  stand-in dims (8,1) == flat Ram 兜底，printc func_ 兜底面 0 触发
+  （NAMFIX 已证）——E2E 输出恒等；单测
+  `test_new_for_op_entry_addr_carries_in0_space` 钉 ram/const/iop/克隆四臂。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

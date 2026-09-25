@@ -50,6 +50,52 @@ enum BoundOperand {
     MemAddr { addr: VarnodeRaw, size: usize },
 }
 
+// RUGRA-GLUE: shift direction for the ia.sinc SHL/SHR/SAR group-2
+// constructors (locked sla value op: INT_LEFT / INT_RIGHT / INT_SRIGHT).
+#[derive(Clone, Copy)]
+enum ShiftDir {
+    Left,
+    Right,
+    Arith,
+}
+
+// RUGRA-GLUE: rotate direction for the ia.sinc ROL/ROR group-2 rotate
+// constructors (locked sla: value = OR of two opposite shifts of the same
+// rm; evidence /tmp/w-ext-rol.out + /tmp/w-ext-ror.out).
+#[derive(Clone, Copy)]
+enum RotDir {
+    Left,
+    Right,
+}
+
+// RUGRA-GLUE: bit-test modify kind for the ia.sinc :BT/:BTS/:BTR/:BTC
+// constructors (locked sla: CF = tested bit; modify op = OR / AND~ / XOR of
+// the 1<<count mask; evidence /tmp/w-ext-bt.out + bts/btr/btc dumps).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BtKind {
+    Test,
+    Set,
+    Reset,
+    Complement,
+}
+
+// RUGRA-GLUE: count source for the group-2 shift encodings. x86 encodes
+// three DISTINCT count forms with different oracle pcode: C0/C1 imm8
+// (count:4 = imm & mask, gated flag muxes), D0/D1 by-one (dedicated short
+// form with no count temp), D2/D3 CL (count:1 = CL & mask). iced normalizes
+// all three to the same mnemonic/operand shape, so the encoding opcode byte
+// — after legacy prefixes and REX — is the only discriminator (evidence
+// /tmp/w-shifts-dump-sleigh.out: `shl eax,1` C1-encoded lifts the 38-op
+// general form while D1-encoded lifts the 11-op by-one form).
+enum ShiftCount {
+    /// C0/C1 — imm8 count (4-byte count temp in the oracle).
+    Imm,
+    /// D0/D1 — shift by one (dedicated constructor, no count temp).
+    ByOne,
+    /// D2/D3 — count in CL (1-byte count temp in the oracle).
+    Cl,
+}
+
 impl Default for X86Lifter {
     // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     fn default() -> Self {
@@ -112,6 +158,39 @@ impl X86Lifter {
             // register space, 2-byte selector size).
             "fs" => 0x108,
             "gs" => 0x10a,
+            // FS/GS segment BASE registers (8-byte), distinct from the
+            // 2-byte selectors: register-catalog dump via
+            // examples/x86fs_probe.rs (x86-64.sla getAllRegisters:
+            // FS_OFFSET=register:0x110:8, GS_OFFSET=0x118:8; chain-side
+            // probe examples/rip_probe.rs agrees). Oracle pcode for every
+            // segment-relative memory op wraps the effective address as
+            // `INT_ADD tmp = FS_OFFSET, EA` with the base register FIRST
+            // (`mov rax,[fs:0x28]` lifts INT_ADD(FS_OFFSET, 0x28) + LOAD +
+            // COPY — never a direct ram varnode), the SLEIGH spacebase form
+            // the oracle prints as `*(undefined8 *)(in_FS_OFFSET + 0x28)`.
+            "fs_offset" => 0x110,
+            "gs_offset" => 0x118,
+            // XMM vector registers: 0x1200 + 0x40*N in the locked sla
+            // register space (dump /tmp/w-ext-comis.out: comiss xmm0 reads
+            // register:0x1200:4, xmm1 0x1240:4, xmm8 0x1400:4; the varnode
+            // size is the OPERATION size — 4 for *ss, 8 for *sd — not
+            // iced's 16-byte vector width).
+            "xmm0" => 0x1200,
+            "xmm1" => 0x1240,
+            "xmm2" => 0x1280,
+            "xmm3" => 0x12c0,
+            "xmm4" => 0x1300,
+            "xmm5" => 0x1340,
+            "xmm6" => 0x1380,
+            "xmm7" => 0x13c0,
+            "xmm8" => 0x1400,
+            "xmm9" => 0x1440,
+            "xmm10" => 0x1480,
+            "xmm11" => 0x14c0,
+            "xmm12" => 0x1500,
+            "xmm13" => 0x1540,
+            "xmm14" => 0x1580,
+            "xmm15" => 0x15c0,
             _ => return None,
         };
         Some(VarnodeRaw::new(AddressSpace::Register, offset, size))
@@ -142,6 +221,12 @@ impl X86Lifter {
     /// CF flag varnode (register:0x200:1)
     fn flag_cf() -> VarnodeRaw {
         VarnodeRaw::new(AddressSpace::Register, 0x200, 1)
+    }
+
+    // RUGRA-GLUE: see flag_cf (X86LIFT-FLAG-PCODE-0001 sla layout)
+    /// AF flag varnode (register:0x204:1; comiss writes it to 0)
+    fn flag_af() -> VarnodeRaw {
+        VarnodeRaw::new(AddressSpace::Register, 0x204, 1)
     }
 
     // RUGRA-GLUE: see flag_cf (X86LIFT-FLAG-PCODE-0001 sla layout)
@@ -215,20 +300,73 @@ impl X86Lifter {
         })
     }
 
+    // RUGRA-GLUE: FS/GS segment-base resolution for the iced path
+    // (LIFT-FS-CANARY-FORM-0001). The locked oracle (x86-64.sla, dumped by
+    // examples/x86fs_probe.rs) models long-mode segment-relative addressing
+    // off the 8-byte FS_OFFSET/GS_OFFSET base registers (0x110/0x118), NOT
+    // the 2-byte selectors (0x108/0x10a).
+    /// The segment-base register varnode for an fs/gs override, if any.
+    fn segment_base(segment: &Option<String>) -> Option<VarnodeRaw> {
+        let name = segment.as_deref()?;
+        Self::get_register(&format!("{name}_offset"), 8)
+    }
+
+    // RUGRA-GLUE: segment wrap per the x86-64.sla segment-override
+    // constructors (examples/x86fs_probe.rs): `INT_ADD tmp = SEG_OFFSET, EA`
+    // — segment base FIRST input, EA second — applied outermost after the
+    // modrm/SIB EA arithmetic (`[fs:rbx+rcx*4+0x10]` lifts INT_ADD(d,base),
+    // INT_MULT(idx,s), INT_ADD(t,product), INT_ADD(FS_OFFSET, t), LOAD).
+    fn apply_segment(
+        &mut self,
+        segment: &Option<String>,
+        addr_vn: VarnodeRaw,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        let Some(base) = Self::segment_base(segment) else {
+            return addr_vn;
+        };
+        let tmp = self.alloc_tmp(8);
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+        op.add_input(base);
+        op.add_input(addr_vn);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        tmp
+    }
+
     // RUGRA-GLUE: memory address computation shared by the flag-pcode ALU
     // paths (oracle emits ONE address varnode reused by the read LOAD, the
     // result STORE and every post-store flag re-LOAD — see `or qword
     // [rsp],0` in /tmp/w-iced-flagprobe.out). Mirrors parse_operand's
     // base + index*scale + displacement arithmetic.
     /// Compute a memory operand's address once, emitting address ops.
+    /// An fs/gs segment override wraps the result in
+    /// `INT_ADD(SEG_OFFSET, EA)`; with no EA components at all the address
+    /// is the bare segment base (d==0 folding, the SLEIGH table convention).
     fn compute_mem_addr(
         &mut self,
+        segment: &Option<String>,
         base: &Option<String>,
         index: &Option<String>,
         scale: &i32,
         displacement: &i64,
         ops: &mut Vec<PcodeOpRaw>,
     ) -> Option<VarnodeRaw> {
+        // rip-relative EA (no index, no segment): the Rugra disassembler
+        // already resolved the displacement to the ABSOLUTE target (iced
+        // memory_displacement64 = next_rip + raw_disp), so the EA is a bare
+        // constant — the same shape as the abs-disp-only form below, with
+        // no RIP register read and no INT_ADD. The resulting
+        // LOAD/STORE(ram-space, const) ops are rewritten to direct
+        // ram-space varnode COPYs by RuleLoadVarnode/RuleStoreVarnode
+        // (ruleaction.cc:4277/:4319), converging on the oracle SLEIGH form
+        // (`add [rip+X],eax` = INT_ADD out=ram:abs in=(ram:abs, EAX) —
+        // .sla dump, probe examples/ripfold_probe.rs). A segment override
+        // cannot combine with rip in long mode, so the fold is gated.
+        if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+            return Some(Self::const_vn(*displacement as u64, 8));
+        }
+
         let mut addr_vn: Option<VarnodeRaw> = None;
 
         if let Some(b) = base {
@@ -279,7 +417,12 @@ impl X86Lifter {
             }
         }
 
-        addr_vn
+        // Segment override (oracle: INT_ADD(SEG_OFFSET, EA), base first;
+        // bare segment base when no EA components remain — d==0 folding).
+        match addr_vn {
+            Some(a) if segment.is_some() => Some(self.apply_segment(segment, a, ops)),
+            other => other.or_else(|| Self::segment_base(segment)),
+        }
     }
 
     // RUGRA-GLUE: LOAD helper for the flag-pcode ALU paths (oracle LOAD
@@ -472,7 +615,27 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
+                // rip-relative source (no index, no segment): the Rugra
+                // disassembler resolves the displacement to the ABSOLUTE
+                // target (iced memory_displacement64 = next_rip + raw_disp),
+                // and the locked x86-64 SLEIGH constructor folds the EA at
+                // instruction-semantics time into a DIRECT ram-space varnode
+                // — `mov rax,[rip+0x1234]` lifts as `COPY RAX <- ram:abs:8`
+                // with no LOAD and no address op (.sla dump, probe
+                // examples/ripfold_probe.rs: [0] COPY out=4:0x0:8
+                // in=(3:0x223b:8); `add rax,[rip+X]` uses ram:abs inline as
+                // the ALU input). Same convention as the push/comis folded
+                // arms. A segment override cannot combine with rip in long
+                // mode, so the fold is segment-gated.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+                    return Some(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *size,
+                    ));
+                }
                 // Address computation: base + index * scale + displacement
                 let mut addr_vn: Option<VarnodeRaw> = None;
 
@@ -526,7 +689,17 @@ impl X86Lifter {
                     }
                 }
 
-                if let Some(a) = addr_vn {
+                // Segment override: INT_ADD(SEG_OFFSET, EA) outermost, or the
+                // bare segment base when no EA components (oracle form).
+                let addr_final = match addr_vn {
+                    Some(a) if segment.is_some() => self.apply_segment(segment, a, ops),
+                    other => match other.or_else(|| Self::segment_base(segment)) {
+                        Some(a) => a,
+                        None => return None,
+                    },
+                };
+
+                {
                     let tmp = self.alloc_tmp(*size);
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
                     op.add_input(VarnodeRaw::new(
@@ -534,12 +707,10 @@ impl X86Lifter {
                         AddressSpace::Ram.space_id() as u64,
                         8,
                     )); // address space ID
-                    op.add_input(a);
+                    op.add_input(addr_final);
                     op.set_output(tmp.clone());
                     ops.push(op);
                     Some(tmp)
-                } else {
-                    None
                 }
             }
         }
@@ -562,7 +733,22 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
+                // rip-relative destination (no index, no segment): same fold
+                // as parse_operand above — the oracle SLEIGH form for
+                // `mov [rip+X],rax` is `COPY ram:abs:8 <- RAX` with NO
+                // STORE (.sla dump, probe examples/ripfold_probe.rs:
+                // [0] COPY out=3:0x225a:8 in=(4:0x0:8)). Returning the
+                // direct ram varnode with the memory-size marker cleared
+                // routes every caller through the plain COPY destination
+                // path, producing exactly that form.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+                    return Some((
+                        VarnodeRaw::new(AddressSpace::Ram, *displacement as u64, *size),
+                        None,
+                    ));
+                }
                 // Very similar to parse_operand but returns the address var
                 let mut addr_vn: Option<VarnodeRaw> = None;
 
@@ -615,11 +801,19 @@ impl X86Lifter {
                     }
                 }
 
-                if let Some(a) = addr_vn {
+                // Segment override: INT_ADD(SEG_OFFSET, EA) outermost, or the
+                // bare segment base when no EA components (oracle form).
+                let addr_final = match addr_vn {
+                    Some(a) if segment.is_some() => self.apply_segment(segment, a, ops),
+                    other => match other.or_else(|| Self::segment_base(segment)) {
+                        Some(a) => a,
+                        None => return None,
+                    },
+                };
+
+                {
                     let size_vn = VarnodeRaw::new(AddressSpace::Const, *size as u64, 4);
-                    Some((a, Some(size_vn))) // Address and size marker for memory store
-                } else {
-                    None
+                    Some((addr_final, Some(size_vn))) // Address and size marker for memory store
                 }
             }
             _ => None,
@@ -681,8 +875,9 @@ impl X86Lifter {
                     scale,
                     displacement,
                     size,
+                    segment,
                 } => {
-                    let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                    let addr = lifter.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                     Some(Op1Ref::MemLoad {
                         addr,
                         size: *size,
@@ -716,9 +911,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let addr =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)?;
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                 Some((
                     AluDst::Mem { addr },
                     Op1Ref::MemLoad {
@@ -864,9 +1060,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -921,9 +1118,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -985,8 +1183,9 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
-                let addr = self.compute_mem_addr(base, index, scale, displacement, ops)?;
+                let addr = self.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                 Some(BoundOperand::MemAddr {
                     addr,
                     size: *size,
@@ -1418,12 +1617,17 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 // Constant address (rip-relative, or absolute disp-only):
                 // oracle folds to a direct ram-space varnode input of COPY —
-                // no LOAD, no address ops.
-                if base.as_deref() == Some("rip")
-                    || (base.is_none() && index.is_none() && *displacement != 0)
+                // no LOAD, no address ops. A segment override breaks the
+                // constant-address folding (oracle `push [fs:0x28]` lifts
+                // INT_ADD(FS_OFFSET,0x28) + LOAD + COPY), so the shortcut is
+                // segment-gated.
+                if segment.is_none()
+                    && (base.as_deref() == Some("rip")
+                        || (base.is_none() && index.is_none() && *displacement != 0))
                 {
                     // Rugra's X86_64Disassembler resolves a rip-relative
                     // operand's displacement to the ABSOLUTE target already
@@ -1441,8 +1645,17 @@ impl X86Lifter {
                     Some(tmp)
                 } else {
                     // Register-indirect: address ops per the oracle's
-                    // modrm/SIB table shapes, then LOAD + COPY.
-                    let addr = self.compute_push_src_addr(base, index, scale, displacement, ops)?;
+                    // modrm/SIB table shapes, then LOAD + COPY. A segment
+                    // override wraps the EA as INT_ADD(SEG_OFFSET, EA)
+                    // outermost (oracle `[fs:0x28]`: EA is the bare const
+                    // displacement when no base/index).
+                    let ea = self
+                        .compute_push_src_addr(base, index, scale, displacement, ops)
+                        .or_else(|| {
+                            (*displacement != 0)
+                                .then(|| Self::const_vn(*displacement as u64, 8))
+                        })?;
+                    let addr = self.apply_segment(segment, ea, ops);
                     let tl = self.emit_load(*size, &addr, ops);
                     let tmp = self.alloc_tmp(*size);
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -1683,7 +1896,14 @@ impl X86Lifter {
         let not_cond = self.emit_bool_not(cond, ops);
         let next = inst.address.as_u64() + inst.length as u64;
         let mut op_cbr = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
-        op_cbr.add_input(VarnodeRaw::new(AddressSpace::Ram, next, 8));
+        // Ghidra: funcdata_varnode.cc:222 Funcdata::newCodeRef — a branch
+        // destination is a 1-byte code-ref annotation varnode. An 8-byte
+        // ram varnode at the target overlaps neighboring branch targets,
+        // and Heritage's range refinement (heritage.cc:390 refineRead /
+        // cc:474 refineWrite family) then splits/rejoins them with PIECE
+        // chains whose dead residue lands in jmp-only basic blocks and
+        // blocks ActionDoNothing (HTTPD-FULLEMPTY-ELSE-0001).
+        op_cbr.add_input(VarnodeRaw::new(AddressSpace::Ram, next, 1));
         op_cbr.add_input(not_cond);
         ops.push(op_cbr);
         // Reg = tmp
@@ -1770,9 +1990,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -1833,8 +2054,9 @@ impl X86Lifter {
                         scale,
                         displacement,
                         size,
+                        segment,
                     } => {
-                        let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                        let addr = lifter.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                         let loaded = lifter.emit_load(*size, &addr, ops);
                         let temp = lifter.alloc_tmp(*size);
                         let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -1895,6 +2117,2332 @@ impl X86Lifter {
         op.set_output(tmp.clone());
         ops.push(op);
         self.emit_resultflags(tmp, ops);
+    }
+
+    // RUGRA-GLUE: raw pcode emit helper for the shift constructors — keeps
+    // every emit site in the exact op order of the locked sla dump.
+    /// Push one pcode op with the given inputs and optional output.
+    fn push_raw(
+        ops: &mut Vec<PcodeOpRaw>,
+        opcode: OpCode,
+        ins: &[VarnodeRaw],
+        out: Option<&VarnodeRaw>,
+    ) {
+        let mut op = PcodeOpRaw::new(opcode as i32);
+        for v in ins {
+            op.add_input(v.clone());
+        }
+        if let Some(o) = out {
+            op.set_output(o.clone());
+        }
+        ops.push(op);
+    }
+
+    // RUGRA-GLUE: group-2 shift encoding discriminator. The locked sla has
+    // THREE distinct constructors per direction with different pcode:
+    // C0/C1 imm-count (38-op gated form), D0/D1 by-one (short direct-flag
+    // form), D2/D3 CL-count. iced normalizes all three to the same
+    // mnemonic/operand shape AND the disassembler never populates
+    // Instruction.bytes (src/disasm/x86_64.rs:51), so the form is
+    // reconstructed from the operands: a CL register operand is definitive
+    // (D2/D3); an imm8 count != 1 is definitive (C0/C1); an imm8 count == 1
+    // is disambiguated by exact instruction-length arithmetic — the by-one
+    // encoding is always exactly one byte shorter than the imm8 encoding of
+    // the same instruction (same prefixes/modrm/SIB/disp, minus imm8), so
+    // computing the canonical by-one length from the operands separates
+    // D1-encoded `shl eax,1` (len 2) from C1-encoded (len 3). Exact for
+    // canonical (assembler-minimal disp8) encodings, i.e. all
+    // compiler-emitted code and every fixture form; a hypothetical
+    // non-canonical by-one encoding with redundant disp32 falls back to the
+    // imm form (disclosed X86LIFT-SHIFTS-FLAGS-0001 limitation — root fix
+    // is populating Instruction.bytes in x86_64.rs, outside this task's
+    // write-set).
+    /// Classify the count form (C0/C1 imm, D0/D1 by-one, D2/D3 CL).
+    fn shift_count_form(inst: &Instruction) -> Option<ShiftCount> {
+        match inst.operands.get(1)? {
+            crate::disasm::Operand::Register { name, size } => {
+                if name == "cl" && *size == 1 {
+                    Some(ShiftCount::Cl)
+                } else {
+                    None
+                }
+            }
+            crate::disasm::Operand::Immediate { value, .. } => {
+                if *value != 1 {
+                    return Some(ShiftCount::Imm);
+                }
+                match Self::shift_byone_len(inst) {
+                    Some(byone) if inst.length == byone => Some(ShiftCount::ByOne),
+                    _ => Some(ShiftCount::Imm),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // RUGRA-GLUE: canonical encoding length of the by-one form (D0/D1) for
+    // the same operands — prefixes (0x66 for 16-bit, REX) + opcode + modrm
+    // + SIB + displacement; reg forms are mod=3 (no SIB/disp). Used only to
+    /// Compute the by-one encoding length for form disambiguation.
+    fn shift_byone_len(inst: &Instruction) -> Option<usize> {
+        let size = match &inst.operands[0] {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return None,
+        };
+        let mut len = 0usize;
+        if size == 2 {
+            len += 1; // 0x66 operand-size prefix
+        }
+        match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, .. } => {
+                let id = Self::gpr_id(name)?;
+                let rex = size == 8
+                    || id >= 8
+                    || (size == 1 && matches!(name.as_str(), "spl" | "bpl" | "sil" | "dil"));
+                if rex {
+                    len += 1;
+                }
+                len += 2; // opcode + modrm (mod=3)
+            }
+            crate::disasm::Operand::Memory { base, index, displacement, .. } => {
+                let base_id = base.as_deref().and_then(Self::gpr_id);
+                let index_id = index.as_deref().and_then(Self::gpr_id);
+                let rex = size == 8
+                    || base_id.is_some_and(|i| i >= 8)
+                    || index_id.is_some_and(|i| i >= 8);
+                if rex {
+                    len += 1;
+                }
+                len += 2; // opcode + modrm
+                // SIB when an index register is present or the base
+                // encodes rm=100 (rsp/r12 families)
+                if index.is_some() || base_id == Some(4) || base_id == Some(12) {
+                    len += 1;
+                }
+                // displacement size (canonical minimal)
+                if let Some(bname) = base {
+                    if bname == "rip" || bname == "eip" {
+                        len += 4;
+                    } else {
+                        let bid = base_id?;
+                        if *displacement == 0 && bid != 5 && bid != 13 {
+                            // mod=00, no disp (rbp/r13 base needs disp8=0)
+                        } else if *displacement >= -128 && *displacement <= 127 {
+                            len += 1;
+                        } else {
+                            len += 4;
+                        }
+                    }
+                } else {
+                    len += 4; // no base: SIB base=101 / direct disp32
+                }
+            }
+            _ => return None,
+        }
+        Some(len)
+    }
+
+    // RUGRA-GLUE: GPR number (0-15) from a register name via the sla offset
+    // table (ah/ch/dh/bh sit one byte above their GPR base).
+    /// Map a GPR name to its 0-15 register number.
+    fn gpr_id(name: &str) -> Option<u8> {
+        let off = Self::get_register(name, 1)?.offset;
+        if off >= 0xC0 {
+            return None; // flags/segment/RIP region — not a GPR
+        }
+        Some(if matches!(off, 0x01 | 0x09 | 0x11 | 0x19) {
+            ((off - 1) / 8) as u8
+        } else {
+            (off / 8) as u8
+        })
+    }
+
+    // RUGRA-GLUE: LOAD into a caller-provided slot varnode — the sla reuses
+    // ONE unique local slot for every re-LOAD of the rm operand in the
+    /// Emit LOAD from `addr` into `slot`.
+    fn emit_load_slot(
+        &mut self,
+        addr: &VarnodeRaw,
+        slot: &VarnodeRaw,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        op.add_input(Self::ram_space_const());
+        op.add_input(addr.clone());
+        op.set_output(slot.clone());
+        ops.push(op);
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :SHL/:SHR/:SAR group-2 constructors of
+    // the locked x86-64 sla (sleigh_specs/x86-64.sla, sleigh_shim op-for-op
+    // dump /tmp/w-shifts-dump-sleigh.out, 56 forms). Structure per dump:
+    //   imm/cl form — `local count = imm&mask / CL&mask`; `local tmpflags =
+    //   rm << 0` (COPY save); `rm = rm <shift> count`; [+zext for 32-bit GPR
+    //   dst]; shlflags(): CF = count==0 ? CF : bit-shifted-out,
+    //   OF = count==1 ? dir-specific : OF; then shiftresultflags(): SF/ZF/PF
+    //   each gated by count!=0 (preserved when count==0). Memory
+    //   destinations re-LOAD the rm slot at every flag use.
+    //   by-one form (D0/D1) — dedicated short constructors: shl CF from the
+    //   pre-shift top bit, OF = CF ^ result-top after the value op; shr/sar
+    //   CF = (rm&1)!=0 (8-bit writes CF directly), OF = 0, no gating.
+    /// Lift `shl`/`sal`/`shr`/`sar` (all count forms; flags + value + zext).
+    fn lift_shift(&mut self, inst: &Instruction, dir: ShiftDir, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let Some(form) = Self::shift_count_form(inst) else {
+            return;
+        };
+
+        // Destination binding — memory address ops precede the constructor
+        // body (dump `shl dword [rbx+8],3`: ADD, AND(count), LOAD, ...).
+        let (dst, size) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (AluDst::Reg { vn, parent64 }, *size)
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+                segment,
+            } => {
+                let Some(addr) =
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
+                else {
+                    return;
+                };
+                (AluDst::Mem { addr }, *size)
+            }
+            _ => return,
+        };
+
+        let shift_op = match dir {
+            ShiftDir::Left => C::CPUI_INT_LEFT,
+            ShiftDir::Right => C::CPUI_INT_RIGHT,
+            ShiftDir::Arith => C::CPUI_INT_SRIGHT,
+        };
+        // count==0 / count==1 gating constants use the count width; result
+        // comparisons use the operand width.
+        let mask: u64 = if size == 8 { 0x3f } else { 0x1f };
+
+        // read_result: post-value rm for reg dst (register varnode) or a
+        // re-LOAD into the ONE shared mem slot (the oracle reuses a single
+        // unique local for every rm re-read — dump `shl byte [rbx],3` loads
+        // unique#1 six times).
+        let mem_slot = match &dst {
+            AluDst::Mem { .. } => Some(self.alloc_tmp(size)),
+            AluDst::Reg { .. } => None,
+        };
+        let read_result = |this: &mut Self, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match (&dst, &mem_slot) {
+                (AluDst::Reg { vn, .. }, _) => vn.clone(),
+                (AluDst::Mem { addr }, Some(slot)) => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+                _ => unreachable!("mem dst must have a slot"),
+            }
+        };
+
+        if let ShiftCount::ByOne = form {
+            // ---- D0/D1 dedicated by-one constructors ----
+            let one = Self::const_vn(1, 4);
+            match dir {
+                ShiftDir::Left => {
+                    // CF = rm s< 0 (pre-shift top bit), BEFORE the value op
+                    let r0 = read_result(self, ops);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r0, Self::const_vn(0, size)],
+                        Some(&Self::flag_cf()),
+                    );
+                    // rm = rm << 1
+                    match &dst {
+                        AluDst::Reg { vn, .. } => Self::push_raw(
+                            ops,
+                            shift_op,
+                            &[vn.clone(), one],
+                            Some(vn),
+                        ),
+                        AluDst::Mem { addr } => {
+                            let slot = mem_slot.clone().expect("mem dst must have a slot");
+                            self.emit_load_slot(addr, &slot, ops);
+                            Self::push_raw(ops, shift_op, &[slot.clone(), one], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = CF ^ (rm s< 0)  (direct flag output)
+                    let r1 = read_result(self, ops);
+                    let t_sign = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r1, Self::const_vn(0, size)],
+                        Some(&t_sign),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[Self::flag_cf(), t_sign],
+                        Some(&Self::flag_of()),
+                    );
+                    // zext for 32-bit GPR dst comes AFTER the OF op
+                    if let AluDst::Reg { vn, parent64 } = &dst {
+                        if let Some(parent) = parent64 {
+                            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                        }
+                    }
+                }
+                ShiftDir::Right | ShiftDir::Arith => {
+                    // CF = rm & 1 (8-bit writes the AND directly into CF);
+                    // OF = 0; both precede the value op
+                    let r0 = read_result(self, ops);
+                    if size == 1 {
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, 1)],
+                            Some(&Self::flag_cf()),
+                        );
+                    } else {
+                        let t0 = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, size)],
+                            Some(&t0),
+                        );
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_NOTEQUAL,
+                            &[t0, Self::const_vn(0, size)],
+                            Some(&Self::flag_cf()),
+                        );
+                    }
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_COPY,
+                        &[Self::const_vn(0, 1)],
+                        Some(&Self::flag_of()),
+                    );
+                    // rm = rm >> 1 (logical or arithmetic)
+                    match &dst {
+                        AluDst::Reg { vn, .. } => Self::push_raw(
+                            ops,
+                            shift_op,
+                            &[vn.clone(), one],
+                            Some(vn),
+                        ),
+                        AluDst::Mem { addr } => {
+                            let slot = mem_slot.clone().expect("mem dst must have a slot");
+                            self.emit_load_slot(addr, &slot, ops);
+                            Self::push_raw(ops, shift_op, &[slot.clone(), one], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // zext for 32-bit GPR dst (after the value op)
+                    if let AluDst::Reg { vn, parent64 } = &dst {
+                        if let Some(parent) = parent64 {
+                            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                        }
+                    }
+                }
+            }
+            // ungated SF/ZF/PF (direct flag outputs; mem re-LOADs per flag)
+            let r_sf = read_result(self, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_SLESS,
+                &[r_sf, Self::const_vn(0, size)],
+                Some(&Self::flag_sf()),
+            );
+            let r_zf = read_result(self, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_EQUAL,
+                &[r_zf, Self::const_vn(0, size)],
+                Some(&Self::flag_zf()),
+            );
+            let r_pf = read_result(self, ops);
+            let t_and = self.alloc_tmp(size);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[r_pf, Self::const_vn(0xff, size)],
+                Some(&t_and),
+            );
+            let t_pop = self.alloc_tmp(1);
+            Self::push_raw(ops, C::CPUI_POPCOUNT, &[t_and], Some(&t_pop));
+            let t_bit = self.alloc_tmp(1);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[t_pop, Self::const_vn(1, 1)],
+                Some(&t_bit),
+            );
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_EQUAL,
+                &[t_bit, Self::const_vn(0, 1)],
+                Some(&Self::flag_pf()),
+            );
+            return;
+        }
+
+        // ---- imm (C0/C1) / cl (D2/D3) general form ----
+        // local count = imm & mask (:4) / CL & mask (:1) — one AND op
+        let (t_count, cs) = match form {
+            ShiftCount::Cl => {
+                let cl = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        match Self::get_register(name, *size) {
+                            Some(vn) => vn,
+                            None => return,
+                        }
+                    }
+                    _ => return,
+                };
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[cl, Self::const_vn(mask, 1)],
+                    Some(&t),
+                );
+                (t, 1)
+            }
+            ShiftCount::Imm => {
+                let value = match &inst.operands[1] {
+                    crate::disasm::Operand::Immediate { value, .. } => *value,
+                    _ => return,
+                };
+                let t = self.alloc_tmp(4);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn((value & 0xff) as u64, 4), Self::const_vn(mask, 4)],
+                    Some(&t),
+                );
+                (t, 4)
+            }
+            ShiftCount::ByOne => unreachable!("handled above"),
+        };
+
+        // local tmpflags = rm << 0 (COPY save); rm = rm <shift> count;
+        // [+zext]; memory form re-LOADs the rm slot for the value op.
+        let save = match &dst {
+            AluDst::Reg { vn, .. } => {
+                let save = self.alloc_tmp(size);
+                Self::push_raw(ops, C::CPUI_COPY, &[vn.clone()], Some(&save));
+                save
+            }
+            AluDst::Mem { addr } => {
+                let slot = mem_slot.clone().expect("mem dst must have a slot");
+                self.emit_load_slot(addr, &slot, ops);
+                let save = self.alloc_tmp(size);
+                Self::push_raw(ops, C::CPUI_COPY, &[slot.clone()], Some(&save));
+                self.emit_load_slot(addr, &slot, ops);
+                Self::push_raw(ops, shift_op, &[slot.clone(), t_count.clone()], Some(&slot));
+                self.emit_store_v(addr, slot, ops);
+                save
+            }
+        };
+        if let AluDst::Reg { vn, parent64 } = &dst {
+            Self::push_raw(ops, shift_op, &[vn.clone(), t_count.clone()], Some(vn));
+            if let Some(parent) = parent64 {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+            }
+        }
+
+        // ---- shlflags(): CF ----
+        let t_ne = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[t_count.clone(), Self::const_vn(0, cs)],
+            Some(&t_ne),
+        );
+        let t_m1 = self.alloc_tmp(cs);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SUB,
+            &[t_count.clone(), Self::const_vn(1, cs)],
+            Some(&t_m1),
+        );
+        let t_sh = self.alloc_tmp(size);
+        Self::push_raw(ops, shift_op, &[save.clone(), t_m1], Some(&t_sh));
+        let t_bit = match dir {
+            ShiftDir::Left => {
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[t_sh, Self::const_vn(0, size)],
+                    Some(&t),
+                );
+                t
+            }
+            ShiftDir::Right | ShiftDir::Arith => {
+                let t_and = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_sh, Self::const_vn(1, size)],
+                    Some(&t_and),
+                );
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[t_and, Self::const_vn(0, size)],
+                    Some(&t),
+                );
+                t
+            }
+        };
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_ne.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[t_neg, Self::flag_cf()],
+            Some(&t_a),
+        );
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_ne.clone(), t_bit], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_cf()));
+
+        // ---- shlflags(): OF (direction-specific) ----
+        let t_eq1 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[t_count.clone(), Self::const_vn(1, cs)],
+            Some(&t_eq1),
+        );
+        match dir {
+            ShiftDir::Left => {
+                // OF = count==1 ? (CF ^ result-top) : OF — result re-read
+                let r = read_result(self, ops);
+                let t_sign = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&t_sign),
+                );
+                let t_xor = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_XOR,
+                    &[Self::flag_cf(), t_sign],
+                    Some(&t_xor),
+                );
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                let t_a = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&t_a),
+                );
+                let t_b = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_AND, &[t_eq1.clone(), t_xor], Some(&t_b));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_of()));
+            }
+            ShiftDir::Right => {
+                // OF = count==1 ? original-top : OF (from the saved COPY)
+                let t_sign = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[save.clone(), Self::const_vn(0, size)],
+                    Some(&t_sign),
+                );
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                let t_a = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&t_a),
+                );
+                let t_b = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_AND, &[t_eq1.clone(), t_sign], Some(&t_b));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_of()));
+            }
+            ShiftDir::Arith => {
+                // OF &= (count != 1) — direct flag output, no temp
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&Self::flag_of()),
+                );
+            }
+        }
+
+        // ---- shiftresultflags(): gated SF / ZF / PF ----
+        let t_gate = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[t_count.clone(), Self::const_vn(0, cs)],
+            Some(&t_gate),
+        );
+        // SF
+        let r_sf = read_result(self, ops);
+        let t_sf = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SLESS,
+            &[r_sf, Self::const_vn(0, size)],
+            Some(&t_sf),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_sf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_sf], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_sf()));
+        // ZF
+        let r_zf = read_result(self, ops);
+        let t_zf = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[r_zf, Self::const_vn(0, size)],
+            Some(&t_zf),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_zf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_zf], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_zf()));
+        // PF
+        let r_pf = read_result(self, ops);
+        let t_and = self.alloc_tmp(size);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[r_pf, Self::const_vn(0xff, size)],
+            Some(&t_and),
+        );
+        let t_pop = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_POPCOUNT, &[t_and], Some(&t_pop));
+        let t_bit = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[t_pop, Self::const_vn(1, 1)],
+            Some(&t_bit),
+        );
+        let t_eq = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[t_bit, Self::const_vn(0, 1)],
+            Some(&t_eq),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_pf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_eq], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_pf()));
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :ROL/:ROR group-2 rotate constructors of
+    // the locked x86-64 sla (sleigh_shim op-for-op dumps /tmp/w-ext-rol.out +
+    // /tmp/w-ext-ror.out, 26 forms, examples/x86ext_probe.rs). Structure per
+    // dump:
+    //   imm/cl form — `local count = imm&(bits-1):4 / CL&(bits-1):1` (8/16-bit
+    //   cl forms additionally compute `CL&0x1f:1` UP FRONT as the flag count);
+    //   value rm = (rm <dir> count) | (rm <other> (bits-count)); 8/16-bit imm
+    //   forms compute `imm&0x1f:1` AFTER the value section as the flag count;
+    //   flags: CF = count!=0 ? (rol: result bit0 / ror: result msb) : CF,
+    //   OF = count==1 ? (rol: CF^result-msb / ror: (rm s<0)^((rm<<1) s<0))
+    //   : OF — the standard AND/OR flag mux. Memory destinations share ONE
+    //   unique slot re-LOADed at every rm read (same as the shift group).
+    //   by-one form (D0/D1) — dedicated short constructors: rol sets CF to the
+    //   pre-shift result-msb then rm = (rm<<1) | CF (8-bit: CF direct, wider:
+    //   zext(CF)); ror sets CF = rm&1 (8-bit: AND writes CF directly, wider:
+    //   AND:W + INT_NOTEQUAL) then rm = (rm>>1) | zext(CF)<<(bits-1); OF =
+    //   (result & second-top-bit) != 0) ^ (result s< 0). Shift-amount consts
+    //   are always :4; bit-test masks at operand width.
+    /// Lift `rol`/`ror` (all count forms; flags + value + zext).
+    fn lift_rotate(&mut self, inst: &Instruction, dir: RotDir, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let Some(form) = Self::shift_count_form(inst) else {
+            return;
+        };
+
+        // Destination binding — memory address ops precede the constructor
+        // body (same operand-binding order as the shift group).
+        let (dst, size) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (AluDst::Reg { vn, parent64 }, *size)
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+                segment,
+            } => {
+                let Some(addr) =
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
+                else {
+                    return;
+                };
+                (AluDst::Mem { addr }, *size)
+            }
+            _ => return,
+        };
+
+        let bits = (size * 8) as u64;
+        let vmask: u64 = bits - 1;
+        let dir_op = match dir {
+            RotDir::Left => C::CPUI_INT_LEFT,
+            RotDir::Right => C::CPUI_INT_RIGHT,
+        };
+        let oth_op = match dir {
+            RotDir::Left => C::CPUI_INT_RIGHT,
+            RotDir::Right => C::CPUI_INT_LEFT,
+        };
+
+        // read_rm: the rm operand for reg dst (register varnode) or a re-LOAD
+        // into the ONE shared mem slot (the oracle reuses a single unique
+        // local for every rm re-read — same as the shift group).
+        let mem_slot = match &dst {
+            AluDst::Mem { .. } => Some(self.alloc_tmp(size)),
+            AluDst::Reg { .. } => None,
+        };
+        let read_rm = |this: &mut Self, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match (&dst, &mem_slot) {
+                (AluDst::Reg { vn, .. }, _) => vn.clone(),
+                (AluDst::Mem { addr }, Some(slot)) => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+                _ => unreachable!("mem dst must have a slot"),
+            }
+        };
+        let zext_parent = |ops: &mut Vec<PcodeOpRaw>| {
+            if let AluDst::Reg { vn, parent64 } = &dst {
+                if let Some(parent) = parent64 {
+                    Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                }
+            }
+        };
+
+        if let ShiftCount::ByOne = form {
+            // ---- D0/D1 dedicated by-one constructors ----
+            match dir {
+                RotDir::Left => {
+                    // CF = rm s< 0 (pre-shift top bit), BEFORE the value op
+                    let r0 = read_rm(self, ops);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r0, Self::const_vn(0, size)],
+                        Some(&Self::flag_cf()),
+                    );
+                    // rm = (rm << 1) | CF   (8-bit: CF direct; wider: zext(CF))
+                    let r1 = read_rm(self, ops);
+                    let t0 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_LEFT,
+                        &[r1, Self::const_vn(1, 4)],
+                        Some(&t0),
+                    );
+                    let rhs = if size == 1 {
+                        Self::flag_cf()
+                    } else {
+                        let z = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_ZEXT,
+                            &[Self::flag_cf()],
+                            Some(&z),
+                        );
+                        z
+                    };
+                    match &dst {
+                        AluDst::Reg { vn, .. } => {
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t0, rhs], Some(vn))
+                        }
+                        AluDst::Mem { addr } => {
+                            let slot =
+                                mem_slot.clone().expect("mem dst must have a slot");
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t0, rhs], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = CF ^ (rm s< 0)  (result top bit)
+                    let r2 = read_rm(self, ops);
+                    let m = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r2, Self::const_vn(0, size)],
+                        Some(&m),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[Self::flag_cf(), m],
+                        Some(&Self::flag_of()),
+                    );
+                    zext_parent(ops);
+                }
+                RotDir::Right => {
+                    // CF = rm & 1  (8-bit writes the AND directly into CF;
+                    // wider: AND:W temp + INT_NOTEQUAL)
+                    let r0 = read_rm(self, ops);
+                    if size == 1 {
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, 1)],
+                            Some(&Self::flag_cf()),
+                        );
+                    } else {
+                        let t0 = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, size)],
+                            Some(&t0),
+                        );
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_NOTEQUAL,
+                            &[t0, Self::const_vn(0, size)],
+                            Some(&Self::flag_cf()),
+                        );
+                    }
+                    // rm = (rm >> 1) | (CF << (bits-1))   (8-bit: CF direct;
+                    // wider: zext(CF) first)
+                    let r1 = read_rm(self, ops);
+                    let t1 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_RIGHT,
+                        &[r1, Self::const_vn(1, 4)],
+                        Some(&t1),
+                    );
+                    let rhs = if size == 1 {
+                        Self::flag_cf()
+                    } else {
+                        let z = self.alloc_tmp(size);
+                        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[Self::flag_cf()], Some(&z));
+                        z
+                    };
+                    let t2 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_LEFT,
+                        &[rhs, Self::const_vn(vmask, 4)],
+                        Some(&t2),
+                    );
+                    match &dst {
+                        AluDst::Reg { vn, .. } => {
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t1, t2], Some(vn))
+                        }
+                        AluDst::Mem { addr } => {
+                            let slot =
+                                mem_slot.clone().expect("mem dst must have a slot");
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t1, t2], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = ((rm & second-top) != 0) ^ (rm s< 0)
+                    let second_top: u64 = 1u64 << (bits - 2);
+                    let r2 = read_rm(self, ops);
+                    let a_w = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_AND,
+                        &[r2, Self::const_vn(second_top, size)],
+                        Some(&a_w),
+                    );
+                    let b = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_NOTEQUAL,
+                        &[a_w, Self::const_vn(0, size)],
+                        Some(&b),
+                    );
+                    let r3 = read_rm(self, ops);
+                    let m = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r3, Self::const_vn(0, size)],
+                        Some(&m),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[b, m],
+                        Some(&Self::flag_of()),
+                    );
+                    zext_parent(ops);
+                }
+            }
+            return;
+        }
+
+        // ---- imm (C0/C1) / cl (D2/D3) general form ----
+        // local count = imm & (bits-1) :4 / CL & (bits-1) :1; 8/16-bit cl
+        // forms ALSO compute the flag count CL & 0x1f :1 up front.
+        let imm_val: u64 = match form {
+            ShiftCount::Imm => match &inst.operands[1] {
+                crate::disasm::Operand::Immediate { value, .. } => (*value as u64) & 0xff,
+                _ => return,
+            },
+            _ => 0,
+        };
+        let (t_count, cs, cf1_early) = match form {
+            ShiftCount::Cl => {
+                let cl = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        match Self::get_register(name, *size) {
+                            Some(vn) => vn,
+                            None => return,
+                        }
+                    }
+                    _ => return,
+                };
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[cl.clone(), Self::const_vn(vmask, 1)],
+                    Some(&t),
+                );
+                let early = if size <= 2 {
+                    let c = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_AND,
+                        &[cl, Self::const_vn(0x1f, 1)],
+                        Some(&c),
+                    );
+                    Some(c)
+                } else {
+                    None
+                };
+                (t, 1, early)
+            }
+            ShiftCount::Imm => {
+                let t = self.alloc_tmp(4);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn(imm_val, 4), Self::const_vn(vmask, 4)],
+                    Some(&t),
+                );
+                (t, 4, None)
+            }
+            ShiftCount::ByOne => unreachable!("handled above"),
+        };
+
+        // value rm = (rm <dir> count) | (rm <other> (bits - count));
+        // mem form re-LOADs the rm slot for each shift input.
+        match &dst {
+            AluDst::Reg { vn, .. } => {
+                let ta = self.alloc_tmp(size);
+                Self::push_raw(ops, dir_op, &[vn.clone(), t_count.clone()], Some(&ta));
+                let tsub = self.alloc_tmp(cs);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SUB,
+                    &[Self::const_vn(bits, cs), t_count.clone()],
+                    Some(&tsub),
+                );
+                let tb = self.alloc_tmp(size);
+                Self::push_raw(ops, oth_op, &[vn.clone(), tsub], Some(&tb));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[ta, tb], Some(vn));
+            }
+            AluDst::Mem { addr } => {
+                let slot = mem_slot.clone().expect("mem dst must have a slot");
+                self.emit_load_slot(addr, &slot, ops);
+                let ta = self.alloc_tmp(size);
+                Self::push_raw(ops, dir_op, &[slot.clone(), t_count.clone()], Some(&ta));
+                let tsub = self.alloc_tmp(cs);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SUB,
+                    &[Self::const_vn(bits, cs), t_count.clone()],
+                    Some(&tsub),
+                );
+                self.emit_load_slot(addr, &slot, ops);
+                let tb = self.alloc_tmp(size);
+                Self::push_raw(ops, oth_op, &[slot.clone(), tsub], Some(&tb));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[ta, tb], Some(&slot));
+                self.emit_store_v(addr, slot, ops);
+            }
+        }
+
+        // flag count: 8/16-bit imm forms re-AND the raw imm at :1 AFTER the
+        // value section; other forms use the count temp / early flag count.
+        let cf1 = match form {
+            ShiftCount::Imm if size <= 2 => {
+                let c = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn(imm_val, 1), Self::const_vn(0x1f, 1)],
+                    Some(&c),
+                );
+                c
+            }
+            _ => cf1_early.unwrap_or_else(|| t_count.clone()),
+        };
+
+        // CF = count!=0 ? (rol: result bit0 / ror: result msb) : CF
+        let g = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[cf1.clone(), Self::const_vn(0, cf1.size)],
+            Some(&g),
+        );
+        let b = match dir {
+            RotDir::Left => {
+                let r = read_rm(self, ops);
+                let bit = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[r, Self::const_vn(1, size)],
+                    Some(&bit),
+                );
+                let nb = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[bit, Self::const_vn(0, size)],
+                    Some(&nb),
+                );
+                nb
+            }
+            RotDir::Right => {
+                let r = read_rm(self, ops);
+                let nb = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&nb),
+                );
+                nb
+            }
+        };
+        let neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[g.clone()], Some(&neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[neg, Self::flag_cf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[g, b], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_cf()));
+
+        // OF = count==1 ? (rol: CF^result-msb / ror: (rm s<0)^((rm<<1) s<0))
+        // : OF
+        let eq1 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[cf1.clone(), Self::const_vn(1, cf1.size)],
+            Some(&eq1),
+        );
+        let x = match dir {
+            RotDir::Left => {
+                let r = read_rm(self, ops);
+                let m = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&m),
+                );
+                let xx = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_XOR,
+                    &[Self::flag_cf(), m],
+                    Some(&xx),
+                );
+                xx
+            }
+            RotDir::Right => {
+                let r0 = read_rm(self, ops);
+                let m0 = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r0, Self::const_vn(0, size)],
+                    Some(&m0),
+                );
+                let r1 = read_rm(self, ops);
+                let sh = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[r1, Self::const_vn(1, 4)],
+                    Some(&sh),
+                );
+                let m1 = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[sh, Self::const_vn(0, size)],
+                    Some(&m1),
+                );
+                let xx = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_XOR, &[m0, m1], Some(&xx));
+                xx
+            }
+        };
+        let neg2 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[eq1.clone()], Some(&neg2));
+        let t_a2 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[neg2, Self::flag_of()],
+            Some(&t_a2),
+        );
+        let t_b2 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[eq1, x], Some(&t_b2));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a2, t_b2], Some(&Self::flag_of()));
+
+        // 32-bit GPR destination zext comes LAST (after all flag ops)
+        zext_parent(ops);
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :IMUL constructors of the locked x86-64
+    // sla (sleigh_shim op-for-op dump /tmp/w-ext-imul.out, 19 forms,
+    // examples/x86ext_probe.rs). All forms compute the double-width flag
+    // product `p:D = sext(op1)*sext(op2)` (D = 2*W), then set CF =
+    // sext(result) != p and OF = COPY(CF); SF/ZF/PF are left untouched.
+    // Per-form structure (dump is truth):
+    //   2-op (0F AF) — s0=sext(dst); rm read (mem: LOAD); s1=sext(rm); p;
+    //     value: W==8 → INT_MULT(dst, rm re-read) into dst, W<8 →
+    //     SUBPIECE(p,0) into dst; dead SUBPIECE(p,W):W; chk=sext(dst);
+    //     CF/OF; W==4 → parent zext last.
+    //   3-op (69/6B) — iced collapses dst==src to 2 operands (dst, imm);
+    //     src read FIRST (mem: LOAD); s0=sext(src); s1=sext(imm const) —
+    //     6B encodings (iced imm size 1) hold the sign-extended imm at
+    //     operand width W, 69 encodings at the encoded imm width (:4/:2);
+    //     value: W==8 → INT_MULT(src, ext) into dst where ext = 6B ? const:8
+    //     : sext(const:4):8 (mem src re-LOADs first), W<8 → SUBPIECE(p,0);
+    //     dead SUBPIECE(p,W); chk=sext(dst); CF/OF; W==4 → parent zext.
+    //   1-op (F6/F7 /5) — AX-family accumulator: p=sext(acc)*sext(rm);
+    //     W==1 → INT_MULT(s0,s1) writes AX:2 directly, CF = sext(AL) != AX;
+    //     W==8 → acc = INT_MULT(acc, rm), RDX = SUBPIECE(p,8);
+    //     W==4 → EDX=SUBPIECE(p,4), RDX=zext(EDX), EAX=SUBPIECE(p,0),
+    //     RAX=zext(EAX) (high half first); W==2 → DX=SUBPIECE(p,2),
+    //     AX=SUBPIECE(p,0); chk=sext(acc); CF/OF.
+    /// Lift `imul` (1/2/3-operand forms; CF/OF via double-width product).
+    fn lift_imul(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        match inst.operands.len() {
+            1 => self.lift_imul_one_op(inst, ops),
+            2 if matches!(inst.operands[1], crate::disasm::Operand::Immediate { .. }) => {
+                // iced collapses the 3-operand dst==src form to (dst, imm)
+                self.lift_imul_three_op(inst, 0, ops)
+            }
+            2 => self.lift_imul_two_op(inst, ops),
+            3 => self.lift_imul_three_op(inst, 1, ops),
+            _ => {}
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL rm operand binding — the constructors re-LOAD the rm
+    // operand into ONE shared unique slot at every use (oracle `imul
+    // rbx,[rax]`: LOAD unique#1 for the flag sext AND again for the value
+    // INT_MULT — /tmp/w-ext-imul.out).
+    /// Bind an imul rm operand; memory operands get one shared load slot.
+    fn imul_bind_rm(
+        &mut self,
+        op: &crate::disasm::Operand,
+        w: usize,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> Option<(BoundOperand, Option<VarnodeRaw>)> {
+        let b = self.bind_operand(op, w, ops)?;
+        let slot = match &b {
+            BoundOperand::MemAddr { size, .. } => Some(self.alloc_tmp(*size)),
+            _ => None,
+        };
+        Some((b, slot))
+    }
+
+    // RUGRA-GLUE: :IMUL rm re-read — reg/const direct, memory re-LOADs into
+    /// One use of the bound imul rm operand (shared mem slot).
+    fn imul_read_rm(
+        &mut self,
+        bound: &BoundOperand,
+        slot: &Option<VarnodeRaw>,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        match (bound, slot) {
+            (BoundOperand::Reg(vn), _) => vn.clone(),
+            (BoundOperand::Const(vn), _) => vn.clone(),
+            (BoundOperand::MemAddr { addr, .. }, Some(s)) => {
+                self.emit_load_slot(addr, s, ops);
+                s.clone()
+            }
+            (BoundOperand::MemAddr { .. }, None) => {
+                unreachable!("imul mem operand must have a slot")
+            }
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL two-operand constructor (0F AF) — see lift_imul
+    // evidence block; /tmp/w-ext-imul.out forms `imul eax,ecx` /
+    /// Lift 2-operand `imul dst, rm`.
+    fn lift_imul_two_op(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        let w = dst_vn.size;
+        let d = w * 2;
+        // s0 = sext(dst)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&s0));
+        // rm read (mem: address ops + LOAD into the shared slot)
+        let Some((rm_bound, rm_slot)) = self.imul_bind_rm(&inst.operands[1], w, ops) else {
+            return;
+        };
+        let rm = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+        // s1 = sext(rm); p = s0 * s1
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[rm], Some(&s1));
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // value op
+        if w == 8 {
+            let rm2 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_MULT,
+                &[dst_vn.clone(), rm2],
+                Some(&dst_vn),
+            );
+        } else {
+            Self::push_raw(
+                ops,
+                C::CPUI_SUBPIECE,
+                &[p.clone(), Self::const_vn(0, 4)],
+                Some(&dst_vn),
+            );
+        }
+        // dead high-half SUBPIECE (present in every dump)
+        let hi = self.alloc_tmp(w);
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[p.clone(), Self::const_vn(w as u64, 4)],
+            Some(&hi),
+        );
+        // chk = sext(result); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[dst_vn], Some(&parent));
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL three-operand constructors (69/6B) — see lift_imul
+    // evidence block; /tmp/w-ext-imul.out forms `imul rbx,rbx,3E8h` /
+    /// Lift 3-operand `imul dst, src, imm` (`src_idx` 0 = collapsed dst==src
+    /// 2-operand display, 1 = real 3-operand form).
+    fn lift_imul_three_op(
+        &mut self,
+        inst: &Instruction,
+        src_idx: usize,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        use OpCode as C;
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        let w = dst_vn.size;
+        let d = w * 2;
+        let (imm_val, imm_enc_size) = match inst.operands.last() {
+            Some(crate::disasm::Operand::Immediate { value, size }) => {
+                (*value as u64, *size)
+            }
+            _ => return,
+        };
+        // 6B encodings (iced imm size 1) carry the sign-extended imm at
+        // operand width; 69 encodings at the encoded imm width.
+        let imm_w = if imm_enc_size == 1 { w } else { imm_enc_size };
+        // src read FIRST (mem: address ops + LOAD into the shared slot)
+        let Some((src_bound, src_slot)) = self.imul_bind_rm(&inst.operands[src_idx], w, ops)
+        else {
+            return;
+        };
+        let src1 = self.imul_read_rm(&src_bound, &src_slot, ops);
+        // p = sext(src) * sext(imm)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[src1], Some(&s0));
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SEXT,
+            &[Self::const_vn(imm_val, imm_w)],
+            Some(&s1),
+        );
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // value op
+        if w == 8 {
+            let ext = if imm_enc_size == 1 {
+                // 6B: the imm is already sign-extended to operand width
+                Self::const_vn(imm_val, 8)
+            } else {
+                let t = self.alloc_tmp(8);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SEXT,
+                    &[Self::const_vn(imm_val, imm_w)],
+                    Some(&t),
+                );
+                t
+            };
+            let src2 = self.imul_read_rm(&src_bound, &src_slot, ops);
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[src2, ext], Some(&dst_vn));
+        } else {
+            Self::push_raw(
+                ops,
+                C::CPUI_SUBPIECE,
+                &[p.clone(), Self::const_vn(0, 4)],
+                Some(&dst_vn),
+            );
+        }
+        // dead high-half SUBPIECE
+        let hi = self.alloc_tmp(w);
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[p.clone(), Self::const_vn(w as u64, 4)],
+            Some(&hi),
+        );
+        // chk = sext(result); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[dst_vn], Some(&parent));
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL one-operand constructor (F6/F7 /5, AX-family
+    // accumulator) — see lift_imul evidence block; /tmp/w-ext-imul.out forms
+    /// Lift 1-operand `imul rm` (AX = AX * rm).
+    fn lift_imul_one_op(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let acc_name = match w {
+            1 => "al",
+            2 => "ax",
+            4 => "eax",
+            8 => "rax",
+            _ => return,
+        };
+        let Some(acc_vn) = Self::get_register(acc_name, w) else {
+            return;
+        };
+        let d = w * 2;
+        // s0 = sext(acc); rm read (shared slot); s1 = sext(rm)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn.clone()], Some(&s0));
+        let Some((rm_bound, rm_slot)) = self.imul_bind_rm(op0, w, ops) else {
+            return;
+        };
+        let rm1 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[rm1], Some(&s1));
+        if w == 1 {
+            // 8-bit: the product writes AX:2 directly; CF = sext(AL) != AX
+            let Some(ax) = Self::get_register("ax", 2) else {
+                return;
+            };
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&ax));
+            let chk = self.alloc_tmp(2);
+            Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn], Some(&chk));
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_NOTEQUAL,
+                &[chk, ax],
+                Some(&Self::flag_cf()),
+            );
+            let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+            of.add_input(Self::flag_cf());
+            of.set_output(Self::flag_of());
+            ops.push(of);
+            return;
+        }
+        // p = s0 * s1
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // result writeback — high half FIRST for W<8
+        match w {
+            8 => {
+                let rm2 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_MULT,
+                    &[acc_vn.clone(), rm2],
+                    Some(&acc_vn),
+                );
+                let Some(rdx) = Self::get_register("rdx", 8) else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(8, 4)],
+                    Some(&rdx),
+                );
+            }
+            4 => {
+                let (Some(edx), Some(rdx), Some(eax), Some(rax)) = (
+                    Self::get_register("edx", 4),
+                    Self::get_register("rdx", 8),
+                    Self::get_register("eax", 4),
+                    Self::get_register("rax", 8),
+                ) else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(4, 4)],
+                    Some(&edx),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[edx], Some(&rdx));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&eax),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[eax], Some(&rax));
+            }
+            2 => {
+                let (Some(dx), Some(ax)) =
+                    (Self::get_register("dx", 2), Self::get_register("ax", 2))
+                else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(2, 4)],
+                    Some(&dx),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&ax),
+                );
+            }
+            _ => return,
+        }
+        // chk = sext(acc); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :BT/:BTS/:BTR/:BTC constructors of the
+    // locked x86-64 sla (sleigh_shim op-for-op dumps /tmp/w-ext-bt.out +
+    // /tmp/w-ext-bts.out + /tmp/w-ext-btr.out + /tmp/w-ext-btc.out, 19
+    // forms, examples/x86ext_probe.rs). CF = tested bit; the modify kind
+    // selects the value op (bts: OR / btr: AND ~ / btc: XOR of the 1<<count
+    // mask); plain bt never modifies. Per-constructor op ORDER (dump is
+    // truth — CF placement differs by width and index kind):
+    //   reg dst, reg/imm idx — count c = idx & (bits-1) at operand width
+    //   (imm forms hold BOTH consts at :4, mask bits-1); sh = rm >> c;
+    //   b = sh & 1; W==8: modify THEN CF = b!=0; W<8: CF THEN modify;
+    //   modify = t = INT_LEFT(1:W, c); rm = rm OR/AND~NOT(t)/XOR t; 32-bit
+    //   GPR modify forms end with the parent zext (plain bt: CF only).
+    //   mem dst, imm idx — c:4 = imm & (bits-1); ONE shared slot LOADed at
+    //   W; b from slot; W<8: CF THEN modify (t = 1:W << c, slot re-LOAD,
+    //   slot = slot OP t, STORE); W==8: modify THEN CF.
+    //   mem dst, reg idx — byte-granular bit string addressing: s:8 =
+    //   sext(idx); sar = s >> 3 (const :4); addr = base + sar; c = idx & 7
+    //   (idx width); byte = LOAD:1; b = (byte >> c) & 1; modify re-LOADs a
+    //   fresh byte temp, OR/AND~/XOR with (1:1 << c) and STOREs; CF comes
+    //   AFTER the STORE.
+    /// Lift `bt`/`bts`/`btr`/`btc` (CF = tested bit; modify per kind).
+    fn lift_bt(&mut self, inst: &Instruction, kind: BtKind, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let emit_cf = |this: &mut Self, b: &VarnodeRaw, ops: &mut Vec<PcodeOpRaw>| {
+            let mut op = PcodeOpRaw::new(C::CPUI_INT_NOTEQUAL as i32);
+            op.add_input(b.clone());
+            op.add_input(Self::const_vn(0, b.size));
+            op.set_output(Self::flag_cf());
+            ops.push(op);
+            let _ = this;
+        };
+        // modify op over (dst, mask) — btr negates the mask first
+        let emit_modify = |this: &mut Self,
+                           kind: BtKind,
+                           dst_in: VarnodeRaw,
+                           out: VarnodeRaw,
+                           t: VarnodeRaw,
+                           ops: &mut Vec<PcodeOpRaw>| {
+            match kind {
+                BtKind::Test => {}
+                BtKind::Set => {
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_OR as i32);
+                    op.add_input(dst_in);
+                    op.add_input(t);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+                BtKind::Reset => {
+                    let nt = this.alloc_tmp(t.size);
+                    let mut neg = PcodeOpRaw::new(C::CPUI_INT_NEGATE as i32);
+                    neg.add_input(t);
+                    neg.set_output(nt.clone());
+                    ops.push(neg);
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_AND as i32);
+                    op.add_input(dst_in);
+                    op.add_input(nt);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+                BtKind::Complement => {
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_XOR as i32);
+                    op.add_input(dst_in);
+                    op.add_input(t);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+            }
+        };
+        match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                // ---- reg dst, reg/imm idx ----
+                let Some(rm) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                let w = *size;
+                let mask: u64 = (w as u64 * 8) - 1;
+                let c = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        let Some(idx) = Self::get_register(name, *size) else {
+                            return;
+                        };
+                        let t = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[idx, Self::const_vn(mask, w)],
+                            Some(&t),
+                        );
+                        t
+                    }
+                    crate::disasm::Operand::Immediate { value, .. } => {
+                        let t = self.alloc_tmp(4);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[
+                                Self::const_vn((*value as u64) & 0xff, 4),
+                                Self::const_vn(mask, 4),
+                            ],
+                            Some(&t),
+                        );
+                        t
+                    }
+                    _ => return,
+                };
+                let sh = self.alloc_tmp(w);
+                Self::push_raw(ops, C::CPUI_INT_RIGHT, &[rm.clone(), c.clone()], Some(&sh));
+                let b = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[sh, Self::const_vn(1, w)],
+                    Some(&b),
+                );
+                if kind == BtKind::Test {
+                    emit_cf(self, &b, ops);
+                    return;
+                }
+                if w < 8 {
+                    emit_cf(self, &b, ops);
+                }
+                let t = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[Self::const_vn(1, w), c],
+                    Some(&t),
+                );
+                emit_modify(self, kind, rm.clone(), rm.clone(), t, ops);
+                if w == 8 {
+                    emit_cf(self, &b, ops);
+                } else if let Some(parent) = parent64 {
+                    Self::push_raw(ops, C::CPUI_INT_ZEXT, &[rm], Some(&parent));
+                }
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+                segment,
+            } => {
+                let w = *size;
+                let mask: u64 = (w as u64 * 8) - 1;
+                match &inst.operands[1] {
+                    crate::disasm::Operand::Immediate { value, .. } => {
+                        // ---- mem dst, imm idx ----
+                        let Some(addr) =
+                            self.compute_mem_addr(segment, base, index, scale, displacement, ops)
+                        else {
+                            return;
+                        };
+                        let c = self.alloc_tmp(4);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[
+                                Self::const_vn((*value as u64) & 0xff, 4),
+                                Self::const_vn(mask, 4),
+                            ],
+                            Some(&c),
+                        );
+                        let slot = self.alloc_tmp(w);
+                        self.emit_load_slot(&addr, &slot, ops);
+                        let sh = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_RIGHT,
+                            &[slot.clone(), c.clone()],
+                            Some(&sh),
+                        );
+                        let b = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[sh, Self::const_vn(1, w)],
+                            Some(&b),
+                        );
+                        if kind == BtKind::Test {
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        if w < 8 {
+                            emit_cf(self, &b, ops);
+                        }
+                        // mask first (btr negates), THEN the re-LOAD, then
+                        // the combine (dump `btr dword [rbx],5` [5][6][7])
+                        let t = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_LEFT,
+                            &[Self::const_vn(1, w), c],
+                            Some(&t),
+                        );
+                        let mask_vn = if kind == BtKind::Reset {
+                            let nt = self.alloc_tmp(w);
+                            Self::push_raw(ops, C::CPUI_INT_NEGATE, &[t.clone()], Some(&nt));
+                            nt
+                        } else {
+                            t
+                        };
+                        self.emit_load_slot(&addr, &slot, ops);
+                        match kind {
+                            BtKind::Set => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_OR,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Reset => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Complement => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_XOR,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Test => unreachable!("handled above"),
+                        }
+                        self.emit_store_v(&addr, slot, ops);
+                        if w == 8 {
+                            emit_cf(self, &b, ops);
+                        }
+                    }
+                    crate::disasm::Operand::Register { name, size } => {
+                        // ---- mem dst, reg idx (byte-granular bit string) ----
+                        let Some(idx) = Self::get_register(name, *size) else {
+                            return;
+                        };
+                        let Some(base_addr) =
+                            self.compute_mem_addr(segment, base, index, scale, displacement, ops)
+                        else {
+                            return;
+                        };
+                        // s:8 = sext(idx); sar = s >> 3; addr = base + sar
+                        let s = self.alloc_tmp(8);
+                        Self::push_raw(ops, C::CPUI_INT_SEXT, &[idx.clone()], Some(&s));
+                        let sar = self.alloc_tmp(8);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_SRIGHT,
+                            &[s, Self::const_vn(3, 4)],
+                            Some(&sar),
+                        );
+                        let addr = self.alloc_tmp(8);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_ADD,
+                            &[base_addr, sar],
+                            Some(&addr),
+                        );
+                        // c = idx & 7 (idx width); plain BT LOADs the byte
+                        // BEFORE this AND, the modify kinds AND first (dump
+                        // `bt [rax],edx` [3][4] vs `bts [rax],edx` [3][4])
+                        let c = self.alloc_tmp(idx.size);
+                        if kind == BtKind::Test {
+                            let byte = self.emit_load(1, &addr, ops);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[idx, Self::const_vn(7, idx.size)],
+                                Some(&c),
+                            );
+                            let sh = self.alloc_tmp(1);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_RIGHT,
+                                &[byte, c],
+                                Some(&sh),
+                            );
+                            let b = self.alloc_tmp(1);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[sh, Self::const_vn(1, 1)],
+                                Some(&b),
+                            );
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[idx, Self::const_vn(7, idx.size)],
+                            Some(&c),
+                        );
+                        let byte = self.emit_load(1, &addr, ops);
+                        let sh = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_RIGHT,
+                            &[byte, c.clone()],
+                            Some(&sh),
+                        );
+                        let b = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[sh, Self::const_vn(1, 1)],
+                            Some(&b),
+                        );
+                        if kind == BtKind::Test {
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        // modify: fresh byte LOAD, OR/AND~/XOR (1 << c), STORE
+                        let load2 = self.emit_load(1, &addr, ops);
+                        let t = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_LEFT,
+                            &[Self::const_vn(1, 1), c],
+                            Some(&t),
+                        );
+                        let res = self.alloc_tmp(1);
+                        emit_modify(self, kind, load2, res.clone(), t, ops);
+                        self.emit_store_v(&addr, res, ops);
+                        emit_cf(self, &b, ops);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :COMIS/:UCOMIS constructors of the
+    // locked x86-64 sla (sleigh_shim op-for-op dump /tmp/w-ext-comis.out, 8
+    // forms, examples/x86ext_probe.rs). COMISS and UCOMIS lift IDENTICAL
+    // pcode (both flag NaN via FLOAT_NAN on both operands): PF = BOOL_OR(
+    // NAN(lhs), NAN(rhs)); ZF = INT_OR(PF, FLOAT_EQUAL(lhs,rhs)); CF =
+    // INT_OR(PF, FLOAT_LESS(lhs,rhs)); OF/AF/SF = COPY(0). Operand size
+    // from the mnemonic suffix (*ss=4, *sd=8) — iced reports the 16-byte
+    // vector width, the oracle reads the XMM register at the operation
+    // size (register:0x1200+0x40*N). Memory rhs: address ops bind first
+    // (displaced forms), then ONE shared slot re-LOADed before each float
+    // op; constant addresses (rip-relative / absolute displacement) fold
+    // to a direct ram-space varnode input with NO LOAD and NO address ops
+    // (dump `comiss xmm0,[rip+0]`: FLOAT_NAN in=(ram:0x1c:4)).
+    /// Lift `comiss`/`ucomiss`/`comisd`/`ucomisd` (PF/ZF/CF from float
+    /// compare; OF/AF/SF cleared).
+    fn lift_comis(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let size = if inst.mnemonic.ends_with("sd") { 8 } else { 4 };
+        let lhs = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, .. } => Self::get_register(name, size),
+            _ => None,
+        };
+        let Some(lhs) = lhs else {
+            return;
+        };
+        // rhs access: register direct / displaced-mem shared slot /
+        // constant-address direct ram varnode
+        enum Rhs {
+            Direct(VarnodeRaw),
+            Slot { addr: VarnodeRaw, slot: VarnodeRaw, size: usize },
+            ConstAddr(VarnodeRaw),
+        }
+        let rhs = match &inst.operands[1] {
+            crate::disasm::Operand::Register { name, .. } => {
+                match Self::get_register(name, size) {
+                    Some(vn) => Rhs::Direct(vn),
+                    None => return,
+                }
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size: msize,
+                segment,
+            } => {
+                // rip-relative / absolute-displacement: constant address —
+                // the oracle folds it into a direct ram varnode (the Rugra
+                // disassembler resolves rip displacement to the absolute
+                // target already). Segment-relative addresses are never
+                // constant (FS_OFFSET/GS_OFFSET base), so the folding is
+                // segment-gated.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
+                    Rhs::ConstAddr(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *msize,
+                    ))
+                } else if segment.is_none() && base.is_none() && index.is_none() {
+                    Rhs::ConstAddr(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *msize,
+                    ))
+                } else {
+                    let Some(addr) =
+                        self.compute_mem_addr(segment, base, index, scale, displacement, ops)
+                    else {
+                        return;
+                    };
+                    let slot = self.alloc_tmp(*msize);
+                    Rhs::Slot {
+                        addr,
+                        slot,
+                        size: *msize,
+                    }
+                }
+            }
+            _ => return,
+        };
+        let use_rhs = |this: &mut Self, rhs: &Rhs, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match rhs {
+                Rhs::Direct(vn) | Rhs::ConstAddr(vn) => vn.clone(),
+                Rhs::Slot { addr, slot, .. } => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+            }
+        };
+        // PF = BOOL_OR(NAN(lhs), NAN(rhs))
+        let n0 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_NAN, &[lhs.clone()], Some(&n0));
+        let r1 = use_rhs(self, &rhs, ops);
+        let n1 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_NAN, &[r1], Some(&n1));
+        Self::push_raw(
+            ops,
+            C::CPUI_BOOL_OR,
+            &[n0, n1],
+            Some(&Self::flag_pf()),
+        );
+        // ZF = INT_OR(PF, FLOAT_EQUAL(lhs, rhs))
+        let r2 = use_rhs(self, &rhs, ops);
+        let eq = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_EQUAL, &[lhs.clone(), r2], Some(&eq));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_OR,
+            &[Self::flag_pf(), eq],
+            Some(&Self::flag_zf()),
+        );
+        // CF = INT_OR(PF, FLOAT_LESS(lhs, rhs))
+        let r3 = use_rhs(self, &rhs, ops);
+        let lt = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_LESS, &[lhs, r3], Some(&lt));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_OR,
+            &[Self::flag_pf(), lt],
+            Some(&Self::flag_cf()),
+        );
+        // OF = AF = SF = 0
+        for flag in [Self::flag_of(), Self::flag_af(), Self::flag_sf()] {
+            Self::push_raw(ops, C::CPUI_COPY, &[Self::const_vn(0, 1)], Some(&flag));
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :MUL constructor (F6/F7 /4) of the
+    // locked x86-64 sla (sleigh_shim op-for-op dump /tmp/w-ext-mul.out, 9
+    // forms). Unsigned double-width product with CF=OF=high-half!=0; the
+    // writeback ORDER differs per width (dump is truth):
+    //   W==1 — a=zext(AL):2, rm read, b=zext(rm):2, AX:2 = INT_MULT direct,
+    //     CF = AH != 0 (NOTEQUAL on the 1-byte AH), OF = COPY(CF).
+    //   W==2 — zext(AX):4 * zext(rm):4; DX=SUBPIECE(p,2); AX=SUBPIECE(p,0);
+    //     CF = DX != 0; OF.   (high, low, CF, OF)
+    //   W==4 — EDX=SUBPIECE(p,4); RDX=zext(EDX); CF = EDX != 0; OF;
+    //     EAX=SUBPIECE(p,0); RAX=zext(EAX).   (high, zext, CF, OF, low, zext)
+    //   W==8 — RDX=SUBPIECE(p,8); RAX=SUBPIECE(p,0); CF = RDX != 0; OF.
+    // mem rm: acc extension FIRST, then the LOAD (dump `mul dword [rbx]`
+    /// Lift `mul rm` (unsigned product into the DX:AX accumulator pair).
+    fn lift_mul(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let (lo_name, hi_name) = match w {
+            1 => ("al", "ah"),
+            2 => ("ax", "dx"),
+            4 => ("eax", "edx"),
+            8 => ("rax", "rdx"),
+            _ => return,
+        };
+        let Some(lo) = Self::get_register(lo_name, w) else {
+            return;
+        };
+        // a = zext(accumulator):D — emitted BEFORE the rm read
+        let d = w * 2;
+        let a = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&a));
+        // rm read (single)
+        let rm = match self.bind_operand(op0, w, ops) {
+            Some(b) => self.read_bound(&b, ops),
+            None => return,
+        };
+        let b = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[rm], Some(&b));
+        let emit_of = |ops: &mut Vec<PcodeOpRaw>| {
+            let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+            of.add_input(Self::flag_cf());
+            of.set_output(Self::flag_of());
+            ops.push(of);
+        };
+        if w == 1 {
+            // AX:2 = a * b direct; CF = AH != 0
+            let Some(ax) = Self::get_register("ax", 2) else {
+                return;
+            };
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[a, b], Some(&ax));
+            let Some(ah) = Self::get_register("ah", 1) else {
+                return;
+            };
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_NOTEQUAL,
+                &[ah, Self::const_vn(0, 1)],
+                Some(&Self::flag_cf()),
+            );
+            emit_of(ops);
+            return;
+        }
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[a, b], Some(&p));
+        let Some(hi) = Self::get_register(hi_name, w) else {
+            return;
+        };
+        match w {
+            2 | 8 => {
+                // high, low, CF = high != 0, OF
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(w as u64, 4)],
+                    Some(&hi),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&lo.clone()),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[hi, Self::const_vn(0, w)],
+                    Some(&Self::flag_cf()),
+                );
+                emit_of(ops);
+            }
+            4 => {
+                // high, zext, CF, OF, low, zext
+                let (Some(rdx), Some(rax)) =
+                    (Self::get_register("rdx", 8), Self::get_register("rax", 8))
+                else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(4, 4)],
+                    Some(&hi),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi.clone()], Some(&rdx));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[hi, Self::const_vn(0, 4)],
+                    Some(&Self::flag_cf()),
+                );
+                emit_of(ops);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p, Self::const_vn(0, 4)],
+                    Some(&lo),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo], Some(&rax));
+            }
+            _ => {}
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :DIV/:IDIV constructors (F6/F7 /6 and
+    // /7, W>=2 forms) of the locked x86-64 sla (sleigh_shim op-for-op dumps
+    // /tmp/w-ext-div.out + /tmp/w-ext-idiv.out, 8 forms). No flags.
+    // Structure: divisor = ZEXT(rm) for div / SEXT(rm) for idiv (mem forms
+    // LOAD FIRST, before the dividend build); dividend:D = (zext(HI) <<
+    // 8W) | zext(LO) — the high half is ZEXT even for idiv (dump `idiv
+    // ecx` [1]); q = INT_DIV/INT_SDIV(dividend, divisor); LO =
+    // SUBPIECE(q,0) [W==4: parent zext right after]; r =
+    // INT_REM/INT_SREM(dividend, divisor); HI = SUBPIECE(r,0) [W==4:
+    /// Lift `div`/`idiv rm` (LO = quotient, HI = remainder; no flags).
+    fn lift_div(&mut self, inst: &Instruction, signed: bool, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let (lo_name, hi_name) = match w {
+            2 => ("ax", "dx"),
+            4 => ("eax", "edx"),
+            8 => ("rax", "rdx"),
+            _ => return,
+        };
+        // divisor extension FIRST (mem: address ops + LOAD before it)
+        let rm = match self.bind_operand(op0, w, ops) {
+            Some(b) => self.read_bound(&b, ops),
+            None => return,
+        };
+        let d = w * 2;
+        let divisor = self.alloc_tmp(d);
+        let ext_op = if signed {
+            C::CPUI_INT_SEXT
+        } else {
+            C::CPUI_INT_ZEXT
+        };
+        Self::push_raw(ops, ext_op, &[rm], Some(&divisor));
+        // dividend = (zext(HI) << 8W) | zext(LO)
+        let Some(hi) = Self::get_register(hi_name, w) else {
+            return;
+        };
+        let Some(lo) = Self::get_register(lo_name, w) else {
+            return;
+        };
+        let hi_z = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi], Some(&hi_z));
+        let sh = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_LEFT,
+            &[hi_z, Self::const_vn((w * 8) as u64, 4)],
+            Some(&sh),
+        );
+        let lo_z = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&lo_z));
+        let dividend = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_OR, &[sh, lo_z], Some(&dividend));
+        // q = dividend / divisor; LO = SUBPIECE(q, 0) [+ parent zext for W4]
+        let div_op = if signed {
+            C::CPUI_INT_SDIV
+        } else {
+            C::CPUI_INT_DIV
+        };
+        let q = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            div_op,
+            &[dividend.clone(), divisor.clone()],
+            Some(&q),
+        );
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[q, Self::const_vn(0, 4)],
+            Some(&lo),
+        );
+        if w == 4 {
+            if let Some(parent) = Self::parent64_name(lo_name)
+                .and_then(|p| Self::get_register(p, 8))
+            {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&parent));
+            }
+        }
+        // r = dividend % divisor; HI = SUBPIECE(r, 0) [+ parent zext for W4]
+        let rem_op = if signed {
+            C::CPUI_INT_SREM
+        } else {
+            C::CPUI_INT_REM
+        };
+        let r = self.alloc_tmp(d);
+        Self::push_raw(ops, rem_op, &[dividend, divisor], Some(&r));
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[r, Self::const_vn(0, 4)],
+            Some(&hi),
+        );
+        if w == 4 {
+            if let Some(parent) = Self::parent64_name(hi_name)
+                .and_then(|p| Self::get_register(p, 8))
+            {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi], Some(&parent));
+            }
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :BSWAP constructor (0F C8, W=4/8) of
+    // the locked x86-64 sla (sleigh_shim op-for-op dump
+    // /tmp/w-ext-bswap.out, 5 forms). No flags; the byte-reverse is a
+    // shift/mask OR-chain: bytes from the TOP down, each t = reg &
+    // (0xff<<8i) shifted RIGHT (top half) or LEFT (bottom half) by
+    // 8*|j-i| (consts :4); the FIRST shift result IS the accumulator, every
+    // subsequent byte ORs into it, the LAST OR writes the register; W==4
+    /// Lift `bswap reg` (byte-reverse via the mask/shift OR-chain).
+    fn lift_bswap(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let (name, w) = match op0 {
+            crate::disasm::Operand::Register { name, size } => (name, *size),
+            _ => return,
+        };
+        if w != 4 && w != 8 {
+            return;
+        }
+        let Some(vn) = Self::get_register(name, w) else {
+            return;
+        };
+        let parent64 = if w == 4 {
+            Self::parent64_name(name)
+                .and_then(|p| Self::get_register(p, 8))
+        } else {
+            None
+        };
+        let mut acc: Option<VarnodeRaw> = None;
+        for i in (0..w).rev() {
+            let mask: u64 = 0xffu64 << (8 * i);
+            let t = self.alloc_tmp(w);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[vn.clone(), Self::const_vn(mask, w)],
+                Some(&t),
+            );
+            let j = w - 1 - i;
+            let amt = (8 * i.abs_diff(j)) as u64;
+            let s = if i > j {
+                // byte sits above the middle — shift it down (RIGHT)
+                let tmp = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_RIGHT,
+                    &[t, Self::const_vn(amt, 4)],
+                    Some(&tmp),
+                );
+                tmp
+            } else if i < j {
+                // byte sits below the middle — shift it up (LEFT)
+                let tmp = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[t, Self::const_vn(amt, 4)],
+                    Some(&tmp),
+                );
+                tmp
+            } else {
+                t
+            };
+            let last = i == 0;
+            match acc {
+                None => acc = Some(s),
+                Some(a) => {
+                    let out = if last {
+                        vn.clone()
+                    } else {
+                        a.clone()
+                    };
+                    Self::push_raw(ops, C::CPUI_INT_OR, &[a, s], Some(&out));
+                    if !last {
+                        acc = Some(out);
+                    }
+                }
+            }
+        }
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn], Some(&parent));
+        }
     }
 
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
@@ -2040,8 +4588,31 @@ impl X86Lifter {
                             } else {
                                 let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
                                 op.add_input(src);
-                                op.set_output(dst);
+                                op.set_output(dst.clone());
                                 ops.push(op);
+                                // ia.sinc check_Reg32_dest/check_Rmr32_dest
+                                // (x86-64 language): a 32-bit GPR write
+                                // zero-extends into the 64-bit parent — the
+                                // same parent64 rule emit_alu_tail applies
+                                // for the ALU ops and the lea arm above.
+                                // Without it `mov $0x280,%esi` leaves RSI's
+                                // upper half undefined and every later
+                                // 64-bit read of RSI materializes
+                                // CONCAT44(<garbage>, 0x280) at call sites
+                                // (CONCATRAM lane: the CONCAT44 family root).
+                                if let crate::disasm::Operand::Register { name, size: 4 } =
+                                    &inst.operands[0]
+                                {
+                                    if let Some(parent) = Self::parent64_name(name)
+                                        .and_then(|p| Self::get_register(p, 8))
+                                    {
+                                        let mut op_zext =
+                                            PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                                        op_zext.add_input(dst);
+                                        op_zext.set_output(parent);
+                                        ops.push(op_zext);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2068,62 +4639,87 @@ impl X86Lifter {
             "xor" => {
                 self.lift_logic(inst, OpCode::CPUI_INT_XOR, &mut ops);
             }
-            "shl" | "shr" | "sal" | "sar" => {
-                if inst.operands.len() == 2 {
-                    if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
-                        if let Some((dst, mem_size)) =
-                            self.parse_dest_operand(&inst.operands[0], &mut ops)
-                        {
-                            let dst_read = if mem_size.is_some() {
-                                self.parse_operand(&inst.operands[0], &mut ops).unwrap()
-                            } else {
-                                dst.clone()
-                            };
-
-                            let opcode = match mnemonic {
-                                "add" => OpCode::CPUI_INT_ADD,
-                                "sub" => OpCode::CPUI_INT_SUB,
-                                "shl" | "sal" => OpCode::CPUI_INT_LEFT,
-                                "shr" => OpCode::CPUI_INT_RIGHT,
-                                "sar" => OpCode::CPUI_INT_SRIGHT,
-                                "and" => OpCode::CPUI_INT_AND,
-                                "or" => OpCode::CPUI_INT_OR,
-                                "xor" => OpCode::CPUI_INT_XOR,
-                                _ => unreachable!(),
-                            };
-
-                            let tmp = self.alloc_tmp(dst_read.size);
-                            let mut op = PcodeOpRaw::new(opcode as i32);
-                            op.add_input(dst_read);
-                            op.add_input(src);
-                            op.set_output(tmp.clone());
-                            ops.push(op);
-
-                            if let Some(size) = mem_size {
-                                self.emit_store(dst, tmp, size, &mut ops);
-                            } else {
-                                let mut cp = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-                                cp.add_input(tmp);
-                                cp.set_output(dst);
-                                ops.push(cp);
-                            }
-                        }
-                    }
-                }
+            "shl" | "sal" => {
+                self.lift_shift(inst, ShiftDir::Left, &mut ops);
+            }
+            "shr" => {
+                self.lift_shift(inst, ShiftDir::Right, &mut ops);
+            }
+            "sar" => {
+                self.lift_shift(inst, ShiftDir::Arith, &mut ops);
+            }
+            "rol" => {
+                self.lift_rotate(inst, RotDir::Left, &mut ops);
+            }
+            "ror" => {
+                self.lift_rotate(inst, RotDir::Right, &mut ops);
+            }
+            "imul" => {
+                self.lift_imul(inst, &mut ops);
+            }
+            "bt" => {
+                self.lift_bt(inst, BtKind::Test, &mut ops);
+            }
+            "bts" => {
+                self.lift_bt(inst, BtKind::Set, &mut ops);
+            }
+            "btr" => {
+                self.lift_bt(inst, BtKind::Reset, &mut ops);
+            }
+            "btc" => {
+                self.lift_bt(inst, BtKind::Complement, &mut ops);
+            }
+            "comiss" | "ucomiss" | "comisd" | "ucomisd" => {
+                self.lift_comis(inst, &mut ops);
+            }
+            "mul" => {
+                self.lift_mul(inst, &mut ops);
+            }
+            "div" => {
+                self.lift_div(inst, false, &mut ops);
+            }
+            "idiv" => {
+                self.lift_div(inst, true, &mut ops);
+            }
+            "bswap" => {
+                self.lift_bswap(inst, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {
                     if let Some((dst, _)) = self.parse_dest_operand(&inst.operands[0], &mut ops) {
                         // Check for RIP-relative addressing: lea reg, [rip+disp]
                         // In PIE binaries, this is how global variables are addressed.
-                        // Resolve to absolute address = inst_addr + inst_len + disp
-                        // so that seed_global_struct_pointers can match known globals.
+                        // X86_64Disassembler's displacement for a rip-relative
+                        // operand is ALREADY the absolute target (iced
+                        // memory_displacement64 = next_rip + raw_disp — probe:
+                        // `48 8d 3d d5 e7 04 00` @0x2b9e7 reports 0x7a1c3, the
+                        // "main.c" .rodata address), the same convention the
+                        // push (lift:1498-1514) and comis (lift:3896-3907) arms
+                        // already follow: take the displacement as the absolute
+                        // address DIRECTLY. Adding next_rip on top double-counted
+                        // rip (Ram@0xa5bb1 = target+rip), landing every string
+                        // reference out-of-image so no string/symbol lookup
+                        // could ever resolve (CONCATRAM lane: the uRam family
+                        // root). The result is the ADDRESS VALUE, so it takes
+                        // the Const space exactly like SLEIGH's rrip export
+                        // (`lea rdi,[rip+X]` = COPY const:8(abs), the form
+                        // SleighLifter produces for curl) — a Ram-space
+                        // location varnode here instead gets symbolized as an
+                        // address-tied global (varmap ADDRTIED name uRam…),
+                        // which blocks the printer's Priority-0 string/symbol
+                        // leaf that renders the oracle's "main.c" literal; and
+                        // the varnode size must match the dest register width
+                        // so seed_global_struct_pointers can match known
+                        // globals.
                         let resolved_addr_vn = match &inst.operands[1] {
                             crate::disasm::Operand::Memory { base, displacement, .. } => {
                                 if base.as_deref() == Some("rip") && *displacement != 0 {
-                                    let next_rip = inst.address.as_u64() + inst.length as u64;
-                                    let abs_addr = next_rip.wrapping_add(*displacement as u64);
-                                    Some(VarnodeRaw::new(AddressSpace::Ram, abs_addr, 8))
+                                    let abs_addr = *displacement as u64;
+                                    Some(VarnodeRaw::new(
+                                        AddressSpace::Const,
+                                        abs_addr,
+                                        dst.size,
+                                    ))
                                 } else {
                                     None
                                 }
@@ -2133,10 +4729,25 @@ impl X86Lifter {
                         if let Some(addr_vn) = resolved_addr_vn.or_else(||
                             self.parse_dest_operand(&inst.operands[1], &mut ops).map(|(v,_)| v))
                         {
+                            // ia.sinc check_*32_dest (x86-64 language): writing a
+                            // 32-bit GPR zero-extends into the 64-bit parent —
+                            // same rule emit_alu_tail applies for the ALU ops.
+                            let parent64 = match &inst.operands[0] {
+                                crate::disasm::Operand::Register { name, size } if *size == 4 => {
+                                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                                }
+                                _ => None,
+                            };
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
                             op.add_input(addr_vn);
-                            op.set_output(dst);
+                            op.set_output(dst.clone());
                             ops.push(op);
+                            if let Some(parent) = parent64 {
+                                let mut op_zext = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                                op_zext.add_input(dst);
+                                op_zext.set_output(parent);
+                                ops.push(op_zext);
+                            }
                         }
                     }
                 }
@@ -2179,7 +4790,10 @@ impl X86Lifter {
                     match &inst.operands[0] {
                         crate::disasm::Operand::Immediate { value, .. } => {
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
-                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, *value as u64, 8));
+                            // Ghidra: funcdata_varnode.cc:222 Funcdata::
+                            // newCodeRef — 1-byte code-ref form (see the
+                            // cmovcc site above; HTTPD-FULLEMPTY-ELSE-0001).
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, *value as u64, 1));
                             ops.push(op);
                         }
                         // Indirect jump through register or memory → CPUI_BRANCHIND.
@@ -2195,7 +4809,7 @@ impl X86Lifter {
                                     let offset = Self::reg_offset(name);
                                     VarnodeRaw::new(AddressSpace::Register, offset, *size)
                                 }
-                                crate::disasm::Operand::Memory { base, index, scale, displacement, size } => {
+                                crate::disasm::Operand::Memory { base, index, scale, displacement, size, .. } => {
                                     // For memory operands like jmp [rip+disp], emit a LOAD
                                     // from the computed address. Simplified: just use the
                                     // displacement as the address for now.
@@ -2235,7 +4849,10 @@ impl X86Lifter {
                 // offsets (0x201/0x202/0x203) and SF-only signed conditions.
                 if inst.operands.len() == 1 {
                     if let crate::disasm::Operand::Immediate { value, .. } = inst.operands[0] {
-                        let target = VarnodeRaw::new(AddressSpace::Ram, value as u64, 8);
+                        // Ghidra: funcdata_varnode.cc:222 Funcdata::
+                        // newCodeRef — 1-byte code-ref form (see the cmovcc
+                        // site above; HTTPD-FULLEMPTY-ELSE-0001).
+                        let target = VarnodeRaw::new(AddressSpace::Ram, value as u64, 1);
                         if let Some(cond_vn) = self.emit_cc_cond(&mnemonic[1..], &mut ops) {
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
                             op.add_input(target);
@@ -2250,29 +4867,136 @@ impl X86Lifter {
             }
             "call" | "ret" => {
                 if mnemonic == "call" {
-                    // Emit CPUI_CALL with target address
+                    // ia.sinc :CALL semantics (locked x86-64.sla template dump,
+                    // HTTPD-CALL-PUSH-0001 evidence): the operand is evaluated
+                    // FIRST (indirect forms), then the return address is pushed,
+                    // then the transfer op:
+                    //   direct  (E8 rel32):
+                    //     RSP = INT_SUB(RSP, 8); STORE ram[RSP] = inst_next;
+                    //     CALL ram:target
+                    //   indirect (FF /2 reg):
+                    //     tmp = COPY reg; RSP = INT_SUB(RSP, 8);
+                    //     STORE ram[RSP] = inst_next; CALLIND tmp
+                    //   indirect (FF /2 mem): LOAD tmp = ram[ea]; push; CALLIND
+                    // Parameter varnodes and the return-value output are still
+                    // established by ActionFuncLink's funcLinkInput/funcLinkOutput
+                    // at analysis time (after Heritage), not by the lifter
+                    // (flow.cc:680 setupCallSpecs + coreaction.cc:1474
+                    // funcLinkInput / 1521 funcLinkOutput). Target evaluation
+                    // precedes the RSP adjust so rsp-relative indirect targets
+                    // see the pre-push pointer.
+                    let indirect: Option<VarnodeRaw> = if inst.metadata.branch_target.is_none() {
+                        match inst.operands.first() {
+                            Some(crate::disasm::Operand::Register { name, size }) => {
+                                let Some(src) = Self::get_register(name, *size) else { return ops };
+                                let tmp = self.alloc_tmp(*size);
+                                let mut copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                                copy.add_input(src);
+                                copy.set_output(tmp.clone());
+                                ops.push(copy);
+                                Some(tmp)
+                            }
+                            Some(crate::disasm::Operand::Memory { .. }) => {
+                                self.parse_operand(&inst.operands[0], &mut ops)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     let target_addr = if let Some(ref bt) = inst.metadata.branch_target {
                         bt.as_u64()
-                    } else if let Some(op) = inst.operands.first() {
-                        match op {
+                    } else if let Some(op0) = inst.operands.first() {
+                        match op0 {
                             crate::disasm::Operand::Immediate { value, .. } => *value as u64,
                             _ => 0,
                         }
                     } else {
                         0
                     };
-                    let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
-                    // Faithful to Ghidra's x86 lifter (ia.sinc): CALL emits only
-                    // the target address as input(0). Parameter varnodes and the
-                    // return-value output are established by ActionFuncLink's
-                    // funcLinkInput/funcLinkOutput at analysis time (after Heritage),
-                    // not by the lifter. This matches Ghidra flow.cc:680 setupCallSpecs
-                    // + coreaction.cc:1474 funcLinkInput + 1521 funcLinkOutput.
-                    op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
-                    ops.push(op);
+                    // push inst_next: RSP = RSP - 8; *[ram]RSP = inst_next
+                    let Some(rsp) = Self::get_register("rsp", 8) else { return ops };
+                    let mut op_sub = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+                    op_sub.add_input(rsp.clone());
+                    op_sub.add_input(Self::const_vn(8, 8));
+                    op_sub.set_output(rsp.clone());
+                    ops.push(op_sub);
+                    let mut op_store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+                    op_store.add_input(Self::ram_space_const());
+                    op_store.add_input(rsp);
+                    op_store.add_input(Self::const_vn(
+                        inst.address.as_u64() + inst.length as u64,
+                        8,
+                    ));
+                    ops.push(op_store);
+                    match indirect {
+                        None => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
+                            ops.push(op);
+                        }
+                        Some(target_vn) => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALLIND as i32);
+                            op.add_input(target_vn);
+                            ops.push(op);
+                        }
+                    }
                 } else if mnemonic == "ret" {
+                    // ia.sinc :RET constructor — locked x86-64.sla template
+                    // dump (RET-OP3-0001, lane DU probe over the locked
+                    // sleigh_specs, same oneInstruction method as lane DL's
+                    // CALL probe): the return address is popped into RIP,
+                    // the stack pointer is bumped past it, then control
+                    // returns:
+                    //   ret (C3):
+                    //     RIP = LOAD(ram[RSP]); RSP = INT_ADD(RSP, 8);
+                    //     RETURN [RIP]
+                    //   ret imm16 (C2 iw):
+                    //     RIP = LOAD(ram[RSP]); RSP = INT_ADD(RSP, 8);
+                    //     RSP = INT_ADD(RSP, zext(imm16)); RETURN [RIP]
+                    // (imm16 zero-extends: probe `ret 0x8000` dumps
+                    // const 0x8000:8, not a sign-extension; the pop-size
+                    // bump is its own INT_ADD *after* the 8-byte
+                    // return-address bump, probe @0x4.) The old bare
+                    // `RETURN const:0` emission was a simplification, not
+                    // the oracle template. RETURN input(0) is never
+                    // printed (printc.cc:754 opReturn only prints
+                    // numInput()>1 = the return value), and the SLEIGH
+                    // path already feeds this exact template through the
+                    // same pipeline (curl E2E decodes via SLEIGH), so the
+                    // RIP load and the trailing RSP bump die/hide the same
+                    // way they already do there.
+                    let Some(rsp) = Self::get_register("rsp", 8) else {
+                        return ops;
+                    };
+                    let Some(rip) = Self::get_register("rip", 8) else {
+                        return ops;
+                    };
+                    // RIP = *:8 RSP
+                    let mut op_load = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+                    op_load.add_input(Self::ram_space_const());
+                    op_load.add_input(rsp.clone());
+                    op_load.set_output(rip.clone());
+                    ops.push(op_load);
+                    // RSP = RSP + 8
+                    let mut op_add = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+                    op_add.add_input(rsp.clone());
+                    op_add.add_input(Self::const_vn(8, 8));
+                    op_add.set_output(rsp.clone());
+                    ops.push(op_add);
+                    // C2 iw: RSP = RSP + zext(imm16)
+                    if let Some(crate::disasm::Operand::Immediate { value, .. }) =
+                        inst.operands.first()
+                    {
+                        let mut op_add_imm = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+                        op_add_imm.add_input(rsp.clone());
+                        op_add_imm.add_input(Self::const_vn(*value as u64, 8));
+                        op_add_imm.set_output(rsp);
+                        ops.push(op_add_imm);
+                    }
+                    // return [RIP]
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
-                    op.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+                    op.add_input(rip);
                     ops.push(op);
                 }
             }
@@ -2288,3 +5012,182 @@ impl X86Lifter {
         ops
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! LIFT-FS-CANARY-FORM-0001 pins: the segment-relative memory forms as
+    //! dumped op-for-op from the locked oracle (sleigh_specs/x86-64.sla via
+    //! examples/x86fs_probe.rs; oracle commit e40ed130, x86-64 language).
+    //! FS_OFFSET=register:0x110:8, GS_OFFSET=register:0x118:8; the wrap is
+    //! `INT_ADD tmp = SEG_OFFSET, EA` with the segment base FIRST, even for
+    //! a pure absolute displacement. Unique-space tmp ids are order-mapped
+    //! (semantics-free), every other field is exact.
+    use super::*;
+    use crate::disasm::Disassembler as _;
+
+    /// (opcode, out sig, in sigs); sigs are (space_id, offset, size).
+    type OpSig = (i32, Option<(u8, u64, u64)>, Vec<(u8, u64, u64)>);
+
+    fn lift_sig(bytes: &[u8]) -> Vec<OpSig> {
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(bytes, crate::Address::new(0))
+            .expect("disassembly");
+        let mut lifter = X86Lifter::new();
+        let mut sigs = Vec::new();
+        for inst in &insts {
+            for op in lifter.lift(inst) {
+                let ins = op
+                    .inputs()
+                    .iter()
+                    .map(|v| (v.space.space_id(), v.offset, v.size as u64))
+                    .collect();
+                sigs.push((
+                    op.get_opcode(),
+                    op.output()
+                        .map(|v| (v.space.space_id(), v.offset, v.size as u64)),
+                    ins,
+                ));
+            }
+        }
+        sigs
+    }
+
+    fn normalize(sigs: Vec<OpSig>) -> Vec<OpSig> {
+        let mut uniq: std::collections::HashMap<(u64, u64), u64> = Default::default();
+        let mut next = 0x9000u64;
+        let mut sig = |space: u8, offset: u64, size: u64| -> (u8, u64, u64) {
+            if space == AddressSpace::Unique.space_id() {
+                let key = (offset, size);
+                let mapped = *uniq.entry(key).or_insert_with(|| {
+                    next += 0x100;
+                    next
+                });
+                (space, mapped, size)
+            } else {
+                (space, offset, size)
+            }
+        };
+        sigs.into_iter()
+            .map(|(opcode, out, ins)| {
+                (
+                    opcode,
+                    out.map(|(s, o, z)| sig(s, o, z)),
+                    ins.into_iter().map(|(s, o, z)| sig(s, o, z)).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn op_id(name: &str) -> i32 {
+        match name {
+            "INT_ADD" => OpCode::CPUI_INT_ADD as i32,
+            "INT_MULT" => OpCode::CPUI_INT_MULT as i32,
+            "LOAD" => OpCode::CPUI_LOAD as i32,
+            "STORE" => OpCode::CPUI_STORE as i32,
+            "COPY" => OpCode::CPUI_COPY as i32,
+            "INT_SUB" => OpCode::CPUI_INT_SUB as i32,
+            _ => panic!("unknown op {name}"),
+        }
+    }
+
+    const REG: u8 = 4;
+    const CST: u8 = 0;
+
+    #[test]
+    fn test_fs_canary_load_mov_rax() {
+        // 64 48 8b 04 25 28 00 00 00: mov rax, [fs:0x28]
+        let got = normalize(lift_sig(&[0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                // INT_ADD tmp = FS_OFFSET, 0x28
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                // LOAD out = (ram-space-const 3, tmp)
+                (op_id("LOAD"), Some((2, 0x9200, 8)), vec![(CST, 0x3, 8), (2, 0x9100, 8)]),
+                // COPY rax = loaded
+                (op_id("COPY"), Some((REG, 0x0, 8)), vec![(2, 0x9200, 8)]),
+            ],
+            "oracle: INT_ADD(FS_OFFSET,0x28) + LOAD + COPY, FS base first"
+        );
+    }
+
+    #[test]
+    fn test_fs_canary_store_mov_fs_rax() {
+        // 64 48 89 04 25 28 00 00 00: mov [fs:0x28], rax
+        let got = normalize(lift_sig(&[0x64, 0x48, 0x89, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                (op_id("STORE"), None, vec![(CST, 0x3, 8), (2, 0x9100, 8), (REG, 0x0, 8)]),
+            ],
+            "oracle: INT_ADD(FS_OFFSET,0x28) then STORE(3, addr, rax)"
+        );
+    }
+
+    #[test]
+    fn test_fs_canary_push_mem() {
+        // 64 ff 34 25 28 00 00 00: push qword [fs:0x28]
+        let got = normalize(lift_sig(&[0x64, 0xff, 0x34, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                (op_id("LOAD"), Some((2, 0x9200, 8)), vec![(CST, 0x3, 8), (2, 0x9100, 8)]),
+                (op_id("COPY"), Some((2, 0x9300, 8)), vec![(2, 0x9200, 8)]),
+                (op_id("INT_SUB"), Some((REG, 0x20, 8)), vec![(REG, 0x20, 8), (CST, 0x8, 8)]),
+                (op_id("STORE"), None, vec![(CST, 0x3, 8), (REG, 0x20, 8), (2, 0x9300, 8)]),
+            ],
+            "oracle: INT_ADD + LOAD + COPY + RSP-=8 + STORE"
+        );
+    }
+
+    #[test]
+    fn test_gs_variant_and_seg_base_reg() {
+        // 65 48 8b 04 25 28 00 00 00: mov rax, [gs:0x28] — GS_OFFSET 0x118
+        let got = normalize(lift_sig(&[0x65, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got[0],
+            (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x118, 8), (CST, 0x28, 8)]),
+            "GS base register is 0x118 (not the 2-byte selector 0x10a)"
+        );
+    }
+
+    #[test]
+    fn test_no_segment_absolute_unchanged() {
+        // 48 8b 04 25 28 00 00 00: mov rax, [0x28] — no prefix: the iced path
+        // keeps its pre-FS-lane LOAD(3, const) form (segment-gated only).
+        let got = normalize(lift_sig(&[0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got[0],
+            (op_id("LOAD"), Some((2, 0x9100, 8)), vec![(CST, 0x3, 8), (CST, 0x28, 8)]),
+            "unprefixed absolute-disp must not grow an INT_ADD"
+        );
+    }
+
+    #[test]
+    fn test_segment_field_extraction() {
+        // The disassembler surfaces the override; long mode ignores
+        // CS/DS/ES/SS prefixes.
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(&[0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00], crate::Address::new(0))
+            .unwrap();
+        match &insts[0].operands[1] {
+            crate::disasm::Operand::Memory { segment, .. } => {
+                assert_eq!(segment.as_deref(), Some("fs"));
+            }
+            other => panic!("expected memory operand, got {other:?}"),
+        }
+        // DS prefix (3e) is decoded but must not surface as a segment.
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(&[0x3e, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00], crate::Address::new(0))
+            .unwrap();
+        match &insts[0].operands[1] {
+            crate::disasm::Operand::Memory { segment, .. } => {
+                assert_eq!(segment.as_ref(), None, "DS override is inert in long mode");
+            }
+            other => panic!("expected memory operand, got {other:?}"),
+        }
+    }
+}
+

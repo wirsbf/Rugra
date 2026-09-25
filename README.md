@@ -48,9 +48,17 @@ void GetStr(char **string,char *value)
 
 ## 快速开始
 
+构建需要锁定版本的 Ghidra 源码树（SLEIGH 引擎经 FFI 编译 + 对齐锚点校验）：
+
 ```bash
-git clone --recurse-submodules https://github.com/wirsbf/Rugra.git
-cd Rugra && cargo build --release
+git clone https://github.com/wirsbf/Rugra.git
+cd Rugra
+# 侧车方式放置锁定 oracle(build.rs 会校验 commit):
+git clone https://github.com/NationalSecurityAgency/ghidra ghidra-src
+git -C ghidra-src checkout e40ed13014025f82488b1f8f7bca566894ac376b
+ln -s "$(pwd)/ghidra-src" ghidra
+
+cargo build --release
 
 # 反编译整个 curl 二进制(124 个函数)
 cargo run --release --example curl_decompile > result.c
@@ -97,7 +105,17 @@ binary/ ──► disasm/ ──► P-code IR ──► Action 管线 ──► 
 
 ## 项目状态
 
-**Alpha,活跃开发中。** 反编译质量以函数级差分为准(curl 语料大部分函数体与 Ghidra 完全一致,其余差距均已定位为登记在册的根因);全局完成度未宣称。当前不支持 Ghidra GUI 功能与多架构(架构层已为多处理器留位)。
+**Alpha,活跃开发中。** 以函数级差分为准的当前硬数字(锁定 Ghidra 12.0.4 oracle,双双 defects=0/numbering=0):
+
+| 指标 | 数值 |
+|---|---|
+| curl 语料骨架残差 | **1438 行(wave 起点 3718,−61.3%)** |
+| httpd 语料骨架残差 | **1447 行(wave 起点 3576,−59.5%)** |
+| 管线全程投影 MATCH 函数 | **5 个**(next_url/match_url/parseconfig/myprogress/getparameter,每阶段 IR 逐字节==oracle) |
+| 文本逐字节零差函数 | curl 59/124(httpd 6/32) |
+| 双侧投影 fixture 银行 | 5 函数 pin 入库 + `tools/verify_projection_bank.sh` 门禁 runner |
+
+当前不支持 Ghidra GUI 功能与多架构(架构层已为多处理器留位);全局完成度未宣称(函数账本见 alignment_audit)。
 
 - 模块级进度:[ALIGNMENT_ROADMAP.md](ALIGNMENT_ROADMAP.md)
 - 活动任务看板:[docs/TODO_BOARD.md](docs/TODO_BOARD.md)

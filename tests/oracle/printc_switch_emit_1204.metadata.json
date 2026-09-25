@@ -50,7 +50,7 @@
  },
  "comparand_sha256": {
   "cpp_fixture_sha256": "e5728abe4c0be2ca2dacd55426cb79eea00981a5153d0cd085a2112681195c20",
-  "rust_fixture_sha256": "e8f69bfc20bbbea611029c6f1f29d63dee8ab43b5e4b734a8ed16e3d776fa64f",
+  "rust_fixture_sha256": "b993b71e96df2bfca731068a56969b43faa262d32c61592fcee22bcae6e26231",
   "runner_sha256": "2addde2a97085daa9fa5a8b761097b291310452b797477aadc69ca9ae622a8e0",
   "rugra_printc": "2acd43b1bd69e3b045c3402134f3d132f799042ca8360ef8a61cb5f7700d4653",
   "rugra_prettyprint": "c6eaa43fa0d5120db1d390fb569fea69e675d66b36f1179c8bf58d6469c0a681",
@@ -66,7 +66,7 @@
   "ghidra_typeop_hh": "abbc9432b150636063b06a0ace54518a6e6d883604e0f45e446a5293c33de931"
  },
  "cpp_fixture_sha256": "e5728abe4c0be2ca2dacd55426cb79eea00981a5153d0cd085a2112681195c20",
- "rust_fixture_sha256": "e8f69bfc20bbbea611029c6f1f29d63dee8ab43b5e4b734a8ed16e3d776fa64f",
+ "rust_fixture_sha256": "81656ef8fe1a7d452d1f530bbd808eb3157fb9b35c30b043c1a06f48bd751861",
  "host": {
   "cxx": "g++ (GCC) 16.2.1 20260810",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",

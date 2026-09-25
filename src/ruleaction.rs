@@ -119,7 +119,7 @@ impl RuleTrivialBool {
 }
 
 impl Rule for RuleTrivialBool {
-    // Ghidra: ruleaction.cc:2451 RuleTrivialBool::applyOp
+    // Ghidra: ruleaction.cc:2431 RuleTrivialBool::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -190,7 +190,7 @@ impl Rule for RuleTrivialBool {
         "trivialbool"
     }
 
-    // Ghidra: ruleaction.cc:2444 RuleTrivialBool::getOpList
+    // Ghidra: ruleaction.cc:2424 RuleTrivialBool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_BOOL_AND,
@@ -505,7 +505,7 @@ impl RuleTrivialArith {
 }
 
 impl Rule for RuleTrivialArith {
-    // Ghidra: ruleaction.cc:2382 RuleTrivialArith::applyOp
+    // Ghidra: ruleaction.cc:2362 RuleTrivialArith::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -612,7 +612,7 @@ impl Rule for RuleTrivialArith {
         "trivialarith"
     }
 
-    // Ghidra: ruleaction.cc:2372 RuleTrivialArith::getOpList
+    // Ghidra: ruleaction.cc:2352 RuleTrivialArith::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Faithful to Ghidra ruleaction.cc:2372-2380 (16 opcodes).
         vec![
@@ -1068,7 +1068,7 @@ impl RuleConcatZero {
 }
 
 impl Rule for RuleConcatZero {
-    // Ghidra: ruleaction.cc:4985 RuleConcatZero::applyOp
+    // Ghidra: ruleaction.cc:4967 RuleConcatZero::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1126,7 +1126,7 @@ impl Rule for RuleConcatZero {
         "concatzero"
     }
 
-    // Ghidra: ruleaction.cc:4979 RuleConcatZero::getOpList
+    // Ghidra: ruleaction.cc:4961 RuleConcatZero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -1146,7 +1146,7 @@ impl RuleXorCollapse {
 }
 
 impl Rule for RuleXorCollapse {
-    // Ghidra: ruleaction.cc:4070 RuleXorCollapse::applyOp
+    // Ghidra: ruleaction.cc:4050 RuleXorCollapse::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1235,7 +1235,7 @@ impl Rule for RuleXorCollapse {
         "xorcollapse"
     }
 
-    // Ghidra: ruleaction.cc:4063 RuleXorCollapse::getOpList
+    // Ghidra: ruleaction.cc:4043 RuleXorCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -1245,11 +1245,10 @@ impl Rule for RuleXorCollapse {
 ///   `((V + c) + d)  =>  V + (c+d)`
 ///   `((V * c) * d)  =>  V * (c*d)`
 ///
-/// Faithful to Ghidra's `RuleAddMultCollapse` (ruleaction.cc:4099-4183). This
-/// ports the primary form: when an INT_ADD/INT_MULT has a constant in slot 1
-/// and its slot-0 input is defined by the same op-code with another constant,
-/// fold the two constants together. The spacebase sub-case (4131-4169) is
-/// deferred (requires isSpacebase/isInput tracking).
+/// Faithful to Ghidra's `RuleAddMultCollapse` (ruleaction.cc:4099-4183).
+/// Ports both forms: the primary constant-fold, and the spacebase sub-case
+/// (ruleaction.cc:4122-4169) `((stackbase + c1) + othervn) + c0 =>
+/// (stackbase + (c0+c1)) + othervn` with basevn spacebase+input guards.
 pub struct RuleAddMultCollapse;
 
 impl RuleAddMultCollapse {
@@ -1260,7 +1259,7 @@ impl RuleAddMultCollapse {
 }
 
 impl Rule for RuleAddMultCollapse {
-    // Ghidra: ruleaction.cc:4113 RuleAddMultCollapse::applyOp
+    // Ghidra: ruleaction.cc:4093 RuleAddMultCollapse::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1295,22 +1294,109 @@ impl Rule for RuleAddMultCollapse {
         if subop_arc.read().unwrap().opcode != opc {
             return Ok(action_status::NO_CHANGE);
         }
-        // c[1] = subop->getIn(1) (must be constant).
-        let (sub2, c1) = {
+        // c[1] = subop->getIn(1); when it is NOT a constant, the oracle
+        // tries the spacebase sub-case (ruleaction.cc:4122-4169):
+        //   a = ((stackbase + c[1]) + othervn) + c[0]
+        //     => (stackbase + (c[0]+c[1])) + othervn
+        // This folds two constant offsets even when another term is added
+        // in and the intermediate sum has multiple uses. Guards and creation
+        // order mirror the oracle loop exactly (per-input scan order, all
+        // continues, basevn spacebase+input requirement).
+        let c1 = {
             let so = subop_arc.read().unwrap();
-            let sub2 = match so.inrefs.get(0) {
+            match so.inrefs.get(1) {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
-            };
-            let c1 = match so.inrefs.get(1) {
-                Some(v) => v.clone(),
-                None => return Ok(action_status::NO_CHANGE),
-            };
-            if !c1.read().unwrap().is_constant() {
-                // The spacebase sub-case is deferred; no change here.
+            }
+        };
+        if !c1.read().unwrap().is_constant() {
+            // cc:4124: only the additive form has the spacebase arm.
+            if opc != OpCode::CPUI_INT_ADD {
                 return Ok(action_status::NO_CHANGE);
             }
-            (sub2, c1)
+            for i in 0..2usize {
+                // cc:4127-4130: pick the non-constant non-free other term.
+                let othervn = match subop_arc.read().unwrap().inrefs.get(i) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if othervn.read().unwrap().is_constant() {
+                    continue;
+                }
+                if othervn.read().unwrap().is_free() {
+                    continue;
+                }
+                // cc:4131-4133: the other slot must be written.
+                let sub2 = match subop_arc.read().unwrap().inrefs.get(1 - i) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !sub2.read().unwrap().is_written() {
+                    continue;
+                }
+                let baseop_arc = match sub2.read().unwrap().def.as_ref().and_then(|w| w.upgrade())
+                {
+                    Some(a) => a,
+                    None => continue,
+                };
+                if baseop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                // cc:4136-4137: baseop's slot-1 constant becomes c[1].
+                let base_c1 = match baseop_arc.read().unwrap().inrefs.get(1) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !base_c1.read().unwrap().is_constant() {
+                    continue;
+                }
+                // cc:4138-4141: slot-0 must be a function-input spacebase.
+                let basevn = match baseop_arc.read().unwrap().inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !basevn.read().unwrap().is_spacebase() {
+                    continue;
+                }
+                if !basevn.read().unwrap().is_input() {
+                    continue;
+                }
+                // cc:4143-4150: fold c[0]+c[1], carrying symbol markup.
+                let size = c0.read().unwrap().get_size();
+                let v0 = c0.read().unwrap().get_offset();
+                let v1 = base_c1.read().unwrap().get_offset();
+                let val = v0.wrapping_add(v1);
+                let newvn = fd.new_constant(size, val);
+                if c0.read().unwrap().get_symbol_entry().is_some() {
+                    crate::varnode::Varnode::copy_symbol_if_valid(&newvn, &c0.read().unwrap());
+                } else if base_c1.read().unwrap().get_symbol_entry().is_some() {
+                    crate::varnode::Varnode::copy_symbol_if_valid(
+                        &newvn,
+                        &base_c1.read().unwrap(),
+                    );
+                }
+                // cc:4151-4162: build (basevn + folded-const) before op,
+                // then rewire op to (newout + othervn).
+                let op_addr = op_arc.read().unwrap().get_addr();
+                let newop = fd.new_op(2, op_addr);
+                fd.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+                let newout = fd.new_unique_out(size, &newop);
+                fd.op_set_input(&newop, basevn, 0);
+                fd.op_set_input(&newop, newvn, 1);
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_insert_before(&newop, &follow);
+                fd.op_set_input(&follow, newout, 0);
+                fd.op_set_input(&follow, othervn, 1);
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+        let sub2 = {
+            let so = subop_arc.read().unwrap();
+            match so.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            }
         };
         if sub2.read().unwrap().is_free() {
             return Ok(action_status::NO_CHANGE);
@@ -1338,7 +1424,7 @@ impl Rule for RuleAddMultCollapse {
         "addmultcollapse"
     }
 
-    // Ghidra: ruleaction.cc:4106 RuleAddMultCollapse::getOpList
+    // Ghidra: ruleaction.cc:4086 RuleAddMultCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_MULT]
     }
@@ -1372,7 +1458,7 @@ impl RuleLess2Zero {
 }
 
 impl Rule for RuleLess2Zero {
-    // Ghidra: ruleaction.cc:5571 RuleLess2Zero::applyOp
+    // Ghidra: ruleaction.cc:5553 RuleLess2Zero::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1428,7 +1514,7 @@ impl Rule for RuleLess2Zero {
         "less2zero"
     }
 
-    // Ghidra: ruleaction.cc:5565 RuleLess2Zero::getOpList
+    // Ghidra: ruleaction.cc:5547 RuleLess2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LESS]
     }
@@ -1452,7 +1538,7 @@ impl RuleLessEqual2Zero {
 }
 
 impl Rule for RuleLessEqual2Zero {
-    // Ghidra: ruleaction.cc:5619 RuleLessEqual2Zero::applyOp
+    // Ghidra: ruleaction.cc:5601 RuleLessEqual2Zero::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1508,7 +1594,7 @@ impl Rule for RuleLessEqual2Zero {
         "lessequal2zero"
     }
 
-    // Ghidra: ruleaction.cc:5613 RuleLessEqual2Zero::getOpList
+    // Ghidra: ruleaction.cc:5595 RuleLessEqual2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LESSEQUAL]
     }
@@ -1535,7 +1621,7 @@ impl RuleBoolNegate {
 }
 
 impl Rule for RuleBoolNegate {
-    // Ghidra: ruleaction.cc:5529 RuleBoolNegate::applyOp
+    // Ghidra: ruleaction.cc:5511 RuleBoolNegate::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -1590,7 +1676,7 @@ impl Rule for RuleBoolNegate {
         "boolnegate"
     }
 
-    // Ghidra: ruleaction.cc:5523 RuleBoolNegate::getOpList
+    // Ghidra: ruleaction.cc:5505 RuleBoolNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Ghidra BOOL_NEGATE == Rugra BOOL_NOT
         vec![OpCode::CPUI_BOOL_NEGATE]
@@ -2178,7 +2264,7 @@ impl RuleTrivialShift {
 }
 
 impl Rule for RuleTrivialShift {
-    // Ghidra: ruleaction.cc:3525 RuleTrivialShift::applyOp
+    // Ghidra: ruleaction.cc:3505 RuleTrivialShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2219,7 +2305,7 @@ impl Rule for RuleTrivialShift {
         "trivialshift"
     }
 
-    // Ghidra: ruleaction.cc:3518 RuleTrivialShift::getOpList
+    // Ghidra: ruleaction.cc:3498 RuleTrivialShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
@@ -2243,7 +2329,7 @@ impl RuleSlessToLess {
 }
 
 impl Rule for RuleSlessToLess {
-    // Ghidra: ruleaction.cc:2560 RuleSlessToLess::applyOp
+    // Ghidra: ruleaction.cc:2540 RuleSlessToLess::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2293,7 +2379,7 @@ impl Rule for RuleSlessToLess {
         "slesstoless"
     }
 
-    // Ghidra: ruleaction.cc:2553 RuleSlessToLess::getOpList
+    // Ghidra: ruleaction.cc:2533 RuleSlessToLess::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL]
     }
@@ -2378,7 +2464,7 @@ impl RuleConcatLeftShift {
 }
 
 impl Rule for RuleConcatLeftShift {
-    // Ghidra: ruleaction.cc:5012 RuleConcatLeftShift::applyOp
+    // Ghidra: ruleaction.cc:4994 RuleConcatLeftShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2480,7 +2566,7 @@ impl Rule for RuleConcatLeftShift {
         "concatleftshift"
     }
 
-    // Ghidra: ruleaction.cc:5006 RuleConcatLeftShift::getOpList
+    // Ghidra: ruleaction.cc:4988 RuleConcatLeftShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -2502,7 +2588,7 @@ impl RuleDoubleShift {
 }
 
 impl Rule for RuleDoubleShift {
-    // Ghidra: ruleaction.cc:1842 RuleDoubleShift::applyOp
+    // Ghidra: ruleaction.cc:1841 RuleDoubleShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2622,7 +2708,7 @@ impl Rule for RuleDoubleShift {
         "doubleshift"
     }
 
-    // Ghidra: ruleaction.cc:1834 RuleDoubleShift::getOpList
+    // Ghidra: ruleaction.cc:1833 RuleDoubleShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_MULT,
@@ -2718,7 +2804,7 @@ impl RuleSignShift {
 }
 
 impl Rule for RuleSignShift {
-    // Ghidra: ruleaction.cc:3555 RuleSignShift::applyOp
+    // Ghidra: ruleaction.cc:3535 RuleSignShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2797,7 +2883,7 @@ impl Rule for RuleSignShift {
         "signshift"
     }
 
-    // Ghidra: ruleaction.cc:3549 RuleSignShift::getOpList
+    // Ghidra: ruleaction.cc:3529 RuleSignShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_RIGHT]
     }
@@ -2821,7 +2907,7 @@ impl RuleSubZext {
 }
 
 impl Rule for RuleSubZext {
-    // Ghidra: ruleaction.cc:5057 RuleSubZext::applyOp
+    // Ghidra: ruleaction.cc:5039 RuleSubZext::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -2915,7 +3001,7 @@ impl Rule for RuleSubZext {
         "subzext"
     }
 
-    // Ghidra: ruleaction.cc:5051 RuleSubZext::getOpList
+    // Ghidra: ruleaction.cc:5033 RuleSubZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ZEXT]
     }
@@ -2936,7 +3022,7 @@ impl RuleConcatShift {
 }
 
 impl Rule for RuleConcatShift {
-    // Ghidra: ruleaction.cc:1979 RuleConcatShift::applyOp
+    // Ghidra: ruleaction.cc:1959 RuleConcatShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3013,7 +3099,7 @@ impl Rule for RuleConcatShift {
         "concatshift"
     }
 
-    // Ghidra: ruleaction.cc:1972 RuleConcatShift::getOpList
+    // Ghidra: ruleaction.cc:1952 RuleConcatShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
@@ -3039,7 +3125,7 @@ impl RuleShiftCompare {
 }
 
 impl Rule for RuleShiftCompare {
-    // Ghidra: ruleaction.cc:2077 RuleShiftCompare::applyOp
+    // Ghidra: ruleaction.cc:2057 RuleShiftCompare::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3149,7 +3235,7 @@ impl Rule for RuleShiftCompare {
         "shiftcompare"
     }
 
-    // Ghidra: ruleaction.cc:2070 RuleShiftCompare::getOpList
+    // Ghidra: ruleaction.cc:2050 RuleShiftCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -3300,7 +3386,7 @@ impl RuleTestSign {
 }
 
 impl Rule for RuleTestSign {
-    // Ghidra: ruleaction.cc:3632 RuleTestSign::applyOp
+    // Ghidra: ruleaction.cc:3612 RuleTestSign::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3387,7 +3473,7 @@ impl Rule for RuleTestSign {
         "testsign"
     }
 
-    // Ghidra: ruleaction.cc:3604 RuleTestSign::getOpList
+    // Ghidra: ruleaction.cc:3584 RuleTestSign::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SRIGHT]
     }
@@ -3477,7 +3563,7 @@ impl RuleLessNotEqual {
 }
 
 impl Rule for RuleLessNotEqual {
-    // Ghidra: ruleaction.cc:2320 RuleLessNotEqual::applyOp
+    // Ghidra: ruleaction.cc:2300 RuleLessNotEqual::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3553,7 +3639,7 @@ impl Rule for RuleLessNotEqual {
 
     // Ghidra: ruleaction.cc:2310 RuleLessNotEqual
     fn get_name(&self) -> &str { "lessnotequal" }
-    // Ghidra: ruleaction.cc:2314 RuleLessNotEqual::getOpList
+    // Ghidra: ruleaction.cc:2294 RuleLessNotEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND] }
 }
 
@@ -3574,7 +3660,7 @@ impl RuleLessEqual {
 }
 
 impl Rule for RuleLessEqual {
-    // Ghidra: ruleaction.cc:2262 RuleLessEqual::applyOp
+    // Ghidra: ruleaction.cc:2242 RuleLessEqual::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3664,7 +3750,7 @@ impl Rule for RuleLessEqual {
 
     // Ghidra: ruleaction.cc:2250 RuleLessEqual
     fn get_name(&self) -> &str { "lessequal" }
-    // Ghidra: ruleaction.cc:2256 RuleLessEqual::getOpList
+    // Ghidra: ruleaction.cc:2236 RuleLessEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR] }
 }
 
@@ -3873,7 +3959,7 @@ impl RuleZextSless {
 }
 
 impl Rule for RuleZextSless {
-    // Ghidra: ruleaction.cc:2584 RuleZextSless::applyOp
+    // Ghidra: ruleaction.cc:2564 RuleZextSless::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -3928,7 +4014,7 @@ impl Rule for RuleZextSless {
 
     // Ghidra: ruleaction.cc:2575 RuleZextSless
     fn get_name(&self) -> &str { "zextsless" }
-    // Ghidra: ruleaction.cc:2577 RuleZextSless::getOpList
+    // Ghidra: ruleaction.cc:2557 RuleZextSless::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL] }
 }
 
@@ -4088,7 +4174,7 @@ impl Rule for RuleScarry {
 
     // Ghidra: ruleaction.cc:3434 RuleScarry
     fn get_name(&self) -> &str { "scarry" }
-    // Ghidra: ruleaction.cc:3444 RuleScarry::getOpList
+    // Ghidra: ruleaction.cc:3424 RuleScarry::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SCARRY] }
 }
 
@@ -4233,7 +4319,7 @@ impl Rule for RuleSborrow {
 
     // Ghidra: ruleaction.cc:3365 RuleSborrow
     fn get_name(&self) -> &str { "sborrow" }
-    // Ghidra: ruleaction.cc:3375 RuleSborrow::getOpList
+    // Ghidra: ruleaction.cc:3355 RuleSborrow::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SBORROW] }
 }
 
@@ -4502,9 +4588,13 @@ impl Rule for RuleAndPiece {
 ///   `(V << c) & mask  =>  (V & (mask >> c)) << c`
 ///   `(V >> c) & mask  =>  (V & (mask << c)) >> c`
 ///
-/// Faithful to Ghidra's `RuleAndCommute` (ruleaction.cc:1519-1626). Ports the
-/// primary INT_LEFT/INT_RIGHT path (the OR/PIECE sub-cases use getNZMask to
-/// decide benefit). When the shift's other input (a constant) can be commuted
+/// Faithful to Ghidra's `RuleAndCommute` (ruleaction.cc:1519-1626). Scans the
+/// AND's inputs for a shift (INT_LEFT/INT_RIGHT with constant amount); the
+/// only unconditional commute is the (LEFT + constant othervn +
+/// shiftvn->loneDescend()==op) fast path (cc:1573-1580). Every other case
+/// must pass the benefit gate (cc:1582-1603): orvn.def must be INT_OR or
+/// PIECE with both halves' NZ-masks overlapping the (shift-adjusted)
+/// othermask. When the shift's other input (a constant) can be commuted
 /// with the AND, perform the commute by creating a new shift + AND.
 pub struct RuleAndCommute;
 
@@ -4551,24 +4641,36 @@ impl Rule for RuleAndCommute {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => continue,
             };
-            let sa = savn.read().unwrap().get_offset() as usize;
+            let sa = savn.read().unwrap().get_offset() as u32;
             let orvn = match shiftop_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
             };
             let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
             let othervn = match othervn { Some(v) => v, None => continue ,
             };
-            let othermask = othervn.read().unwrap().get_nz_mask();
-            if othermask == 0 || othermask == fullmask { continue; }
-            // Decide if commute is beneficial (othermask bits affected by shift).
-            let adjusted = if opc == OpCode::CPUI_INT_RIGHT {
-                if (fullmask >> sa) == othermask { continue; }
-                othermask << sa
+            // cc:1556 — othervn must be linked into the SSA tree.
+            if !othervn.read().unwrap().is_heritage_known() { continue; }
+            let mut othermask = othervn.read().unwrap().get_nz_mask();
+            // cc:1561-1568 — check the AND is not merely zeroing bits the shift
+            // already zeroes, then adjust the mask to its post-commute form.
+            if opc == OpCode::CPUI_INT_RIGHT {
+                if (fullmask.wrapping_shr(sa)) == othermask { continue; }
+                othermask = othermask.wrapping_shl(sa);
             } else {
-                if ((fullmask << sa) & fullmask) == othermask { continue; }
-                othermask >> sa
-            };
-            if adjusted == 0 || adjusted == fullmask { continue; }
-            // For LEFT with constant othervn, require loneDescend for stability.
+                // cc:1566 — Ghidra source literally reads
+                // `if (((fullmask<<sa)&&fullmask)==othermask) continue;`: the
+                // `&&` is a logical AND of two uintb values (bool 0/1), not a
+                // bitwise `&`.  Ported verbatim: the gate value is 1 whenever
+                // both shifted fullmask and fullmask are non-zero, so the
+                // reject only fires when othermask == 1 in that situation.
+                let gate = u64::from(fullmask.wrapping_shl(sa) != 0 && fullmask != 0);
+                if gate == othermask { continue; }
+                othermask = othermask.wrapping_shr(sa);
+            }
+            // cc:1569-1570 — post-adjustment checks (andmask handles these).
+            if othermask == 0 { continue; }
+            if othermask == fullmask { continue; }
+            // cc:1573-1580 — the only unconditional commute: LEFT shift with a
+            // constant othervn whose shift output feeds only this AND.
             if opc == OpCode::CPUI_INT_LEFT && othervn.read().unwrap().is_constant() {
                 if shiftvn
                     .read()
@@ -4579,19 +4681,63 @@ impl Rule for RuleAndCommute {
                     found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
                     break;
                 }
-                // Otherwise check if orvn is an OR/PIECE (beneficial sub-case).
-                let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-                if let Some(oa) = orop_arc {
-                    let oc = oa.read().unwrap().opcode;
-                    if oc == OpCode::CPUI_INT_OR || oc == OpCode::CPUI_PIECE {
+            }
+            // cc:1582 — benefit gate: orvn must be defined by an op.
+            if !orvn.read().unwrap().is_written() { continue; }
+            let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let orop_arc = match orop_arc { Some(a) => a, None => continue };
+            let oc = orop_arc.read().unwrap().opcode;
+            // cc:1585-1603 — commute only pays off when orvn.def is INT_OR or
+            // PIECE whose halves both overlap othermask; anything else (e.g. a
+            // LOAD output) must not commute.
+            if oc == OpCode::CPUI_INT_OR {
+                let (ormask1, ormask2) = {
+                    let orop = orop_arc.read().unwrap();
+                    let m1 = orop.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let m2 = orop.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    (m1, m2)
+                };
+                if (ormask1 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                if (ormask2 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                if othervn.read().unwrap().is_constant() {
+                    if (ormask1 & othermask) == ormask1 {
+                        found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                        break;
+                    }
+                    if (ormask2 & othermask) == ormask2 {
                         found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
                         break;
                     }
                 }
+            } else if oc == OpCode::CPUI_PIECE {
+                let (ormask1, ormask2, lowsize) = {
+                    let orop = orop_arc.read().unwrap();
+                    let lowmask = orop.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let highmask = orop.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let ls = orop.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    (lowmask, highmask, ls)
+                };
+                // Low part of piece (cc:1596-1597).
+                if (ormask1 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                // High part (cc:1598-1600).
+                let ormask2 = ormask2.wrapping_shl((lowsize as u32) * 8);
+                if (ormask2 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+            } else {
+                // cc:1602-1603 — orvn.def is neither INT_OR nor PIECE.
                 continue;
             }
-            found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
-            break;
         }
         let (i, shiftop_arc, opc, savn, orvn, othervn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) ,
         };
@@ -4754,7 +4900,7 @@ impl RuleBooleanNegate {
 }
 
 impl Rule for RuleBooleanNegate {
-    // Ghidra: ruleaction.cc:2969 RuleBooleanNegate::applyOp
+    // Ghidra: ruleaction.cc:2949 RuleBooleanNegate::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -4790,7 +4936,7 @@ impl Rule for RuleBooleanNegate {
 
     // Ghidra: ruleaction.cc:2957 RuleBooleanNegate
     fn get_name(&self) -> &str { "booleannegate" }
-    // Ghidra: ruleaction.cc:2962 RuleBooleanNegate::getOpList
+    // Ghidra: ruleaction.cc:2942 RuleBooleanNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -4806,7 +4952,7 @@ impl RuleLogic2Bool {
 }
 
 impl Rule for RuleLogic2Bool {
-    // Ghidra: ruleaction.cc:3138 RuleLogic2Bool::applyOp
+    // Ghidra: ruleaction.cc:3118 RuleLogic2Bool::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -4848,7 +4994,7 @@ impl Rule for RuleLogic2Bool {
 
     // Ghidra: ruleaction.cc:3126 RuleLogic2Bool
     fn get_name(&self) -> &str { "logic2bool" }
-    // Ghidra: ruleaction.cc:3131 RuleLogic2Bool::getOpList
+    // Ghidra: ruleaction.cc:3111 RuleLogic2Bool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![
             OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
         ] }
@@ -4869,12 +5015,12 @@ impl RuleLeftRight {
 }
 
 impl Rule for RuleLeftRight {
-    // Ghidra: ruleaction.cc:2030 RuleLeftRight::applyOp
+    // Ghidra: ruleaction.cc:2010 RuleLeftRight::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
         // Phase 1: validate and extract raw values.
-        let (sa, leftshift_arc, is_sright, shiftin_size, tsz) = {
+        let (sa, leftshift_arc, is_sright, shiftin_size, tsz, shiftin) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
@@ -4922,14 +5068,30 @@ impl Rule for RuleLeftRight {
             }
             (
                 sa, leftshift_arc, op.opcode == OpCode::CPUI_INT_SRIGHT, shiftin_size, tsz,
+                shiftin,
             )
         };
         // Phase 2: transform.
         let leftshift_ref = crate::op::PcodeOpRef(leftshift_arc.clone());
         let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Ghidra (ruleaction.cc:2029-2031): `Address addr = shiftin->getAddr();`
+        // — captured BEFORE the unsets, carrying shiftin's OWN space and
+        // offset. Big-endian keeps the most-significant bytes: `addr += isa`.
+        // (Rugra's AddressSpace endianness predicate is the little-endian
+        // enum stub; the x86-64 oracle's spaces are all little-endian.)
+        let (shiftin_space, mut newaddr) = {
+            let s = shiftin.read().unwrap();
+            (s.get_space(), *s.get_addr())
+        };
+        if shiftin_space.is_big_endian() {
+            newaddr = newaddr.offset((sa >> 3) as i64);
+        }
         fd.op_unset_input(&follow, 0);
         fd.op_unset_output(&leftshift_ref);
-        let newvn = fd.new_varnode_out(tsz, crate::address::Address::new(0x1000), &leftshift_ref);
+        // cc:2034: `addr.renormalize(tsz)` only acts in the join space
+        // (address.cc:191-194, renormalizeJoinAddress); Rugra has no
+        // JoinRecord store (degraded glue, SPACELESS family precedent).
+        let newvn = fd.new_varnode_out_full(tsz, shiftin_space, newaddr, &leftshift_ref);
         fd.op_set_opcode(&leftshift_ref, OpCode::CPUI_SUBPIECE);
         let zero_const = fd.new_constant(4, 0);
         fd.op_set_input(&leftshift_ref, zero_const, 1);
@@ -4942,7 +5104,7 @@ impl Rule for RuleLeftRight {
 
     // Ghidra: ruleaction.cc:2016 RuleLeftRight
     fn get_name(&self) -> &str { "leftright" }
-    // Ghidra: ruleaction.cc:2023 RuleLeftRight::getOpList
+    // Ghidra: ruleaction.cc:2003 RuleLeftRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -5190,7 +5352,7 @@ impl RuleBitUndistribute {
 }
 
 impl Rule for RuleBitUndistribute {
-    // Ghidra: ruleaction.cc:2634 RuleBitUndistribute::applyOp
+    // Ghidra: ruleaction.cc:2614 RuleBitUndistribute::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -5275,7 +5437,7 @@ impl Rule for RuleBitUndistribute {
 
     // Ghidra: ruleaction.cc:2620 RuleBitUndistribute
     fn get_name(&self) -> &str { "bitundistribute" }
-    // Ghidra: ruleaction.cc:2627 RuleBitUndistribute::getOpList
+    // Ghidra: ruleaction.cc:2607 RuleBitUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![
             OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
         ] }
@@ -5297,7 +5459,7 @@ impl RuleBooleanDedup {
 }
 
 impl Rule for RuleBooleanDedup {
-    // Ghidra: ruleaction.cc:2852 RuleBooleanDedup::applyOp
+    // Ghidra: ruleaction.cc:2832 RuleBooleanDedup::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -5378,7 +5540,7 @@ impl Rule for RuleBooleanDedup {
 
     // Ghidra: ruleaction.cc:2812 RuleBooleanDedup
     fn get_name(&self) -> &str { "booleandedup" }
-    // Ghidra: ruleaction.cc:2820 RuleBooleanDedup::getOpList
+    // Ghidra: ruleaction.cc:2800 RuleBooleanDedup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR] }
 }
 
@@ -5501,7 +5663,7 @@ impl RuleBooleanUndistribute {
     /// Check if two boolean Varnodes are correlated (same or complementary).
     /// Faithful to `RuleBooleanUndistribute::isMatch` (ruleaction.cc:2710-2729).
     /// Returns `Some(is_flip)` where `is_flip` is true for complementary.
-    // Ghidra: ruleaction.cc:2718 RuleBooleanUndistribute::isMatch
+    // Ghidra: ruleaction.cc:2698 RuleBooleanUndistribute::isMatch
     fn is_match(
         left_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         right_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -5516,7 +5678,7 @@ impl RuleBooleanUndistribute {
 }
 
 impl Rule for RuleBooleanUndistribute {
-    // Ghidra: ruleaction.cc:2731 RuleBooleanUndistribute::applyOp
+    // Ghidra: ruleaction.cc:2711 RuleBooleanUndistribute::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -5656,7 +5818,7 @@ impl Rule for RuleBooleanUndistribute {
 
     // Ghidra: ruleaction.cc:2697 RuleBooleanUndistribute
     fn get_name(&self) -> &str { "booleanundistribute" }
-    // Ghidra: ruleaction.cc:2703 RuleBooleanUndistribute::getOpList
+    // Ghidra: ruleaction.cc:2683 RuleBooleanUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -5674,7 +5836,7 @@ impl RuleBoolZext {
 }
 
 impl Rule for RuleBoolZext {
-    // Ghidra: ruleaction.cc:3015 RuleBoolZext::applyOp
+    // Ghidra: ruleaction.cc:2995 RuleBoolZext::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -5858,7 +6020,7 @@ impl Rule for RuleBoolZext {
 
     // Ghidra: ruleaction.cc:3001 RuleBoolZext
     fn get_name(&self) -> &str { "boolzext" }
-    // Ghidra: ruleaction.cc:3009 RuleBoolZext::getOpList
+    // Ghidra: ruleaction.cc:2989 RuleBoolZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -5875,17 +6037,84 @@ impl RulePushMulti {
     // Ghidra: ruleaction.cc:1062 RulePushMulti
     pub fn new() -> Self { Self }
 
+    // Ghidra: block.cc:2778 BlockBasic::earliestUse
+    /// Get the earliest use/read of a Varnode in this basic block.
+    /// Faithful to `BlockBasic::earliestUse` (block.cc:2778-2795): scan the
+    /// varnode's descendants, keep those whose parent is this block, and
+    /// return the one with the smallest intra-block `SeqNum::order`; the
+    /// `<`-only compare never replaces on equality, so the FIRST-seen
+    /// descendant wins ties, mirroring the oracle's iteration order.
+    /// (RULEACTION-FINDSUB-BBFILTER-0001: consumed by applyOp cc:1095.)
+    fn earliest_use_in_block(
+        bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
+        let mut res: Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = None;
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        for op_arc in descendants {
+            // cc:2786: if (op->getParent() != this) continue — a parentless
+            // op never matches the (non-null) block.
+            let op_parent = op_arc
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade());
+            let parent_matches = op_parent
+                .map(|p| std::sync::Arc::ptr_eq(&p, bl))
+                .unwrap_or(false);
+            if !parent_matches {
+                continue;
+            }
+            let order = op_arc.read().unwrap().get_seq_num().order;
+            match &res {
+                None => res = Some(op_arc),
+                Some(cur) => {
+                    if order < cur.read().unwrap().get_seq_num().order {
+                        res = Some(op_arc);
+                    }
+                }
+            }
+        }
+        res
+    }
+
     /// Find a substitute MULTIEQUAL in the block that already merges in1/in2.
-    /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060).
+    /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060):
+    /// the descendant scan filters on `op->getParent() != bb` (cc:1040), and
+    /// the functional-equality CSE arm delegates to
+    /// `Funcdata::cseFindInBlock(op1,vn,bb,earliest)` (cc:1056), which
+    /// enforces the same block membership plus the earliest-order
+    /// constraint. (RULEACTION-FINDSUB-BBFILTER-0001)
     // Ghidra: ruleaction.cc:1031 RulePushMulti::findSubstitute
     fn find_substitute(
+        fd: &Funcdata,
         in1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         in2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        bb: &Option<
+            std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >,
+        >,
+        earliest: Option<&crate::op::PcodeOpRef>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
         // Search descendants of in1 for a MULTIEQUAL with inputs [in1, in2].
         let descends: Vec<_> = in1.read().unwrap().descend_iter().collect();
         for op_arc in descends {
             let op = op_arc.read().unwrap();
+            // cc:1040: if (op->getParent() != bb) continue — raw pointer
+            // inequality; null -bb- matches ONLY parentless ops (flat-bank
+            // fixtures keep their legacy reach inside that class).
+            let op_parent = op.parent.as_ref().and_then(|w| w.upgrade());
+            let parent_matches = match (&op_parent, bb) {
+                (Some(p), Some(b)) => std::sync::Arc::ptr_eq(p, b),
+                (None, None) => true,
+                _ => false,
+            };
+            if !parent_matches {
+                continue;
+            }
             if op.opcode != OpCode::CPUI_MULTIEQUAL {
                 continue;
             }
@@ -5923,33 +6152,20 @@ impl RulePushMulti {
                 let op2_in = op2.read().unwrap().inrefs.get(i).cloned();
                 if let Some(op2_in) = op2_in {
                     if std::sync::Arc::ptr_eq(&vn, &op2_in) {
-                        // Search for a CSE of op1 reading vn in the block.
-                        let vn_descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
-                        for d in vn_descends {
-                            let dr = d.read().unwrap();
-                            if std::sync::Arc::ptr_eq(&d, &op1) {
-                                continue;
-                            }
-                            // Check if this descendant has the same opcode and
-                            // matching inputs as op1.
-                            if dr.opcode == op1.read().unwrap().opcode
-                                && dr.inrefs.len() == op1.read().unwrap().inrefs.len()
-                            {
-                                let mut all_match = true;
-                                for j in 0..dr.inrefs.len() {
-                                    if !std::sync::Arc::ptr_eq(
-                                        &dr.inrefs[j], &op1.read().unwrap().inrefs[j],
-                                    ) {
-                                        all_match = false;
-                                        break;
-                                    }
-                                }
-                                if all_match {
-                                    drop(dr);
-                                    return Some(d);
-                                }
-                            }
-                        }
+                        // cc:1056: search for a cse of op1 in bb, under the
+                        // earliest-order constraint — the canonical
+                        // Funcdata::cseFindInBlock (funcdata_op.cc:1324-1345)
+                        // enforces block membership, the earliest bound, the
+                        // null-output skip, and depth-0 functional equality
+                        // of the outputs.
+                        return fd
+                            .cse_find_in_block(
+                                &crate::op::PcodeOpRef(op1.clone()),
+                                &vn,
+                                bb.as_ref(),
+                                earliest,
+                            )
+                            .map(|r| r.0);
                     }
                 }
             }
@@ -6005,6 +6221,21 @@ impl Rule for RulePushMulti {
             None => return Ok(action_status::NO_CHANGE),
         };
 
+        // cc:1094-1095: BlockBasic *bl = op->getParent();
+        // PcodeOp *earliest = bl->earliestUse(op->getOut()); — computed
+        // before BOTH findSubstitute arms (the COPY special case at
+        // cc:1096-1104 consumes it too). (RULEACTION-FINDSUB-BBFILTER-0001)
+        let bl = op_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        let earliest: Option<crate::op::PcodeOpRef> = bl
+            .as_ref()
+            .and_then(|b| Self::earliest_use_in_block(b, &out_vn))
+            .map(crate::op::PcodeOpRef);
+
         if op1_code == OpCode::CPUI_COPY {
             // Special case: MERGE of 2 shadowing varnodes.
             if res == 0 {
@@ -6013,7 +6244,8 @@ impl Rule for RulePushMulti {
             let substitute = match result
                 .pairs
                 .get(0)
-                .and_then(|p| Self::find_substitute(&p.0, &p.1)) {
+                .and_then(|p| Self::find_substitute(fd, &p.0, &p.1, &bl, earliest.as_ref()))
+            {
                 Some(s) => s,
                 None => return Ok(action_status::NO_CHANGE),
             };
@@ -6050,41 +6282,85 @@ impl Rule for RulePushMulti {
         fd.op_set_output(&op1_ref, out_vn.clone());
         fd.op_uninsert(&op1_ref);
 
+        // Ghidra cc:1094: bl = op->getParent() — the merge block owning the
+        // MULTIEQUAL being destroyed; both insert forms below target it.
+        // (Extracted once before the COPY arm together with -earliest-.)
+
         if res == 1 {
             // There's one pair that must be unified via a new MULTIEQUAL.
             let buf1 = &result.pairs[0].0;
             let buf2 = &result.pairs[0].1;
-            let substitute = Self::find_substitute(buf1, buf2);
+            let substitute = Self::find_substitute(fd, buf1, buf2, &bl, earliest.as_ref());
             let slot1 = fd.op_get_slot(&op1_ref, buf1) as usize;
-            let sub_out = if let Some(sub) = substitute {
-                sub.read().unwrap().output.clone().unwrap_or_else(|| {
-                    // Fallback: create a new MULTIEQUAL if substitute has no output.
+            let sub_ref = match substitute {
+                Some(sub) => crate::op::PcodeOpRef(sub),
+                None => {
+                    // cc:1117-1127: create the unifying MULTIEQUAL. Its output
+                    // preserves the pair's shared storage address when both
+                    // inputs carry the same address and that storage is not
+                    // addr-tied (cc:1121-1124); otherwise a fresh unique is
+                    // allocated (newUniqueOut, cc:1124).
                     let addr = op_arc.read().unwrap().get_addr();
                     let new_op = fd.new_op(2, addr);
                     fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
-                    let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
+                    let (size, space, offset, addr_tied) = {
+                        let b1 = buf1.read().unwrap();
+                        (
+                            b1.get_size(),
+                            b1.get_space(),
+                            b1.get_offset(),
+                            b1.is_addr_tied(),
+                        )
+                    };
+                    let shared_addr = {
+                        let b2 = buf2.read().unwrap();
+                        b2.get_space() == space && b2.get_offset() == offset
+                    };
+                    if shared_addr && !addr_tied {
+                        fd.new_varnode_out_full(
+                            size,
+                            space,
+                            crate::address::Address::new(offset),
+                            &new_op,
+                        );
+                    } else {
+                        fd.new_unique_out(size, &new_op);
+                    }
                     fd.op_set_input(&new_op, buf1.clone(), 0);
                     fd.op_set_input(&new_op, buf2.clone(), 1);
-                    fd.op_insert_before(&new_op, &op_ref);
-                    sub_vn
-                })
-            } else {
-                // Create a new MULTIEQUAL to unify buf1/buf2.
-                let addr = op_arc.read().unwrap().get_addr();
-                let new_op = fd.new_op(2, addr);
-                fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
-                let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
-                fd.op_set_input(&new_op, buf1.clone(), 0);
-                fd.op_set_input(&new_op, buf2.clone(), 1);
-                fd.op_insert_before(&new_op, &op_ref);
-                sub_vn
+                    // cc:1127: opInsertBegin(substitute, bl) — block-begin
+                    // insert (MULTIEQUAL-aware leading-group skip), not an
+                    // insert relative to the destroyed op. Flat-bank unit
+                    // fixtures without block membership keep the legacy
+                    // relative insert (RUGRA-GLUE).
+                    match &bl {
+                        Some(bl) => fd.op_insert_begin(&new_op, bl),
+                        None => fd.op_insert_before(&new_op, &op_ref),
+                    }
+                    new_op
+                }
+            };
+            // cc:1129: opSetInput(op1, substitute->getOut(), slot1) — replace
+            // the unified op's input with the substitute's output varnode.
+            let sub_out = match sub_ref.0.read().unwrap().output.clone() {
+                Some(o) => o,
+                // Oracle substitutes always carry an output (an existing
+                // MULTIEQUAL or a CSE op); a parentless one is outside the
+                // contract.
+                None => return Ok(action_status::NO_CHANGE),
             };
             fd.op_set_input(&op1_ref, sub_out, slot1);
-            // Re-insert op1 after the substitute (or before op).
-            fd.op_insert_before(&op1_ref, &op_ref);
+            // cc:1130: opInsertAfter(op1, substitute) — complete the move of
+            // the unified op into the merge block right behind the substitute.
+            fd.op_insert_after(&op1_ref, &sub_ref);
         } else {
-            // res == 0: inputs are identical, just move op1 to the merge block.
-            fd.op_insert_before(&op1_ref, &op_ref);
+            // res == 0: inputs are identical, just move op1 to the merge block
+            // (cc:1133 opInsertBegin(op1, bl)); flat-bank fixtures keep the
+            // legacy relative insert (RUGRA-GLUE).
+            match &bl {
+                Some(bl) => fd.op_insert_begin(&op1_ref, bl),
+                None => fd.op_insert_before(&op1_ref, &op_ref),
+            }
         }
         // Destroy the original MULTIEQUAL and the duplicate op2.
         let op2_ref = crate::op::PcodeOpRef(op2_arc);
@@ -6168,7 +6444,7 @@ impl RuleMultNegOne {
 }
 
 impl Rule for RuleMultNegOne {
-    // Ghidra: ruleaction.cc:7179 RuleMultNegOne::applyOp
+    // Ghidra: ruleaction.cc:7161 RuleMultNegOne::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6194,7 +6470,7 @@ impl Rule for RuleMultNegOne {
 
     // Ghidra: ruleaction.cc:7171 RuleMultNegOne
     fn get_name(&self) -> &str { "multnegone" }
-    // Ghidra: ruleaction.cc:7173 RuleMultNegOne::getOpList
+    // Ghidra: ruleaction.cc:7155 RuleMultNegOne::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 
@@ -6211,7 +6487,7 @@ impl RuleSub2Add {
 }
 
 impl Rule for RuleSub2Add {
-    // Ghidra: ruleaction.cc:4040 RuleSub2Add::applyOp
+    // Ghidra: ruleaction.cc:4020 RuleSub2Add::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6241,7 +6517,7 @@ impl Rule for RuleSub2Add {
 
     // Ghidra: ruleaction.cc:4032 RuleSub2Add
     fn get_name(&self) -> &str { "sub2add" }
-    // Ghidra: ruleaction.cc:4034 RuleSub2Add::getOpList
+    // Ghidra: ruleaction.cc:4014 RuleSub2Add::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SUB] }
 }
 
@@ -6258,7 +6534,7 @@ impl RuleSubExtComm {
 }
 
 impl Rule for RuleSubExtComm {
-    // Ghidra: ruleaction.cc:4422 RuleSubExtComm::applyOp
+    // Ghidra: ruleaction.cc:4402 RuleSubExtComm::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6330,7 +6606,7 @@ impl Rule for RuleSubExtComm {
 
     // Ghidra: ruleaction.cc:4405 RuleSubExtComm
     fn get_name(&self) -> &str { "subextcomm" }
-    // Ghidra: ruleaction.cc:4416 RuleSubExtComm::getOpList
+    // Ghidra: ruleaction.cc:4396 RuleSubExtComm::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -6344,7 +6620,7 @@ impl Rule2Comp2Mult {
 }
 
 impl Rule for Rule2Comp2Mult {
-    // Ghidra: ruleaction.cc:3987 Rule2Comp2Mult::applyOp
+    // Ghidra: ruleaction.cc:3967 Rule2Comp2Mult::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6368,7 +6644,7 @@ impl Rule for Rule2Comp2Mult {
 
     // Ghidra: ruleaction.cc:3979 Rule2Comp2Mult
     fn get_name(&self) -> &str { "2comp2mult" }
-    // Ghidra: ruleaction.cc:3981 Rule2Comp2Mult::getOpList
+    // Ghidra: ruleaction.cc:3961 Rule2Comp2Mult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
@@ -6438,7 +6714,7 @@ impl Rule for Rule2Comp2Sub {
 
     // Ghidra: ruleaction.cc:7234 Rule2Comp2Sub
     fn get_name(&self) -> &str { "2comp2sub" }
-    // Ghidra: ruleaction.cc:7236 Rule2Comp2Sub::getOpList
+    // Ghidra: ruleaction.cc:7218 Rule2Comp2Sub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
@@ -6452,7 +6728,7 @@ impl RuleCarryElim {
 }
 
 impl Rule for RuleCarryElim {
-    // Ghidra: ruleaction.cc:4008 RuleCarryElim::applyOp
+    // Ghidra: ruleaction.cc:3988 RuleCarryElim::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6492,7 +6768,7 @@ impl Rule for RuleCarryElim {
 
     // Ghidra: ruleaction.cc:3997 RuleCarryElim
     fn get_name(&self) -> &str { "carryelim" }
-    // Ghidra: ruleaction.cc:4002 RuleCarryElim::getOpList
+    // Ghidra: ruleaction.cc:3982 RuleCarryElim::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_CARRY] }
 }
 
@@ -6506,7 +6782,7 @@ impl RuleConcatZext {
 }
 
 impl Rule for RuleConcatZext {
-    // Ghidra: ruleaction.cc:4814 RuleConcatZext::applyOp
+    // Ghidra: ruleaction.cc:4794 RuleConcatZext::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6548,7 +6824,7 @@ impl Rule for RuleConcatZext {
 
     // Ghidra: ruleaction.cc:4806 RuleConcatZext
     fn get_name(&self) -> &str { "concatzext" }
-    // Ghidra: ruleaction.cc:4808 RuleConcatZext::getOpList
+    // Ghidra: ruleaction.cc:4788 RuleConcatZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -6562,7 +6838,7 @@ impl RuleZextCommute {
 }
 
 impl Rule for RuleZextCommute {
-    // Ghidra: ruleaction.cc:4852 RuleZextCommute::applyOp
+    // Ghidra: ruleaction.cc:4832 RuleZextCommute::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6603,7 +6879,7 @@ impl Rule for RuleZextCommute {
 
     // Ghidra: ruleaction.cc:4844 RuleZextCommute
     fn get_name(&self) -> &str { "zextcommute" }
-    // Ghidra: ruleaction.cc:4846 RuleZextCommute::getOpList
+    // Ghidra: ruleaction.cc:4826 RuleZextCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -6619,7 +6895,7 @@ impl RuleZextShiftZext {
 }
 
 impl Rule for RuleZextShiftZext {
-    // Ghidra: ruleaction.cc:4885 RuleZextShiftZext::applyOp
+    // Ghidra: ruleaction.cc:4865 RuleZextShiftZext::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6718,7 +6994,7 @@ impl Rule for RuleZextShiftZext {
 
     // Ghidra: ruleaction.cc:4877 RuleZextShiftZext
     fn get_name(&self) -> &str { "zextshiftzext" }
-    // Ghidra: ruleaction.cc:4879 RuleZextShiftZext::getOpList
+    // Ghidra: ruleaction.cc:4859 RuleZextShiftZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -6732,7 +7008,7 @@ impl RuleShiftSub {
 }
 
 impl Rule for RuleShiftSub {
-    // Ghidra: ruleaction.cc:5209 RuleShiftSub::applyOp
+    // Ghidra: ruleaction.cc:5191 RuleShiftSub::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6782,7 +7058,7 @@ impl Rule for RuleShiftSub {
 
     // Ghidra: ruleaction.cc:5201 RuleShiftSub
     fn get_name(&self) -> &str { "shiftsub" }
-    // Ghidra: ruleaction.cc:5203 RuleShiftSub::getOpList
+    // Ghidra: ruleaction.cc:5185 RuleShiftSub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -6796,7 +7072,7 @@ impl RuleHumptyDumpty {
 }
 
 impl Rule for RuleHumptyDumpty {
-    // Ghidra: ruleaction.cc:5243 RuleHumptyDumpty::applyOp
+    // Ghidra: ruleaction.cc:5225 RuleHumptyDumpty::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6862,7 +7138,7 @@ impl Rule for RuleHumptyDumpty {
 
     // Ghidra: ruleaction.cc:5232 RuleHumptyDumpty
     fn get_name(&self) -> &str { "humptydumpty" }
-    // Ghidra: ruleaction.cc:5237 RuleHumptyDumpty::getOpList
+    // Ghidra: ruleaction.cc:5219 RuleHumptyDumpty::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -6876,7 +7152,7 @@ impl RuleDumptyHump {
 }
 
 impl Rule for RuleDumptyHump {
-    // Ghidra: ruleaction.cc:5296 RuleDumptyHump::applyOp
+    // Ghidra: ruleaction.cc:5278 RuleDumptyHump::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -6941,7 +7217,7 @@ impl Rule for RuleDumptyHump {
 
     // Ghidra: ruleaction.cc:5283 RuleDumptyHump
     fn get_name(&self) -> &str { "dumptyhump" }
-    // Ghidra: ruleaction.cc:5290 RuleDumptyHump::getOpList
+    // Ghidra: ruleaction.cc:5272 RuleDumptyHump::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -6958,7 +7234,7 @@ impl RuleSubCancel {
 }
 
 impl Rule for RuleSubCancel {
-    // Ghidra: ruleaction.cc:5137 RuleSubCancel::applyOp
+    // Ghidra: ruleaction.cc:5119 RuleSubCancel::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7071,7 +7347,7 @@ impl Rule for RuleSubCancel {
 
     // Ghidra: ruleaction.cc:5120 RuleSubCancel
     fn get_name(&self) -> &str { "subcancel" }
-    // Ghidra: ruleaction.cc:5131 RuleSubCancel::getOpList
+    // Ghidra: ruleaction.cc:5113 RuleSubCancel::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -7087,7 +7363,7 @@ impl RuleHumptyOr {
 }
 
 impl Rule for RuleHumptyOr {
-    // Ghidra: ruleaction.cc:5350 RuleHumptyOr::applyOp
+    // Ghidra: ruleaction.cc:5332 RuleHumptyOr::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7174,7 +7450,7 @@ impl Rule for RuleHumptyOr {
 
     // Ghidra: ruleaction.cc:5339 RuleHumptyOr
     fn get_name(&self) -> &str { "humptyor" }
-    // Ghidra: ruleaction.cc:5344 RuleHumptyOr::getOpList
+    // Ghidra: ruleaction.cc:5326 RuleHumptyOr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
@@ -7182,7 +7458,7 @@ impl Rule for RuleHumptyOr {
 /// Faithful to Ghidra's `RuleEqual2Zero` (ruleaction.cc:5857-5924).
 ///
 /// Simplify INT_SLESS applied to 0 or -1. Faithful to `RuleSLess2Zero`
-/// (ruleaction.cc:5711-5840). Forms include:
+/// (ruleaction.cc:5693-5837). Forms include:
 /// - `-1 s< SUB(V,hi) => -1 s< V`
 /// - `SUB(V,hi) s< 0 => V s< 0`
 /// - `-1 s< ~V => V s< 0`
@@ -7196,8 +7472,8 @@ impl RuleSLess2Zero {
     pub fn new() -> Self { Self }
 
     /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
-    /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
-    // Ghidra: ruleaction.cc:5659 RuleSLess2Zero::getHiBit
+    /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5641-5664).
+    // Ghidra: ruleaction.cc:5641 RuleSLess2Zero::getHiBit
     fn get_hi_bit(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -7225,11 +7501,11 @@ impl RuleSLess2Zero {
 }
 
 impl Rule for RuleSLess2Zero {
-    // Ghidra: ruleaction.cc:5711 RuleSLess2Zero::applyOp
+    // Ghidra: ruleaction.cc:5693 RuleSLess2Zero::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5711-5840).
+        // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5693-5837).
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
             (op.inrefs.get(0).cloned(), op.inrefs.get(1).cloned())
@@ -7380,12 +7656,12 @@ impl Rule for RuleSLess2Zero {
 
     // Ghidra: ruleaction.cc:5684 RuleSLess2Zero
     fn get_name(&self) -> &str { "sless2zero" }
-    // Ghidra: ruleaction.cc:5705 RuleSLess2Zero::getOpList
+    // Ghidra: ruleaction.cc:5687 RuleSLess2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS] }
 }
 
 /// Simplify boolean expressions combined through POPCOUNT. Faithful to
-/// `RulePopcountBoolXor` (ruleaction.cc:10265-10321). Transforms:
+/// `RulePopcountBoolXor` (ruleaction.cc:10258-10304). Transforms:
 ///   `popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`
 pub struct RulePopcountBoolXor;
 
@@ -7394,10 +7670,10 @@ impl RulePopcountBoolXor {
     pub fn new() -> Self { Self }
 
     /// Extract the boolean varnode producing a bit at the given position.
-    /// Faithful to `getBooleanResult` (ruleaction.cc:10335-10419).
+    /// Faithful to `getBooleanResult` (ruleaction.cc:10317-10402).
     /// Returns (Some(vn), const_res) if found, or (None, const_res) where
     /// const_res is -1 (not found), 0, or 1 (constant result).
-    // Ghidra: ruleaction.cc:10335 RulePopcountBoolXor::getBooleanResult
+    // Ghidra: ruleaction.cc:10317 RulePopcountBoolXor::getBooleanResult
     fn get_boolean_result(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         mut bit_pos: i32,
@@ -7478,7 +7754,7 @@ impl RulePopcountBoolXor {
 }
 
 impl Rule for RulePopcountBoolXor {
-    // Ghidra: ruleaction.cc:10276 RulePopcountBoolXor::applyOp
+    // Ghidra: ruleaction.cc:10258 RulePopcountBoolXor::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7543,7 +7819,7 @@ impl Rule for RulePopcountBoolXor {
 
     // Ghidra: ruleaction.cc:10265 RulePopcountBoolXor
     fn get_name(&self) -> &str { "popcountboolxor" }
-    // Ghidra: ruleaction.cc:10270 RulePopcountBoolXor::getOpList
+    // Ghidra: ruleaction.cc:10252 RulePopcountBoolXor::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_POPCOUNT] }
 }
 
@@ -7557,7 +7833,7 @@ impl RuleEqual2Zero {
 }
 
 impl Rule for RuleEqual2Zero {
-    // Ghidra: ruleaction.cc:5868 RuleEqual2Zero::applyOp
+    // Ghidra: ruleaction.cc:5850 RuleEqual2Zero::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7603,39 +7879,37 @@ impl Rule for RuleEqual2Zero {
 
         // Determine posvn and unnegvn.
         let (posvn, unnegvn) = if vn2.read().unwrap().is_constant() {
-            // 0 == V + c => V == -c
+            // 0 == V + c => V == -c (cc:5877-5882)
+            let size = vn2.read().unwrap().get_size();
             let val = vn2.read().unwrap().get_offset();
-            let neg_val = val.wrapping_neg().wrapping_sub(1).wrapping_add(1) & calc_mask(vn2.read().unwrap().get_size());
-            // uintb_negate(val-1, size) = (~val+1) & mask = -val & mask
-            let _ = neg_val;
-            let negated = (0i64.wrapping_sub(val as i64) as u64) & calc_mask(vn2.read().unwrap().get_size());
-            (
-                vn.clone(), fd.new_constant(vn2.read().unwrap().get_size(), negated),
-            )
+            // cc:5878 uintb_negate(c-1, size) = ~(c-1) & mask = (-c) & mask
+            // (address.cc:654 uintb_negate = (~in) & calc_mask(size)).
+            let negated = (!val.wrapping_sub(1)) & calc_mask(size);
+            let negvn = fd.new_constant(size, negated);
+            // cc:5880 unnegvn->copySymbolIfValid(vn2) — propagate any
+            // equate markup onto the new constant.
+            crate::varnode::Varnode::copy_symbol_if_valid(&negvn, &vn2.read().unwrap());
+            (vn.clone(), negvn)
         } else {
-            // Check for INT_MULT by -1.
-            let (negvn, posvn) = if vn.read().unwrap().is_written() {
-                let vn_def = vn.read().unwrap().get_def();
-                if let Some(d) = vn_def {
-                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
-                        (vn.clone(), vn2.clone())
-                    } else {
-                        return Ok(action_status::NO_CHANGE);
-                    }
-                } else {
-                    return Ok(action_status::NO_CHANGE);
-                }
-            } else if vn2.read().unwrap().is_written() {
-                let vn2_def = vn2.read().unwrap().get_def();
-                if let Some(d) = vn2_def {
-                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
-                        (vn2.clone(), vn.clone())
-                    } else {
-                        return Ok(action_status::NO_CHANGE);
-                    }
-                } else {
-                    return Ok(action_status::NO_CHANGE);
-                }
+            // Check for INT_MULT by -1 (cc:5884-5893). The else-if ladder
+            // is order-sensitive: the first ADD input only claims the
+            // negvn slot when it is BOTH written and defined by INT_MULT;
+            // a written-but-not-MULT first input falls through to the
+            // second input instead of rejecting the op.
+            let vn_is_negmult = {
+                let g = vn.read().unwrap();
+                g.is_written()
+                    && g.get_def().is_some_and(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_MULT)
+            };
+            let vn2_is_negmult = {
+                let g = vn2.read().unwrap();
+                g.is_written()
+                    && g.get_def().is_some_and(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_MULT)
+            };
+            let (negvn, posvn) = if vn_is_negmult {
+                (vn.clone(), vn2.clone())
+            } else if vn2_is_negmult {
+                (vn2.clone(), vn.clone())
             } else {
                 return Ok(action_status::NO_CHANGE);
             };
@@ -7652,6 +7926,10 @@ impl Rule for RuleEqual2Zero {
             if multiplier != calc_mask(unnegvn.read().unwrap().get_size()) { return Ok(action_status::NO_CHANGE); }
             (posvn, unnegvn)
         };
+        // cc:5900-5901: both surviving inputs must already be known to
+        // heritage (flags insert|constant|annotation) before rewriting.
+        if !posvn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
+        if !unnegvn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
         let _ = central_opc;
         fd.op_set_input(&follow, posvn, 0);
         fd.op_set_input(&follow, unnegvn, 1);
@@ -7660,7 +7938,7 @@ impl Rule for RuleEqual2Zero {
 
     // Ghidra: ruleaction.cc:5857 RuleEqual2Zero
     fn get_name(&self) -> &str { "equal2zero" }
-    // Ghidra: ruleaction.cc:5861 RuleEqual2Zero::getOpList
+    // Ghidra: ruleaction.cc:5843 RuleEqual2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -7677,7 +7955,7 @@ impl RuleShiftAnd {
 }
 
 impl Rule for RuleShiftAnd {
-    // Ghidra: ruleaction.cc:4933 RuleShiftAnd::applyOp
+    // Ghidra: ruleaction.cc:4913 RuleShiftAnd::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7749,7 +8027,7 @@ impl Rule for RuleShiftAnd {
 
     // Ghidra: ruleaction.cc:4921 RuleShiftAnd
     fn get_name(&self) -> &str { "shiftand" }
-    // Ghidra: ruleaction.cc:4925 RuleShiftAnd::getOpList
+    // Ghidra: ruleaction.cc:4905 RuleShiftAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![
             OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT,
         ] }
@@ -7768,7 +8046,7 @@ impl RuleCondNegate {
 }
 
 impl Rule for RuleCondNegate {
-    // Ghidra: ruleaction.cc:5492 RuleCondNegate::applyOp
+    // Ghidra: ruleaction.cc:5474 RuleCondNegate::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7796,7 +8074,7 @@ impl Rule for RuleCondNegate {
 
     // Ghidra: ruleaction.cc:5479 RuleCondNegate
     fn get_name(&self) -> &str { "condnegate" }
-    // Ghidra: ruleaction.cc:5486 RuleCondNegate::getOpList
+    // Ghidra: ruleaction.cc:5468 RuleCondNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CBRANCH] }
 }
 
@@ -7810,7 +8088,7 @@ impl RuleXorSwap {
 }
 
 impl Rule for RuleXorSwap {
-    // Ghidra: ruleaction.cc:10625 RuleXorSwap::applyOp
+    // Ghidra: ruleaction.cc:10607 RuleXorSwap::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7857,7 +8135,7 @@ impl Rule for RuleXorSwap {
 
     // Ghidra: ruleaction.cc:10614 RuleXorSwap
     fn get_name(&self) -> &str { "xorswap" }
-    // Ghidra: ruleaction.cc:10619 RuleXorSwap::getOpList
+    // Ghidra: ruleaction.cc:10601 RuleXorSwap::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_XOR] }
 }
 
@@ -7874,7 +8152,7 @@ impl RuleEqual2Constant {
 }
 
 impl Rule for RuleEqual2Constant {
-    // Ghidra: ruleaction.cc:5940 RuleEqual2Constant::applyOp
+    // Ghidra: ruleaction.cc:5922 RuleEqual2Constant::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -7934,7 +8212,7 @@ impl Rule for RuleEqual2Constant {
 
     // Ghidra: ruleaction.cc:5926 RuleEqual2Constant
     fn get_name(&self) -> &str { "equal2constant" }
-    // Ghidra: ruleaction.cc:5933 RuleEqual2Constant::getOpList
+    // Ghidra: ruleaction.cc:5915 RuleEqual2Constant::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -7951,7 +8229,7 @@ impl RuleOrCompare {
 }
 
 impl Rule for RuleOrCompare {
-    // Ghidra: ruleaction.cc:10814 RuleOrCompare::applyOp
+    // Ghidra: ruleaction.cc:10796 RuleOrCompare::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8020,7 +8298,7 @@ impl Rule for RuleOrCompare {
 
     // Ghidra: ruleaction.cc:10803 RuleOrCompare
     fn get_name(&self) -> &str { "orcompare" }
-    // Ghidra: ruleaction.cc:10808 RuleOrCompare::getOpList
+    // Ghidra: ruleaction.cc:10790 RuleOrCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
@@ -8037,7 +8315,7 @@ impl RuleConcatCommute {
 }
 
 impl Rule for RuleConcatCommute {
-    // Ghidra: ruleaction.cc:4687 RuleConcatCommute::applyOp
+    // Ghidra: ruleaction.cc:4667 RuleConcatCommute::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8115,7 +8393,7 @@ impl Rule for RuleConcatCommute {
 
     // Ghidra: ruleaction.cc:4675 RuleConcatCommute
     fn get_name(&self) -> &str { "concatcommute" }
-    // Ghidra: ruleaction.cc:4681 RuleConcatCommute::getOpList
+    // Ghidra: ruleaction.cc:4661 RuleConcatCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -8135,7 +8413,7 @@ impl RuleSubCommute {
 }
 
 impl Rule for RuleSubCommute {
-    // Ghidra: ruleaction.cc:4534 RuleSubCommute::applyOp
+    // Ghidra: ruleaction.cc:4514 RuleSubCommute::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8341,7 +8619,7 @@ impl Rule for RuleSubCommute {
 
     // Ghidra: ruleaction.cc:4463 RuleSubCommute
     fn get_name(&self) -> &str { "subcommute" }
-    // Ghidra: ruleaction.cc:4470 RuleSubCommute::getOpList
+    // Ghidra: ruleaction.cc:4450 RuleSubCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -8356,7 +8634,7 @@ impl RuleLzcountShiftBool {
 }
 
 impl Rule for RuleLzcountShiftBool {
-    // Ghidra: ruleaction.cc:10666 RuleLzcountShiftBool::applyOp
+    // Ghidra: ruleaction.cc:10648 RuleLzcountShiftBool::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8425,7 +8703,7 @@ impl Rule for RuleLzcountShiftBool {
 
     // Ghidra: ruleaction.cc:10652 RuleLzcountShiftBool
     fn get_name(&self) -> &str { "lzcountshiftbool" }
-    // Ghidra: ruleaction.cc:10660 RuleLzcountShiftBool::getOpList
+    // Ghidra: ruleaction.cc:10642 RuleLzcountShiftBool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LZCOUNT] }
 }
 
@@ -8444,7 +8722,7 @@ impl RuleThreeWayCompare {
     /// Check if two comparison ops are equivalent. Returns 0=correct, 1=swap,
     /// -1=not equivalent. Faithful to `testCompareEquivalence`
     /// (ruleaction.cc:9960-10034).
-    // Ghidra: ruleaction.cc:9960 RuleThreeWayCompare::testCompareEquivalence
+    // Ghidra: ruleaction.cc:9942 RuleThreeWayCompare::testCompareEquivalence
     fn test_compare_equivalence(
         lessop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         lessequalop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -8486,8 +8764,8 @@ impl RuleThreeWayCompare {
 
     /// Detect a three-way comparison pattern rooted at `addop`. Returns the
     /// less-than op, or None. Faithful to `detectThreeWay`
-    /// (ruleaction.cc:10035-10124).
-    // Ghidra: ruleaction.cc:10035 RuleThreeWayCompare::detectThreeWay
+    /// (ruleaction.cc:10017-10106).
+    // Ghidra: ruleaction.cc:10017 RuleThreeWayCompare::detectThreeWay
     fn detect_three_way(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, bool)> {
@@ -8525,7 +8803,7 @@ impl RuleThreeWayCompare {
 }
 
 impl Rule for RuleThreeWayCompare {
-    // Ghidra: ruleaction.cc:10146 RuleThreeWayCompare::applyOp
+    // Ghidra: ruleaction.cc:10128 RuleThreeWayCompare::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8655,7 +8933,7 @@ impl Rule for RuleThreeWayCompare {
     // Oracle diagnostic name is the truncated "threewaycomp" (ruleaction.hh:1504
     // Rule(g, 0, "threewaycomp")); fixed by PIPE-POOL-LOCAL-RULES-0001 fixture.
     fn get_name(&self) -> &str { "threewaycomp" }
-    // Ghidra: ruleaction.cc:10137 RuleThreeWayCompare::getOpList
+    // Ghidra: ruleaction.cc:10119 RuleThreeWayCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL,
@@ -8875,7 +9153,7 @@ impl Rule for RuleMultiCollapse {
                         .find(|input| !input.read().unwrap().is_constant())
                         .and_then(|input| {
                             fd.cse_find_in_block(
-                            &source_ref, input, &parent, earliest.as_ref())
+                            &source_ref, input, Some(&parent), earliest.as_ref())
                         });
                     if let Some(substitute) = substitute {
                         let substitute_out = substitute.0.read().unwrap().output.clone()
@@ -8933,7 +9211,7 @@ impl RuleSignDiv2 {
 }
 
 impl Rule for RuleSignDiv2 {
-    // Ghidra: ruleaction.cc:8365 RuleSignDiv2::applyOp
+    // Ghidra: ruleaction.cc:8347 RuleSignDiv2::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -8997,12 +9275,12 @@ impl Rule for RuleSignDiv2 {
 
     // Ghidra: ruleaction.cc:8357 RuleSignDiv2
     fn get_name(&self) -> &str { "signdiv2" }
-    // Ghidra: ruleaction.cc:8359 RuleSignDiv2::getOpList
+    // Ghidra: ruleaction.cc:8341 RuleSignDiv2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
 /// Collapse two consecutive divisions: `(x / c1) / c2 => x / (c1*c2)`.
-/// Faithful to Ghidra's `RuleDivChain` (ruleaction.cc:8410-8455).
+/// Faithful to Ghidra's `RuleDivChain` (ruleaction.cc:8401-8443).
 pub struct RuleDivChain;
 
 impl RuleDivChain {
@@ -9011,11 +9289,11 @@ impl RuleDivChain {
 }
 
 impl Rule for RuleDivChain {
-    // Ghidra: ruleaction.cc:8419 RuleDivChain::applyOp
+    // Ghidra: ruleaction.cc:8401 RuleDivChain::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleDivChain::applyOp (ruleaction.cc:8419-8455).
+        // Faithful to RuleDivChain::applyOp (ruleaction.cc:8401-8443).
         let (opc2, vn, const_vn2_val) = {
             let op = op_arc.read().unwrap();
             let opc2 = op.opcode;
@@ -9043,26 +9321,61 @@ impl Rule for RuleDivChain {
         if !const_vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // Intermediate result must only be used here.
         if vn.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
+        // cc:8418-8426: value divided by in the first div. Same opcode pair
+        // reads the constant directly; the (INT_DIV, INT_RIGHT) pair folds
+        // the shift as 1 << sa.
         let val1 = if opc1 == opc2 {
             const_vn1.read().unwrap().get_offset()
         } else {
-            // Unsigned case with INT_RIGHT.
-            1u64 << const_vn1.read().unwrap().get_offset()
+            // cc:8423-8425: int4 sa = constVn1->getOffset(); val1 = 1; val1 <<= sa;
+            1u64.wrapping_shl(const_vn1.read().unwrap().get_offset() as u32)
         };
-        let full_mask = calc_mask(const_vn1.read().unwrap().get_size());
-        let new_val = (val1.wrapping_mul(const_vn2_val)) & full_mask;
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        let new_const = fd.new_constant(const_vn1.read().unwrap().get_size(), new_val);
-        fd.op_set_input(&follow, new_const, 1);
-        if opc1 == OpCode::CPUI_INT_RIGHT {
-            fd.op_set_opcode(&follow, OpCode::CPUI_INT_DIV);
+        // cc:8427-8428: the chain base must still be live (isFree guard).
+        let base_vn = match div_op.read().unwrap().get_in(0) {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if base_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        // cc:8429-8431: resval = (val1 * val2) & calc_mask(sz), sz from vn.
+        let sz = vn.read().unwrap().get_size();
+        let val2 = const_vn2_val;
+        let resval = (val1.wrapping_mul(val2)) & calc_mask(sz);
+        // cc:8432: a zero product cannot replace the divisor.
+        if resval == 0 { return Ok(action_status::NO_CHANGE); }
+        // cc:8433-8436: normalize both constants to absolute value before
+        // counting bits.
+        let mut val1_abs = val1;
+        let mut val2_abs = val2;
+        if crate::address::signbit_negative(val1_abs, sz) {
+            val1_abs = (!val1_abs).wrapping_add(1) & calc_mask(sz);
         }
+        if crate::address::signbit_negative(val2_abs, sz) {
+            val2_abs = (!val2_abs).wrapping_add(1) & calc_mask(sz);
+        }
+        // cc:8437-8439: overflow guards on the collapsed constant.
+        let bitcount = crate::address::mostsigbit_set(val1_abs)
+            + crate::address::mostsigbit_set(val2_abs)
+            + 2;
+        if opc2 == OpCode::CPUI_INT_DIV && bitcount > (sz * 8) as i32 {
+            return Ok(action_status::NO_CHANGE); // Unsigned overflow
+        }
+        if opc2 == OpCode::CPUI_INT_SDIV && bitcount > (sz * 8) as i32 - 2 {
+            return Ok(action_status::NO_CHANGE); // Signed overflow
+        }
+        // cc:8440-8441: collapse the chain. in(0) becomes the chain base so
+        // the intermediate (x / c1) loses its lone descendent and the pattern
+        // cannot re-fire on it; in(1) becomes the product constant. The op
+        // keeps its DIV/SDIV opcode (oracle never rewrites it here).
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, base_vn, 0);
+        let new_const = fd.new_constant(sz, resval);
+        fd.op_set_input(&follow, new_const, 1);
         Ok(action_status::CHANGE)
     }
 
     // Ghidra: ruleaction.cc:8410 RuleDivChain
     fn get_name(&self) -> &str { "divchain" }
-    // Ghidra: ruleaction.cc:8412 RuleDivChain::getOpList
+    // Ghidra: ruleaction.cc:8394 RuleDivChain::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
 }
 
@@ -9155,7 +9468,7 @@ impl RuleSignForm2 {
 }
 
 impl Rule for RuleSignForm2 {
-    // Ghidra: ruleaction.cc:8505 RuleSignForm2::applyOp
+    // Ghidra: ruleaction.cc:8487 RuleSignForm2::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9230,7 +9543,7 @@ impl Rule for RuleSignForm2 {
 
     // Ghidra: ruleaction.cc:8494 RuleSignForm2
     fn get_name(&self) -> &str { "signform2" }
-    // Ghidra: ruleaction.cc:8499 RuleSignForm2::getOpList
+    // Ghidra: ruleaction.cc:8481 RuleSignForm2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -9245,7 +9558,7 @@ impl RulePositiveDiv {
 }
 
 impl Rule for RulePositiveDiv {
-    // Ghidra: ruleaction.cc:7817 RulePositiveDiv::applyOp
+    // Ghidra: ruleaction.cc:7799 RulePositiveDiv::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9280,7 +9593,7 @@ impl Rule for RulePositiveDiv {
 
     // Ghidra: ruleaction.cc:7805 RulePositiveDiv
     fn get_name(&self) -> &str { "positivediv" }
-    // Ghidra: ruleaction.cc:7810 RulePositiveDiv::getOpList
+    // Ghidra: ruleaction.cc:7792 RulePositiveDiv::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SDIV, OpCode::CPUI_INT_SREM] }
 }
 
@@ -9294,7 +9607,7 @@ impl RuleDoubleArithShift {
 }
 
 impl Rule for RuleDoubleArithShift {
-    // Ghidra: ruleaction.cc:1943 RuleDoubleArithShift::applyOp
+    // Ghidra: ruleaction.cc:1923 RuleDoubleArithShift::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9348,7 +9661,7 @@ impl Rule for RuleDoubleArithShift {
 
     // Ghidra: ruleaction.cc:1932 RuleDoubleArithShift
     fn get_name(&self) -> &str { "doublearithshift" }
-    // Ghidra: ruleaction.cc:1937 RuleDoubleArithShift::getOpList
+    // Ghidra: ruleaction.cc:1917 RuleDoubleArithShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -9548,7 +9861,7 @@ impl RuleFloatCast {
 }
 
 impl Rule for RuleFloatCast {
-    // Ghidra: ruleaction.cc:9560 RuleFloatCast::applyOp
+    // Ghidra: ruleaction.cc:9542 RuleFloatCast::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9614,7 +9927,7 @@ impl Rule for RuleFloatCast {
 
     // Ghidra: ruleaction.cc:9551 RuleFloatCast
     fn get_name(&self) -> &str { "floatcast" }
-    // Ghidra: ruleaction.cc:9553 RuleFloatCast::getOpList
+    // Ghidra: ruleaction.cc:9535 RuleFloatCast::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_TRUNC] }
 }
 
@@ -9628,7 +9941,7 @@ impl RuleSubNormal {
 }
 
 impl Rule for RuleSubNormal {
-    // Ghidra: ruleaction.cc:7732 RuleSubNormal::applyOp
+    // Ghidra: ruleaction.cc:7714 RuleSubNormal::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9737,14 +10050,14 @@ impl Rule for RuleSubNormal {
 
     // Ghidra: ruleaction.cc:7720 RuleSubNormal
     fn get_name(&self) -> &str { "subnormal" }
-    // Ghidra: ruleaction.cc:7726 RuleSubNormal::getOpList
+    // Ghidra: ruleaction.cc:7708 RuleSubNormal::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
 /// Verify that a Varnode is a sign extraction `V s>> (size*8-1)`.
 /// Returns the base Varnode, or None. Faithful to `checkSignExtraction`
-/// (ruleaction.cc:8776-8792).
-// Ghidra: ruleaction.cc:8776 RuleSignMod2nOpt::checkSignExtraction
+/// (ruleaction.cc:8758-8774).
+// Ghidra: ruleaction.cc:8758 RuleSignMod2nOpt::checkSignExtraction
 fn check_sign_extraction(
     out_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -9770,7 +10083,7 @@ impl RuleSignMod2nOpt {
 }
 
 impl Rule for RuleSignMod2nOpt {
-    // Ghidra: ruleaction.cc:8683 RuleSignMod2nOpt::applyOp
+    // Ghidra: ruleaction.cc:8665 RuleSignMod2nOpt::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -9925,7 +10238,7 @@ impl Rule for RuleSignMod2nOpt {
 
     // Ghidra: ruleaction.cc:8673 RuleSignMod2nOpt
     fn get_name(&self) -> &str { "signmod2nopt" }
-    // Ghidra: ruleaction.cc:8677 RuleSignMod2nOpt::getOpList
+    // Ghidra: ruleaction.cc:8659 RuleSignMod2nOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -9940,7 +10253,7 @@ impl RuleSignMod2Opt {
 }
 
 impl Rule for RuleSignMod2Opt {
-    // Ghidra: ruleaction.cc:8805 RuleSignMod2Opt::applyOp
+    // Ghidra: ruleaction.cc:8787 RuleSignMod2Opt::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -10097,7 +10410,7 @@ impl Rule for RuleSignMod2Opt {
 
     // Ghidra: ruleaction.cc:8794 RuleSignMod2Opt
     fn get_name(&self) -> &str { "signmod2opt" }
-    // Ghidra: ruleaction.cc:8799 RuleSignMod2Opt::getOpList
+    // Ghidra: ruleaction.cc:8781 RuleSignMod2Opt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -10112,7 +10425,7 @@ impl RuleShiftPiece {
 }
 
 impl Rule for RuleShiftPiece {
-    // Ghidra: ruleaction.cc:3791 RuleShiftPiece::applyOp
+    // Ghidra: ruleaction.cc:3771 RuleShiftPiece::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -10278,7 +10591,7 @@ impl Rule for RuleShiftPiece {
 
     // Ghidra: ruleaction.cc:3773 RuleShiftPiece
     fn get_name(&self) -> &str { "shiftpiece" }
-    // Ghidra: ruleaction.cc:3783 RuleShiftPiece::getOpList
+    // Ghidra: ruleaction.cc:3763 RuleShiftPiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![
             OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD,
         ] }
@@ -10296,8 +10609,8 @@ impl RuleDivOpt {
     pub fn new() -> Self { Self }
 
     /// Detect the division-by-multiplication form. Faithful to `findForm`
-    /// (ruleaction.cc:8069-8143). Returns (in_vn, n, y128, xsize, ext_opc).
-    // Ghidra: ruleaction.cc:8069 RuleDivOpt::findForm
+    /// (ruleaction.cc:8051-8125). Returns (in_vn, n, y128, xsize, ext_opc).
+    // Ghidra: ruleaction.cc:8051 RuleDivOpt::findForm
     fn find_form(
         op: &crate::op::PcodeOpRef,
     ) -> Option<(
@@ -10427,7 +10740,7 @@ impl RuleDivOpt {
 
     /// Compute divisor from the multiplicative encoding. Faithful to
     /// `calcDivisor` (ruleaction.cc:8157-8198). Uses Rust's native u128.
-    // Ghidra: ruleaction.cc:8157 RuleDivOpt::calcDivisor
+    // Ghidra: ruleaction.cc:8139 RuleDivOpt::calcDivisor
     fn calc_divisor(n: u64, y: u128, xsize: i32) -> u64 {
         if n > 127 || xsize > 64 { return 0; }
         let power = 1u128 << n;
@@ -10466,7 +10779,7 @@ impl RuleDivOpt {
 
     /// Check if a SUBPIECE form is contained in a superseding form.
     /// Faithful to `checkFormOverlap` (ruleaction.cc:8260-8279).
-    // Ghidra: ruleaction.cc:8260 RuleDivOpt::checkFormOverlap
+    // Ghidra: ruleaction.cc:8242 RuleDivOpt::checkFormOverlap
     fn check_form_overlap(op: &crate::op::PcodeOpRef) -> bool {
         if op.0.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return false; }
         let vn = match op.0.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return false ,
@@ -10492,7 +10805,7 @@ impl RuleDivOpt {
     /// `first_vn` (and, if `first_vn` is itself an INT_SRIGHT, the value it
     /// shifts) and rewrite any redundant sign-bit extraction
     /// `(V >> (size*8-1))` to read `replace_vn` instead.
-    // Ghidra: ruleaction.cc:8210 RuleDivOpt::moveSignBitExtraction
+    // Ghidra: ruleaction.cc:8192 RuleDivOpt::moveSignBitExtraction
     fn move_sign_bit_extraction(
         first_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         replace_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -10550,7 +10863,7 @@ impl RuleDivOpt {
 /// Walks the second input of the shift op. If that input is itself written by a
 /// COPY, returns the copied value; if written by an `INT_AND(c0, c1)` (with `c1`
 /// constant and `c0 & c1 == c0`), returns `c0`; otherwise returns the input as-is.
-// Ghidra: ruleaction.cc:8210 RuleDivOpt::moveSignBitExtraction
+// Ghidra: ruleaction.cc:8192 RuleDivOpt::moveSignBitExtraction
 fn resolve_shift_const(
     shift_op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -10579,7 +10892,7 @@ fn resolve_shift_const(
 }
 
 impl Rule for RuleDivOpt {
-    // Ghidra: ruleaction.cc:8295 RuleDivOpt::applyOp
+    // Ghidra: ruleaction.cc:8277 RuleDivOpt::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -10688,7 +11001,7 @@ impl Rule for RuleDivOpt {
 
     // Ghidra: ruleaction.cc:8281 RuleDivOpt
     fn get_name(&self) -> &str { "divopt" }
-    // Ghidra: ruleaction.cc:8287 RuleDivOpt::getOpList
+    // Ghidra: ruleaction.cc:8269 RuleDivOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
@@ -10708,7 +11021,7 @@ impl RuleModOpt {
 }
 
 impl Rule for RuleModOpt {
-    // Ghidra: ruleaction.cc:8621 RuleModOpt::applyOp
+    // Ghidra: ruleaction.cc:8603 RuleModOpt::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -10829,7 +11142,7 @@ impl Rule for RuleModOpt {
 
     // Ghidra: ruleaction.cc:8612 RuleModOpt
     fn get_name(&self) -> &str { "modopt" }
-    // Ghidra: ruleaction.cc:8614 RuleModOpt::getOpList
+    // Ghidra: ruleaction.cc:8596 RuleModOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV]
     }
@@ -10846,8 +11159,8 @@ impl RuleSignMod2nOpt2 {
     pub fn new() -> Self { Self }
 
     /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
-    /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
-    // Ghidra: ruleaction.cc:8928 RuleSignMod2nOpt2::checkSignExtForm
+    /// (ruleaction.cc:8910-8934). Returns the base Varnode V or None.
+    // Ghidra: ruleaction.cc:8910 RuleSignMod2nOpt2::checkSignExtForm
     fn check_sign_ext_form(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -10904,7 +11217,7 @@ impl RuleSignMod2nOpt2 {
 }
 
 impl Rule for RuleSignMod2nOpt2 {
-    // Ghidra: ruleaction.cc:8877 RuleSignMod2nOpt2::applyOp
+    // Ghidra: ruleaction.cc:8859 RuleSignMod2nOpt2::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -11002,7 +11315,7 @@ impl Rule for RuleSignMod2nOpt2 {
 
     // Ghidra: ruleaction.cc:8867 RuleSignMod2nOpt2
     fn get_name(&self) -> &str { "signmod2nopt2" }
-    // Ghidra: ruleaction.cc:8871 RuleSignMod2nOpt2::getOpList
+    // Ghidra: ruleaction.cc:8853 RuleSignMod2nOpt2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 /// Simplify optimized division expressions. Faithful to `RuleDivTermAdd`
@@ -11012,13 +11325,13 @@ impl Rule for RuleSignMod2nOpt2 {
 pub struct RuleDivTermAdd;
 
 impl RuleDivTermAdd {
-    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
+    // Ghidra: ruleaction.cc:7830 RuleDivTermAdd
     pub fn new() -> Self { Self }
 
     /// Find SUBPIECE (high) form: SUB(V,c) or SUB(V,c)>>n. Returns
     /// (subpiece_op, total_truncation_bits, shift_opcode). Faithful to
-    /// `findSubshift` (ruleaction.cc:7928-7953).
-    // Ghidra: ruleaction.cc:7928 RuleDivTermAdd::findSubshift
+    /// `findSubshift` (ruleaction.cc:7910-7935).
+    // Ghidra: ruleaction.cc:7910 RuleDivTermAdd::findSubshift
     fn find_subshift(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, i32, OpCode)> {
@@ -11055,7 +11368,7 @@ impl RuleDivTermAdd {
 }
 
 impl Rule for RuleDivTermAdd {
-    // Ghidra: ruleaction.cc:7848 RuleDivTermAdd::applyOp
+    // Ghidra: ruleaction.cc:7830 RuleDivTermAdd::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -11179,9 +11492,9 @@ impl Rule for RuleDivTermAdd {
         Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
+    // Ghidra: ruleaction.cc:7830 RuleDivTermAdd
     fn get_name(&self) -> &str { "divtermadd" }
-    // Ghidra: ruleaction.cc:7840 RuleDivTermAdd::getOpList
+    // Ghidra: ruleaction.cc:7822 RuleDivTermAdd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
@@ -11201,7 +11514,7 @@ impl RuleDivTermAdd2 {
 }
 
 impl Rule for RuleDivTermAdd2 {
-    // Ghidra: ruleaction.cc:7969 RuleDivTermAdd2::applyOp
+    // Ghidra: ruleaction.cc:7951 RuleDivTermAdd2::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -11413,7 +11726,7 @@ impl Rule for RuleDivTermAdd2 {
 
     // Ghidra: ruleaction.cc:7955 RuleDivTermAdd2
     fn get_name(&self) -> &str { "divtermadd2" }
-    // Ghidra: ruleaction.cc:7963 RuleDivTermAdd2::getOpList
+    // Ghidra: ruleaction.cc:7945 RuleDivTermAdd2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -11463,15 +11776,18 @@ impl Rule for RuleRangeMeld {
             (op.opcode, sub1, sub2)
         };
 
-        // Pull back range1 from sub1.
+        // Pull back range1 from sub1. cc:1376-1377: one shared `markup`
+        // varnode is threaded through every pull-back (never cleared —
+        // cc:1069-1070 overwrites on each symbol-carrying constant).
         let mut range1 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
-        let a1 = pull_back_op(&mut range1, &sub1_arc);
+        let mut markup: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        let a1 = range1.pull_back(&sub1_arc, false, &mut markup);
         let a1 = match a1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
         };
 
         // Pull back range2 from sub2.
         let mut range2 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
-        let a2 = pull_back_op(&mut range2, &sub2_arc);
+        let a2 = range2.pull_back(&sub2_arc, false, &mut markup);
         let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
         };
 
@@ -11482,7 +11798,7 @@ impl Rule for RuleRangeMeld {
             let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
             };
-            match pull_back_op(&mut range1, &a1_def) {
+            match range1.pull_back(&a1_def, false, &mut markup) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
             }
@@ -11495,7 +11811,7 @@ impl Rule for RuleRangeMeld {
             let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
             };
-            match pull_back_op(&mut range2, &a2_def) {
+            match range2.pull_back(&a2_def, false, &mut markup) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
             }
@@ -11513,7 +11829,7 @@ impl Rule for RuleRangeMeld {
             if s1 < s2 && a2.read().unwrap().is_written() {
                 let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
                 if let Some(d) = a2_def {
-                    match pull_back_op(&mut range2, &d) {
+                    match range2.pull_back(&d, false, &mut markup) {
                         Some(v) if functional_equality_eq(&a1, &v) => { /* ok */ }
                         _ => return Ok(action_status::NO_CHANGE),
                     }
@@ -11523,7 +11839,7 @@ impl Rule for RuleRangeMeld {
             } else if a1.read().unwrap().is_written() {
                 let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
                 if let Some(d) = a1_def {
-                    match pull_back_op(&mut range1, &d) {
+                    match range1.pull_back(&d, false, &mut markup) {
                         Some(v) if functional_equality_eq(&v, &a2) => { /* ok */ }
                         _ => return Ok(action_status::NO_CHANGE),
                     }
@@ -11535,44 +11851,69 @@ impl Rule for RuleRangeMeld {
             }
         }
 
-        // isHeritageKnown — Rugra has no explicit flag; conservatively assume true
-        // for non-free varnodes.
-        if a1.read().unwrap().is_free() {
+        // cc:1401: if (!A1->isHeritageKnown()) return 0. Faithful flag
+        // check (varnode.hh:298): flags & (insert|constant|annotation).
+        // Bank-created varnodes carry INSERT from VarnodeBank::xref
+        // (varnode.cc:1306); makeFree clears it (varnode.cc:1323). The old
+        // is_free() proxy diverged in both directions: INPUT-only varnodes
+        // (free=false but heritage-unknown pre-bank) passed, and registered
+        // never-written bank varnodes (INSERT set, free=true) bailed.
+        if !a1.read().unwrap().is_heritage_known() {
             return Ok(action_status::NO_CHANGE);
         }
 
-        // Intersect (BOOL_AND) or union (BOOL_OR) the ranges.
-        // Rugra's CircleRange::intersect returns: 0=empty, 1=non-empty single.
-        // Rugra's CircleRange::union returns: 0=single, 1=two pieces, 2=full.
-        // We normalize to Ghidra's restype: 0=try translate, 1=always true,
-        // 2=cannot represent, 3=always false.
+        // Intersect (BOOL_AND) or union (BOOL_OR) the ranges, mirroring
+        // ruleaction.cc:1403-1407. BOOL_AND: the legacy-code wrapper returns
+        // 0=empty / 1=non-empty single / 2=two-pieces. BOOL_OR: the faithful
+        // `circle_union` (cc:360-444, full 'a'-'g' merge arms incl. wrapping
+        // and stride accommodation) returns 0=merged-single (including the
+        // covers-everything case, which reaches its always-true verdict via
+        // translate_to_op → Err(1) → COPY(1) below, exactly cc:1412-1430) or
+        // 2=two-pieces. The simplified legacy `union` wrapper
+        // (rangeutil.rs) punts on wrapping/stride cases and must not be used
+        // on this path.
         let a1_size = a1.read().unwrap().get_size();
-        let restype = if central_opc == OpCode::CPUI_BOOL_AND {
+        let mut restype = if central_opc == OpCode::CPUI_BOOL_AND {
             match range1.intersect(&range2) {
                 0 => 3, // Empty intersection → always false.
-                _ => 0, // Non-empty → try translate.
+                1 => 0, // Non-empty single → try translate.
+                _ => 2, // Two pieces → cannot represent.
             }
         } else {
-            match range1.union(&range2) {
-                0 => 0, // Single range → try translate.
-                1 => 2, // Two pieces → cannot represent.
-                2 => 1, // Full → always true.
-                _ => 0,
+            match range1.circle_union(&range2) {
+                0 => 0, // Merged single (or covers everything) → try translate.
+                _ => 2, // Two pieces → cannot represent.
             }
         };
 
         let follow = crate::op::PcodeOpRef(op_arc.clone());
 
         if restype == 0 {
-            // Try to translate the merged range back to a single comparison op.
-            if let Some((opc, resc, resslot)) = range1.translate_to_op() {
-                let new_const = fd.new_constant(a1_size, resc);
-                fd.op_set_opcode(&follow, opc);
-                fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
-                fd.op_set_input(&follow, new_const, resslot as usize);
-                return Ok(action_status::CHANGE);
+            // Try to translate the merged range back to a single comparison
+            // op (ruleaction.cc:1410-1424). translate_to_op mirrors
+            // CircleRange::translate2Op's 0/1/2/3 codes; non-zero codes fall
+            // through to the always-true / cannot-represent / always-false
+            // arms exactly as upstream.
+            match range1.translate_to_op() {
+                Ok((opc, resc, resslot)) => {
+                    let new_const = fd.new_constant(a1_size, resc);
+                    // cc:1415-1417: propagate potential constant markup into
+                    // the new constant. copySymbolIfValid is a no-op when the
+                    // symbol's value does not match the constant (varnode.cc
+                    // copySymbolIfValid gating).
+                    if let Some(markup_vn) = &markup {
+                        crate::varnode::Varnode::copy_symbol_if_valid(
+                            &new_const,
+                            &markup_vn.read().unwrap(),
+                        );
+                    }
+                    fd.op_set_opcode(&follow, opc);
+                    fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
+                    fd.op_set_input(&follow, new_const, resslot as usize);
+                    return Ok(action_status::CHANGE);
+                }
+                Err(code) => restype = code,
             }
-            return Ok(action_status::NO_CHANGE); // Cannot translate.
         }
 
         if restype == 2 {
@@ -11600,58 +11941,14 @@ impl Rule for RuleRangeMeld {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
-/// Pull back a CircleRange through a comparison op. Faithful to
-/// `CircleRange::pullBack` (rangeutil.cc:1022-1073) simplified: returns the
-/// non-constant input Varnode that the range now applies to, or None if the
-/// op cannot be pulled back through. Does not track constMarkup or useNZMask.
-// Ghidra: rangeutil.cc:1022 CircleRange::pullBack
-fn pull_back_op(
-    range: &mut crate::rangeutil::CircleRange,
-    op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-    let op_rg = op.read().unwrap();
-    let num_input = op_rg.inrefs.len();
-    let opc = op_rg.opcode;
-    let out_size = op_rg
-        .output
-        .as_ref()
-        .map(|v| v.read().unwrap().get_size())
-        .unwrap_or(1);
-    if num_input == 1 {
-        let res = op_rg.inrefs.get(0)?.clone();
-        if res.read().unwrap().is_constant() {
-            return None;
-        }
-        let in_size = res.read().unwrap().get_size();
-        if !range.pull_back_unary(opc, in_size, out_size) {
-            return None;
-        }
-        Some(res)
-    } else if num_input == 2 {
-        // Find the non-constant input and slot.
-        let in0 = op_rg.inrefs.get(0)?;
-        let in1 = op_rg.inrefs.get(1)?;
-        let (res, val, slot) = if in0.read().unwrap().is_constant() {
-            if in1.read().unwrap().is_constant() {
-                return None;
-            }
-            let val = in0.read().unwrap().get_offset();
-            (in1.clone(), val, 1)
-        } else if in1.read().unwrap().is_constant() {
-            let val = in1.read().unwrap().get_offset();
-            (in0.clone(), val, 0)
-        } else {
-            return None;
-        };
-        let in_size = res.read().unwrap().get_size();
-        if !range.pull_back_binary(opc, val, slot, in_size, out_size) {
-            return None;
-        }
-        Some(res)
-    } else {
-        None
-    }
-}
+// RUGRA-GLUE: the former simplified `pull_back_op` wrapper (which dropped
+// constMarkup, the SUBPIECE nzmask salvage arm and the usenzmask tail) was
+// removed — RuleRangeMeld now calls the canonical
+// `CircleRange::pull_back(op, usenzmask, &mut markup)` directly
+// (rangeutil.cc:1022-1084 full port), which restores cc:1053-1065 SUBPIECE
+// salvage (dead here because RuleRangeMeld passes usenzmask=false, exactly
+// like the oracle), the cc:1069-1070 markup pass-back, and the cc:1075-1082
+// nzmask intersection tail for usenzmask=true callers.
 
 /// Merge float range conditions of the form: `V f< c, c f< V, V f== c` etc.
 ///
@@ -11864,7 +12161,7 @@ impl RuleFloatSign {
 }
 
 impl Rule for RuleFloatSign {
-    // Ghidra: ruleaction.cc:10733 RuleFloatSign::applyOp
+    // Ghidra: ruleaction.cc:10715 RuleFloatSign::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -11944,7 +12241,7 @@ impl Rule for RuleFloatSign {
 
     // Ghidra: ruleaction.cc:10714 RuleFloatSign
     fn get_name(&self) -> &str { "floatsign" }
-    // Ghidra: ruleaction.cc:10723 RuleFloatSign::getOpList
+    // Ghidra: ruleaction.cc:10705 RuleFloatSign::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_FLOAT_EQUAL, OpCode::CPUI_FLOAT_NOTEQUAL,
@@ -11976,7 +12273,7 @@ impl RulePullsubMulti {
     /// Compute the min/max byte range actually used by descendants of `vn`.
     /// Faithful to `minMaxUse` (ruleaction.cc:683-709). If any descendant is
     /// not a SUBPIECE, the full range is assumed.
-    // Ghidra: ruleaction.cc:977 RulePullsubMulti::minMaxUse
+    // Ghidra: ruleaction.cc:683 RulePullsubMulti::minMaxUse
     fn min_max_use(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (i32, i32) {
         let in_size = vn.read().unwrap().get_size() as i32;
         let mut max_byte = -1i32;
@@ -12007,7 +12304,7 @@ impl RulePullsubMulti {
 
     /// Check if a size is a suitable truncation size. Faithful to
     /// `acceptableSize` (ruleaction.cc:758-766).
-    // Ghidra: ruleaction.cc:981 RulePullsubMulti::acceptableSize
+    // Ghidra: ruleaction.cc:758 RulePullsubMulti::acceptableSize
     fn acceptable_size(size: i32) -> bool {
         if size == 0 { return false; }
         if size >= 8 { return true; }
@@ -12016,7 +12313,7 @@ impl RulePullsubMulti {
 
     /// Replace `orig_vn` with `new_vn` in all descendant ops. Faithful to
     /// `replaceDescendants` (ruleaction.cc:719-752).
-    // Ghidra: ruleaction.cc:1017 RulePullsubMulti::replaceDescendants
+    // Ghidra: ruleaction.cc:719 RulePullsubMulti::replaceDescendants
     fn replace_descendants(
         fd: &mut Funcdata,
         orig_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -12067,7 +12364,7 @@ impl RulePullsubMulti {
     /// Find a preexisting SUBPIECE of `base_vn` with the given size+shift.
     /// Faithful to `findSubpiece` (ruleaction.cc:849-870). Returns the output
     /// Varnode or None.
-    // Ghidra: ruleaction.cc:1005 RulePullsubMulti::findSubpiece
+    // Ghidra: ruleaction.cc:849 RulePullsubMulti::findSubpiece
     fn find_subpiece(
         base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         out_size: u32,
@@ -12142,52 +12439,84 @@ impl RulePullsubMulti {
                 None => return Err(crate::error::Error::from("Undefined pullsub")),
             }
         };
-        // cc:793-821: resolve the output address.  Join pieces are stored
-        // most-significant first, but SUBPIECE offsets count from the least
-        // significant end, so Ghidra scans the piece table in reverse.
+        // cc:791-821: resolve the output address, mirroring the oracle's
+        // usetmp decision exactly. Join pieces are stored most-significant
+        // first, but SUBPIECE offsets count from the least significant
+        // end, so Ghidra scans the piece table in reverse; a join base
+        // starts as usetmp=true and only a covering piece flips it to the
+        // piece's own address — the join-space offset itself is NEVER
+        // treated as a mappable plain offset (SPACEFIX-CR-F6 arm).
         let is_join = base_space == crate::space::AddressSpace::Join;
-        let mut piece_location = None;
+        let mut usetmp = false;
+        let mut piece_location: Option<(crate::space::AddressSpace, u64)> = None;
+        let mut plain_addr: Option<crate::address::Address> = None;
         if is_join {
-            if let Some(arch) = fd.arch.as_ref() {
-                if let Some(joinrec) = arch.join_db.find_join(base_addr.as_u64()) {
-                    if joinrec.num_pieces() > 1 {
-                        let mut skipleft = shift;
-                        for i in (0..joinrec.num_pieces()).rev() {
-                            let piece = joinrec.get_piece(i);
-                            if skipleft >= piece.size as u64 {
-                                skipleft -= piece.size as u64;
-                                continue;
-                            }
-                            if skipleft + out_size as u64 > piece.size as u64 {
-                                break;
-                            }
-                            let offset = if piece.space.is_big_endian() {
-                                piece
-                                    .offset
-                                    .wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
-                            } else {
-                                piece.offset.wrapping_add(skipleft)
-                            };
-                            piece_location = Some((piece.space, offset));
+            // cc:793-795: usetmp = true; findJoin throws
+            // LowlevelError("Unlinked join address") on a miss
+            // (translate.cc:746-762). Rugra degradation: the producer
+            // mints unlinked splitmix64 offsets (see
+            // HERITAGE-PJOINS-UNLINKED-0001), so the throw is logged and
+            // the subpiece falls back to unique — the oracle's own
+            // no-cover behavior (cc:825-826 newUniqueOut).
+            usetmp = true;
+            let joinrec = fd
+                .arch
+                .as_ref()
+                .and_then(|arch| arch.join_db.find_join(base_addr.as_u64()));
+            if joinrec.is_none() {
+                eprintln!(
+                    "[RULEACTION] build_subpiece: unlinked join address join:0x{:x} \
+                     (ruleaction.cc:795 via translate.cc:761 LowlevelError arm degraded; \
+                     HERITAGE-PJOINS-UNLINKED-0001)",
+                    base_addr.as_u64()
+                );
+            }
+            if let Some(joinrec) = joinrec {
+                // cc:796: single-piece records (float extensions)
+                // automatically keep the unique output.
+                if joinrec.num_pieces() > 1 {
+                    let mut skipleft = shift;
+                    for i in (0..joinrec.num_pieces()).rev() {
+                        let piece = joinrec.get_piece(i);
+                        if skipleft >= piece.size as u64 {
+                            skipleft -= piece.size as u64;
+                            continue;
+                        }
+                        if skipleft + out_size as u64 > piece.size as u64 {
                             break;
                         }
+                        let offset = if piece.space.is_big_endian() {
+                            piece
+                                .offset
+                                .wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
+                        } else {
+                            piece.offset.wrapping_add(skipleft)
+                        };
+                        piece_location = Some((piece.space, offset));
+                        usetmp = false;
+                        break;
                     }
                 }
             }
-        }
-        let small_addr = if let Some((_, piece_offset)) = piece_location {
-            crate::address::Address::new(piece_offset)
-        } else if !is_big_endian {
-            base_addr.offset(shift as i64)
         } else {
-            base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64))
-        };
+            // cc:816-821: plain spaces offset within their own space.
+            if !is_big_endian {
+                plain_addr = Some(base_addr.offset(shift as i64));
+            } else {
+                plain_addr =
+                    Some(base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64)));
+            }
+        }
         // Build the new SUBPIECE.
         let new_op = fd.new_op(2, new_addr);
         fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
         // cc:825-830: unresolved joins use unique; a resolved piece uses
-        // renormalize(smalladdr1,outsize) and newVarnodeOut in that piece space.
-        let out_vn = if let Some((piece_space, piece_offset)) = piece_location {
+        // renormalize(smalladdr1,outsize) and newVarnodeOut in that piece
+        // space (renormalizeJoinAddress only rewrites join-space
+        // addresses — piece and plain addresses are untouched).
+        let out_vn = if usetmp {
+            fd.new_unique_out(out_size as usize, &new_op)
+        } else if let Some((piece_space, piece_offset)) = piece_location {
             let piece_addr = crate::address::Address::new(piece_offset).offset(0);
             let vn = fd.vbank.create_def_with_space(
                 out_size as usize,
@@ -12202,9 +12531,10 @@ impl RulePullsubMulti {
             }
             fd.set_varnode_properties(&vn);
             vn
-        } else if is_join {
-            fd.new_unique_out(out_size as usize, &new_op)
         } else {
+            // The remaining non-tmp arm is the plain (non-join) space.
+            let small_addr = plain_addr
+                .unwrap_or_else(|| base_addr.offset(shift as i64));
             let vn = fd.vbank.create_def_with_space(
                 out_size as usize,
                 base_space,
@@ -12266,8 +12596,25 @@ impl Rule for RulePullsubMulti {
         if mult_arc.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
             return Ok(action_status::NO_CHANGE);
         }
-        // We only pull up, do not pull "down" to bottom of loop.
-        // Rugra lacks hasLoopIn; conservatively allow.
+        // cc:883: "We only pull up, do not pull down to bottom of loop" —
+        // reject when the MULTIEQUAL's block is the head of a loop (any
+        // in-edge labeled f_loop_edge; labels maintained by
+        // BlockGraph::find_spanning_tree / structure_loops, block.cc:1101).
+        // RULE-PULLSUBMULTI-LOOPIN-0001 closed: was conservatively allowed
+        // while the loop-edge query was missing (match_url Phase 2 ordinal
+        // 28 oppool1 fired pullsub on the __libc_csu_init loop phi where
+        // the oracle rejects here).
+        let mult_has_loop_in = mult_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|bb| bb.read().unwrap().has_loop_in())
+            .unwrap_or(false);
+        if mult_has_loop_in {
+            return Ok(action_status::NO_CHANGE);
+        }
         let (max_byte, min_byte) = Self::min_max_use(&vn);
         let new_size = max_byte - min_byte + 1;
         if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {
@@ -12276,9 +12623,17 @@ impl Rule for RulePullsubMulti {
         if !Self::acceptable_size(new_size) {
             return Ok(action_status::NO_CHANGE);
         }
-        // Don't pull apart double precision objects (Rugra lacks isPrecisLo/Hi;
-        // conservatively allow).
-        // Check consume on each branch input.
+        // cc:889: don't pull apart a double precision object.
+        let out_is_precis = {
+            let out_vn = op_arc.read().unwrap().get_out().cloned();
+            out_vn.is_some_and(|v| {
+                let r = v.read().unwrap();
+                r.is_precis_lo() || r.is_precis_hi()
+            })
+        };
+        if out_is_precis {
+            return Ok(action_status::NO_CHANGE);
+        }
         let consume = if min_byte < 8 {
             !(calc_mask(new_size as usize) << (8 * min_byte as u64))
         } else {
@@ -12313,13 +12668,18 @@ impl Rule for RulePullsubMulti {
         }
 
         // Compute small address for the new MULTIEQUAL output.
-        let (base_addr, vn_size, is_big_endian) = {
+        // cc:921-925: little-endian offsets count up from the low byte;
+        // big-endian from the top of the kept window.
+        let (base_addr, vn_space, vn_size, is_big_endian) = {
             let r = vn.read().unwrap();
             (
-                crate::address::Address::new(r.get_offset()), r.get_size(), r.space().is_big_endian(),
+                crate::address::Address::new(r.get_offset()),
+                r.get_space(),
+                r.get_size(),
+                r.space().is_big_endian(),
             )
         };
-        let _small_addr2 = if !is_big_endian {
+        let mut small_addr2 = if !is_big_endian {
             base_addr.offset(min_byte as i64)
         } else {
             base_addr.offset(vn_size as i64 - (max_byte as i64 + 1))
@@ -12342,15 +12702,40 @@ impl Rule for RulePullsubMulti {
         // Build the new MULTIEQUAL.
         let mult_addr = mult_arc.read().unwrap().get_addr();
         let new_multi = fd.new_op(params.len(), mult_addr);
-        // Rugra lacks newVarnodeOut at a computed address; use new_unique_out.
-        let new_vn = fd.new_unique_out(new_size as usize, &new_multi);
+        // cc:939: smalladdr2.renormalize(newSize) — join-space addresses
+        // re-resolve through the JoinRecord for the new size; every other
+        // space is a no-op (address.cc:191-194). The join-space branch needs
+        // AddrSpaceManager::renormalizeJoinAddress (translate.cc:870-916),
+        // which Rugra's Architecture does not yet expose (it carries only
+        // the simplified join_db); registered as
+        // RULE-PULLSUBMULTI-JOINRENORM-0001. Register/file/unique spaces —
+        // everything this rule's merges produce today — are exact.
+        debug_assert_ne!(
+            vn_space,
+            crate::space::AddressSpace::Join,
+            "RULE-PULLSUBMULTI-JOINRENORM-0001: join-space pullsub renormalize unimplemented"
+        );
+        // cc:940: newVarnodeOut at the (renormalized) address keeps the
+        // merged window in the ORIGINAL varnode's space (e.g. the register
+        // file), not a unique temporary.
+        let new_vn = fd.new_varnode_out_full(new_size as usize, vn_space, small_addr2, &new_multi);
         fd.op_set_opcode(&new_multi, OpCode::CPUI_MULTIEQUAL);
         for (slot, p) in params.iter().enumerate() {
             fd.op_set_input(&new_multi, p.clone(), slot);
         }
-        // Insert near the original MULTIEQUAL. Rugra lacks opInsertBegin;
-        // use op_insert_before.
-        fd.op_insert_before(&new_multi, &mult_ref);
+        // cc:943: insert at the head of the original MULTIEQUAL's block
+        // (MULTIEQUALs sort to the block front; opInsertBegin keeps that
+        // ordering instead of parking before the original).
+        let mult_parent = mult_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        match mult_parent {
+            Some(bb) => fd.op_insert_begin(&new_multi, &bb),
+            None => fd.op_insert_before(&new_multi, &mult_ref),
+        }
 
         // Replace descendants of vn with new_vn.
         Self::replace_descendants(fd, &vn, new_vn, max_byte, min_byte);
@@ -12376,12 +12761,12 @@ impl Rule for RulePullsubMulti {
 /// printed as a subtraction of the negated (small positive) value.
 ///
 /// NOTE: Ghidra consults the constant's read-facing data-type (`TYPE_UINT`,
-/// not char-print, enum/equate name-locks). Rugra resolves the non-union base
-/// type via `get_type_read_facing()` and applies the `TYPE_UINT` /
-/// `!isCharPrint()` guards. Factory-backed constants always carry a type, so
-/// their default `TYPE_UNKNOWN` is rejected. A malformed Rust-only `None`
-/// type still falls through; op-aware union resolution and the equate/enum
-/// branches remain under `RULE-ADDUNSIGNED-TYPEPRECOND-0001`.
+/// not char-print, enum/equate name-locks). Rugra consults the fd-aware twin
+/// `vn_type_read_facing` (union map resolution included, ruleaction.cc:7188)
+/// and applies the `TYPE_UINT` / `!isCharPrint()` guards. Factory-backed
+/// constants always carry a type, so their default `TYPE_UNKNOWN` is
+/// rejected. A malformed Rust-only `None` type still falls through; the
+/// equate/enum branches remain under `RULE-ADDUNSIGNED-TYPEPRECOND-0001`.
 pub struct RuleAddUnsigned;
 
 impl RuleAddUnsigned {
@@ -12406,11 +12791,18 @@ impl Rule for RuleAddUnsigned {
         }
         use crate::type_system::datatype::TypeMetatype;
         // Ghidra: dt = constvn->getTypeReadFacing(op); require metatype==
-        // TYPE_UINT, skip char-print types (ruleaction.cc:7188-7190). Rugra's
-        // get_type_read_facing returns the varnode's resolved base type. Its
-        // Rust-only None fall-through has no valid Ghidra Varnode analogue and
-        // remains a registered RULE-ADDUNSIGNED-TYPEPRECOND-0001 mismatch.
-        if let Some(dt) = constvn.read().unwrap().get_type_read_facing() {
+        // TYPE_UINT, skip char-print types (ruleaction.cc:7188-7190). The
+        // fd-aware twin consults the union map (resolved field type) with
+        // the reading op/slot key (op reads constvn at slot 1). The
+        // Rust-only None fall-through has no valid Ghidra Varnode analogue
+        // and remains a registered RULE-ADDUNSIGNED-TYPEPRECOND-0001
+        // mismatch.
+        if let Some(dt) = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &constvn,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            1,
+        ) {
             if dt.get_metatype() != TypeMetatype::Uint {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -12435,11 +12827,9 @@ impl Rule for RuleAddUnsigned {
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SUB);
         let cvn = fd.new_constant(size, negated_val);
         // Ghidra: cvn->copySymbol(constvn); propagate the constant's symbol/type
-        // + lock flags into the new constant (ruleaction.cc:7211).
-        {
-            let cvn_lock = constvn.read().unwrap();
-            cvn.write().unwrap().copy_symbol(&cvn_lock);
-        }
+        // + lock flags AND high bookkeeping (typeDirty/setSymbol, cc:500-504)
+        // into the new constant (ruleaction.cc:7211 → varnode.cc:493-505).
+        crate::varnode::Varnode::copy_symbol_arc(&cvn, &constvn.read().unwrap());
         fd.op_set_input(&op_ref, cvn, 1);
         Ok(action_status::CHANGE)
     }
@@ -12468,12 +12858,12 @@ impl Rule for RuleAddUnsigned {
 pub struct RuleSubRight;
 
 impl RuleSubRight {
-    // Ghidra: ruleaction.cc:7256 RuleSubRight
+    // Ghidra: ruleaction.cc:7238 RuleSubRight
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubRight {
-    // Ghidra: ruleaction.cc:7269 RuleSubRight::applyOp
+    // Ghidra: ruleaction.cc:7251 RuleSubRight::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -12487,7 +12877,13 @@ impl Rule for RuleSubRight {
         {
             let in0_vn = op_arc.read().unwrap().inrefs.get(0).cloned();
             if let Some(vn) = in0_vn {
-                if let Some(dt) = vn.read().unwrap().get_type_read_facing() {
+                // fd-aware twin: op reads in(0) at slot 0 (ruleaction.cc:7256).
+                if let Some(dt) = crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &vn,
+                    &crate::op::PcodeOpRef(op_arc.clone()),
+                    0,
+                ) {
                     if dt.is_piece_structured() {
                         // Faithful to `data.opMarkSpecialPrint(op)` (ruleaction.cc:7275).
                         fd.op_mark_special_print(&crate::op::PcodeOpRef(op_arc.clone()));
@@ -12522,7 +12918,15 @@ impl Rule for RuleSubRight {
         let mut working_op_ref = crate::op::PcodeOpRef(op_arc.clone());
         // Search for lone right shift descendant and lump it in.
         let mut lumped = false;
-        if let Some(lone) = outvn.read().unwrap().lone_descend() {
+        // RUGRA-GLUE (lock hygiene): the lone_descend read guard must be
+        // hoisted out of the if-let scrutinee — a scrutinee temporary would
+        // stay alive through the whole body, and the lump arm's
+        // op_unlink → opUnsetOutput → make_free write-locks this same outvn,
+        // deadlocking the thread (std RwLock is not reentrant). Dropping the
+        // guard first is unobservable: lone_descend's result is an owned
+        // Option<Arc<_>>.
+        let lone_desc = outvn.read().unwrap().lone_descend();
+        if let Some(lone) = lone_desc {
             let opc2 = lone.read().unwrap().opcode;
             if opc2 == OpCode::CPUI_INT_RIGHT || opc2 == OpCode::CPUI_INT_SRIGHT {
                 let shift_c = lone.read().unwrap().get_in(1).cloned();
@@ -12539,7 +12943,7 @@ impl Rule for RuleSubRight {
                                 d = a_size_bits - 1; // sign extraction
                             }
                             // opUnlink(op); op = lone; opSetOpcode(op,SUBPIECE); opc = opc2;
-                            fd.op_unset_input(&working_op_ref, 0); // unlink this op's inputs
+                            fd.op_unlink(&crate::op::PcodeOpRef(op_arc.clone())); // cc:7285 data.opUnlink(op) = funcdata_op.cc:179-193: op dies (unset output + all inputs + uninsert)
                             working_op_ref = crate::op::PcodeOpRef(lone);
                             fd.op_set_opcode(&working_op_ref, OpCode::CPUI_SUBPIECE);
                             opc = opc2;
@@ -12551,7 +12955,11 @@ impl Rule for RuleSubRight {
         }
         // Create shift BEFORE the SUBPIECE happens.
         let a_size = a.read().unwrap().get_size();
-        let addr = op_arc.read().unwrap().get_addr();
+        // cc:7299 `newOp(2,op->getAddr())` reads the address of the REBOUND
+        // `op` — after the lump arm it is `lone` (cc:7286 `op = lone`), i.e.
+        // the surviving SUBPIECE-to-be, not the unlinked original SUBPIECE.
+        // working_op_ref mirrors the rebound `op` exactly.
+        let addr = working_op_ref.0.read().unwrap().get_addr();
         let shiftop = fd.new_op(2, addr);
         fd.op_set_opcode(&shiftop, opc);
         // Ghidra: ct = getBase(a->getSize(), opc==INT_RIGHT?TYPE_UINT:TYPE_INT)
@@ -12582,9 +12990,9 @@ impl Rule for RuleSubRight {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:7256 RuleSubRight
+    // Ghidra: ruleaction.cc:7238 RuleSubRight
     fn get_name(&self) -> &str { "subright" }
-    // Ghidra: ruleaction.cc:7263 RuleSubRight::getOpList
+    // Ghidra: ruleaction.cc:7245 RuleSubRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -12599,7 +13007,7 @@ impl RuleNegateNegate {
 }
 
 impl Rule for RuleNegateNegate {
-    // Ghidra: ruleaction.cc:9258 RuleNegateNegate::applyOp
+    // Ghidra: ruleaction.cc:9240 RuleNegateNegate::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -12630,7 +13038,7 @@ impl Rule for RuleNegateNegate {
 
     // Ghidra: ruleaction.cc:9250 RuleNegateNegate
     fn get_name(&self) -> &str { "negatenegate" }
-    // Ghidra: ruleaction.cc:9252 RuleNegateNegate::getOpList
+    // Ghidra: ruleaction.cc:9234 RuleNegateNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEGATE] }
 }
 
@@ -12668,7 +13076,7 @@ impl RuleFloatSignCleanup {
 }
 
 impl Rule for RuleFloatSignCleanup {
-    // Ghidra: ruleaction.cc:10789 RuleFloatSignCleanup::applyOp
+    // Ghidra: ruleaction.cc:10771 RuleFloatSignCleanup::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -12709,7 +13117,7 @@ impl Rule for RuleFloatSignCleanup {
 
     // Ghidra: ruleaction.cc:10778 RuleFloatSignCleanup
     fn get_name(&self) -> &str { "floatsigncleanup" }
-    // Ghidra: ruleaction.cc:10782 RuleFloatSignCleanup::getOpList
+    // Ghidra: ruleaction.cc:10764 RuleFloatSignCleanup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_XOR] }
 }
 
@@ -12740,7 +13148,7 @@ impl RulePtrsubCharConstant {
     /// Faithful to `pushConstFurther` (ruleaction.cc:7341-7358). Given a
     /// descendant PTRADD of the collapsed constant, fold the PTRADD's constant
     /// index into the pointer value and turn the PTRADD into a COPY.
-    // Ghidra: ruleaction.cc:7341 RulePtrsubCharConstant::pushConstFurther
+    // Ghidra: ruleaction.cc:7323 RulePtrsubCharConstant::pushConstFurther
     fn push_const_further(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -12776,11 +13184,11 @@ impl RulePtrsubCharConstant {
 }
 
 impl Rule for RulePtrsubCharConstant {
-    // Ghidra: ruleaction.cc:7372 RulePtrsubCharConstant::applyOp
+    // Ghidra: ruleaction.cc:7354 RulePtrsubCharConstant::applyOp
     fn apply_op(
-        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7372-7421).
+        // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7354-7403).
         let (sb, vn1, outvn) = {
             let op = op_arc.read().unwrap();
             let sb = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
@@ -12794,7 +13202,13 @@ impl Rule for RulePtrsubCharConstant {
         if !vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // sbType = sb->getTypeReadFacing(op); require TYPE_PTR to TYPE_SPACEBASE.
         use crate::type_system::datatype::{Datatype, TypeMetatype};
-        let sb_type = sb.read().unwrap().get_type();
+        // fd-aware twin: op reads sb at slot 0 (ruleaction.cc:7358).
+        let sb_type = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &sb,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            0,
+        );
         let sb_is_spacebase_ptr = sb_type
             .as_ref()
             .map(|dt| {
@@ -12807,7 +13221,8 @@ impl Rule for RulePtrsubCharConstant {
         if !sb_is_spacebase_ptr { return Ok(action_status::NO_CHANGE); }
         // outtype = outvn->getTypeDefFacing(); require TYPE_PTR with
         //   basetype isCharPrint() (ruleaction.cc:7366-7369).
-        let outtype = outvn.read().unwrap().get_type();
+        // fd-aware def-facing twin (ruleaction.cc:7366).
+        let outtype = crate::unionresolve::vn_type_def_facing(fd, &outvn);
         let out_is_char_ptr = outtype
             .as_ref()
             .map(|dt| {
@@ -12835,7 +13250,7 @@ impl Rule for RulePtrsubCharConstant {
         //   (legacy/test Funcdata) cannot confirm readonly: Ghidra's scope
         //   always exists, so the conservative no-op matches the observable
         //   "rule did not fire".
-        match _fd.is_scope_read_only(symaddr, 1, op_addr) {
+        match fd.is_scope_read_only(symaddr, 1, op_addr) {
             Some(true) => {}
             _ => return Ok(action_status::NO_CHANGE),
         }
@@ -12845,7 +13260,7 @@ impl Rule for RulePtrsubCharConstant {
         //   PrintC::pushPtrCharConstant reads through at print time
         //   (printc.cc:1537/1698). charsize/opaque project basetype exactly
         //   as stringmanage.cc:166's virtual getStringData call does.
-        let Some(sm) = _fd.get_arch().and_then(|a| a.string_manager.clone()) else {
+        let Some(sm) = fd.get_arch().and_then(|a| a.string_manager.clone()) else {
             return Ok(action_status::NO_CHANGE);
         };
         let charsize = basetype.get_size() as i32;
@@ -12876,7 +13291,7 @@ impl Rule for RulePtrsubCharConstant {
                 let slot = subop.read().unwrap().slot_of_input(&outvn);
                 if let Some(slot) = slot {
                     if !Self::push_const_further(
-                        _fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone(),
+                        fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone(),
                     ) {
                         remove = false;
                     }
@@ -12891,24 +13306,24 @@ impl Rule for RulePtrsubCharConstant {
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         if remove_copy {
             // ruleaction.cc:7392-7393: data.opDestroy(op).
-            _fd.op_destroy(&op_ref);
+            fd.op_destroy(&op_ref);
         } else {
             // ruleaction.cc:7395-7400: convert the original PTRSUB to a COPY
             // of the constant, with the char-pointer type carried over
             // (cc:7396-7397).
             let outvn_size = outvn.read().unwrap().get_size();
-            let newvn = _fd.new_constant(outvn_size, val);
+            let newvn = fd.new_constant(outvn_size, val);
             newvn.write().unwrap().update_type(outtype);
-            _fd.op_remove_input(&op_ref, 1);
-            _fd.op_set_input(&op_ref, newvn, 0);
-            _fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+            fd.op_remove_input(&op_ref, 1);
+            fd.op_set_input(&op_ref, newvn, 0);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
         }
         Ok(action_status::CHANGE)
     }
 
     // Ghidra: ruleaction.cc:7360 RulePtrsubCharConstant
     fn get_name(&self) -> &str { "ptrsubcharconstant" }
-    // Ghidra: ruleaction.cc:7366 RulePtrsubCharConstant::getOpList
+    // Ghidra: ruleaction.cc:7348 RulePtrsubCharConstant::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
 
@@ -12933,7 +13348,7 @@ impl RuleExtensionPush {
     /// `buildVarnodeOut` (ruleaction.cc:6783-6790). Duplicate the single-input
     /// extension op so each descendant gets its own copy, then destroy the
     /// original. We assume the op is INT_ZEXT/INT_SEXT (one input).
-    // Ghidra: ruleaction.cc:6827 RulePushPtr::duplicateNeed
+    // Ghidra: ruleaction.cc:6809 RulePushPtr::duplicateNeed
     fn duplicate_need(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) {
         let op_ref = crate::op::PcodeOpRef(op.clone());
         let out_vn = match op.read().unwrap().output.clone() {
@@ -12987,7 +13402,7 @@ impl RuleExtensionPush {
 }
 
 impl Rule for RuleExtensionPush {
-    // Ghidra: ruleaction.cc:7435 RuleExtensionPush::applyOp
+    // Ghidra: ruleaction.cc:7417 RuleExtensionPush::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -13046,7 +13461,7 @@ impl Rule for RuleExtensionPush {
 
     // Ghidra: ruleaction.cc:7423 RuleExtensionPush
     fn get_name(&self) -> &str { "extensionpush" }
-    // Ghidra: ruleaction.cc:7428 RuleExtensionPush::getOpList
+    // Ghidra: ruleaction.cc:7410 RuleExtensionPush::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT, OpCode::CPUI_INT_SEXT] }
 }
 
@@ -13074,7 +13489,7 @@ impl RuleExpandLoad {
     /// Faithful to `checkAndComparison` (ruleaction.cc:10878-10893). True iff
     /// every descendant of `vn` is `INT_AND vn const` whose sole descendant is a
     /// constant-comparison INT_EQUAL/INT_NOTEQUAL.
-    // Ghidra: ruleaction.cc:10878 RuleExpandLoad::checkAndComparison
+    // Ghidra: ruleaction.cc:10860 RuleExpandLoad::checkAndComparison
     fn check_and_comparison(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -13102,7 +13517,7 @@ impl RuleExpandLoad {
     /// the constants in the `(V & C) == D` forms scanned by
     /// `check_and_comparison`: shift them left by `offset` bytes and point the
     /// AND at the new bigger variable `new_vn`.
-    // Ghidra: ruleaction.cc:10904 RuleExpandLoad::modifyAndComparison
+    // Ghidra: ruleaction.cc:10886 RuleExpandLoad::modifyAndComparison
     fn modify_and_comparison(
         fd: &mut Funcdata,
         old_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -13144,7 +13559,7 @@ impl RuleExpandLoad {
 }
 
 impl Rule for RuleExpandLoad {
-    // Ghidra: ruleaction.cc:10937 RuleExpandLoad::applyOp
+    // Ghidra: ruleaction.cc:10919 RuleExpandLoad::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -13170,10 +13585,23 @@ impl Rule for RuleExpandLoad {
             if root_ptr.read().unwrap().is_written() {
                 let def = match root_ptr.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
                 };
-                if def.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+                // cc:10927 conjunctive arm gate: `defOp->code() == CPUI_INT_ADD
+                // && defOp->getIn(1)->isConstant()`. A non-constant addend (or
+                // a non-INT_ADD definer) makes the conjunction false and falls
+                // to the else arm with addOp left None, offset 0, and elType
+                // read from the ORIGINAL rootPtr facing the LOAD op — the rule
+                // can still fire (RULEACTION-EXPANDLOAD-NONCONST-0001).
+                let def_is_const_add = {
+                    let d = def.read().unwrap();
+                    d.opcode == OpCode::CPUI_INT_ADD
+                        && d
+                            .get_in(1)
+                            .map(|v| v.read().unwrap().is_constant())
+                            .unwrap_or(false)
+                };
+                if def_is_const_add {
                     let in1 = match def.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
                     };
-                    if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
                     let off = in1.read().unwrap().get_offset();
                     if off > 16 { return Ok(action_status::NO_CHANGE); } // INT_ADD offset must be small
                     // INT_ADD must be used only once.
@@ -13185,7 +13613,14 @@ impl Rule for RuleExpandLoad {
                     // elType = rootPtr (=def->getIn(0))->getTypeReadFacing(def)
                     let real_root = match def.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
                     };
-                    let dt = match real_root.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    // fd-aware twin with the defOp key: def reads real_root
+                    // (=def->getIn(0)) at slot 0 (ruleaction.cc:10937).
+                    let dt = match crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        &real_root,
+                        &crate::op::PcodeOpRef(def.clone()),
+                        0,
+                    ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                     };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                     let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13193,7 +13628,14 @@ impl Rule for RuleExpandLoad {
                     Some(ptr_to)
                 } else {
                     // elType = rootPtr->getTypeReadFacing(op)
-                    let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    // fd-aware twin with the LOAD op key: op reads root_ptr
+                    // (=op->getIn(1)) at slot 1 (ruleaction.cc:10940).
+                    let dt = match crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        &root_ptr,
+                        &op_ref,
+                        1,
+                    ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                     };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                     let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13201,7 +13643,13 @@ impl Rule for RuleExpandLoad {
                     Some(ptr_to)
                 }
             } else {
-                let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                // fd-aware twin with the LOAD op key (ruleaction.cc:10943).
+                let dt = match crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &root_ptr,
+                    &op_ref,
+                    1,
+                ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                 };
                 if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                 let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13233,7 +13681,9 @@ impl Rule for RuleExpandLoad {
             // Check for natural integer truncation.
             if meta != TypeMetatype::Int && meta != TypeMetatype::Uint { return Ok(action_status::NO_CHANGE); }
             // outMeta = outVn->getTypeDefFacing()->getMetatype(); must be INT/UINT/UNKNOWN/BOOL.
-            let out_meta = out_vn.read().unwrap().get_type().map(|t| t.get_metatype());
+            // fd-aware def-facing twin (ruleaction.cc:10964).
+            let out_meta = crate::unionresolve::vn_type_def_facing(fd, &out_vn)
+                .map(|t| t.get_metatype());
             match out_meta {
                 None | Some(TypeMetatype::Int) | Some(TypeMetatype::Uint)
                 | Some(TypeMetatype::Unknown) | Some(TypeMetatype::Bool) => {}
@@ -13293,7 +13743,7 @@ impl Rule for RuleExpandLoad {
 
     // Ghidra: ruleaction.cc:10927 RuleExpandLoad
     fn get_name(&self) -> &str { "expandload" }
-    // Ghidra: ruleaction.cc:10931 RuleExpandLoad::getOpList
+    // Ghidra: ruleaction.cc:10913 RuleExpandLoad::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
 
@@ -13432,7 +13882,7 @@ impl PieceNode {
 /// statements.
 ///
 /// Faithful to `RulePieceStructure` (ruleaction.cc:7625-7720) plus helpers
-/// `determineDatatype` (7481-7517), `spanningRange` (7519-7541),
+/// `determineDatatype` (7463-7492), `spanningRange` (7501-7513),
 /// `convertZextToPiece` (7543-7572), `findReplaceZext` (7574-7596),
 /// `separateSymbol` (7598-7611), and the `PieceNode` engine (op.cc:801-876).
 ///
@@ -13452,11 +13902,11 @@ impl RulePieceStructure {
     // Ghidra: ruleaction.cc:7613 RulePieceStructure
     pub fn new() -> Self { Self }
 
-    /// Faithful to `determineDatatype` (ruleaction.cc:7481-7510). Returns the
+    /// Faithful to `determineDatatype` (ruleaction.cc:7463-7492). Returns the
     /// structured (struct/array/union) data-type the varnode is part of, plus
     /// the base offset. Uses `getStructuredType` and, for the partial case,
     /// resolves the byte offset via `SymbolEntry` then walks `getSubType`.
-    // Ghidra: ruleaction.cc:7481 RulePieceStructure::determineDatatype
+    // Ghidra: ruleaction.cc:7463 RulePieceStructure::determineDatatype
     fn determine_datatype(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
@@ -13482,7 +13932,7 @@ impl RulePieceStructure {
                 let (st_opt, so) = sub_type.get_sub_type(sub_offset);
                 match st_opt {
                     Some(st) => {
-                        sub_type = std::sync::Arc::new(st.clone());
+                        sub_type = st;
                         sub_offset = so;
                     }
                     None => break,
@@ -13499,9 +13949,9 @@ impl RulePieceStructure {
         }
     }
 
-    /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
+    /// Faithful to `spanningRange` (ruleaction.cc:7501-7513). True unless the
     /// range falls within a single non-structured element.
-    // Ghidra: ruleaction.cc:7519 RulePieceStructure::spanningRange
+    // Ghidra: ruleaction.cc:7501 RulePieceStructure::spanningRange
     fn spanning_range(
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         offset: i32,
@@ -13519,7 +13969,7 @@ impl RulePieceStructure {
                     if !s.is_piece_structured() {
                         return false;
                     }
-                    cur = std::sync::Arc::new(s.clone());
+                    cur = s;
                     new_off = off as i32;
                 }
             }
@@ -13534,7 +13984,7 @@ impl RulePieceStructure {
     /// switched to CPUI_PIECE and the zero inserted at slot 0.
     /// `invn->getType()->needsResolution()` → `inheritResolution` (7561-7562) is
     /// not modelled in Rugra and is skipped.
-    // Ghidra: ruleaction.cc:7543 RulePieceStructure::convertZextToPiece
+    // Ghidra: ruleaction.cc:7525 RulePieceStructure::convertZextToPiece
     fn convert_zext_to_piece(
         zext: &crate::op::PcodeOpRef,
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -13571,7 +14021,7 @@ impl RulePieceStructure {
             let (sub, off) = cur.get_sub_type(new_off as i64);
             match sub {
                 Some(s) => {
-                    cur = std::sync::Arc::new(s.clone());
+                    cur = s;
                     new_off = off as i32;
                 }
                 None => break None,
@@ -13594,7 +14044,7 @@ impl RulePieceStructure {
     /// gathered CONCAT-tree nodes; for each INT_ZEXT leaf whose Varnode spans
     /// multiple structure elements, converts the ZEXT to a PIECE. Returns true
     /// if any conversion happened (so the caller rebuilds the tree).
-    // Ghidra: ruleaction.cc:7574 RulePieceStructure::findReplaceZext
+    // Ghidra: ruleaction.cc:7556 RulePieceStructure::findReplaceZext
     fn find_replace_zext(
         stack: &[PieceNode],
         structured_type: &std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -13634,7 +14084,7 @@ impl RulePieceStructure {
     /// root's, or if the root is not addr-tied, or if the leaf is proto-partial
     /// / defined by a marker / defined by a PIECE whose type is itself
     /// piece-structured.
-    // Ghidra: ruleaction.cc:7598 RulePieceStructure::separateSymbol
+    // Ghidra: ruleaction.cc:7580 RulePieceStructure::separateSymbol
     fn separate_symbol(
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         leaf: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -13742,14 +14192,17 @@ impl Rule for RulePieceStructure {
         let type_factory = fd.get_arch().and_then(|arch| arch.types.clone());
 
         // Walk every node and give it the correct storage address.
-        // baseAddr = outvn->getAddr() - baseOffset
-        let base_addr = crate::address::Address::new(
-            outvn
-                .read()
-                .unwrap()
-                .get_offset()
-                .wrapping_sub(base_offset as u64),
-        );
+        // baseAddr = outvn->getAddr() - baseOffset (ruleaction.cc:7644): the
+        // subtraction keeps the root's address space, so every relocated
+        // leaf/intermediate stays in the root's space (typically unique).
+        // Rugra's split-Address model keeps the space on the varnode, so the
+        // root's `AddressSpace` is carried through the arithmetic explicitly
+        // (PIECESTRUCT-SPACE-0001: dropping it made relocated legs land in
+        // the Register space at unique offsets).
+        let (root_space, base_off) = {
+            let r = outvn.read().unwrap();
+            (r.get_space(), r.get_offset().wrapping_sub(base_offset as u64))
+        };
         let mut any_addr_tied = outvn.read().unwrap().is_addr_tied();
         for i in 0..stack.len() {
             let (op_clone, slot, type_offset, is_leaf) = {
@@ -13760,11 +14213,17 @@ impl Rule for RulePieceStructure {
                 Some(v) => v,
                 None => continue,
             };
-            // addr = baseAddr + node.getTypeOffset(); (renormalize is a no-op for
-            // non-join spaces in Rugra's flat Address model.)
-            let addr = crate::address::Address::new(base_addr.as_u64().wrapping_add(type_offset as u64));
-            let vn_addr = vn.read().unwrap().get_offset();
-            if vn_addr == addr.as_u64() {
+            // addr = baseAddr + node.getTypeOffset(); (renormalize is a no-op
+            // for non-join spaces in Rugra's flat Address model.)
+            let addr_off = base_off.wrapping_add(type_offset as u64);
+            let addr = crate::address::Address::new(addr_off);
+            // Ghidra compares full Addresses (space + offset); Rugra mirrors
+            // that with the enum space carried beside the offset.
+            let (vn_space, vn_addr) = {
+                let r = vn.read().unwrap();
+                (r.get_space(), r.get_offset())
+            };
+            if vn_space == root_space && vn_addr == addr_off {
                 // vn already has the correct address.
                 if !is_leaf || !Self::separate_symbol(&outvn, &vn) {
                     // Part of the same symbol as the root: just mark proto-partial.
@@ -13779,10 +14238,14 @@ impl Rule for RulePieceStructure {
             let vn_size = vn.read().unwrap().get_size();
             if is_leaf {
                 // Insert a COPY: vn → newVn at the correct address, then point
-                // the PIECE input at newVn. Faithful to 7679-7699.
+                // the PIECE input at newVn. Faithful to 7661-7681. The new
+                // varnode inherits the root's address space
+                // (PIECESTRUCT-SPACE-0001), matching Ghidra's
+                // newVarnodeOut(size, addr, copyOp) where addr is
+                // space-carrying.
                 let op_addr = op_clone.read().unwrap().get_addr();
                 let copy_op = fd.new_op(1, op_addr);
-                let new_vn = fd.new_varnode_out(vn_size, addr, &copy_op);
+                let new_vn = fd.new_varnode_out_full(vn_size, root_space, addr, &copy_op);
                 any_addr_tied = any_addr_tied || new_vn.read().unwrap().is_addr_tied();
                 // newType = getExactPiece(ct, typeOffset, vn->getSize()) ?: vn->getType()
                 let new_type = type_factory
@@ -13794,16 +14257,36 @@ impl Rule for RulePieceStructure {
                             .get_exact_piece(ct.clone(), type_offset as i64, vn_size)
                     })
                     .or_else(|| vn.read().unwrap().get_type());
-                if let Some(t) = new_type {
-                    new_vn.write().unwrap().update_type(t);
+                if let Some(t) = new_type.as_ref() {
+                    new_vn.write().unwrap().update_type(t.clone());
                 }
                 fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+                // cc:7673 (vn->getType()) read before the edge wiring
+                // consumes the Arc (Rugra borrow-order glue; Ghidra reads it
+                // after opSetInput with identical value).
+                let vn_inst_type = vn.read().unwrap().get_type();
                 fd.op_set_input(&copy_op, vn, 0);
                 fd.op_set_input(
                     &crate::op::PcodeOpRef(op_clone.clone()), new_vn.clone(), slot,
                 );
                 fd.op_insert_before(&copy_op, &crate::op::PcodeOpRef(op_clone.clone()));
-                // needsResolution / resolveInFlow: not modelled in Rugra.
+                // cc:7673-7676: if vn's (instance) type needs resolution,
+                // inherit the PIECE's read resolution for the COPY's read.
+                if let Some(vt) = vn_inst_type.as_ref().filter(|t| t.needs_resolution()) {
+                    fd.inherit_resolution(
+                        vt.as_ref(),
+                        &copy_op,
+                        0,
+                        &crate::op::PcodeOpRef(op_clone.clone()),
+                        slot as i32,
+                    );
+                }
+                // cc:7677-7678: if the piece represents part of a union,
+                // resolve it — resolveInFlow populates union_map for the new
+                // COPY's def-facing edge (last-chance scoring).
+                if let Some(nt) = new_type.as_ref().filter(|t| t.needs_resolution()) {
+                    crate::unionresolve::resolve_in_flow(fd, nt, &copy_op, -1);
+                }
                 let mut nv = new_vn.write().unwrap();
                 if !nv.is_addr_tied() {
                     nv.set_proto_partial();
@@ -13830,7 +14313,10 @@ impl Rule for RulePieceStructure {
                 let lslot = match lslot { Some(s) => s, None => continue ,
                 };
                 let vn_type = vn.read().unwrap().get_type();
-                let new_vn = fd.new_varnode(vn_size, addr);
+                // Non-leaf replacement keeps the root's space as well
+                // (ruleaction.cc:7689 data.newVarnode(size, addr, type) with
+                // the space-carrying addr).
+                let new_vn = fd.new_varnode_in_space(vn_size, root_space, addr);
                 if let Some(t) = vn_type {
                     new_vn.write().unwrap().update_type(t);
                 }
@@ -13845,14 +14331,18 @@ impl Rule for RulePieceStructure {
                 }
             }
         }
-        // registerProtoPartialRoot(outvn) when !anyAddrTied: not modelled.
-        let _ = any_addr_tied;
+        // cc:7697-7698: if (!anyAddrTied) data.getMerge().
+        // registerProtoPartialRoot(outvn) — the unmapped CONCAT stack is
+        // registered so Merge::groupPartials can group it into one variable.
+        if !any_addr_tied {
+            fd.merge_state.register_proto_partial_root(&outvn);
+        }
         Ok(action_status::CHANGE)
     }
 
     // Ghidra: ruleaction.cc:7613 RulePieceStructure
     fn get_name(&self) -> &str { "piecestructure" }
-    // Ghidra: ruleaction.cc:7618 RulePieceStructure::getOpList
+    // Ghidra: ruleaction.cc:7600 RulePieceStructure::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE, OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -14005,7 +14495,13 @@ impl Rule for RulePullsubIndirect {
         let indir_addr = indir.read().unwrap().get_addr();
         let new_ind = fd.new_op(2, indir_addr);
         fd.op_set_opcode(&new_ind, OpCode::CPUI_INDIRECT);
-        let small2 = fd.new_varnode_out(new_size as usize, smalladdr2, &new_ind);
+        // Ghidra (ruleaction.cc:1011): `newVarnodeOut(newSize,smalladdr2,new_ind)`
+        // — smalladdr2 derives from `vn->getAddr()` (cc:993-996), so the new
+        // varnode lives in vn's OWN space (the INDIRECT output's space), not
+        // an implicit register pin. The creation branch above already passes
+        // this space to new_indirect_creation_in_space.
+        let vn_space = vn.read().unwrap().get_space();
+        let small2 = fd.new_varnode_out_full(new_size as usize, vn_space, smalladdr2, &new_ind);
         fd.op_set_input(&new_ind, small1, 0);
         // data.opSetInput(new_ind, data.newVarnodeIop(targ_op), 1);
         let iop_vn = fd.new_varnode_iop(&targ_op);
@@ -14043,7 +14539,7 @@ impl RuleIndirectCollapse {
 }
 
 impl Rule for RuleIndirectCollapse {
-    // Ghidra: ruleaction.cc:3177 RuleIndirectCollapse::applyOp
+    // Ghidra: ruleaction.cc:3157 RuleIndirectCollapse::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -14186,7 +14682,7 @@ impl Rule for RuleIndirectCollapse {
 
     // Ghidra: ruleaction.cc:3169 RuleIndirectCollapse
     fn get_name(&self) -> &str { "indirectcollapse" }
-    // Ghidra: ruleaction.cc:3171 RuleIndirectCollapse::getOpList
+    // Ghidra: ruleaction.cc:3151 RuleIndirectCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INDIRECT] }
 }
 
@@ -14208,7 +14704,7 @@ impl RuleTransformCpool {
 }
 
 impl Rule for RuleTransformCpool {
-    // Ghidra: ruleaction.cc:3915 RuleTransformCpool::applyOp
+    // Ghidra: ruleaction.cc:3895 RuleTransformCpool::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -14283,7 +14779,7 @@ impl Rule for RuleTransformCpool {
 
     // Ghidra: ruleaction.cc:3904 RuleTransformCpool
     fn get_name(&self) -> &str { "transformcpool" }
-    // Ghidra: ruleaction.cc:3909 RuleTransformCpool::getOpList
+    // Ghidra: ruleaction.cc:3889 RuleTransformCpool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CPOOLREF] }
 }
 
@@ -14309,7 +14805,7 @@ impl RuleSwitchSingle {
 }
 
 impl Rule for RuleSwitchSingle {
-    // Ghidra: ruleaction.cc:5430 RuleSwitchSingle::applyOp
+    // Ghidra: ruleaction.cc:5412 RuleSwitchSingle::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -14410,7 +14906,7 @@ impl Rule for RuleSwitchSingle {
 
     // Ghidra: ruleaction.cc:5422 RuleSwitchSingle
     fn get_name(&self) -> &str { "switchsingle" }
-    // Ghidra: ruleaction.cc:5424 RuleSwitchSingle::getOpList
+    // Ghidra: ruleaction.cc:5406 RuleSwitchSingle::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BRANCHIND] }
 }
 
@@ -14432,7 +14928,7 @@ impl RuleFuncPtrEncoding {
 }
 
 impl Rule for RuleFuncPtrEncoding {
-    // Ghidra: ruleaction.cc:9926 RuleFuncPtrEncoding::applyOp
+    // Ghidra: ruleaction.cc:9908 RuleFuncPtrEncoding::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -14473,7 +14969,7 @@ impl Rule for RuleFuncPtrEncoding {
 
     // Ghidra: ruleaction.cc:9914 RuleFuncPtrEncoding
     fn get_name(&self) -> &str { "funcptrencoding" }
-    // Ghidra: ruleaction.cc:9920 RuleFuncPtrEncoding::getOpList
+    // Ghidra: ruleaction.cc:9902 RuleFuncPtrEncoding::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CALLIND] }
 }
 
@@ -14798,7 +15294,7 @@ impl RulePtraddUndo {
 }
 
 impl Rule for RulePtraddUndo {
-    // Ghidra: ruleaction.cc:6927 RulePtraddUndo::applyOp
+    // Ghidra: ruleaction.cc:6909 RulePtraddUndo::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -14822,21 +15318,27 @@ impl Rule for RulePtraddUndo {
         //   ->getAlignSize()==size && ind!=0 return 0;
         // If the varnode has a pointer type whose pointed-to size matches the
         // PTRADD element size AND the index is non-zero, this is still a valid
-        // pointer arithmetic — leave it alone.
-        let is_correctly_typed_ptr = basevn
-            .read()
-            .unwrap()
-            .get_type()
-            .map(|dt| {
-                use crate::type_system::datatype::{Datatype, TypeMetatype};
-                if dt.get_metatype() != TypeMetatype::Pointer { return false; }
-                if let Datatype::Pointer(tp) = dt.as_ref() {
-                    tp.ptr_to.get_align_size() == size as usize
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false); // no type ⇒ not confirmed ⇒ proceed with undo
+        // pointer arithmetic — leave it alone. ruleaction.cc:6915 is the
+        // READ-FACING consult: a pointer-to-union base resolves to the field
+        // pointer before the alignSize comparison, so a PTRADD AddTree built
+        // from the resolved field is not undone.
+        let is_correctly_typed_ptr = {
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+                .or_else(|| basevn.read().unwrap().get_type())
+                .map(|dt| {
+                    use crate::type_system::datatype::{Datatype, TypeMetatype};
+                    if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+                    if let Datatype::Pointer(tp) = dt.as_ref() {
+                        let ws = tp.wordsize.max(1) as u64;
+                        tp.ptr_to.get_align_size() as u64
+                            == crate::space::AddrSpace::address_to_byte_int(size as i64, ws as u32) as u64
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false) // no type ⇒ not confirmed ⇒ proceed with undo
+        };
         if is_correctly_typed_ptr {
             let ind_is_zero = indvn.read().unwrap().is_constant()
                 && indvn.read().unwrap().get_offset() == 0;
@@ -14852,7 +15354,7 @@ impl Rule for RulePtraddUndo {
 
     // Ghidra: ruleaction.cc:6915 RulePtraddUndo
     fn get_name(&self) -> &str { "ptraddundo" }
-    // Ghidra: ruleaction.cc:6921 RulePtraddUndo::getOpList
+    // Ghidra: ruleaction.cc:6903 RulePtraddUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRADD] }
 }
 
@@ -15092,7 +15594,7 @@ impl RulePtrsubUndo {
                         if extra < 0 || extra >= s.get_size() as i64 {
                             // type.cc:1157 — testForArraySlack allows PTRSUB into
                             // an arrayed component even when extra is OOB.
-                            if !Self::test_for_array_slack(s, extra) {
+                            if !Self::test_for_array_slack(s.as_ref(), extra) {
                                 return false;
                             }
                         }
@@ -15115,7 +15617,7 @@ impl RulePtrsubUndo {
     /// Faithful to `getConstOffsetBack` (ruleaction.cc:6970-7010). Returns the
     /// sum of constants in the additive tree rooted at `vn`, and the biggest
     /// constant multiplier in `multiplier` (0 if none).
-    // Ghidra: ruleaction.cc:6970 RulePtrsubUndo::getConstOffsetBack
+    // Ghidra: ruleaction.cc:6952 RulePtrsubUndo::getConstOffsetBack
     fn get_const_offset_back(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         multiplier: &mut i64,
@@ -15169,7 +15671,7 @@ impl RulePtrsubUndo {
     /// Faithful to `getExtraOffset` (ruleaction.cc:7011-7059). Walks the
     /// additive expression using `outvn`'s lone descendant, returning the extra
     /// constant offset and the biggest multiplier.
-    // Ghidra: ruleaction.cc:7011 RulePtrsubUndo::getExtraOffset
+    // Ghidra: ruleaction.cc:6993 RulePtrsubUndo::getExtraOffset
     fn get_extra_offset(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         multiplier: &mut i64,
@@ -15256,7 +15758,7 @@ impl RulePtrsubUndo {
     /// Faithful to `removeLocalAddRecurse` (ruleaction.cc:7061-7094). Converts
     /// INT_ADD-with-constant nodes in the additive tree into COPYs, returning
     /// the sum of removed constants.
-    // Ghidra: ruleaction.cc:7061 RulePtrsubUndo::removeLocalAddRecurse
+    // Ghidra: ruleaction.cc:7043 RulePtrsubUndo::removeLocalAddRecurse
     fn remove_local_add_recurse(
         op: &crate::op::PcodeOpRef,
         slot: usize,
@@ -15303,7 +15805,7 @@ impl RulePtrsubUndo {
     /// Faithful to `removeLocalAdds` (ruleaction.cc:7096-7143). Walks the
     /// additive chain rooted at `vn`, converting INT_ADD/PTRSUB/PTRADD constant
     /// contributions into COPYs / undoing PTRADDs, and returns the removed sum.
-    // Ghidra: ruleaction.cc:7096 RulePtrsubUndo::removeLocalAdds
+    // Ghidra: ruleaction.cc:7078 RulePtrsubUndo::removeLocalAdds
     fn remove_local_adds(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         fd: &mut Funcdata,
@@ -15398,7 +15900,7 @@ impl RulePtrsubUndo {
 }
 
 impl Rule for RulePtrsubUndo {
-    // Ghidra: ruleaction.cc:7146 RulePtrsubUndo::applyOp
+    // Ghidra: ruleaction.cc:7128 RulePtrsubUndo::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -15418,19 +15920,20 @@ impl Rule for RulePtrsubUndo {
         let mut multiplier: i64 = 0;
         let extra = Self::get_extra_offset(op_arc, &mut multiplier);
         // if (basevn->getTypeReadFacing(op)->isPtrsubMatching(val,extra,multiplier)) return 0;
-        // We approximate isPtrsubMatching (type.cc:1123-1162) for the core
-        // TypePointer cases. wordsize defaults to 1 (addressToByteInt is a no-op).
-        // testForArraySlack and TypePointerRel are not yet modelled.
-        let still_matching = basevn
-            .read()
-            .unwrap()
-            .get_type()
+        // ruleaction.cc:7138: the READ-FACING consult — a PTRSUB whose base
+        // still carries the whole pointer-to-union type resolves to the
+        // field pointer first; the inherited union_map edge (AddTree
+        // buildTree / RS0 rewrites) makes the resolved form match, which is
+        // what keeps RulePtrsubUndo from undoing the freshly built field
+        // PTRSUB (the AddTree↔PtrsubUndo rewrite ping-pong otherwise).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let still_matching = crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+            .or_else(|| basevn.read().unwrap().get_type())
             .map(|dt| Self::is_ptrsub_matching(&dt, val, extra, multiplier))
             .unwrap_or(false);
         if still_matching { return Ok(action_status::NO_CHANGE); }
 
         // data.opSetOpcode(op,CPUI_INT_ADD); op->clearStopTypePropagation();
-        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
         op_arc.write().unwrap().clear_stop_type_propagation();
         // removeLocalAdds(op->getOut(), data) — walk the PTRSUB output's
@@ -15452,7 +15955,7 @@ impl Rule for RulePtrsubUndo {
 
     // Ghidra: ruleaction.cc:6949 RulePtrsubUndo
     fn get_name(&self) -> &str { "ptrsubundo" }
-    // Ghidra: ruleaction.cc:6955 RulePtrsubUndo::getOpList
+    // Ghidra: ruleaction.cc:6937 RulePtrsubUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
 
@@ -15477,7 +15980,7 @@ impl RuleSegment {
 }
 
 impl Rule for RuleSegment {
-    // Ghidra: ruleaction.cc:9013 RuleSegment::applyOp
+    // Ghidra: ruleaction.cc:8995 RuleSegment::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -15565,7 +16068,7 @@ impl Rule for RuleSegment {
 
     // Ghidra: ruleaction.cc:9005 RuleSegment
     fn get_name(&self) -> &str { "segment" }
-    // Ghidra: ruleaction.cc:9007 RuleSegment::getOpList
+    // Ghidra: ruleaction.cc:8989 RuleSegment::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SEGMENTOP] }
 }
 
@@ -15654,7 +16157,7 @@ fn find_contiguous_whole(
 /// Search for concatenations with unlikely things to inform return/parameter
 /// consumption calculation.
 ///
-/// Faithful to `RulePiecePathology` (ruleaction.cc:10578-10616) plus helpers
+/// Faithful to `RulePiecePathology` (ruleaction.cc:10560-10594) plus helpers
 /// `isPathology` (ruleaction.cc:10427-10505) and `tracePathologyForward`
 /// (ruleaction.cc:10506-10570).
 ///
@@ -15677,7 +16180,7 @@ impl RulePiecePathology {
     /// ops on a worklist to explore all merge branches. Returns true as soon as
     /// a CALL/CALLIND (or INDIRECT-around-a-call) with a non-active output is
     /// reached, or the varnode is a plain function input.
-    // Ghidra: ruleaction.cc:10427 RulePiecePathology::isPathology
+    // Ghidra: ruleaction.cc:10409 RulePiecePathology::isPathology
     fn is_pathology(
         start_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         fd: &Funcdata,
@@ -15811,7 +16314,7 @@ impl RulePiecePathology {
     /// `set_input_bytes_consumed`) or a RETURN (record
     /// `set_return_bytes_consumed`). Returns the number of new bytes labeled as
     /// unconsumed (a non-zero value signals a change).
-    // Ghidra: ruleaction.cc:10506 RulePiecePathology::tracePathologyForward
+    // Ghidra: ruleaction.cc:10488 RulePiecePathology::tracePathologyForward
     fn trace_pathology_forward(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         fd: &mut Funcdata,
@@ -15937,11 +16440,11 @@ impl RulePiecePathology {
 }
 
 impl Rule for RulePiecePathology {
-    // Ghidra: ruleaction.cc:10578 RulePiecePathology::applyOp
+    // Ghidra: ruleaction.cc:10560 RulePiecePathology::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
+        // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10560-10594).
         use crate::op::pcodeop_flags;
         let (vn, lsb_vn) = {
             let op = op_arc.read().unwrap();
@@ -16022,15 +16525,15 @@ impl Rule for RulePiecePathology {
 
     // Ghidra: ruleaction.cc:10561 RulePiecePathology
     fn get_name(&self) -> &str { "piecepathology" }
-    // Ghidra: ruleaction.cc:10572 RulePiecePathology::getOpList
+    // Ghidra: ruleaction.cc:10554 RulePiecePathology::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
 /// Simplify various conditional move situations.
 ///
 /// Faithful to `RuleConditionalMove` (ruleaction.cc:9390-9558) plus helpers
-/// `checkBoolean` (9277-9303), `gatherExpression` (9305-9344),
-/// `constructBool` (9346-9381).
+/// `checkBoolean` (9259-9276), `gatherExpression` (9287-9316),
+/// `constructBool` (9328-9341).
 ///
 /// NOTE: This rule is fundamentally block/control-flow driven. The block
 /// in-edge analysis (find the common root block ending in a CBRANCH), the
@@ -16049,10 +16552,10 @@ impl RuleConditionalMove {
     // Ghidra: ruleaction.cc:9361 RuleConditionalMove
     pub fn new() -> Self { Self }
 
-    /// Faithful to `checkBoolean` (ruleaction.cc:9277-9303). Given a MULTIEQUAL
+    /// Faithful to `checkBoolean` (ruleaction.cc:9259-9276). Given a MULTIEQUAL
     /// input, return its boolean root if it is a boolean value (bool-output op
     /// or a COPY of a 0/1 constant), else None.
-    // Ghidra: ruleaction.cc:9277 RuleConditionalMove::checkBoolean
+    // Ghidra: ruleaction.cc:9259 RuleConditionalMove::checkBoolean
     fn check_boolean(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -16073,7 +16576,7 @@ impl RuleConditionalMove {
         None
     }
 
-    /// Faithful to `gatherExpression` (ruleaction.cc:9305-9334). Collects the
+    /// Faithful to `gatherExpression` (ruleaction.cc:9287-9316). Collects the
     /// set of PcodeOps (in `branch`) that define `vn` and would need to be
     /// duplicated to propagate the expression out of the branch.
     ///
@@ -16085,7 +16588,7 @@ impl RuleConditionalMove {
     /// op duplicator). Callers that get a non-empty `ops` therefore cannot build
     /// the cloned expression and must bail. The empty-list case — which covers
     /// values formed before the branch — works without cloning.
-    // Ghidra: ruleaction.cc:9305 RuleConditionalMove::gatherExpression
+    // Ghidra: ruleaction.cc:9287 RuleConditionalMove::gatherExpression
     fn gather_expression(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         ops: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
@@ -16155,14 +16658,14 @@ impl RuleConditionalMove {
         true
     }
 
-    /// Faithful to `constructBool` (ruleaction.cc:9346-9381). Returns the
+    /// Faithful to `constructBool` (ruleaction.cc:9328-9341). Returns the
     /// Varnode representing the (possibly reproduced) boolean expression.
     ///
     /// Ghidra uses `CloneBlockOps::cloneExpression` to duplicate the `ops` set
     /// before `insertop`. Rugra has no such cross-block cloner, so:
     ///   - `ops` empty   → return `vn` itself (faithful, no cloning needed).
     ///   - `ops` non-empty → return None (cannot clone); caller bails.
-    // Ghidra: ruleaction.cc:9346 RuleConditionalMove::constructBool
+    // Ghidra: ruleaction.cc:9328 RuleConditionalMove::constructBool
     fn construct_bool(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
@@ -16178,7 +16681,7 @@ impl RuleConditionalMove {
 }
 
 impl Rule for RuleConditionalMove {
-    // Ghidra: ruleaction.cc:9390 RuleConditionalMove::applyOp
+    // Ghidra: ruleaction.cc:9372 RuleConditionalMove::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -16427,7 +16930,7 @@ impl Rule for RuleConditionalMove {
 
     // Ghidra: ruleaction.cc:9361 RuleConditionalMove
     fn get_name(&self) -> &str { "conditionalmove" }
-    // Ghidra: ruleaction.cc:9384 RuleConditionalMove::getOpList
+    // Ghidra: ruleaction.cc:9366 RuleConditionalMove::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
@@ -16435,7 +16938,7 @@ impl Rule for RuleConditionalMove {
 ///
 /// Faithful to `RuleIgnoreNan` (ruleaction.cc:9740-9787) plus helpers
 /// `checkBackForCompare` (9622-9662), `isAnotherNan` (9664-9694),
-/// `testForComparison` (9696-9738).
+/// `testForComparison` (9678-9720).
 ///
 /// The `nan_ignore_all` short-circuit (treat NaN as always false) is
 /// implemented via `get_arch()`. When `nan_ignore_all` is false, the deeper
@@ -16470,7 +16973,7 @@ impl RuleIgnoreNan {
     /// comparison whose input is functionally equal to `float_var`. The root
     /// may be the direct output of a comparison, a BOOL_NEGATE of one, or a
     /// BOOL_AND/BOOL_OR combining a comparison output.
-    // Ghidra: ruleaction.cc:9622 RuleIgnoreNan::checkBackForCompare
+    // Ghidra: ruleaction.cc:9604 RuleIgnoreNan::checkBackForCompare
     fn check_back_for_compare(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -16539,7 +17042,7 @@ impl RuleIgnoreNan {
     ///
     /// Test if `vn` is produced by a NaN operation (directly, or via a
     /// BOOL_NEGATE of a NaN output).
-    // Ghidra: ruleaction.cc:9664 RuleIgnoreNan::isAnotherNan
+    // Ghidra: ruleaction.cc:9646 RuleIgnoreNan::isAnotherNan
     fn is_another_nan(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
         if !vn.read().unwrap().is_written() { return false; }
@@ -16563,7 +17066,7 @@ impl RuleIgnoreNan {
         opc == OpCode::CPUI_FLOAT_NAN
     }
 
-    /// Faithful to `RuleIgnoreNan::testForComparison` (ruleaction.cc:9696-9738).
+    /// Faithful to `RuleIgnoreNan::testForComparison` (ruleaction.cc:9678-9720).
     ///
     /// The NaN output reaches `op` through input `slot`. If `op` combines it
     /// (BOOL_OR/BOOL_AND/INT_EQUAL/INT_NOTEQUAL) with a floating-point
@@ -16573,7 +17076,7 @@ impl RuleIgnoreNan {
     /// the output varnode of `op` when `op`'s opcode equals `match_code` (so the
     /// caller can continue the chain), else None. Increments `count` on a real
     /// transformation.
-    // Ghidra: ruleaction.cc:9696 RuleIgnoreNan::testForComparison
+    // Ghidra: ruleaction.cc:9678 RuleIgnoreNan::testForComparison
     fn test_for_comparison(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -16626,7 +17129,7 @@ impl RuleIgnoreNan {
     /// is another CBRANCH reading (in slot 1) a comparison on `float_var`, and
     /// that block's other out-edge rejoins the sibling branch, replace the NaN
     /// input with a constant.
-    // Ghidra: ruleaction.cc:9722 RuleIgnoreNan::testForComparison
+    // Ghidra: ruleaction.cc:9678 RuleIgnoreNan::testForComparison
     fn try_cbranch_protection(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -16705,7 +17208,7 @@ impl RuleIgnoreNan {
 }
 
 impl Rule for RuleIgnoreNan {
-    // Ghidra: ruleaction.cc:9740 RuleIgnoreNan::applyOp
+    // Ghidra: ruleaction.cc:9722 RuleIgnoreNan::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -16790,7 +17293,7 @@ impl Rule for RuleIgnoreNan {
 
     // Ghidra: ruleaction.cc:9604 RuleIgnoreNan
     fn get_name(&self) -> &str { "ignorenan" }
-    // Ghidra: ruleaction.cc:9609 RuleIgnoreNan::getOpList
+    // Ghidra: ruleaction.cc:9591 RuleIgnoreNan::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_NAN] }
 }
 
@@ -17009,14 +17512,24 @@ impl Rule for RuleLoadVarnode {
 
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         // newvn = data.newVarnode(size, baseoff, offoff);
-        // Rugra's new_varnode takes (size, Address) and defaults to Ram space.
-        // We create a varnode in the resolved space at the byte offset.
-        let newvn = fd.vbank.create_with_space(out_size, baseoff, offoff);
-        // funcdata_varnode.cc:148-172 newVarnode's symbol tail
-        // (localmap->queryProperties -> setSymbolProperties), which attaches
-        // the DWARF global's typelocked symbol type to the address varnode
-        // (verified patch from w-typeflow; RULE-LOADVARNODE-SYMBOLTAIL-0001).
-        fd.set_varnode_properties(&newvn);
+        // newVarnode (funcdata_varnode.cc:148-169) = VarnodeBank::create +
+        // assignHigh + the symbol tail: localmap->queryProperties(m, s,
+        // Address() /*invalid usepoint*/, vflags) -> setSymbolProperties /
+        // setFlags(vflags & ~typelock). The ScopeLocal leg of that walk is
+        // what puts mapped|addrtied on stack locals (database.cc:1268
+        // stackContainer starts at the function's own scope; the in-scope
+        // discovery arm is mapped|addrtied, database.cc:1271-1277), and
+        // BlockBasic::isComplex (block.cc:2419) later reads isAddrTied to
+        // decide whether such a calculation is a statement. The old
+        // create_with_space + set_varnode_properties composition bypassed
+        // the ScopeLocal leg (its mirror only walks the Ram/global parent
+        // channel), so stack locals created here never took addrtied and
+        // structuring saw them as non-statements (file2string ord-76
+        // blockstructure count divergence, lane sb-f2string).
+        // RULE-LOADVARNODE-SYMBOLTAIL-0001 keeps its Ram/global behavior:
+        // the shared tail's parent leg reproduces the DWARF-global
+        // typelocked-symbol attach the old call was added for.
+        let newvn = fd.new_varnode_in_space(out_size, baseoff, crate::address::Address::new(offoff));
 
         // data.opSetInput(op, newvn, 0);
         fd.op_set_input(&op_ref, newvn, 0);
@@ -17116,6 +17629,60 @@ impl Rule for RuleStoreVarnode {
             .vbank
             .create_def_with_space(val_size, baseoff, offset_bytes, &op_ref.0);
         op_ref.0.write().unwrap().output = Some(new_out.clone());
+        // cc:110 assignHigh(vn) + cc:112-113 laned-register witness — the
+        // remaining newVarnodeOut ctor steps between setOutput and the
+        // queryProperties tail.
+        let _ = fd.assign_high(&new_out);
+        if val_size >= fd.min_laned_size as usize {
+            fd.check_for_laned_register(val_size, baseoff, crate::address::Address::new(offset_bytes));
+        }
+        // cc:104-122 newVarnodeOut's symbol tail: localmap->queryProperties(
+        // m, s, op->getAddr(), vflags) -> setSymbolProperties (varnode.cc:
+        // 410-424: setFlags(entry->getAllFlags() & ~typelock)) / setFlags(
+        // vflags & ~typelock). The query's ScopeLocal leg (database.cc:1268)
+        // is what puts mapped|addrtied on stack STORE->COPY outputs;
+        // set_varnode_properties below only mirrors the Ram/global parent
+        // channel, so the local leg is folded here first. Its MAPPED bit
+        // also arms set_varnode_properties' isMapped guard (cc:28), making
+        // the follow-up call a no-op exactly when the local scope answered —
+        // matching newVarnodeOut's single-query tail for stack addresses
+        // while keeping the Ram/global channel for other spacebase spaces.
+        {
+            let op_usepoint = op_ref.0.read().unwrap().get_addr().as_u64();
+            let answered = fd.scope.as_ref().map(|scope| {
+                let property = |spc: crate::space::AddressSpace, _off: u64| -> u32 {
+                    if spc != crate::space::AddressSpace::Ram {
+                        return 0;
+                    }
+                    fd.arch
+                        .as_ref()
+                        .and_then(|a| a.symboltab.clone())
+                        .map(|t| {
+                            t.read()
+                                .unwrap()
+                                .get_property(crate::address::Address::new(_off))
+                        })
+                        .unwrap_or(0)
+                };
+                let outcome = scope.query_properties_ex(
+                    baseoff,
+                    offset_bytes,
+                    val_size as i64,
+                    Some(op_usepoint),
+                    None,
+                    &property,
+                );
+                if !matches!(
+                    outcome.final_scope,
+                    crate::varmap::QueryFinalScope::None
+                ) {
+                    let fl = outcome.flags
+                        & !crate::varnode::varnode_flags::TYPELOCK;
+                    new_out.write().unwrap().set_flags(fl);
+                }
+            });
+            let _ = answered;
+        }
         fd.set_varnode_properties(&new_out);
 
         // op->getOut()->setStackStore(); // Mark as originally from CPUI_STORE
@@ -17162,12 +17729,14 @@ impl RulePushPtr {
     // Ghidra: ruleaction.cc:6852 RulePushPtr
     pub fn new() -> Self { Self }
 
-    /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6783-6789).
+    /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6765-6771).
     ///
     /// Build a duplicate of `vn` as an output of `op`, preserving the storage
-    /// address if possible. AddrTied / internal-space varnodes get a fresh
-    /// unique; otherwise a new varnode-out at the original address.
-    // Ghidra: ruleaction.cc:6783 RulePushPtr::buildVarnodeOut
+    /// address if possible. AddrTied / internal-space (unique) varnodes get a
+    /// fresh unique; otherwise a new varnode-out at the original address —
+    /// `newVarnodeOut(vn->getSize(), vn->getAddr(), op)` (cc:6770) carries
+    /// vn's OWN space.
+    // Ghidra: ruleaction.cc:6765 RulePushPtr::buildVarnodeOut
     fn build_varnode_out(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &crate::op::PcodeOpRef,
@@ -17177,10 +17746,14 @@ impl RulePushPtr {
             let v = vn.read().unwrap();
             (v.is_addr_tied(), v.get_space(), v.get_size(), *v.get_addr())
         };
-        if is_addr_tied || space == crate::space::AddressSpace::Iop {
+        // cc:6768: `vn->isAddrTied() || vn->getSpace()->getType() == IPTR_INTERNAL`
+        // — IPTR_INTERNAL is the UNIQUE space (SpaceType::Internal), not the
+        // iop space: duplicated ZEXT/SEXT/2COMP/MULT outputs are typically
+        // unique-space and must take the fresh-unique allocation.
+        if is_addr_tied || space.is_unique() {
             return fd.new_unique_out(size, op);
         }
-        fd.new_varnode_out(size, addr, op)
+        fd.new_varnode_out_full(size, space, addr, op)
     }
 
     /// Faithful to `RulePushPtr::collectDuplicateNeeds` (ruleaction.cc:6798-6817).
@@ -17188,7 +17761,7 @@ impl RulePushPtr {
     /// Walk back through the chain of ZEXT/SEXT/2COMP/INT_MULT(const) ops
     /// building the offset; any with a lone descendant must be duplicated when
     /// the pointer is pushed.
-    // Ghidra: ruleaction.cc:6798 RulePushPtr::collectDuplicateNeeds
+    // Ghidra: ruleaction.cc:6780 RulePushPtr::collectDuplicateNeeds
     fn collect_duplicate_needs(
         reslist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
         mut vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -17237,7 +17810,7 @@ impl RulePushPtr {
     /// Duplicate the given PcodeOp so each output descendant gets its own copy
     /// inserted just before it, then destroy the original. Assumes the op has a
     /// single primary input (slot 0) and, optionally, a constant second input.
-    // Ghidra: ruleaction.cc:7469 RulePushPtr::duplicateNeed
+    // Ghidra: ruleaction.cc:6809 RulePushPtr::duplicateNeed
     fn duplicate_need(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         fd: &mut Funcdata) {
@@ -17305,7 +17878,7 @@ impl RulePushPtr {
 }
 
 impl Rule for RulePushPtr {
-    // Ghidra: ruleaction.cc:6863 RulePushPtr::applyOp
+    // Ghidra: ruleaction.cc:6845 RulePushPtr::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -17320,12 +17893,16 @@ impl Rule for RulePushPtr {
         for s in 0..num_input {
             let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue ,
             };
-            let is_ptr = in_vn
-                .read()
-                .unwrap()
-                .get_type_read_facing()
-                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
-                .unwrap_or(false);
+            // fd-aware twin: op reads in_vn at slot s (ruleaction.cc:6854
+            // vni->getTypeReadFacing(op)).
+            let is_ptr = crate::unionresolve::vn_type_read_facing(
+                fd,
+                &in_vn,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                s as i32,
+            )
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+            .unwrap_or(false);
             if is_ptr {
                 slot = s;
                 vni = Some(in_vn);
@@ -17339,7 +17916,7 @@ impl Rule for RulePushPtr {
         }
 
         // if (evaluatePointerExpression(op, slot) != 1) return 0;
-        if RulePtrArith::evaluate_pointer_expression(op_arc, slot) != 1 {
+        if RulePtrArith::evaluate_pointer_expression(fd, op_arc, slot) != 1 {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -17416,7 +17993,7 @@ impl Rule for RulePushPtr {
 
     // Ghidra: ruleaction.cc:6852 RulePushPtr
     fn get_name(&self) -> &str { "pushptr" }
-    // Ghidra: ruleaction.cc:6857 RulePushPtr::getOpList
+    // Ghidra: ruleaction.cc:6839 RulePushPtr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -17444,8 +18021,9 @@ impl RulePtrArith {
     /// Tests whether the node immediately above the putative base pointer also
     /// looks like a base pointer. Returns true if `slot` holds the *preferred*
     /// pointer (i.e. there is no earlier pointer that should be pushed first).
-    // Ghidra: ruleaction.cc:6558 RulePtrArith::verifyPreferredPointer
+    // Ghidra: ruleaction.cc:6540 RulePtrArith::verifyPreferredPointer
     fn verify_preferred_pointer(
+        fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
     ) -> bool {
@@ -17459,12 +18037,21 @@ impl RulePtrArith {
             return true;
         }
         // Find which input of preOp is a pointer.
+        // fd-aware twins: preOp reads its in(preslot) at slot preslot
+        // (ruleaction.cc:6548/6550).
         let mut preslot: usize = 0;
         let pre_is_ptr_0 = pre_op
             .read()
             .unwrap()
             .get_in(0)
-            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .and_then(|v| {
+                crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    v,
+                    &crate::op::PcodeOpRef(pre_op.clone()),
+                    0,
+                )
+            })
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if !pre_is_ptr_0 {
@@ -17473,7 +18060,14 @@ impl RulePtrArith {
                 .read()
                 .unwrap()
                 .get_in(1)
-                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .and_then(|v| {
+                    crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        v,
+                        &crate::op::PcodeOpRef(pre_op.clone()),
+                        1,
+                    )
+                })
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if !pre_is_ptr_1 {
@@ -17481,7 +18075,7 @@ impl RulePtrArith {
             }
         }
         // return (1 != evaluatePointerExpression(preOp, preslot));
-        Self::evaluate_pointer_expression(&pre_op, preslot) != 1
+        Self::evaluate_pointer_expression(fd, &pre_op, preslot) != 1
     }
 
     /// Faithful to `RulePtrArith::evaluatePointerExpression` (ruleaction.cc:6586-6627).
@@ -17492,8 +18086,9 @@ impl RulePtrArith {
     ///   - 0 → no action (expression not fully linked / should not convert)
     ///   - 1 → a push action is needed first
     ///   - 2 → the conversion can proceed
-    // Ghidra: ruleaction.cc:6876 RulePtrArith::evaluatePointerExpression
+    // Ghidra: ruleaction.cc:6568 RulePtrArith::evaluatePointerExpression
     fn evaluate_pointer_expression(
+        fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
     ) -> i32 {
@@ -17506,11 +18101,20 @@ impl RulePtrArith {
             return 0;
         }
         let other_slot = if slot == 0 { 1 } else { 0 };
+        // fd-aware twin: op reads in(1-slot) at slot other_slot
+        // (ruleaction.cc:6576).
         let other_is_ptr = op
             .read()
             .unwrap()
             .get_in(other_slot)
-            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .and_then(|v| {
+                crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    v,
+                    &crate::op::PcodeOpRef(op.clone()),
+                    other_slot as i32,
+                )
+            })
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if other_is_ptr {
@@ -17536,14 +18140,18 @@ impl RulePtrArith {
                 if other_vn.read().unwrap().is_free() && !other_vn.read().unwrap().is_constant() {
                     return 0;
                 }
-                let ov_is_ptr = other_vn
-                    .read()
-                    .unwrap()
-                    .get_type_read_facing()
-                    .map(|dt| {
-                        dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
-                    })
-                    .unwrap_or(false);
+                // fd-aware twin: decOp reads otherVn (=decOp->getIn(1-slot))
+                // at slot other_idx (ruleaction.cc:6588).
+                let ov_is_ptr = crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &other_vn,
+                    &crate::op::PcodeOpRef(dec_op.clone()),
+                    other_idx as i32,
+                )
+                .map(|dt| {
+                    dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
+                })
+                .unwrap_or(false);
                 if ov_is_ptr {
                     res = 2; // Do not push in the presence of other pointers.
                 }
@@ -17588,7 +18196,7 @@ impl RulePtrArith {
 }
 
 impl Rule for RulePtrArith {
-    // Ghidra: ruleaction.cc:6654 RulePtrArith::applyOp
+    // Ghidra: ruleaction.cc:6636 RulePtrArith::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -17600,11 +18208,19 @@ impl Rule for RulePtrArith {
         let num_input = op_arc.read().unwrap().num_input();
         let mut slot: usize = num_input;
         for s in 0..num_input {
+            // fd-aware twin: op reads in(s) at slot s (ruleaction.cc:6645).
             let is_ptr = op_arc
                 .read()
                 .unwrap()
                 .get_in(s)
-                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .and_then(|v| {
+                    crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        v,
+                        &crate::op::PcodeOpRef(op_arc.clone()),
+                        s as i32,
+                    )
+                })
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if is_ptr { slot = s; break; }
@@ -17612,10 +18228,10 @@ impl Rule for RulePtrArith {
         if slot == num_input {
             return Ok(action_status::NO_CHANGE);
         }
-        if Self::evaluate_pointer_expression(op_arc, slot) != 2 {
+        if Self::evaluate_pointer_expression(fd, op_arc, slot) != 2 {
             return Ok(action_status::NO_CHANGE);
         }
-        if !Self::verify_preferred_pointer(op_arc, slot) {
+        if !Self::verify_preferred_pointer(fd, op_arc, slot) {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -17633,7 +18249,7 @@ impl Rule for RulePtrArith {
 
     // Ghidra: ruleaction.cc:6629 RulePtrArith
     fn get_name(&self) -> &str { "ptrarith" }
-    // Ghidra: ruleaction.cc:6648 RulePtrArith::getOpList
+    // Ghidra: ruleaction.cc:6630 RulePtrArith::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -17649,7 +18265,15 @@ struct AddTreeState<'a> {
     base_op: std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     base_slot: usize,
     ptr: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    /// The pointed-to data-type (ct->getPtrTo()).
+    /// The pointer data-type read facing the base op (Ghidra field `ct`,
+    /// ruleaction.hh:48). Needed for the wordsize conversions and the
+    /// `TypePointerRel` (alternate form) logic.
+    ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    /// A copy of `ct` if it is a formal relative pointer (Ghidra field
+    /// `pRelType`, ruleaction.hh:50); `None` otherwise or once
+    /// `init_alternate_form` has dropped the relative interpretation.
+    p_rel: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    /// The pointed-to data-type (ct->getPtrTo(), or the rel parent).
     base_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
     ptrsize: usize,
     ptrmask: u64,
@@ -17657,7 +18281,7 @@ struct AddTreeState<'a> {
     size: i64,
     multsum: u64,
     nonmultsum: u64,
-    biggest_non_mult_coeff: u64,
+    biggest_non_mult_coeff: u32,
     multiple: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     coeff: Vec<i64>,
     nonmult: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
@@ -17673,10 +18297,11 @@ struct AddTreeState<'a> {
 
 impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::AddTreeState` ctor (ruleaction.cc:6036-6069).
-    // Ghidra: ruleaction.cc:6036 AddTreeState::AddTreeState
+    // Ghidra: ruleaction.cc:6018 AddTreeState::AddTreeState
     fn new(
         data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize,
     ) -> Self {
+        use crate::type_system::datatype::{type_flags, Datatype, TypeMetatype};
         // ptr = op->getIn(slot). The caller guarantees slot is a pointer, so it
         // must exist; if not, fabricate a 1-byte const placeholder so the state
         // is well-formed (apply() will bail via the type checks).
@@ -17687,54 +18312,65 @@ impl<'a> AddTreeState<'a> {
             .cloned()
             .unwrap_or_else(|| data.vbank.create_constant(1, 0)
         );
-        let (ct, ptrsize, base_type, size, is_degenerate) = {
+        // Ghidra 6037-6038: ct = ptr->getTypeReadFacing(op); ptrsize/ptrmask.
+        let (ct, ptrsize) = {
+            let ct = crate::unionresolve::vn_type_read_facing(
+                data,
+                &ptr,
+                &crate::op::PcodeOpRef(op.clone()),
+                slot as i32,
+            );
             let v = ptr.read().unwrap();
-            let ct = v.get_type_read_facing();
-            let ptrsize = v.get_size();
-            let (base_type, size, is_degenerate) = if let Some(ref ct_arc) = ct {
-                use crate::type_system::datatype::{Datatype, TypeMetatype};
+            (ct, v.get_size())
+        };
+        let ptrmask = crate::address::calc_mask(ptrsize);
+        // Ghidra 6029-6031: multsum = nonmultsum = 0; pRelType = null.
+        let mut nonmultsum: u64 = 0;
+        let mut p_rel: Option<std::sync::Arc<Datatype>> = None;
+        // Ghidra 6032-6037: formal relative pointer — baseType = parent,
+        // nonmultsum seeded with the relative ADDRESS offset
+        // (getAddressOffset, type.hh:670) & ptrmask.
+        let rel_state = ct.as_ref().and_then(Self::ptr_rel_state);
+        if let Some((rel_off, _, _, _, _)) = &rel_state {
+            p_rel = ct.clone();
+            nonmultsum = (*rel_off as u64) & ptrmask;
+        }
+        // Ghidra 6028/6038: baseType = ct->getPtrTo() (or the rel parent
+        // assigned above); then the size/degenerate derivation below reads
+        // that base type exactly as 6038-6050 does.
+        let (base_type, size, is_degenerate) = match (&ct, &rel_state) {
+            (Some(_), Some((_, _, rel_parent, _, wordsize))) => {
+                // Relative form: baseType = pRelType->getParent() (6034).
+                let bt = rel_parent.clone();
+                Self::derive_base_geometry(&bt, *wordsize)
+            }
+            (Some(ct_arc), None) => {
                 if ct_arc.get_metatype() == TypeMetatype::Pointer {
                     if let Datatype::Pointer(tp) = ct_arc.as_ref() {
-                        let word_size = tp.wordsize.max(1) as i64;
-                        let bt = &tp.ptr_to;
-                        let is_var_len = bt.is_variable_length();
-                        let sz = if is_var_len {
-                            0
-                        } else {
-                            // byteToAddressInt(baseType->getAlignSize(), wordSize)
-                            byte_to_address_int(
-                                bt.get_align_size() as i64, tp.wordsize.max(1) as i64,
-                            )
-                        };
-                        // isDegenerate: baseType->getAlignSize() <= unitsize && > 0
-                        // where unitsize = addressToByteInt(1, wordSize) == wordSize.
-                        let unitsize = word_size;
-                        let is_deg = (bt.get_align_size() as i64) <= unitsize && bt.get_align_size() > 0;
-                        (Some(tp.ptr_to.clone()), sz, is_deg)
+                        let wordsize = tp.wordsize.max(1) as i64;
+                        (Some(tp.ptr_to.clone()), Self::size_of_base(&tp.ptr_to, wordsize), Self::is_degenerate_of(&tp.ptr_to, wordsize))
                     } else {
                         (None, 0i64, false)
                     }
                 } else {
                     (None, 0i64, false)
                 }
-            } else {
-                (None, 0i64, false)
-            };
-            (ct, ptrsize, base_type, size, is_degenerate)
+            }
+            (None, _) => (None, 0i64, false),
         };
-        let ptrmask = crate::address::calc_mask(ptrsize);
-        let _ = ct;
         AddTreeState {
             data,
             base_op: op,
             base_slot: slot,
             ptr,
+            ct,
+            p_rel,
             base_type,
             ptrsize,
             ptrmask,
             size,
             multsum: 0,
-            nonmultsum: 0,
+            nonmultsum,
             biggest_non_mult_coeff: 0,
             multiple: Vec::new(),
             coeff: Vec::new(),
@@ -17750,14 +18386,92 @@ impl<'a> AddTreeState<'a> {
         }
     }
 
+    // RUGRA-GLUE: read the formal-relative-pointer state off Rugra's flat
+    // TypePointer model (base.flags IS_PTRREL + base.pointer_rel) — the
+    // ownership twin of Ghidra's `ct->isFormalPointerRel()` virtual plus the
+    // `TypePointerRel` accessors. `addr_off` mirrors getAddressOffset()
+    // (type.hh:670): `AddrSpace::byteToAddressInt(offset, wordsize)` — the
+    // stored BYTE offset (type.hh:652, mirrored by `rel.offset` /
+    // getByteOffset type.hh:675) scaled to ADDRESS units. `byte_off` passes
+    // the raw stored byte offset through for evaluateThruParent (type.cc:2593
+    // folds `byteOff + offset` in byte units).
+    fn ptr_rel_state(
+        ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> Option<(i64, i64, std::sync::Arc<crate::type_system::datatype::Datatype>, std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
+        if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
+            // ruleaction.cc:6032 gates on ct->isFormalPointerRel()
+            // (type.hh:228: (is_ptrrel|has_stripped)==is_ptrrel): the
+            // ephemeral relative pointers built by propagateAddIn2Out carry
+            // has_stripped (markEphemeral, type.cc:4020) and are EXCLUDED
+            // from the AddTree relative accounting — their parent/offset
+            // bookkeeping is owned by the type-propagation layer.
+            let formal = (p.base.flags
+                & (crate::type_system::datatype::type_flags::IS_PTRREL
+                    | crate::type_system::datatype::type_flags::HAS_STRIPPED))
+                == crate::type_system::datatype::type_flags::IS_PTRREL;
+            if !formal {
+                return None;
+            }
+            if (p.base.flags & crate::type_system::datatype::type_flags::IS_PTRREL) != 0 {
+                if let Some(rel) = p.base.pointer_rel.as_ref() {
+                    // wordsize clamp: FIELDOFF-CR-F6 recorded deviation —
+                    // oracle reads bare getWordSize() (ws=0 is C++ UB; the
+                    // Rust divide would panic), so clamp to 1.
+                    let wordsize = p.wordsize.max(1) as i64;
+                    return Some((
+                        // getAddressOffset (type.hh:670): bytes → address units.
+                        byte_to_address_int(rel.offset, wordsize),
+                        // getByteOffset (type.hh:675): raw stored byte offset.
+                        rel.offset,
+                        rel.parent.clone(),
+                        p.ptr_to.clone(),
+                        wordsize,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    // RUGRA-GLUE: Ghidra ctor 6038-6041 — size = variableLength ? 0 :
+    // byteToAddressInt(baseType->getAlignSize(), ct->getWordSize()).
+    fn size_of_base(bt: &crate::type_system::datatype::Datatype, wordsize: i64) -> i64 {
+        if bt.is_variable_length() {
+            0
+        } else {
+            byte_to_address_int(bt.get_align_size() as i64, wordsize)
+        }
+    }
+
+    // RUGRA-GLUE: Ghidra ctor 6049-6050 — isDegenerate = baseType->getAlignSize()
+    // <= unitsize && > 0, unitsize = addressToByteInt(1, ct->getWordSize()) == wordsize.
+    fn is_degenerate_of(bt: &crate::type_system::datatype::Datatype, wordsize: i64) -> bool {
+        (bt.get_align_size() as i64) <= wordsize && bt.get_align_size() > 0
+    }
+
+    // RUGRA-GLUE: combined (base, size, isDegenerate) derivation used by the
+    // rel form, where Ghidra reassigns baseType before the 6038-6050 block.
+    fn derive_base_geometry(
+        bt: &std::sync::Arc<crate::type_system::datatype::Datatype>, wordsize: i64,
+    ) -> (Option<std::sync::Arc<crate::type_system::datatype::Datatype>>, i64, bool) {
+        (Some(bt.clone()), Self::size_of_base(bt, wordsize), Self::is_degenerate_of(bt, wordsize))
+    }
+
     /// Faithful to `AddTreeState::clear` (ruleaction.cc:5992-6011). The
-    /// pRelType/`nonmultsum = addressOffset` branch is omitted (no
-    /// TypePointerRel in Rugra — pRelType is always null).
-    // Ghidra: ruleaction.cc:5992 AddTreeState::clear
+    /// pRelType re-seed of `nonmultsum` (5980-5983) reads the relative
+    /// address offset off the stored `p_rel` type.
+    // Ghidra: ruleaction.cc:5974 AddTreeState::clear
     fn clear(&mut self) {
         self.multsum = 0;
         self.nonmultsum = 0;
         self.biggest_non_mult_coeff = 0;
+        if let Some(rel) = &self.p_rel {
+            if let Some((rel_off, _, _, _, _)) = Self::ptr_rel_state(rel) {
+                // Ghidra 5981-5982: nonmultsum = getAddressOffset() & ptrmask
+                // (ADDRESS units, type.hh:670).
+                self.nonmultsum = (rel_off as u64) & self.ptrmask;
+            }
+        }
         self.multiple.clear();
         self.coeff.clear();
         self.nonmult.clear();
@@ -17769,11 +18483,30 @@ impl<'a> AddTreeState<'a> {
         self.distribute_op = None;
     }
 
-    /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034).
-    /// With no TypePointerRel, there is never an alternate form.
-    // Ghidra: ruleaction.cc:6017 AddTreeState::initAlternateForm
+    /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034):
+    /// drop the relative-pointer interpretation, re-derive baseType/size/
+    /// isDegenerate from the plain pointed-to type, reset
+    /// `preventDistribution`, and clear the accumulators. Returns false when
+    /// there was no relative form to begin with.
+    // Ghidra: ruleaction.cc:5999 AddTreeState::initAlternateForm
     fn init_alternate_form(&mut self) -> bool {
-        false
+        if self.p_rel.is_none() {
+            return false;
+        }
+        self.p_rel = None;
+        // baseType = ct->getPtrTo() (type.cc baseType reassignment at 6006).
+        if let Some(ct) = &self.ct {
+            if let crate::type_system::datatype::Datatype::Pointer(tp) = ct.as_ref() {
+                let wordsize = tp.wordsize.max(1) as i64;
+                let (base_type, size, is_degenerate) = Self::derive_base_geometry(&tp.ptr_to, wordsize);
+                self.base_type = base_type;
+                self.size = size;
+                self.is_degenerate = is_degenerate;
+            }
+        }
+        self.prevent_distribution = false;
+        self.clear();
+        true
     }
 
     /// Faithful to `AddTreeState::checkMultTerm` (ruleaction.cc:6136-6179).
@@ -17781,7 +18514,7 @@ impl<'a> AddTreeState<'a> {
     /// Examine a CPUI_INT_MULT element mid-tree. Returns true if there are no
     /// multiples of the base size discovered (i.e. treated as a non-multiple
     /// leaf).
-    // Ghidra: ruleaction.cc:6136 AddTreeState::checkMultTerm
+    // Ghidra: ruleaction.cc:6118 AddTreeState::checkMultTerm
     fn check_mult_term(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -17829,7 +18562,11 @@ impl<'a> AddTreeState<'a> {
                             return self.span_add_tree(&def, val);
                         }
                     }
-                    let vncoeff: u64 = if sval < 0 { (-sval) as u64 } else { sval as u64 };
+                    // Ghidra: ruleaction.cc:6146 `uint4 vncoeff = (sval < 0) ?
+                    // (uint4)-sval : (uint4)sval;` — the cast to uint4 happens
+                    // BEFORE the comparison, so |sval| >= 2^32 wraps (possibly
+                    // to 0) before it can beat the running maximum.
+                    let vncoeff: u32 = if sval < 0 { sval.wrapping_neg() as u32 } else { sval as u32 };
                     if vncoeff > self.biggest_non_mult_coeff {
                         self.biggest_non_mult_coeff = vncoeff;
                     }
@@ -17844,14 +18581,16 @@ impl<'a> AddTreeState<'a> {
                 }
             }
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6158-6159 — compare at uint8 (treeCoeff) width
+        // against the uint4 field promoted to uint8, store truncated to uint4.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
 
     /// Faithful to `AddTreeState::checkTerm` (ruleaction.cc:6186-6231).
-    // Ghidra: ruleaction.cc:6186 AddTreeState::checkTerm
+    // Ghidra: ruleaction.cc:6168 AddTreeState::checkTerm
     fn check_term(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -17905,14 +18644,17 @@ impl<'a> AddTreeState<'a> {
             self.valid = false;
             return false;
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6210-6211 — `treeCoeff` (uint8) is compared at
+        // full 64-bit width against the uint4 field (promoted), but the STORE
+        // truncates to uint4: the running maximum only ever holds 32 bits.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
 
     /// Faithful to `AddTreeState::spanAddTree` (ruleaction.cc:6244-6266).
-    // Ghidra: ruleaction.cc:6160 spanAddTree
+    // Ghidra: ruleaction.cc:6226 spanAddTree
     fn span_add_tree(
         &mut self,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -17928,7 +18670,16 @@ impl<'a> AddTreeState<'a> {
         if !self.valid { return false; }
         let two_is_non = self.check_term(&in1, tree_coeff);
         if !self.valid { return false; }
-        // pRelType is always null in Rugra, so the pRelType guard is skipped.
+        // Ghidra 6236-6241: with a relative pointer the accumulators must
+        // stay trivial — any multiple, any size-relevant non-multiple sum, or
+        // any multiple container invalidates the relative interpretation.
+        // (`nonmultsum >= size` compares uint8 against int4, i.e. unsigned.)
+        if self.p_rel.is_some() {
+            if self.multsum != 0 || self.nonmultsum >= self.size as u64 || !self.multiple.is_empty() {
+                self.valid = false;
+                return false;
+            }
+        }
         if one_is_non && two_is_non {
             return true;
         }
@@ -17941,16 +18692,187 @@ impl<'a> AddTreeState<'a> {
         false // At least one side contains multiples.
     }
 
+    // RUGRA-GLUE: live getMap projection for the TypeSpacebase query path.
+    /// Resolve the [`SpacebaseMap`] a TypeSpacebase query must run against —
+    /// Ghidra's `TypeSpacebase::getMap` (type.cc:2935-2945) re-resolves this
+    /// on EVERY query through the Architecture: the global scope, or — when
+    /// `localframe` is valid — the function at `localframe`
+    /// (`queryFunction`) whose live ScopeLocal becomes the map. Rugra cannot
+    /// reach the Funcdata from inside the interned `Arc<Datatype>`, so the
+    /// rule query path resolves it from the decompiling function here: this
+    /// AddTreeState always belongs to `self.data`, whose entry address IS
+    /// the spacebase's `localframe` (the spacebase varnode's pointer type is
+    /// created from `Funcdata::getAddress()`, funcdata.cc:245). A frame
+    /// mismatch models the `queryFunction` miss and falls back to the global
+    /// scope, exactly like the C++.
+    fn spacebase_map<'m>(
+        &'m self,
+        bt: &'m std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> crate::type_system::datatype::SpacebaseMap<'m> {
+        use crate::type_system::datatype::{Datatype, SpacebaseMap};
+        if let Datatype::Spacebase(sb) = bt.as_ref() {
+            // Ghidra: `!localframe.isInvalid()` (type.cc:2939) — an invalid
+            // Address is the default-constructed (spaceless) one; a real
+            // function entry is never invalid. Rugra's legacy `Address`
+            // carries no space at all (function baseaddrs arrive as
+            // spaceless NONZERO offsets), so the observable discrimination
+            // is: the global spacebase is the all-zero sentinel frame
+            // (typefactory.rs get_type_spacebase frame 0); any spaced or
+            // nonzero frame references the owning function.
+            let frame_references_function =
+                !sb.localframe.is_invalid() || !sb.localframe.is_null();
+            if frame_references_function {
+                let fd: &'m Funcdata = self.data;
+                if fd.get_address().as_u64() == sb.localframe.as_u64() {
+                    return SpacebaseMap::Local(fd.scope.as_ref());
+                }
+            }
+            // queryFunction(localframe) miss (or the global spacebase): the
+            // global-scope leg.
+            return SpacebaseMap::Global(sb.scope.as_ref());
+        }
+        SpacebaseMap::Global(None)
+    }
+
+    // Ghidra: ruleaction.cc:6064 AddTreeState::hasMatchingSubType
+    /// An explicit offset should target a specific sub data-type, but array
+    /// indexing may confuse things: find the best matching component near
+    /// `off`, preferring a matching array element size and a component start
+    /// nearer to the offset. Faithful to `AddTreeState::hasMatchingSubType`
+    /// (ruleaction.cc:6064-6107). With `array_hint == 0` this is exactly
+    /// `getSubType`; otherwise the backward/forward
+    /// `nearestArrayedComponent*` walks run against the base type — the
+    /// virtual dispatch sends TYPE_SPACEBASE to the live-map overrides
+    /// (type.cc:3020/2971) and TYPE_STRUCT to the field walks
+    /// (type.cc:1669/1698); every other metatype takes the base null walks
+    /// (type.cc:201/188).
+    fn has_matching_sub_type(&self, off: i64, array_hint: u32, newoff: &mut i64) -> bool {
+        use crate::type_system::datatype::{
+            nearest_arrayed_component_backward, nearest_arrayed_component_forward, Datatype,
+            SpacebaseMap, TypeMetatype,
+        };
+        let base_type = match self.base_type.as_ref() {
+            Some(bt) => bt.clone(),
+            None => return false,
+        };
+        // The formal is `uint4 coeff` (ruleaction.cc:6064) and the argument is
+        // the uint4 field `biggestNonMultCoeff` (ruleaction.hh:54): no
+        // truncation happens at this call in the oracle — the field is already
+        // 32-bit (stores truncate, see the three mirror sites above).
+        let map: Option<SpacebaseMap<'_>> =
+            if base_type.get_metatype() == TypeMetatype::Spacebase {
+                Some(self.spacebase_map(&base_type))
+            } else {
+                None
+            };
+        // The virtual getSubType dispatch (spacebase override resolves the
+        // live map, ruleaction.cc:6068/6087).
+        let query_sub_type = |o: i64| -> (Option<std::sync::Arc<crate::type_system::datatype::Datatype>>, i64) {
+            match (&map, base_type.as_ref()) {
+                (Some(m), Datatype::Spacebase(sb)) => sb.get_sub_type_in_map(m, o),
+                _ => base_type.get_sub_type(o),
+            }
+        };
+        if array_hint == 0 {
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        // ruleaction.cc:6070-6082 — nearestArrayedComponentBackward: a hit
+        // with a compatible element size whose offset is inside the
+        // component answers directly.
+        let type_before = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_backward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_backward(&base_type, off),
+        };
+        if let Some(tb) = &type_before.dtype {
+            if array_hint == 1 || type_before.elsize == array_hint as i64 {
+                // int8 sizeAddr = byteToAddressInt(getSize(), ct wordsize)
+                // = size / ws (space.hh:541).
+                let size_addr =
+                    (tb.get_size() as i64).wrapping_div(self.rel_wordsize() as i64);
+                if type_before.newoff >= 0 && type_before.newoff < size_addr {
+                    // If the offset is inside a component with a compatible
+                    // array, return it.
+                    *newoff = type_before.newoff;
+                    return true;
+                }
+            }
+        }
+        // ruleaction.cc:6083-6095 — nearestArrayedComponentForward.
+        let type_after = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_forward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_forward(&base_type, off),
+        };
+        if type_before.dtype.is_none() && type_after.dtype.is_none() {
+            // ruleaction.cc:6086-6087 — both walks missed: fall back to the
+            // plain getSubType container query.
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        if type_before.dtype.is_none() {
+            *newoff = type_after.newoff;
+            return true;
+        }
+        if type_after.dtype.is_none() {
+            *newoff = type_before.newoff;
+            return true;
+        }
+        // ruleaction.cc:6097-6105 — pick the nearer start; an element-size
+        // mismatch adds the 0x1000 penalty; the tie goes backward (offBefore).
+        let mut dist_before = (type_before.newoff as i64).unsigned_abs();
+        let mut dist_after = (type_after.newoff as i64).unsigned_abs();
+        if array_hint != 1 {
+            if type_before.elsize != array_hint as i64 {
+                dist_before += 0x1000;
+            }
+            if type_after.elsize != array_hint as i64 {
+                dist_after += 0x1000;
+            }
+        }
+        *newoff = if dist_after < dist_before {
+            type_after.newoff
+        } else {
+            type_before.newoff
+        };
+        true
+    }
+
     /// Faithful to `AddTreeState::calcSubtype` (ruleaction.cc:6270-6355).
     ///
-    /// The pRelType branches (6350-6354) are omitted (no TypePointerRel). The
-    /// TypePointerRel `hasMatchingSubType` path for SPACEBASE/STRUCT needs
-    /// `nearestArrayedComponent*` which Rugra lacks; we approximate with
-    /// `get_sub_type`, mirroring the arrayHint==0 Ghidra path.
-    // Ghidra: ruleaction.cc:6270 AddTreeState::calcSubtype
+    /// The final pRelType block (6350-6354) lives at the tail below (Rugra's
+    /// relative pointer is a flat TypePointer state, see `ptr_rel_state`).
+    /// The SPACEBASE/STRUCT arms call `hasMatchingSubType` with
+    /// biggestNonMultCoeff as the array hint; the hint path resolves the
+    /// spacebase map live through `spacebase_map` (the TypeSpacebase
+    /// nearestArrayedComponent* overrides, type.cc:2971/3020).
+    // Ghidra: ruleaction.cc:6252 AddTreeState::calcSubtype
     fn calc_subtype(&mut self) {
         let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
-        if self.size == 0 || (tmpoff as i64) < self.size {
+        // Ghidra ruleaction.cc:6256 `if (size == 0 || tmpoff < size)` —
+        // `tmpoff` is uint8 and `size` is int4, so C++ usual arithmetic
+        // conversions promote BOTH to uint8: the comparison is UNSIGNED.
+        // A negative byte offset (0xfff...f8 for -8 on a downward-growing
+        // stack) is a huge unsigned value and takes the modulo path, where
+        // the sign-extended remainder keeps `multsum` non-zero. A signed
+        // Rust comparison here sent every negative-offset SP-alias add down
+        // the `offset = tmpoff` branch, zeroed `multsum`, and invalidated
+        // the tree (`valid=false`) — killing the whole INT_ADD→PTRADD
+        // conversion for stack-pointer aliases.
+        if self.size == 0 || tmpoff < self.size as u64 {
             self.offset = tmpoff;
         } else {
             let stmpoff = sign_extend_u64(tmpoff, self.ptrsize * 8);
@@ -17986,33 +18908,87 @@ impl<'a> AddTreeState<'a> {
             use crate::type_system::datatype::TypeMetatype;
             match bt.get_metatype() {
                 TypeMetatype::Spacebase => {
-                    // offsetbytes = addressToByteInt(offset, wordSize)
-                    // hasMatchingSubType needs scope/var-offset mapping; with
-                    // arrayHint 0, Ghidra falls to getSubType. We use that.
-                    // (nearestArrayedComponent* not modelled.)
-                    let extra = match bt.get_sub_type(self.offset as i64) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => { self.valid = false; return; }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    // Ghidra (ruleaction.cc:6286-6298): offsetbytes =
+                    // addressToByteInt(offset, ct wordsize) — the uint8
+                    // offset reinterpreted as int8 then ×ws — and the answer
+                    // converts back with byteToAddress (÷ws,
+                    // space.hh:523/541). hasMatchingSubType carries
+                    // biggestNonMultCoeff (truncated to uint4) as the array
+                    // hint; with hint ≠ 0 the backward/forward
+                    // nearestArrayedComponent* walks resolve through the
+                    // CURRENT ScopeLocal (the live getMap projection,
+                    // RULEARITH-SPACEBASE-ARRAYSNAP-0001) instead of the
+                    // construction-time global snapshot. The no-container
+                    // miss answers (undefined1, 0) keeping the arm valid —
+                    // the match_url oppool2 CROSSBUILD chain.
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = (self.offset as i64).wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into mapped variable.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        self.valid = false; // Cannot find mapped variable but nonmult is non-empty.
+                        return;
+                    }
+                    let extra = ((extra as u64) / (wordsize as u64)) as i64; // Ghidra: ruleaction.cc:6294 AddrSpace::byteToAddress (uintb unsigned divide, space.hh:523-525)
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     self.is_subtype = true;
                 }
                 TypeMetatype::Struct => {
                     let soffset = sign_extend_u64(self.offset, self.ptrsize * 8);
-                    let extra = match bt.get_sub_type(soffset) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => {
-                            // Out of structure bounds check (compare as bytes).
-                            if (soffset < 0) || (soffset as u64) >= bt.get_size() as u64 {
-                                self.valid = false;
-                                return;
-                            }
-                            0 // No field, but pretend there is something there.
+                    // Ghidra (ruleaction.cc:6299-6313): offsetbytes =
+                    // addressToByteInt(soffset, ct wordsize) (×ws);
+                    // hasMatchingSubType with biggestNonMultCoeff as the
+                    // array hint consults the struct's
+                    // nearestArrayedComponent* field walks (type.cc:1669/1698)
+                    // on the hint path; the answer converts back with
+                    // byteToAddressInt (÷ws).
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = soffset.wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into field in structure.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        // Out of structure's bounds (compare as bytes! not
+                        // address units).
+                        if offsetbytes < 0 || offsetbytes >= bt.get_size() as i64 {
+                            self.valid = false;
+                            return;
                         }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                        extra = 0; // No field, but pretend there is something there.
+                    }
+                    let extra = extra.wrapping_div(wordsize);
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
+                    // Ghidra 6314-6320: with a relative pointer, when the
+                    // offset lands inside the basic pointed-to type, the
+                    // offset must be explainable through the parent container
+                    // (evaluateThruParent(0)) or the basic form must be used.
+                    if let Some(rel) = &self.p_rel {
+                        if let Some((rel_off, rel_byte_off, rel_parent, rel_ptrto, _)) =
+                            Self::ptr_rel_state(rel)
+                        {
+                            // Ghidra 6314: offset (uint8) == getAddressOffset()
+                            // (int4, ADDRESS units): unsigned comparison after
+                            // converting the int4. evaluateThruParent folds the
+                            // stored BYTE offset (type.cc:2593), so it takes
+                            // rel_byte_off, not the address-unit rel_off.
+                            if self.offset == rel_off as u64 {
+                                if !crate::type_system::datatype::pointer_rel_evaluate_thru_parent(
+                                    rel_ptrto.as_ref(),
+                                    rel_parent.as_ref(),
+                                    self.rel_wordsize(),
+                                    rel_byte_off,
+                                    self.ptrsize,
+                                    0,
+                                ) {
+                                    self.valid = false; // Use basic (alternate) form.
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     self.is_subtype = true;
                 }
                 TypeMetatype::Array => {
@@ -18028,10 +19004,35 @@ impl<'a> AddTreeState<'a> {
         } else {
             self.valid = false;
         }
+        // Ghidra 6332-6336: with a relative pointer, both the sub-type offset
+        // and the correction shift by the relative ADDRESS offset
+        // (getAddressOffset, type.hh:670).
+        if let Some(rel) = &self.p_rel {
+            if let Some((rel_off, _, _, _, _)) = Self::ptr_rel_state(rel) {
+                let ptr_off = rel_off as u64;
+                self.offset = self.offset.wrapping_sub(ptr_off) & self.ptrmask;
+                self.correct = self.correct.wrapping_sub(ptr_off) & self.ptrmask;
+            }
+        }
     }
 
-    /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
-    // Ghidra: ruleaction.cc:6374 AddTreeState::buildMultiples
+    // RUGRA-GLUE: ct->getWordSize() read for the relative-pointer helpers —
+    // Ghidra reads it off the `ct` TypePointer field (ruleaction.hh:48).
+    fn rel_wordsize(&self) -> usize {
+        self.ct
+            .as_ref()
+            .and_then(|ct| {
+                if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
+                    Some(p.wordsize.max(1) as usize)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(1)
+    }
+
+    /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6356-6384).
+    // Ghidra: ruleaction.cc:6356 AddTreeState::buildMultiples
     fn build_multiples(
         &mut self,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -18081,8 +19082,8 @@ impl<'a> AddTreeState<'a> {
         res_node
     }
 
-    /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
-    // Ghidra: ruleaction.cc:6408 AddTreeState::buildExtra
+    /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6390-6418).
+    // Ghidra: ruleaction.cc:6390 AddTreeState::buildExtra
     fn build_extra(
         &mut self,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -18135,44 +19136,49 @@ impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::buildDegenerate` (ruleaction.cc:6441-6458).
     ///
     /// When the base data-type is unit-sized, every ADD becomes a PTRADD.
-    // Ghidra: ruleaction.cc:6441 AddTreeState::buildDegenerate
+    // Ghidra: ruleaction.cc:6423 AddTreeState::buildDegenerate
     fn build_degenerate(&mut self) -> bool {
-        let (base_align_lt_wordsize, word_size, ct_size, out_is_ptr) = {
+        let (base_align_lt_wordsize, out_is_ptr) = {
             let bt = match &self.base_type { Some(b) => b.clone(), None => return false ,
             };
-            let ws = {
-                let p = self.ptr.read().unwrap();
-                p.get_type_read_facing()
-                    .and_then(|ct| {
-                        use crate::type_system::datatype::Datatype;
-                        if let Datatype::Pointer(tp) = ct.as_ref() { Some(tp.wordsize) } else { None }
-                    })
-                    .unwrap_or(1)
+            // cc:6426 reads the ctor-cached `ct` member — its value is the
+            // cc:6025 consult `ptr->getTypeReadFacing(op)`, which the Rust
+            // ctor takes via the fd-aware twin. The wordsize comes from
+            // that cached (possibly union-resolved) pointer type, not a
+            // fresh raw read.
+            let ws: i64 = match &self.ct {
+                Some(ct) => {
+                    use crate::type_system::datatype::Datatype;
+                    if let Datatype::Pointer(tp) = ct.as_ref() {
+                        tp.wordsize as i64
+                    } else {
+                        1
+                    }
+                }
+                None => 1,
             };
             let align = bt.get_align_size() as i64;
-            let is_lt = align < ws as i64;
-            let out_meta = self
+            let is_lt = align < ws;
+            // cc:6430: baseOp->getOut()->getTypeDefFacing()->getMetatype()
+            // != TYPE_PTR — fd-aware def-facing twin, not the raw v_type.
+            let out_is_ptr = self
                 .base_op
                 .read()
                 .unwrap()
                 .get_out()
-                .and_then(|o| o.read().unwrap().v_type.clone())
+                .cloned()
+                .and_then(|o| crate::unionresolve::vn_type_def_facing(&*self.data, &o))
                 .map(|dt| {
                     use crate::type_system::datatype::TypeMetatype;
-                    let _ = dt.get_metatype();
-                    // out->getTypeDefFacing()->getMetatype() != TYPE_PTR
-                    let m = dt.get_metatype();
-                    m == TypeMetatype::Pointer
+                    dt.get_metatype() == TypeMetatype::Pointer
                 })
                 .unwrap_or(false);
-            (is_lt, ws, 0i64, out_meta)
+            (is_lt, out_is_ptr)
         };
         // If the size is really less than scale, there is padding — don't transform.
         if base_align_lt_wordsize {
             return false;
         }
-        let _ = word_size;
-        let _ = ct_size;
         // Make sure pointer propagates through INT_ADD.
         if !out_is_ptr {
             return false;
@@ -18196,7 +19202,7 @@ impl<'a> AddTreeState<'a> {
     /// The `distributeIntMultAdd`/`collapseIntMultMult` loop (6475-6491) is now
     /// ported: `distribute_int_mult_add` lives on `Funcdata` (funcdata.rs) and
     /// `collapse_int_mult_mult` is implemented here (see below).
-    // Ghidra: ruleaction.cc:6461 AddTreeState::apply
+    // Ghidra: ruleaction.cc:6443 AddTreeState::apply
     fn apply(&mut self) -> bool {
         if self.is_degenerate {
             return self.build_degenerate();
@@ -18265,7 +19271,7 @@ impl<'a> AddTreeState<'a> {
     /// `Funcdata` itself) because the only primitives it needs —
     /// `new_constant` and `op_set_input` — are already public on `Funcdata`.
     /// The op-mutation logic is a 1:1 port of Ghidra's funcdata_op.cc:1132-1153.
-    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
+    // Ghidra: funcdata_op.cc:1130 Funcdata::collapseIntMultMult
     fn collapse_int_mult_mult(
         data: &mut Funcdata,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -18316,7 +19322,12 @@ impl<'a> AddTreeState<'a> {
     fn assign_propagated_type(&mut self, newop: &crate::op::PcodeOpRef) {
         let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return ,
         };
-        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return ,
+        let in_type = match crate::unionresolve::vn_type_read_facing(
+            self.data,
+            &vn,
+            newop,
+            0,
+        ) { Some(t) => t, None => return ,
         };
         use crate::type_system::datatype::TypeMetatype;
         if in_type.get_metatype() != TypeMetatype::Pointer {
@@ -18360,6 +19371,19 @@ impl<'a> AddTreeState<'a> {
             self.data
                 .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // ruleaction.cc:6500-6501: if (ptr->getType()->needsResolution())
+            //   data.inheritResolution(ptr->getType(),newop, 0, baseOp, baseSlot);
+            if let Some(pt) = self.ptr.read().unwrap().get_type() {
+                if pt.needs_resolution() {
+                    self.data.inherit_resolution(
+                        pt.as_ref(),
+                        &newp,
+                        0,
+                        &crate::op::PcodeOpRef(self.base_op.clone()),
+                        self.base_slot as i32,
+                    );
+                }
+            }
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
                 self.assign_propagated_type(&newp);
@@ -18382,6 +19406,19 @@ impl<'a> AddTreeState<'a> {
             self.data
                 .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // ruleaction.cc:6512-6513: if (multNode->getType()->needsResolution())
+            //   data.inheritResolution(multNode->getType(),newop, 0, baseOp, baseSlot);
+            if let Some(pt) = mult_node.read().unwrap().get_type() {
+                if pt.needs_resolution() {
+                    self.data.inherit_resolution(
+                        pt.as_ref(),
+                        &newp,
+                        0,
+                        &crate::op::PcodeOpRef(self.base_op.clone()),
+                        self.base_slot as i32,
+                    );
+                }
+            }
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
                 self.assign_propagated_type(&newp);
@@ -18422,31 +19459,36 @@ impl<'a> AddTreeState<'a> {
 }
 
 // ============================================================================
-// RuleStructOffset0  (ruleaction.cc:6678-6774)
+// RuleStructOffset0  (ruleaction.cc:6660-6756)
 // ============================================================================
 
 /// Convert a LOAD/STORE to the first element of a structure into a PTRSUB.
 ///
-/// Faithful to Ghidra's `RuleStructOffset0` (ruleaction.cc:6678-6774).
+/// Faithful to Ghidra's `RuleStructOffset0` (ruleaction.cc:6660-6756).
 ///
 /// When type propagation says we have a pointer to a structure but we load/store
 /// too little data, we really need a pointer to the *first element*. This rule
-/// inserts a `PTRSUB(ptr, 0)` to drill down to that component. The
-/// TypePointerRel branch (6713-6743) is omitted (Rugra has no TypePointerRel);
-/// the plain STRUCT/ARRAY path is faithful.
+/// inserts a `PTRSUB(ptr, 0)` to drill down to that component. The formal
+/// relative-pointer branch (ruleaction.cc:6695-6725: `isFormalPointerRel() &&
+/// evaluateThruParent(0)` → parent PTRSUB walk via `getByteOffset` +
+/// `getSubType` + `byteToAddress(newoff, wordsize)`) is NOT yet wired — the
+/// rel infrastructure has landed (`AddTreeState::ptr_rel_state`,
+/// `pointer_rel_evaluate_thru_parent`), the branch itself is pending under
+/// TODO RULEACTION-RS0-RELGATE-0001; the plain STRUCT/ARRAY path
+/// (ruleaction.cc:6726-6755) is faithful.
 pub struct RuleStructOffset0;
 
 impl RuleStructOffset0 {
-    // Ghidra: ruleaction.cc:6678 RuleStructOffset0
+    // Ghidra: ruleaction.cc:6660 RuleStructOffset0
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStructOffset0 {
-    // Ghidra: ruleaction.cc:6693 RuleStructOffset0::applyOp
+    // Ghidra: ruleaction.cc:6675 RuleStructOffset0::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6693-6774).
+        // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6675-6756).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
         }
@@ -18470,7 +19512,12 @@ impl Rule for RuleStructOffset0 {
         // ptrVn = op->getIn(1); ct = ptrVn->getTypeReadFacing(op);
         let ptr_vn = match op_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
         };
-        let ct = match ptr_vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+        let ct = match crate::unionresolve::vn_type_read_facing(
+            fd,
+            &ptr_vn,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            1,
+        ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
         };
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if ct.get_metatype() != TypeMetatype::Pointer {
@@ -18480,9 +19527,15 @@ impl Rule for RuleStructOffset0 {
         };
         let base_type = tp.ptr_to.clone();
 
-        // The TypePointerRel `isFormalPointerRel` branch is omitted (no
-        // TypePointerRel in Rugra). Fall straight to the plain STRUCT/ARRAY
-        // path (ruleaction.cc:6744-6767).
+        // The formal relative-pointer branch (ruleaction.cc:6695-6725) is
+        // pending under TODO RULEACTION-RS0-RELGATE-0001: Rugra's rel
+        // infrastructure has landed (`AddTreeState::ptr_rel_state`,
+        // `pointer_rel_evaluate_thru_parent`), but this LOAD/STORE arm —
+        // parent PTRSUB via getByteOffset + getSubType +
+        // byteToAddress(newoff, wordsize), with an INT_ADD back-offset,
+        // inheritResolution and setStopTypePropagation — is not yet wired.
+        // Fall straight to the plain STRUCT/ARRAY path
+        // (ruleaction.cc:6726-6755).
         let mut offset: i64 = 0;
         match base_type.get_metatype() {
             TypeMetatype::Struct => {
@@ -18525,6 +19578,13 @@ impl Rule for RuleStructOffset0 {
         fd.op_set_input(&newop, ptr_vn.clone(), 0);
         fd.op_set_input(&newop, zero_const, 1);
         fd.op_insert_before(&newop, &op_ref);
+        // ruleaction.cc:6751-6752: if (ptrVn->getType()->needsResolution())
+        //   data.inheritResolution(ptrVn->getType(),newop, 0, op, 1);
+        if let Some(pt) = ptr_vn.read().unwrap().get_type() {
+            if pt.needs_resolution() {
+                fd.inherit_resolution(pt.as_ref(), &newop, 0, &op_ref, 1);
+            }
+        }
         // newop->setStopTypePropagation()
         newop.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
         // data.opSetInput(op, newop->getOut(), 1)
@@ -18535,7 +19595,7 @@ impl Rule for RuleStructOffset0 {
 
     // Ghidra: ruleaction.cc:6678 RuleStructOffset0
     fn get_name(&self) -> &str { "structoffset0" }
-    // Ghidra: ruleaction.cc:6686 RuleStructOffset0::getOpList
+    // Ghidra: ruleaction.cc:6668 RuleStructOffset0::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD, OpCode::CPUI_STORE] }
 }
 
@@ -18605,7 +19665,7 @@ impl RulePtrFlow {
     /// `glb->getDefaultDataSpace()->isTruncated()`. Rugra's Architecture has no
     /// `getDefaultDataSpace`/`isTruncated` yet, so we default to false — exactly
     /// matching Ghidra's behaviour for non-truncated architectures.
-    // Ghidra: ruleaction.cc:9056 RulePtrFlow::RulePtrFlow
+    // Ghidra: ruleaction.cc:9038 RulePtrFlow::RulePtrFlow
     pub fn new() -> Self {
         Self { has_truncations: false ,
         }
@@ -18614,7 +19674,7 @@ impl RulePtrFlow {
     /// Set \e ptrflow property on PcodeOp only if it is propagating. Returns
     /// true if the ptrflow property is newly set. Faithful to
     /// `RulePtrFlow::trialSetPtrFlow` (ruleaction.cc:9083-9099).
-    // Ghidra: ruleaction.cc:9083 RulePtrFlow::trialSetPtrFlow
+    // Ghidra: ruleaction.cc:9065 RulePtrFlow::trialSetPtrFlow
     fn trial_set_ptr_flow(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> bool {
         let opc = op.read().unwrap().opcode;
         match opc {
@@ -18638,7 +19698,7 @@ impl RulePtrFlow {
     /// Propagate \e ptrflow property to given Varnode and the defining PcodeOp.
     /// Returns true if a change was made. Faithful to
     /// `RulePtrFlow::propagateFlowToDef` (ruleaction.cc:9108-9120).
-    // Ghidra: ruleaction.cc:9108 RulePtrFlow::propagateFlowToDef
+    // Ghidra: ruleaction.cc:9090 RulePtrFlow::propagateFlowToDef
     fn propagate_flow_to_def(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -18659,7 +19719,7 @@ impl RulePtrFlow {
     /// Propagate \e ptrflow property to given Varnode and to descendant
     /// PcodeOps. Returns true if a change was made. Faithful to
     /// `RulePtrFlow::propagateFlowToReads` (ruleaction.cc:9127-9145).
-    // Ghidra: ruleaction.cc:9127 RulePtrFlow::propagateFlowToReads
+    // Ghidra: ruleaction.cc:9109 RulePtrFlow::propagateFlowToReads
     fn propagate_flow_to_reads(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -18683,8 +19743,8 @@ impl RulePtrFlow {
     /// operation truncating the value to the size necessary for a pointer into
     /// the given address space, and updates the PcodeOp input. Returns the new
     /// truncated Varnode. Faithful to `RulePtrFlow::truncatePointer`
-    /// (ruleaction.cc:9154-9184).
-    // Ghidra: ruleaction.cc:9154 RulePtrFlow::truncatePointer
+    /// (ruleaction.cc:9136-9157).
+    // Ghidra: ruleaction.cc:9136 RulePtrFlow::truncatePointer
     fn truncate_pointer(
         spc: &crate::space::AddressSpace,
         op: &crate::op::PcodeOpRef,
@@ -18707,15 +19767,19 @@ impl RulePtrFlow {
             // Address addr = vn->getAddr();
             //   if (addr.isBigEndian()) addr = addr + (vn->getSize() - spc->getAddrSize());
             //   addr.renormalize(spc->getAddrSize());
-            // Rugra's Address is a plain u64 (Copy); renormalize is a no-op
-            // modulo word_size, which is 1 here, so the address is unchanged.
+            // cc:9147-9151: the address carries vn's OWN space.
+            // addr.isBigEndian() (cc:9148) reads THAT space's endianness —
+            // not the pointer-target space's. renormalize is join-space-only
+            // (address.cc:191-194); Rugra has no JoinRecord store (degraded
+            // glue). Rugra's AddressSpace endianness predicate is the
+            // little-endian enum stub; the x86-64 oracle's spaces are all LE.
             let addr = vn.read().unwrap().get_addr().clone();
-            let addr_val = if spc.is_big_endian() {
+            let addr_val = if vn_space.is_big_endian() {
                 addr.offset((vn_size - addr_size) as i64)
             } else {
                 addr
             };
-            data.new_varnode_out(addr_size, addr_val, &truncop)
+            data.new_varnode_out_full(addr_size, vn_space, addr_val, &truncop)
         };
         data.op_set_input(op, newvn.clone(), slot);
         data.op_set_input(&truncop, vn.clone(), 0);
@@ -18725,7 +19789,7 @@ impl RulePtrFlow {
 }
 
 impl Rule for RulePtrFlow {
-    // Ghidra: ruleaction.cc:9177 RulePtrFlow::applyOp
+    // Ghidra: ruleaction.cc:9159 RulePtrFlow::applyOp
     fn apply_op(
         &self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -18859,10 +19923,10 @@ impl Rule for RulePtrFlow {
         Ok(made_change)
     }
 
-    // Ghidra: ruleaction.cc:9056 RulePtrFlow::RulePtrFlow
+    // Ghidra: ruleaction.cc:9038 RulePtrFlow::RulePtrFlow
     fn get_name(&self) -> &str { "ptrflow" }
 
-    // Ghidra: ruleaction.cc:9063 RulePtrFlow::getOpList
+    // Ghidra: ruleaction.cc:9045 RulePtrFlow::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Faithful to RulePtrFlow::getOpList (ruleaction.cc:9063-9077):
         // "if (!hasTruncations) return; // Only stick ourselves into pool if
@@ -22748,55 +23812,175 @@ mod tests {
     // --- RuleAndCommute (ruleaction.cc:1519) ---
 
     #[test]
-    fn test_and_commute_right_shift() {
-        // (V >> 4) & 0x0f0f (size 2) — othermask=0x0f0f, not full(0xffff).
-        // RIGHT path: adjusted = 0x0f0f << 4 = 0xf0f0 (nonzero, != full).
-        // othervn not constant → found set.
+    fn test_and_commute_benefit_gate_rejects_non_or_piece_shift_input() {
+        // myprogress ord-28 shape (ruleaction.cc:1582-1603): the shift's input
+        // is a LOAD output; only INT_OR/PIECE defs pass the mandatory benefit
+        // gate, so AND(RIGHT(load,10),0xffffffff) must NOT commute.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd
+        let base = fd
             .vbank
-            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
-        v.write()
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        base.write()
             .unwrap()
-            .set_flags(crate::varnode::varnode_flags::INPUT);
-        let sa = fd.vbank.create_constant(4, 4);
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_LOAD,
+        )));
+        base.write().unwrap().def = Some(Arc::downgrade(&load_op));
+        let sa = fd.vbank.create_constant(4, 10);
         let shift_out = fd
             .vbank
-            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
+            SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_RIGHT,
         )));
         {
             let mut s = shift_op.write().unwrap();
-            s.inrefs = vec![v.clone(), sa.clone()];
+            s.inrefs = vec![base.clone(), sa.clone()];
             s.output = Some(shift_out.clone());
         }
         shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
-        // W = register with NZM = fullmask = 0xffff. To get partial, use a
-        // SUBPIECE-derived varnode? Simpler: this test will be NO_CHANGE for
-        // a register (NZM=full). Document that and test the constant-LEFT
-        // path instead, which is the more common real case.
-        let w = fd.vbank.create_constant(2, 0x0f0f);
+        let mask = fd.vbank.create_constant(8, 0xffffffff);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![shift_out, mask];
+            a.output = Some(fd.vbank.create_with_space(
+                8, crate::space::AddressSpace::Register, 0x30,
+            ));
+        }
+        let rule = RuleAndCommute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // LOAD is neither INT_OR nor PIECE → cc:1602-1603 continue → no commute.
+        assert_eq!(result, action_status::NO_CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_AND);
+        assert_eq!(a.inrefs.len(), 2);
+    }
+
+    #[test]
+    fn test_and_commute_left_constant_lone_descend() {
+        // cc:1573-1580: LEFT shift + constant othervn + shift output feeding
+        // only this AND → the sole unconditional commute path.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let sa = fd.vbank.create_constant(4, 4);
+        let shift_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, sa.clone()];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        let mask = fd.vbank.create_constant(2, 0x0f0f);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_AND,
         )));
         {
             let mut a = and_op.write().unwrap();
-            a.inrefs = vec![shift_out, w];
+            a.inrefs = vec![shift_out.clone(), mask];
             a.output = Some(fd.vbank.create_with_space(
                 2, crate::space::AddressSpace::Register, 0x30,
             ));
         }
+        // shift output is consumed only by this AND.
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&and_op));
         let rule = RuleAndCommute::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
-        // othervn is a constant (0x0f0f), opc=RIGHT (not LEFT), so the
-        // LEFT-constant loneDescend guard doesn't apply; RIGHT path accepts.
+        assert_eq!(result, action_status::CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_LEFT);
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
+    }
+
+    #[test]
+    fn test_and_commute_or_mask_disjoint_arm() {
+        // cc:1585-1587: orvn.def is INT_OR whose first arm's NZ mask does not
+        // overlap the (shift-adjusted) othermask → commute.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v1 = fd.vbank.create_constant(1, 0xf0);
+        let v2 = fd.vbank.create_constant(1, 0x0f);
+        let or_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        or_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let or_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = or_op.write().unwrap();
+            o.inrefs = vec![v1, v2];
+            o.output = Some(or_out.clone());
+        }
+        or_out.write().unwrap().def = Some(Arc::downgrade(&or_op));
+        let sa = fd.vbank.create_constant(4, 1);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![or_out, sa.clone()];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        let mask = fd.vbank.create_constant(1, 0x06);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![shift_out, mask];
+            a.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
+        }
+        let rule = RuleAndCommute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // adjusted othermask = 0x06 << 1 = 0x0c; ormask1 = 0xf0 & 0x0c == 0 →
+        // break → commute.
         assert_eq!(result, action_status::CHANGE);
         let a = and_op.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_RIGHT);
-        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 1);
     }
 
     // --- RuleOrConsume (ruleaction.cc:344) ---
@@ -23406,9 +24590,9 @@ mod tests {
         let v = fd
             .vbank
             .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write()
-            .unwrap()
-            .set_flags(crate::varnode::varnode_flags::INPUT);
+        // Real inputs go through VarnodeBank::setInput → xref → INSERT flag
+        // (varnode.cc:1306) — required for the cc:1401 isHeritageKnown gate.
+        let v = fd.vbank.set_input(v).unwrap();
         let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
         c5.write()
             .unwrap()
@@ -23465,6 +24649,247 @@ mod tests {
             o.opcode
         );
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    // CR8 M-A regression: (200 <s V) || (250 <s V)  =>  200 <s V.
+    // The OR arm must run the faithful circle_union (ruleaction.cc:1405-
+    // 1406): the pulled-back windows [201,0x80000000) and
+    // [251,0x80000000) merge (subset, 'c' arm) and translate2Op rewrites
+    // the OR as a single INT_SLESS(200, V) with the constant on slot 0.
+    #[test]
+    fn test_rule_range_meld_greater_or_greater_merged() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        // setInput → xref → INSERT (varnode.cc:1306): cc:1401 gate input.
+        let v = fd.vbank.set_input(v).unwrap();
+        let c200 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(200, 4)));
+        c200
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        let c250 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(250, 4)));
+        c250
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        // INT_SLESS(200, V) — "V > 200" — bool output
+        let s1_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let s1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        s1.write().unwrap().inrefs = vec![c200, v.clone()];
+        s1.write().unwrap().output = Some(s1_out.clone());
+        s1.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        s1_out.write().unwrap().def = Some(Arc::downgrade(&s1));
+        s1_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // INT_SLESS(250, V) — "V > 250"
+        let s2_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let s2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        s2.write().unwrap().inrefs = vec![c250, v.clone()];
+        s2.write().unwrap().output = Some(s2_out.clone());
+        s2.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        s2_out.write().unwrap().def = Some(Arc::downgrade(&s2));
+        s2_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // BOOL_OR(s1_out, s2_out)
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![s1_out, s2_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_SLESS);
+        assert!(o.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 200);
+        assert!(Arc::ptr_eq(&o.inrefs[1], &v));
+    }
+
+    /// cc:1401 `if (!A1->isHeritageKnown()) return 0` — the real flag check
+    /// (varnode.hh:298: flags & (insert|constant|annotation)). A varnode
+    /// that is INPUT-only and was never run through VarnodeBank::xref (no
+    /// INSERT flag) is heritage-UNKNOWN: the rule must bail even though the
+    /// old `is_free()` proxy (flags & (input|written)) == 0 would have let
+    /// the meld proceed (INPUT set → not free).
+    #[test]
+    fn test_rule_range_meld_heritage_unknown_varnode_bails() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        // Hand-built varnode: INPUT flag only — no bank xref, so no INSERT.
+        let v = Arc::new(RwLock::new(crate::varnode::Varnode::new_register(0x10, 4)));
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        assert!(!v.read().unwrap().is_free(), "fixture: INPUT ⇒ not free");
+        assert!(
+            !v.read().unwrap().is_heritage_known(),
+            "fixture: INPUT-only without INSERT ⇒ heritage unknown"
+        );
+        let c200 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(200, 4)));
+        c200
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        let c250 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(250, 4)));
+        c250
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        let mut mk_sless = |ord: u32,
+                            cnst: &Arc<RwLock<crate::varnode::Varnode>>,
+                            out_off: u64|
+         -> (
+            Arc<RwLock<crate::varnode::Varnode>>,
+            Arc<RwLock<PcodeOp>>,
+        ) {
+            let out = fd
+                .vbank
+                .create_with_space(1, crate::space::AddressSpace::Register, out_off);
+            let op = Arc::new(RwLock::new(PcodeOp::new(
+                SeqNum::new(Address::new(0x1000), ord),
+                OpCode::CPUI_INT_SLESS,
+            )));
+            op.write().unwrap().inrefs = vec![cnst.clone(), v.clone()];
+            op.write().unwrap().output = Some(out.clone());
+            op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+            out.write().unwrap().def = Some(Arc::downgrade(&op));
+            out.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::WRITTEN);
+            (out, op)
+        };
+        // Hold both defining ops alive: the outputs' def Weaks die with the
+        // Arcs, which would short-circuit applyOp at the def-upgrade step.
+        let (s1_out, _s1_op) = mk_sless(0, &c200, 0x20);
+        let (s2_out, _s2_op) = mk_sless(1, &c250, 0x21);
+
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![s1_out, s2_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(
+            result, action_status::NO_CHANGE,
+            "heritage-unknown A1 must bail (cc:1401)"
+        );
+        // And the op is untouched.
+        assert_eq!(
+            outer.read().unwrap().opcode,
+            OpCode::CPUI_BOOL_OR,
+            "no meld must run on heritage-unknown varnode"
+        );
+    }
+
+    /// cc:1414-1417: when a pulled-back constant carries a SymbolEntry, the
+    /// markup must propagate into the rebuilt comparison's new constant via
+    /// `newConst->copySymbolIfValid(markup)`. Mirrors the oracle's shared
+    /// `markup` out-param threading (rangeutil.cc:1069-1070).
+    #[test]
+    fn test_rule_range_meld_markup_propagates_to_new_constant() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        // setInput → xref → INSERT (varnode.cc:1306): cc:1401 gate input.
+        let v = fd.vbank.set_input(v).unwrap();
+        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
+        c5.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        // Attach an equate SymbolEntry to c5, registered value-close to the
+        // merged constant 6 (copySymbolIfValid gating: isValueClose compares
+        // against the NEW constant, varnode.cc:510-522).
+        let symbol = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::database::Symbol::new(0, "EQ5", "equ"),
+        ));
+        crate::varnode::equate_symbol_registry::register_value(&symbol, 6);
+        let entry = crate::database::SymbolEntry::new_dynamic(
+            symbol,
+            0, 1, 0, 4, Default::default(),
+        );
+        c5.write()
+            .unwrap()
+            .set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+
+        let mut mk_bool_op =
+            |ord: u32,
+             opc: OpCode,
+             out_off: u64|
+         -> (
+                Arc<RwLock<crate::varnode::Varnode>>,
+                Arc<RwLock<PcodeOp>>,
+            ) {
+                let out = fd
+                    .vbank
+                    .create_with_space(1, crate::space::AddressSpace::Register, out_off);
+                let op = Arc::new(RwLock::new(PcodeOp::new(
+                    SeqNum::new(Address::new(0x1000), ord),
+                    opc,
+                )));
+                op.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+                op.write().unwrap().output = Some(out.clone());
+                op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+                out.write().unwrap().def = Some(Arc::downgrade(&op));
+                out.write()
+                    .unwrap()
+                    .set_flags(crate::varnode::varnode_flags::WRITTEN);
+                (out, op)
+            };
+        // Hold both defining ops alive (see heritage test note).
+        let (less_out, _less_op) = mk_bool_op(0, OpCode::CPUI_INT_LESS, 0x20);
+        let (eq_out, _eq_op) = mk_bool_op(1, OpCode::CPUI_INT_EQUAL, 0x21);
+
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![less_out, eq_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        // Merged [0,6) → INT_LESS(V, 6): the rebuilt constant input carries
+        // the markup propagated from c5.
+        assert!(
+            o.opcode == OpCode::CPUI_INT_LESS || o.opcode == OpCode::CPUI_INT_LESSEQUAL,
+            "expected INT_LESS or INT_LESSEQUAL, got {:?}",
+            o.opcode
+        );
+        let const_slot = if Arc::ptr_eq(&o.inrefs[0], &v) { 1 } else { 0 };
+        assert!(
+            o.inrefs[const_slot].read().unwrap().is_constant(),
+            "rebuilt comparison must hold the merged constant"
+        );
+        assert_eq!(o.inrefs[const_slot].read().unwrap().get_offset(), 6);
+        assert!(
+            o.inrefs[const_slot].read().unwrap().get_symbol_entry().is_some(),
+            "cc:1415-1417: constant markup must propagate into the new constant"
+        );
     }
 
     #[test]
@@ -24071,6 +25496,104 @@ mod tests {
         );
     }
 
+    /// RuleSubRight lump arm (ruleaction.cc:7277-7289): SUBPIECE(c≠0) whose
+    /// lone descendant is a constant INT_RIGHT and outvn.size + c == a.size
+    /// must destroy the original SUBPIECE via op_unlink (cc:7285
+    /// `data.opUnlink(op)` = funcdata_op.cc:179-193: unset output + all
+    /// inputs + uninsert). The old bug kept the op alive with slot0 =
+    /// null_slot_sentinel, so re-matching leaked the sentinel as a real
+    /// varnode and later panicked in add_descend
+    /// (RULEACTION-SUBRIGHT-UNLINK-0001).
+    #[test]
+    fn test_rule_subright_lump_unlinks_original_subpiece() {
+        let mut fd = Funcdata::new("test_subright_lump", Address::new(0x1000), 0x10);
+        // a: 8-byte input; SUBPIECE(a, 4) → outvn 4 bytes (4 + 4 == 8: "hi").
+        let a = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let a = fd.vbank.set_input(a).unwrap();
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        let outvn = fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(&sub_op, a.clone(), 0);
+        let c4 = fd.new_constant(4, 4);
+        fd.op_set_input(&sub_op, c4, 1); // c = 4 ≠ 0
+        fd.obank.alivelist.push(sub_op.clone());
+        // Lone descendant: INT_RIGHT(outvn, 8) — constant shift. Built at a
+        // DIFFERENT address (0x2000) than the SUBPIECE (0x1000) so the test
+        // discriminates which address the lumped shift op inherits:
+        // cc:7286 `op = lone` then cc:7299 `newOp(2,op->getAddr())` must
+        // take the REBOUND op's (lone's) address, not the unlinked
+        // SUBPIECE's.
+        let lone = fd.new_op(2, Address::new(0x2000));
+        fd.op_set_opcode(&lone, OpCode::CPUI_INT_RIGHT);
+        let _lone_out = fd.new_unique_out(4, &lone);
+        fd.op_set_input(&lone, outvn, 0);
+        let shift8 = fd.new_constant(4, 8);
+        fd.op_set_input(&lone, shift8, 1);
+        fd.obank.alivelist.push(lone.clone());
+
+        let rule = RuleSubRight::new();
+        let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+
+        // cc:7285 opUnlink: the original SUBPIECE is dead — out of the alive
+        // list, no output, every input slot nulled to the shared sentinel.
+        assert!(
+            !fd.obank
+                .alivelist
+                .iter()
+                .any(|r| Arc::ptr_eq(&r.0, &sub_op.0)),
+            "unlinked SUBPIECE must leave the alive list"
+        );
+        {
+            let sub = sub_op.0.read().unwrap();
+            assert!(sub.output.is_none(), "opUnsetOutput must have run");
+            for slot in &sub.inrefs {
+                assert!(
+                    Arc::ptr_eq(slot, &crate::op::null_slot_sentinel()),
+                    "all input slots must be nulled; live varnode retained"
+                );
+            }
+        }
+
+        // The lone INT_RIGHT became the least-sig SUBPIECE (cc:7287, 7308-7309)
+        // reading the new shift output + constant 0 — no null-slot residue.
+        let newout = {
+            let lone_r = lone.0.read().unwrap();
+            assert_eq!(lone_r.opcode, OpCode::CPUI_SUBPIECE);
+            assert_eq!(lone_r.inrefs[1].read().unwrap().get_offset(), 0);
+            lone_r.inrefs[0].clone()
+        };
+        assert!(
+            !Arc::ptr_eq(&newout, &crate::op::null_slot_sentinel()),
+            "surviving SUBPIECE slot0 must be the shift output, not the sentinel"
+        );
+
+        // The inserted shift (cc:7299-7305) is the sole INT_RIGHT: it reads a
+        // and the lumped constant d = c*8 + 8 = 40.
+        let shift = fd
+            .obank
+            .alivelist
+            .iter()
+            .find(|r| r.0.read().unwrap().opcode == OpCode::CPUI_INT_RIGHT)
+            .expect("new INT_RIGHT shift op must exist")
+            .clone();
+        {
+            let s = shift.0.read().unwrap();
+            assert!(Arc::ptr_eq(&s.inrefs[0], &a), "shift reads the original a");
+            assert_eq!(s.inrefs[1].read().unwrap().get_offset(), 40);
+            assert!(Arc::ptr_eq(s.output.as_ref().unwrap(), &newout));
+            // O-1 (CR11): the lumped shift op carries lone's address
+            // (cc:7299 via the cc:7286 rebinding), not the SUBPIECE's.
+            assert_eq!(
+                s.get_addr(),
+                Address::new(0x2000),
+                "shiftop must inherit the rebound op's (lone's) address"
+            );
+        }
+    }
+
     /// RuleSubRight must NOT fire when the SUBPIECE is least-significant (c==0).
     #[test]
     fn test_rule_sub_right_no_fire_leastsig() {
@@ -24547,8 +26070,16 @@ mod tests {
         // Readonly + StringManager confirm 0x2000 → CHANGE. With no
         // descendants the propagation half vacuously succeeds (cc:7381),
         // so the PTRSUB is destroyed (cc:7392-7393): inputs detached.
+        // opDestroy nulls each slot in place (op.cc:98 clearInput via
+        // opUnsetInput) keeping the slot count — post-destroy numInput()==2
+        // NULL slots (SB-ORD159-NULLSLOT-0001 shared null sentinel).
         assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::CHANGE);
-        assert!(op_arc.read().unwrap().inrefs.is_empty());
+        let guard = op_arc.read().unwrap();
+        assert_eq!(guard.inrefs.len(), 2);
+        assert!(guard
+            .inrefs
+            .iter()
+            .all(|vn| Arc::ptr_eq(vn, &crate::op::null_slot_sentinel())));
     }
 
     /// RulePtrsubCharConstant addr-force arm: an address-forced output
@@ -25111,7 +26642,7 @@ mod tests {
         op.inrefs = vec![ptr_vn, c];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 0);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 0);
     }
 
     /// evaluatePointerExpression: an INT_ADD(ptr, const) feeding an INT_ADD
@@ -25155,7 +26686,7 @@ mod tests {
         }
         out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
         // Single ADD descendant with a non-pointer other input → res stays 1 (push).
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 1);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 1);
     }
 
     /// evaluatePointerExpression: when the other input is itself a pointer,
@@ -25202,7 +26733,7 @@ mod tests {
             d.output = Some(out2);
         }
         out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 2);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 2);
     }
 
     /// verifyPreferredPointer: when the putative base pointer is NOT defined by
@@ -25225,7 +26756,7 @@ mod tests {
         op.inrefs = vec![ptr_vn, c];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
-        assert!(RulePtrArith::verify_preferred_pointer(&op_arc, 0));
+        assert!(RulePtrArith::verify_preferred_pointer(&fd, &op_arc, 0));
     }
 
     /// RulePtrArith::applyOp: no type recovery → NO_CHANGE (early out).
@@ -25483,7 +27014,7 @@ mod tests {
     }
 
     // ========================================================================
-    // RuleStructOffset0 tests (ruleaction.cc:6678-6774)
+    // RuleStructOffset0 tests (ruleaction.cc:6660-6756)
     // ========================================================================
 
     /// Helper: make a `struct { int a; int b; }` (size 8) type.
@@ -26036,4 +27567,476 @@ mod tests {
         assert_eq!(leaves, 4); // leaf_a..leaf_d
         assert_eq!(non_leaves, 2); // hi8, lo8
     }
+#[test]
+    fn test_add_tree_vncoeff_truncates_before_compare() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // MULT #1: constant 0xFFFFFFFBFFFFFFFD (8-byte) ×1 → val keeps the
+        // full pattern; sign_extend(·,63) gives sval = -0x100000003.
+        let vn1 = fd.vbank.create_constant(8, 0xFFFF_FFFB_FFFF_FFFD);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn1];
+            o.output = Some(out1.clone());
+        }
+        // MULT #2: coefficient 5 > 3 (u32 compare) → final accumulator 5.
+        let vn2 = fd.vbank.create_constant(8, 5);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x50);
+        let op2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op2.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn2];
+            o.output = Some(out2.clone());
+        }
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 1));
+        // (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+        assert!(state.check_mult_term(&out2, &op2, 1));
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+    }
+#[test]
+    fn test_add_tree_treecoeff_fullwidth_compare_truncated_store() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // vnconst NOT constant → the cc:6129 constant block is skipped and
+        // control reaches the cc:6158 treeCoeff site.
+        let nonconst = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x60);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), nonconst];
+            o.output = Some(out1.clone());
+        }
+        // cc:6210 site: an INPUT (unwritten, non-free) varnode falls
+        // straight to the checkTerm treeCoeff accumulator.
+        let input_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x70);
+        input_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 0x1_0000_0005));
+        // Full-width 0x100000005 > 0 wins the compare; store truncates to 5.
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+        assert!(state.check_mult_term(&out1, &op1, 6));
+        assert_eq!(state.biggest_non_mult_coeff, 6);
+        assert!(state.check_term(&input_vn, 0x1_0000_0003));
+        // 0x100000003 > 6 full width → stores (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+    }
+#[test]
+    fn test_add_tree_spacebase_extra_unsigned_byte_to_address() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
+        };
+        let mut fd = Funcdata::new("sbws2", Address::new(0x1000), 0x10);
+        // ScopeLocal with one whole, address-tied array symbol int[8]
+        // (size 32) at stack offset 0x2000 — the forward arrayed-component
+        // walk's +32 probe target.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let arr_t = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("int[8]".into(), 32, TypeMetatype::Array),
+            array_of: int_t.clone(),
+            num_elements: 8,
+        }));
+        let mut sl = crate::varmap::ScopeLocal::new();
+        let mut sym = crate::varmap::LocalSymbol::new("arr", 0x2000, 32, Some(arr_t), -1);
+        sym.addrtied = true;
+        sl.symbols.push(sym);
+        sl.mapentry_log.push(crate::varmap::LocalMapEntry {
+            sym: 0,
+            space: crate::space::AddressSpace::Stack,
+            start: 0x2000,
+            size: 32,
+            offset: 0,
+            extraflags: 0,
+            uselimit: Vec::new(),
+            subsort: crate::varmap::EntrySubsort { useindex: 0, useoffset: 0 },
+        });
+        fd.scope = Some(sl);
+        // spacebase for THIS function's frame (localframe == fd address so
+        // spacebase_map resolves the live ScopeLocal), pointer wordsize 2 —
+        // the ws > 1 divergence condition.
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: Some(crate::space::AddressSpace::Stack),
+            localframe: Address::new(0x1000),
+            scope: None,
+        }));
+        let ct = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 2,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ct);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        // The non-multiple term that routes calc_subtype into the SPACEBASE
+        // arm (created before the state borrows fd).
+        let nm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let mut state = AddTreeState::new(&mut fd, add_op, 0);
+        // Seed the accumulator so calc_subtype lands in the SPACEBASE arm:
+        // offset = 0xFF8 (spacebase size 0 → tmpoff passthrough),
+        // offsetbytes = 0xFF8 × 2 = 0x1FF0; the array hint 4 (== int
+        // element size) routes hasMatchingSubType through the forward walk,
+        // which misses at 0x1FF0, probes 0x2010 into the int[8] symbol, and
+        // answers extra = 0x1FF0 - 0x2000 = -16 (cc:6088-6090).
+        state.multsum = 0xFF8;
+        state.biggest_non_mult_coeff = 4;
+        state.nonmult.push(nm);
+        state.calc_subtype();
+        assert!(state.valid);
+        assert!(state.is_subtype);
+        // extra = byteToAddress(-16, 2) = 0xFFFFFFFFFFFFFFF0 / 2 =
+        // 0x7FFFFFFFFFFFFFF8 (unsigned). offset = 0xFF8 - that, mod 2^64.
+        assert_eq!(state.offset, 0x8000_0000_0000_1000);
+        assert_eq!(state.correct, 0x8000_0000_0000_0008);
+    }
+
+    /// RULEACTION-ADDRUNIT-0001: `ptr_rel_state` must report the relative
+    /// offset in ADDRESS units — the `getAddressOffset()` mirror
+    /// (type.hh:670 = `AddrSpace::byteToAddressInt(offset, wordsize)`,
+    /// space.hh:541 `val/ws`) — alongside the raw stored BYTE offset
+    /// (`getByteOffset`, type.hh:675), and the AddTreeState ctor/clear must
+    /// seed `nonmultsum` with the ADDRESS-unit value (ruleaction.cc:6035 /
+    /// 5981). wordsize==1 keeps the two units identical (the x86 corpus
+    /// identity); wordsize>1 divides the byte offset by the word size.
+    #[test]
+    fn test_add_tree_ptr_rel_state_address_unit_offset() {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, PointerRelState, TypeBase, TypeMetatype, TypePointer,
+        };
+        // Parent container: 32-byte struct; the pointer points at byte
+        // offset 8 inside it; wordsize 2 → address offset 8/2 = 4.
+        let parent = Arc::new(Datatype::Base(TypeBase::new(
+            "container".into(),
+            32,
+            TypeMetatype::Struct,
+        )));
+        let ptr_to = Arc::new(Datatype::Base(TypeBase::new(
+            "field".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let make_ct = |wordsize: usize| {
+            let mut tp = TypePointer {
+                base: TypeBase::new("container *+".into(), 8, TypeMetatype::Pointer),
+                ptr_to: ptr_to.clone(),
+                wordsize,
+            };
+            tp.base.flags |= type_flags::IS_PTRREL;
+            tp.base.pointer_rel = Some(PointerRelState {
+                parent: parent.clone(),
+                offset: 8,
+                stripped: None,
+            });
+            Arc::new(Datatype::Pointer(tp))
+        };
+        // wordsize 2: getAddressOffset = 8/2 = 4 (address units);
+        // getByteOffset = 8 (byte units).
+        let ct2 = make_ct(2);
+        let (addr_off, byte_off, rel_parent, rel_ptrto, ws) =
+            AddTreeState::ptr_rel_state(&ct2).expect("formal rel pointer");
+        assert_eq!(ws, 2);
+        assert_eq!(byte_off, 8); // getByteOffset (type.hh:675)
+        assert_eq!(addr_off, 4); // getAddressOffset (type.hh:670)
+        assert!(Arc::ptr_eq(&rel_parent, &parent));
+        assert!(Arc::ptr_eq(&rel_ptrto, &ptr_to));
+        // wordsize 1: the two units are identical.
+        let (addr_off1, byte_off1, _, _, ws1) =
+            AddTreeState::ptr_rel_state(&make_ct(1)).expect("formal rel pointer");
+        assert_eq!(ws1, 1);
+        assert_eq!(addr_off1, 8);
+        assert_eq!(byte_off1, 8);
+        // Ephemeral rel pointers (HAS_STRIPPED) are excluded from the AddTree
+        // relative accounting (ruleaction.cc:6032 gate, type.hh:228).
+        let ephemeral = {
+            let mut tp = TypePointer {
+                base: TypeBase::new("container *+".into(), 8, TypeMetatype::Pointer),
+                ptr_to: ptr_to.clone(),
+                wordsize: 2,
+            };
+            tp.base.flags |= type_flags::IS_PTRREL | type_flags::HAS_STRIPPED;
+            tp.base.pointer_rel = Some(PointerRelState {
+                parent: parent.clone(),
+                offset: 8,
+                stripped: None,
+            });
+            Arc::new(Datatype::Pointer(tp))
+        };
+        assert!(AddTreeState::ptr_rel_state(&ephemeral).is_none());
+        // Ctor seeding (ruleaction.cc:6034-6036): baseType = parent,
+        // nonmultsum = getAddressOffset() & ptrmask — ADDRESS units, so 4,
+        // not the byte offset 8. size = byteToAddressInt(32, 2) = 16.
+        let mut fd = Funcdata::new("relws2", Address::new(0x1000), 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ct2.clone());
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        let mut state = AddTreeState::new(&mut fd, add_op, 0);
+        assert!(state.p_rel.is_some());
+        assert_eq!(state.nonmultsum, 4); // ADDRESS-unit seed (6035)
+        assert_eq!(state.size, 16); // byteToAddressInt(align 32, ws 2) (6041)
+        assert!(!state.is_degenerate); // 32 > unitsize 2 (6049-6050)
+        assert!(matches!(state.base_type.as_ref(), Some(bt) if Arc::ptr_eq(bt, &parent)));
+        // clear() re-seeds the same ADDRESS-unit value (ruleaction.cc:5981).
+        state.nonmultsum = 0;
+        state.clear();
+        assert_eq!(state.nonmultsum, 4);
+    }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// vnterm for check_mult_term: written by a COPY (not INT_ADD) so the
+    /// distribute path (cc:6138-6143) is skipped and the vncoeff
+    /// accumulator at cc:6145 runs; not free (WRITTEN set).
+    fn make_copy_written_vnterm(
+        fd: &mut Funcdata, reg: u64,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vnterm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, reg);
+        let vnterm_def = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 5),
+            OpCode::CPUI_COPY,
+        )));
+        vnterm
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        vnterm.write().unwrap().def = Some(Arc::downgrade(&vnterm_def));
+        vnterm
+    }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// Shared fixture: an AddTreeState over an 8-byte pointer to a
+    /// VARIABLE-LENGTH base type, so `size == 0` (cc:6038). That is what
+    /// structurally lets |sval| exceed the cc:6134 `val >= size` bail (the
+    /// gate only fires when size != 0), letting pathological magnitudes
+    /// reach the vncoeff accumulator.
+    fn make_varlen_add_tree_state(
+        fd: &mut Funcdata,
+    ) -> AddTreeState<'_> {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer,
+        };
+        let varlen_base = {
+            let mut b = TypeBase::new("void".into(), 1, TypeMetatype::Void);
+            b.flags |= type_flags::VARLENGTH;
+            Arc::new(Datatype::Base(b))
+        };
+        let ptr_type = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("void *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: varlen_base,
+            wordsize: 1,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        let state = AddTreeState::new(fd, add_op, 0);
+        assert_eq!(state.size, 0);
+        state
+    }
+
+    // --- RuleDivChain (ruleaction.cc:8401-8443) ---
+
+    /// Build `((base op1 c1) op2 c2) -> out` through the real Funcdata path
+    /// with `base` an INPUT-flagged varnode (not free). Returns the outer op
+    /// (the rule target) and the base varnode.
+    fn build_div_chain(
+        fd: &mut Funcdata,
+        inner_opc: OpCode,
+        c1: u64,
+        outer_opc: OpCode,
+        c2: u64,
+        size: usize,
+    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+        let base = make_input_vn(fd, size, 0x300);
+        let c1_vn = fd.new_constant(size, c1);
+        let (div_op, mid) = build_op(fd, inner_opc, &[base.clone(), c1_vn], size);
+        let c2_vn = fd.new_constant(size, c2);
+        let (outer, _out) = build_op(fd, outer_opc, &[mid, c2_vn], size);
+        let _ = div_op;
+        (outer, base)
+    }
+
+    /// cc:8440-8441: the collapse must replace in(0) with the chain base
+    /// (opSetInput(op,baseVn,0)) and in(1) with the product constant. With
+    /// in(0) swapped to a non-written base, a second pass is a NO_CHANGE —
+    /// the non-termination mechanism of the old port (in(1)-only rewrite,
+    /// pattern re-firing forever) is structurally gone.
+    #[test]
+    fn divchain_collapses_in0_base_and_terminates() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_DIV, 8, OpCode::CPUI_INT_DIV, 4, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1, "oracle applyOp returns 1 on collapse");
+        {
+            let o = outer.0.read().unwrap();
+            assert_eq!(o.opcode, OpCode::CPUI_INT_DIV, "opcode untouched");
+            assert!(
+                Arc::ptr_eq(&o.inrefs[0], &base),
+                "cc:8440 in(0) must be the chain base"
+            );
+            let in1 = o.inrefs[1].read().unwrap();
+            assert!(in1.is_constant());
+            assert_eq!(in1.get_offset(), 32, "8 * 4 = 0x20");
+            assert_eq!(in1.get_size(), 4, "sz from vn (cc:8429)");
+        }
+        // Second pass: in(0) = base has no def -> isWritten fails -> 0.
+        let rc2 = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc2, 0, "chain pattern must not re-fire");
+    }
+
+    /// (INT_DIV, INT_RIGHT) pair: val1 = 1 << sa (cc:8423-8425); the outer
+    /// op is already INT_DIV and the oracle never rewrites its opcode.
+    #[test]
+    fn divchain_right_shift_inner_folds_without_opcode_rewrite() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_RIGHT, 4, OpCode::CPUI_INT_DIV, 2, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1);
+        let o = outer.0.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_DIV);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &base));
+        assert_eq!(o.inrefs[1].read().unwrap().get_offset(), 32, "(1<<4) * 2");
+    }
+
+    /// cc:8433-8436 + cc:8438-8439: negative divisors are normalized to
+    /// absolute value before the bit count, and SDIV must fit sz*8-2 bits.
+    /// ((x /s -1) /s 2) => x /s 0xfffffffe with no overflow rejection.
+    #[test]
+    fn divchain_sdiv_signbit_normalization() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer, base) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_SDIV, 0xffff_ffff, OpCode::CPUI_INT_SDIV, 2, 4,
+        );
+        let rc = RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap();
+        assert_eq!(rc, 1, "|−1|*|2| = 2 bits, fits sz*8−2 = 30");
+        let o = outer.0.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_SDIV);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &base));
+        assert_eq!(o.inrefs[1].read().unwrap().get_offset(), 0xffff_fffe);
+    }
+
+    /// cc:8432 + cc:8437-8439: a product that wraps to zero, and a
+    /// normalized bit count exceeding the width, both leave the op alone
+    /// (the old port rewrote in(1) unconditionally and never terminated).
+    #[test]
+    fn divchain_zero_product_and_overflow_rejected() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // (2^16) * (2^16) wraps to 0 mod 2^32 -> cc:8432 resval==0 reject.
+        let (outer, _) = build_div_chain(
+            &mut fd, OpCode::CPUI_INT_DIV, 0x1_0000, OpCode::CPUI_INT_DIV, 0x1_0000, 4,
+        );
+        let before = outer.0.read().unwrap().inrefs[1].clone();
+        assert_eq!(RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap(), 0);
+        assert!(
+            Arc::ptr_eq(&outer.0.read().unwrap().inrefs[1], &before),
+            "in(1) untouched on reject"
+        );
+        // Unsigned overflow: 0x8000_0000 * 2 -> resval 0 ok? no: wraps to 0,
+        // so use 0x4000_0001 * 4: resval = 0x1_0000_0004 & mask = 4 != 0,
+        // but |0x4000_0001| has mostsig=30, |4| -> 2, bitcount = 30+2+2 = 34
+        // > sz*8 = 32 -> cc:8438 reject.
+        let mut fd2 = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (outer2, _) = build_div_chain(
+            &mut fd2, OpCode::CPUI_INT_DIV, 0x4000_0001, OpCode::CPUI_INT_DIV, 4, 4,
+        );
+        assert_eq!(RuleDivChain::new().apply_op(&outer2.0, &mut fd2).unwrap(), 0);
+        assert_eq!(outer2.0.read().unwrap().opcode, OpCode::CPUI_INT_DIV);
+    }
+
+    /// cc:8428: a free base varnode (neither INPUT nor WRITTEN) must reject.
+    #[test]
+    fn divchain_free_base_rejected() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let base = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        assert!(base.read().unwrap().is_free());
+        let c1 = fd.new_constant(4, 8);
+        let (_, mid) = build_op(&mut fd, OpCode::CPUI_INT_DIV, &[base.clone(), c1], 4);
+        let c2 = fd.new_constant(4, 4);
+        let (outer, _) = build_op(&mut fd, OpCode::CPUI_INT_DIV, &[mid, c2], 4);
+        assert_eq!(RuleDivChain::new().apply_op(&outer.0, &mut fd).unwrap(), 0);
+    }
 }
+
+
+

@@ -1979,11 +1979,26 @@ pub fn coveringmask(val: u64) -> u64 {
     }
 }
 
-// Ghidra: address.hh:174 RangeList::minimalmask
-/// Return the minimal mask covering the set bits of `val` (alias for
-/// `coveringmask`, matching Ghidra's `minimalmask` in jumptable.cc).
+// Ghidra: address.hh:525 minimalmask
+/// Return the smallest full-byte mask (0xff, 0xffff, 0xffffffff, or ~0)
+/// that is >= val. Faithful to `minimalmask` (address.hh:525-534). This is
+/// NOT `coveringmask` (address.cc:800, smallest 2^n-1 >= val): minimalmask
+/// rounds up to a whole-byte boundary ladder; e.g. minimalmask(0x7ff)=0xffff
+/// while coveringmask(0x7ff)=0x7ff, and minimalmask(0)=0xff while
+/// coveringmask(0)=0. Consumers: ActionDeadCode::markConsumedParameters
+/// (coreaction.cc:3856), gatherConsumedReturn (coreaction.cc:3884), and
+/// JumpTable::foldInNormalization (jumptable.cc:2581).
 pub fn minimalmask(val: u64) -> u64 {
-    coveringmask(val)
+    if val > 0xffffffff {
+        return u64::MAX;
+    }
+    if val > 0xffff {
+        return 0xffffffff;
+    }
+    if val > 0xff {
+        return 0xffff;
+    }
+    0xff
 }
 
 // Ghidra: address.hh:174 RangeList::functionalEquality
@@ -2029,9 +2044,17 @@ mod tests {
 
     #[test]
     fn test_minimalmask() {
-        assert_eq!(minimalmask(0), 0);
-        assert_eq!(minimalmask(0xF), 0xF);
-        assert_eq!(minimalmask(0x10), 0x1F);
+        // Ghidra address.hh:525-534: whole-byte ladder, NOT coveringmask.
+        assert_eq!(minimalmask(0), 0xff);
+        assert_eq!(minimalmask(0xF), 0xff);
+        assert_eq!(minimalmask(0xff), 0xff);
+        assert_eq!(minimalmask(0x10), 0xff);
+        assert_eq!(minimalmask(0x100), 0xffff);
+        assert_eq!(minimalmask(0x7ff), 0xffff);
+        assert_eq!(minimalmask(0xffff), 0xffff);
+        assert_eq!(minimalmask(0x10000), 0xffffffff);
+        assert_eq!(minimalmask(0xffffffff), 0xffffffff);
+        assert_eq!(minimalmask(0x1_0000_0000), u64::MAX);
     }
 
     #[test]

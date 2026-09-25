@@ -1,5 +1,84 @@
 # `debugproto.rs` API Reference
 
+## 2026-09-25：OUTSTRUCT-ID0 命名类型注册修复（C4 STRUCT-SEED 通道前置）
+
+**根因（`find_by_name` 对直接命名复合体恒 None）**：`intern_named` 对 id=0 候选
+恒失效——`base_type`/`struct_type`/`union_type`/`enum_type` 构造时 `TypeBase id=0`，
+`TypeFactory::find_add` 拒绝零 id（type.cc:3417-3425 "Datatype must have a valid
+id"），`intern_imported` Err 后静默返回**未注册**候选：直接命名的 DWARF 复合体
+（`OutStruct`/`stat`/`LongShort`/`ProgressData`）从不进名树——HashMap 消费者
+（libc 签名表 type_names）无感，但任何名树解析（`find_by_name`）恒 None。typedef
+路径（`alias_type`）因显式 `hash_name` 而一直正常（`FILE`/`URLGlob` 可解析）。
+**修复（2 处）**：①`intern_named` 在注册前按 oracle 传输规则补 id：
+`id = hashName(name)`（type.cc:675-676 `Datatype::decodeBasic` "There must be
+some kind of id"）；零尺寸（`DW_AT_declaration` 不完整复合体）候选保持未注册
+课程——Ghidra 的 DWARF 前端从不把不完整复合体喂给 `findAdd`
+（`getPrimitiveAlignSize(0)` 对默认对齐表零项取模即除零，type.cc:3429-3437）。
+②`parse_c_type` 的 `other` 臂在 bail 前先查共享工厂名树——Ghidra C 解析器对
+TYPE_NAME token 的 `glb->types->findByName` 镜像（grammar.cc:2989）；工厂名树由
+驱动无条件 `parse_type_names` DWARF 导入填充，签名路径与种子路径同一身份域。
+**行为影响（身份统一，无门禁启用即发生）**：直接命名复合体现在真正驻留——
+同型分组/指针恒等比较生效；curl 默认 1099→1096（main −1、getparameter −2，
+零回退；W1b/C2DWARF 见证基线随之移 3 行，见 Differential 归因）；mirror 五投影
+新鲜复跑 next_url/getparameter **MATCH**（97,466 行投影体逐字节=冻结银行，仅
+META producer 行异）。C4 STRUCT-SEED 通道（RUGRA_STRUCTSEED 门）依赖本修复：
+`OutStruct`/`stat` 等拼写经名树解析为带字段复合体。
+
+
+## 2026-09-24：GLIBC-PROTO-PARAMNAME-0001 签名类型工厂驻留（libc + DWARF 剩余碎片点）
+
+**根因（curl main 48 行 glibc 参数名族）**：canon headless（12.0.4/12.1.2 双证）在
+`ActionNameVars::lookForFuncParamNames`（coreaction.cc:2853-2897）只给
+`numMergeClasses==1` 的未命名局部挂 libc/DWARF 形参名（coreaction.cc:2887
+`high->getNumMergeClasses() > 1` 挡板）；多区复用的指针临时在 canon 里被
+`ActionMergeType`→`Merge::mergeLinear`（coreaction.hh:414 → merge.cc:272-292/359-402）
+按**类型指针恒等**（merge.cc:387 `ct == high->getType()`）投机合并成多类，从而
+**不**继承 `__haystack/__ptr/__filename/__s/nextarg` 之类名字；寄存器常驻单类值
+（main 的 R14/R15 FILE*）才得名 `__stream/__stream_00`。Rugra 侧
+`parse_c_type`（libc 24 表）此前**每次 `Arc::new` 裸铸**类型，per-call-site 身份
+碎片化使同型分组无法成组 → 临时恒单类 → 被过命名（main 多 4 名 48 行；
+`nextarg` 为 DWARF callee 同病）。**修复（本文件 3 处 + curl 驱动 1 处）**：
+①`parse_c_type` 全面走 `TypeFactory::shared_default()`——基础拼写按
+`find_by_name` 名树（grammar.cc:2989 lexer TYPE_NAME 规则的镜像），未命中经
+`factory_named_base`→`get_base_named`（findAdd 驻留，type.cc:3412），指针层走
+`get_type_pointer` 3 参匿名重载（grammar.cc:2402-2411 PointerModifier::modType →
+type.cc:3867-3875）；②`void_type` 改 `get_type_void()` 单例；③`dwarf_base_type`
+的 char 臂改经 `intern_named` 名驻留（DWARF char = 工厂 char 同一对象）；
+④curl 驱动 `build_worker_architecture` 的 cspec data_organization 解码目标由
+per-process 裸工厂改为 `shared_default()` 单例——与 `Architecture::ensure_types`
+既有的"canonical headless-oracle factory"口径合一，使管线推断/libc 签名/DWARF
+三通道共享一个身份域（Ghidra 每 Architecture 恰一个 TypeFactory，
+type.cc:3106）。**验收**：curl main 只剩 canon 同款 `__stream/__stream_00`；
+curl E2E 1740→**1561**/0/0、httpd **1698**/0/0、五投影 MATCH×5、双跑恒等。
+**移交**：`MERGE-SAMETYPE-COVER-PARITY-0001`（my_get_line +33/glob_range +7
+编号级联与 file2string/parseconfig 欠命名 = merge 覆盖粒度分歧双向残差，
+merge 域）。
+
+
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
+## 2026-09-22：DWARF 类型工厂驻留（HERITAGE-PROMOTE-SYMBOLTAIL-0001 配套）
+
+`base_type`/`struct_type`/`union_type`/`enum_type`/`alias_type` 的产物与
+`pointer_type` 此前每次 `Arc::new` 裸建，不进共享 `TypeFactory`。Ghidra 的
+DWARF analyzer 把每个 DIE 类型解析进 Architecture 的**唯一** TypeFactory
+（type.cc findByName/setName 驻留），所以两个 DWARF 通道（globals 的
+`DebugGlobalDatabase` 与原型的 `DebugPrototypeDatabase`）看到的同名结构是**同一**
+interned 对象——指针恒等比较（`CastStrategyC::castStandard` 的
+`curtype == reqtype`，cast.cc:299；ActionSetCasts 的 store-value cast，
+coreaction.cc:553-554）判定相等、免 cast。Rugra 双通道各自裸建时，
+`*glob = glob_expand;`（`URLGlob**` 形参 vs typelocked `URLGlob*` 全局读）多出
+伪 `(URLGlob *)` cast（glob_url 4→6）。修复：`intern_named` 软驻留——共享工厂
+按名命中且**枚举变体/size/metatype 全同**时复用既有 Arc（形状守卫使环回
+shallow 投影不得遮蔽同名字段的完整定义），未命中时经新
+`TypeFactory::intern_imported`（find_add 包装，type.cc:3390 导入边界）注册；
+`pointer_type` 走 `get_type_pointer`（pointee 已驻留后结构去重生效）。
+
 `src/debugproto.rs` implements Rugra's native equivalent of Ghidra's
 pre-decompiler debug-import boundary. Ghidra's DWARF analyzer writes declared
 function prototypes into the Program database; the C++ decompiler subsequently
@@ -19,6 +98,17 @@ of an address constant that references the global, i.e. a pointer to the
 declared variable type with C array decay (0x17660 `glob_expand` →
 `URLGlob **`, 0x17520 `config` → `Configurable *`, 0x17680 `glob_buffer`
 → `char *`).
+
+Function-statics — `DW_TAG_variable` nested inside a `DW_TAG_subprogram` —
+carry the enclosing function's name in `DebugGlobalVariable::
+parent_function` (gimli's `next_dfs` yields a depth DELTA per entry, so the
+absolute level is accumulated before the scope stack pops; misreading the
+delta as the absolute level used to drop the subprogram frame and flatten
+every static to a bare name — `CURLCANON-DBSYM-DUP-RAWNAME-0001`). The
+driver renders those as `<parent>::<name>` spellings in both the Program-DB
+DWARF layer and the name-proxy overlay: locked witnesses
+`my_get_token::save` @0x17510 and `next_url::beenhere` @0x17518
+(`ghidra_curl_1204.c:1226+`).
 
 `DebugGlobalDatabase::seed_global_locked` (`GLOBWORD-C5-GLOBAL-TYPEFLOW-0001`)
 is the driver-side projection of the DWARF front end's committed-data-type
@@ -48,6 +138,13 @@ included) that back the external-stub rendering
 
 - `LibcSignatureTable::lookup(name)` — the signature record for an imported
   symbol, `None` for anything else (unknown imports stay unlocked).
+- `LibcSignatureTable::empty()` — bare-load constructor
+  (RUGRA-FLOW-MIRROR-0001 M3): an empty table whose every lookup misses,
+  reproducing the raw-BFD load environment of the oracle single-function
+  harness (BfdArchitecture + readLoaderSymbols carry no generic_clib
+  signature data; ACTIVEPARAM-COUNT-9V2-0001 RCA-1). The curl driver
+  selects it under `RUGRA_BARE_LOAD=1`; default construction keeps the full
+  locked ledger.
 - `LibcSignatureTable::locked_proto(name, model_carrier, type_names)` — builds
   a clean callee `FuncProto` that shares the carrier's resolved model, then
   routes the declared types through `FuncProto::setPieces` and that model's
@@ -78,11 +175,33 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
 
 `resolve_type` materializes the DWARF type graph into `Datatype` objects:
 
-- base types map `DW_AT_encoding` onto the Rugra metatype (float/unsigned/
-  boolean/int). The locked analyzer's character distinction is also retained:
-  core `char`/`signed char` and the `DW_ATE_signed_char` fallback become a
-  `CHARTYPE`/`SUB_INT_CHAR` datatype, while `DW_ATE_unsigned_char` remains the
-  ordinary unsigned `uchar` type;
+- base types resolve in the locked analyzer's order
+  (DEBUGPROTO-DWARF-BASENAME-0001, 2026-09-26): a `DW_AT_name` spelling a
+  standard C alias (`long int`, `short int`, `unsigned int`, `long long
+  int`, …) first hits the alias table
+  (DWARFDataTypeManager.java:477-549 initBaseDataTypes, consulted at
+  :403 in getBaseType) — when the canonical type's dataOrganization size
+  equals `DW_AT_byte_size` and the encoding is compatible
+  (isEncodingCompatible :359-369: `DW_ATE_signed` rejects unsigned
+  canonicals, `DW_ATE_unsigned` rejects signed ones, everything else
+  passes), the canonical Program type is returned DIRECTLY with no typedef
+  wrap, so DWARF `long int` (8, signed) IS the cspec `long` and casts print
+  `(long)` (12.0.4 golden: `(long)` 55x curl / 1165x httpd, `long int` zero
+  occurrences). Factory-present canonicals (`char`/`short`/`ushort`/`int`/
+  `uint`/`long`/`ulong`/`float`/`double`/`longdouble`/`bool`/`wchar_t`/
+  `undefined1`) intern onto the factory's same-named core entry
+  (TypeFactory::findAdd, type.cc:3412-3425) — one object with the
+  signature-data `long`, so identical-type casts disappear;
+  `uchar`/`longlong`/`ulonglong` are Java-DTM-only names (the C++
+  coretypes stream's same-size longlong slot is overwritten by `long`),
+  interning as named non-core types exactly as the database transport
+  delivers them. The locked analyzer's character distinction is also
+  retained: the `DW_ATE_signed_char` fallback (for names outside the alias
+  table) becomes a `CHARTYPE`/`SUB_INT_CHAR` datatype, while
+  `DW_ATE_unsigned_char` resolves through the alias table to the ordinary
+  unsigned `uchar` type; every other name keeps its DWARF spelling (the
+  typedef-wrap arm — Rugra materializes typedefs as the renamed underlying
+  type);
 - pointers/references build `Datatype::Pointer` with the pointee's spelling
   (`URLGlob *`, and `URLGlob **` for pointer-to-pointer);
 - `DW_TAG_structure_type`/`DW_TAG_union_type` build fielded
@@ -90,7 +209,18 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
   `DW_AT_data_member_location` constant or `DW_OP_plus_uconst`, resolved
   member type) — named by `DW_AT_name` without a `struct `/`union ` prefix,
   which is the spelling Ghidra's type manager prints (`Configurable *`,
-  matching the 12.0.4 golden);
+  matching the 12.0.4 golden). Imported unions carry the
+  `NEEDS_RESOLUTION` flag (COREACT-C3-UNIONRES-0001, 2026-09-25):
+  Ghidra's `TypeUnion` constructor sets `needs_resolution` on every
+  instance (type.hh:551) and pointers to the union inherit it in
+  `TypePointer::calcSubmeta` (type.cc:1048-1049) — the flag is what drives
+  `ActionInferTypes::propagateTypeEdge`'s always-resolve arm
+  (coreaction.cc:5081-5084) and `ActionSetCasts::resolveUnion`
+  (coreaction.cc:2490); the DWARF import completes fields at construction,
+  so only the resolution flag is set (`type_incomplete` is cleared by the
+  factory's setFields counterpart, exactly as the ctor+setFields decode
+  path in the oracle). Same flagging pattern as the enum `ENUMTYPE` note
+  above;
 - `DW_TAG_enumeration_type` builds `TypeEnum` with its `DW_TAG_enumerator`
   value table;
 - `DW_TAG_array_type` builds `Datatype::Array` from the first subrange's
@@ -99,6 +229,21 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
   of reducing it to a base `(size, metatype)` pair. This preserves character
   flags/submeta and pointer/array/composite shape. Rugra still has no
   `TypeTypedef` variant or importer-side TypeFactory registry identity;
+  **exception（PRINTC-BOOLLITERAL-0001, 2026-09-24）**: the conventional
+  boolean typedef names (`bool`/`_Bool`, 1-byte underlying) short-circuit to
+  the factory's core `bool` via `TypeFactory::dwarf_conventional_bool`
+  (docs/api/type_system/typefactory.md) — mirroring Ghidra's DWARF front end
+  mapping `typedef char bool` (curl.h line 394) to its boolean primitive, the
+  identity behind the canonical golden's `true`/`false` constant prints on
+  typedef-bool fields (`::config.showerror = true;` /
+  `::config.progressmode = (bool)(::config.progressmode ^ 1);`) via
+  `ActionSetCasts::castInput`'s constant absorption (coreaction.cc:2687-2691)
+  and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771). Known
+  residual of the same family: plain-`char` fields (`config.remotefile`) and
+  `bool[N]` stack arrays in the canonical golden come from the Java-headless
+  analyzer layer (Data Type Propagation), which has no decompiler-library
+  counterpart — the library-level direct-runner golden prints `'\0'`/`'\x01'`
+  for those same stores;
 - recursive type graphs (`FILE` → `struct _IO_FILE` → `_chain FILE *`) break
   at the back edge with a shallow named projection (name/size/metatype, no
   fields), mirroring how Ghidra's two-phase type manager exposes an
@@ -116,10 +261,12 @@ The current curl regression input has SHA-256
 `4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a`.
 Rust-side import tests cover `GetStr` (2 fixed parameters), `myprogress` (5),
 `helpf` (1 plus varargs), the optimized `getparameter` definition (4 via
-`DW_AT_abstract_origin`), locked zero-input `hugehelp`, and the five DWARF
+`DW_AT_abstract_origin`), locked zero-input `hugehelp`, and the DWARF
 globals of the curl fixture (`config`, `save`, `beenhere`, `glob_buffer`,
-`glob_expand`) including the `URLGlob` 304-byte layout (literal char*[10] @0,
-pattern URLPattern[9] @80, size int @296) and the `&global` pointer map.
+`glob_expand`, plus the copy-relocation externals `stdout`/`stdin`/`stderr`
+with their FILE* declaration types) including the `URLGlob` 304-byte layout
+(literal char*[10] @0, pattern URLPattern[9] @80, size int @296) and the
+`&global` pointer map.
 This is useful regression evidence, but it is not a complete Ghidra
 DWARF-analyzer oracle fixture; the importer remains `NO_ORACLE` under mechanism
 B2. A fresh production GetStr differential does prove the resulting visible
@@ -241,6 +388,48 @@ structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，
 由 DWARF analyzer 填充 program type manager；重复名首见优先（锁定 curl
 语料无冲突）。
 
+## 2026-09-23：DWARF-SYMFIELD-TYPESTATE-0001 — typedef 拼写与 copy-reloc 外部符号
+
+两处 DWARF 前端类型态修复（锁定输入 `examples/curl`，oracle
+`ghidra_curl_1204.c` main 行为证据）：
+
+1. **typedef 拼写保留**（`parse_type_names`）：`DW_TAG_typedef` 条目此前直接
+   解析 `DW_AT_type` 目标，索引里 `FILE` 落成底层 `struct _IO_FILE`
+   （216B）——所有 libc 签名与 cast 随之打印 `_IO_FILE *`。现在 typedef 条目
+   经 `resolve_type` 的 typedef 分支物化为**改名为 typedef 拼写**的底层类型
+   （Ghidra 侧 TypeTypedef type.hh:522 保名语义），`type_names["FILE"]` 为
+   名为 `FILE` 的 216B struct，`_IO_FILE` 仍以原名共存。golden 证据：
+   `FILE *__stream` 声明、`(FILE *)0x0` cast、`int fclose(FILE *__stream)`。
+2. **copy-reloc 外部符号导入**（`DebugGlobalDatabase::parse_elf`）：DWARF 中
+   `stdout/stdin/stderr` 只有 `DW_AT_declaration`（无 `DW_AT_location`），
+   此前被 located-global 循环跳过，驱动侧 ELF 回退把它们种成匿名
+   `undefined *`，符号名带 `@@GLIBC_2.2.5` 后缀。现在 walk 期间收集
+   external 声明（`DW_AT_declaration`+`DW_AT_external`+`DW_AT_type`，名字
+   首见优先），walk 后用 goblin 枚举 `R_X86_64_COPY` 重定位目标
+   （`copy_reloc_object_symbols`，STT_OBJECT、剥 `@@VERSION`），按地址种入
+   globals（located globals 仍优先）。curl 语料受影响集合恰为
+   {stdout@0x174e0, stdin@0x174f0, stderr@0x17500}，类型 = 指向统一 `FILE`
+   的指针（与 `type_names["FILE"]` 同一 Arc 身份）。httpd 无 DWARF FILE
+   typedef/声明，路径惰性（globals=0）。
+
+**可见效果**（curl E2E，main）：`__stream = stdin;`/`__stream_00 = stdout;`
+裸赋值（原 `(_IO_FILE *)stdout@@GLIBC_2.2.5` cast）、`stdout == (FILE *)0x0`、
+`heads.stream = (FILE *)stdout;` field-store cast 重现（golden 896）、全部
+`_IO_FILE` 拼写改 `FILE`。三门禁：curl skeleton 2665→**2614**（main
+605→583、libc FILE thunk 11→9、my_fwrite 12→4、getparameter 748→743、
+helpf 81→77，10 函数改善 0 回退），defects=0/numbering=0；httpd 2331==基线
+0/0；next_url/match_url 字节级不变（103/76）。lib 测试 18 失败==已知基线
+（预存 flaky 集合）。
+
+**残余**（登记 TODO DWARF-SYMFIELD-TYPESTATE-0001 ②③，不在 debugproto 域）：
+`glob.pattern[8].content.Set.elements = (undefined8)in_stack_...fd90` 的
+`(char **)` 缺失——Rugra 在该 STORE 插入的是 `union_a49` 8 字节 PartialUnion
+cast（`get_exact_piece` union 臂，dump op@0x30d6
+`CAST(PartialUnion)=in_stack_fd90`），oracle 经 ScoreUnionFields/
+derefPointer 钻取 Set→elements@0 尺寸匹配后 cast 到叶子类型 char**；
+`glob._296_8_ = (undefined8)uVar32` 同类（PartialStruct 剩余片）。修复域在
+coreaction/unionresolve 的 store-cast 目标选择。
+
 ## parse_c_type/split_pointer_depth：嵌套指针归一（2026-08-27）
 
 `split_pointer_depth` 逐星剥离（星 + 前导空格循环），任意间距形式
@@ -309,3 +498,105 @@ FuncLink bilateral fixture 会消费这些 producer 形成的 scalar register/st
 storage，但并没有运行真实 Ghidra Program database/analyzer importer。因此本
 front-end adapter 本身仍为 `NO_ORACLE`/L2；aggregate ModelRules、非 x86、完整
 ProtoStore codec 与错误状态均未获批准。
+
+## 2026-08-30：HTTPD-URAM-SYMBOLIZE-0001 — PLT thunk 名与默认 FUN_ 符号导入
+
+`ElfPltImports::parse_elf` 是 ELF PLT thunk 名导入边界（Ghidra Java
+ELF/PLT analyzer 的 native 对应物）：`.plt.sec`/`.plt` 槽位按索引对应
+`.rela.plt` JUMP_SLOT 重定位（第 i 项 ↔ `base + 16*i`，`.plt` 跳过解析器头
+从 1 起），`.plt.got` 槽位逐个解码 `f2 ff 25 <disp32>` 尾巴并匹配拥有该
+GOT 地址的 R_X86_64_GLOB_DAT 重定位。几何与匹配沿用 curl 驱动已锁定的实现
+（原 examples/curl_decompile.rs 内联块，提炼为共享边界）；httpd witness：
+slot 43 = 0x2a6d0 = `apr_app_initialize`，`.plt`@0x29020、`.plt.got`@0x2a400、
+`.plt.sec`@0x2a420，317 个 JUMP_SLOT 全部解析。
+
+`analyze_headless_function_symbol_name(vaddr, image_base)` 镜像 Java
+SymbolManager 的默认函数符号策略：`FUN_` + analyzeHeadless image-base 地址
+的 8 位零填充 hex（ET_DYN image 装载于 0x100000，golden 的共享尾块
+0x2c520 → `FUN_0012c520`）。
+
+消费链（对齐 flow.cc:656-672 `queryCall` → fspec.cc:4949-4960 `setFuncdata`
+→ printc.cc:601-609 `opCall` 的 `fc->getName()`）：驱动把 thunk 名与未命名
+call-target 的默认名种入 callpoint-symbol 替身表，`map_globals` 对已命名地址
+经 has_symbol 门跳过 `uRam<offset>` 合成，`PrintC` 的 CPUI_CALL 臂按地址取名。
+E2E（httpd 29 函数口径）：uRam 调用 87→0（82 thunk + 5 发现函数全部按 golden
+拼写命名），skeleton 2278→2274，defects=0、numbering=0；curl 输出字节不变
+（3090/0/0）。单元测试 3 项（slot 重定位映射、image-base 命名、非 ELF 拒绝）
+锁 httpd 语料。前端 adapter 本身仍 `NO_ORACLE`/L2（无真实 Java analyzer
+对拍；oracle 证据=12.0.4 headless golden 的 thunk/默认名拼写与计数）。
+
+## 2026-09-24：DWARF 枚举补 ENUMTYPE 旗标（Lane GG2）
+
+`enum_type` 构造的 TypeBase 现置 `type_flags::ENUMTYPE`——Ghidra TypeEnum
+自带 enumtype 旗标（type.hh:490-494，isEnumType() 按旗标判定，type.hh:219），
+缺旗标的枚举对 pushConstant 的枚举臂不可见（打印退化为默认 cast）。
+另：前代 DWARF-VOID-UNKNOWN-MODEL-0001（0 参 DWARF 签名 → model "unknown"，
+golden 三函数 Unknown-calling-convention 警告见证）的单测期望已同步翻转
+（void_signature_dwarf_prototype_pins_unknown_model）。
+
+## 2026-09-24：LibcSignatureTable 原型钉 unknown 约定名（Lane CURB，PLTSTUB-WARNLOSS-0001 收口）
+
+`LibcSignatureTable::locked_proto` 产物在锁定 storage 之外现在额外钉
+`set_model_name("unknown")`——镜像 generic_clib 引入路径的约定名状态：
+ELF thunk 的 FunctionDB 从未被赋予 calling convention（ELF 导入器不给
+thunk 指定约定；`FunctionPrototype.grabFromFunction`（FunctionPrototype.java:
+129-141）回读为 "unknown"），`FuncProto::decode`（fspec.cc:4675 起）将
+model="unknown" 路由到 `createUnknownModel`（architecture.cc:1159-1166：
+UnknownProtoModel 从 defaultfp 克隆行为——paramrange/localrange/
+stackgrowsnegative 与默认模型一致、printInDecl=false），参数存储仍经该
+模型分配且 typelock 保留（ProtoStoreInternal::decode，fspec.cc:3464-3567）。
+可观测出口=`ActionPrototypeWarnings`（coreaction.cc:4901-4908：
+isModelUnknown && !hasCustomStorage && (inputLocked || outputLocked)）——
+锁定 curl golden 上恰好 24 个 generic_clib 锁定 PLT 桩
+（0x102310 strcpy / 0x102320 puts 等见 witnesses）的头注释
+`/* WARNING: Unknown calling convention -- yet parameter storage is locked */`；
+表外 21 个引入（curl_easy_*、__vfprintf_chk、__cxa_finalize 等）无锁定
+签名、golden 同样无警告。Rugra 只钉名字符串：绑定的 ProtoModelFull 仍是
+defaultfp 克隆，模型对象消费者（hasEffect、derive_input_map、varmap 名字
+键注册表回退 defaultfp）保持 UnknownProtoModel 的占位行为。
+
+验收（fast-release 亲测，基线=亲父 37014110）：curl 1329/0/0→1215/0/0
+（45 个 PLT 桩 diff 3/2→0；本节 −24 行 + jumptable 警告 −90 行合并账，
+jumptable 半边见 PLTSTUB-THUNKRELRO-0001）；零差函数 62→107；
+逐函数 0 回退；httpd 输出字节恒等；8/8 投影银行 MATCH。
+
+## parse_c_type 扩展：数组声明符 + C1 种子基类型（HEADLESS-BRIDGE-V1-TYPESEED，2026-09-25）
+
+`parse_c_type` 改为 `pub(crate)` 并扩展两类输入（HEADLESS-BRIDGE-V1-TYPESEED
+的 manifest 声明拼写）：①最外层数组声明符（`long[4]`、`char *[2]`）——按
+`TypeFactory::get_array`（type.cc:3902 getTypeArray 镜像）折叠，
+对应 TypeArray::decode 的 arraysize×alignsize 重建（type.cc:1330-1342）；
+②x86-64 gcc 数据布局基类型表（undefined/undefined1/2/4/8、uint4、ulong8、
+byte1、short2、float4、double8、bool1）。既有 24 条 libc 签名拼写路径不变
+（新臂只在新拼写上点火）。指针层与名字树解析（factory_named_base/
+find_by_name 身份复用）保持 GL 判例语义。
+
+## 2026-09-25：BRIDGE1-TYPESEED 三连修（Lane TYPEFIX：PIDT/MULTIDIM/PARSEFAIL）
+
+CR-BRIDGE1 复核登记的三个条件项收口（基亲父 22957a15）：
+
+- **`__pid_t`（PIDT，P2）**：基类型表补 glibc typedef 镜像条目
+  `"__pid_t" => (4, Int)`——httpd canon 在 ap_signal_server 提交
+  `__pid_t local_34;`（ghidra_httpd_1204.c:24574，glibc `typedef int
+  __pid_t` 的 analyzeHeadless DWARF 导入），oracle 侧 `<localdb>` 编码表
+  （gen_seed_xml.py BASES，stage_seed_diag 验证）同载 (4,int)。httpd 驱动
+  无 DWARF 名字索引，提交 typedef 与其它种子基一样走表解析。
+- **未知命名基禁止 address_size 回退（PIDT 根因面）**：`parse_c_type`
+  的 other 臂不再静默铸造 8B 未知基——oracle 两条路径都不允许裸名猜尺寸：
+  `<type>` 传输只读显式 ATTRIB_SIZE（`Datatype::decodeBasic`，type.cc:623-637，
+  经 `TypeFactory::decodeTypeNoRef` default 臂 type.cc:4536-4543），C 签名
+  路径经 `glb->types->findByName`（grammar.cc:2989）解析，未知名仅产出
+  IDENTIFIER 使解析失败。不可解析基现为 parse error，由种子调用方
+  （coreaction 的 PARSERFAIL 降级臂）报告并跳过。
+- **多维数组维序（MULTIDIM，P3）**：数组折叠改剥**最左**维（C 声明维序，
+  `long[2][4]` = array(2) of array(4) of long，镜像 TypeArray::encode 的
+  外层 arraysize=左维嵌套，type.cc:1326-1347）；原最右维剥离产生倒置的
+  array(4) of array(2)。单维拼写形状不变。
+- 新增单测 3 例：`typeseed_pidt_base_carries_committed_four_byte_int` /
+  `typeseed_unknown_base_is_parse_error_not_address_sized_mint` /
+  `typeseed_multidim_array_strips_leftmost_dimension`。
+
+coreaction 侧（F3，注释声明不改逻辑）：种子 parse 失败臂登记
+BRIDGE1-TYPESEED-PARSEFAIL 降级——oracle 的 decodeType 失败抛 LowlevelError
+使整函数数据库解码失败；Rust 通道按符号 skip+eprintln（仅损坏 manifest
+可观测），详见 docs/api/coreaction.md 同日节。

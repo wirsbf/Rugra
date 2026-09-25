@@ -1,0 +1,1677 @@
+# HEADLESS_BRIDGE_V1_DESIGN — headless 桥接建模 v1:加料通道归因与驱动侧设计
+
+- Lane: BRIDGE1(wt/bridge1,自 master dc70528c)
+- 日期: 2026-09-24
+- 性质: 归因+设计车道(docs-only,零 src 改动)
+- 语料: `tests/golden/ghidra_{curl,httpd}_1204.c`(headless 正典) vs `.direct-runner.c`(库级契约),双 golden 同源锁定 oracle(Ghidra 12.0.4 e40ed130,provenance 在库)
+- 实验产物: `/dev/shm/rugra-tests/bridge1/`(parse_golden.py / diff_channels.py / diff_canon.py / diff_hunks.py + 4 份 JSON 结果)
+- 结论先行: **未建模加料通道共 8 族,v1 主攻 C1 类型播种(committed local 层)** —— httpd 侧 5824 处 `local_` 引用 / 3173 行 typed 声明,是 direct-runner 完全没有的一整层,且已被 SPALIAS drill 证明单函数 oracle 无法从库内收敛得到。驱动侧等价实现 = golden 收割 manifest + worker 在 action 前向 `ScopeLocal` 播种 typed 符号(镜像 Ghidra `<localdb>` XML 协议,varmap.rs:1950 消费链已在位)。
+
+---
+
+## §0 为什么需要这个设计(三判例的战略前提)
+
+FI 判决(sb-spillpair)已把口径钉死:**Rugra 库级输出 vs direct-runner golden 同形 = 正确终态;与 headless 正典 golden 的残差中,有一整族是"headless 环境输入"而非库缺陷**。DP 判决(sb-pushabsorb)同样明言:canonical 口径要达到"push 消失"必须先建模 headless 桥接输入(参数锁/栈帧/analyzer 传递),属新 lane。SPALIAS drill(VARMAP-SPALIAS-RETYPE-0001)则给出铁证:hermetic 单函数 oracle 与 Rugra 同收敛到 unknown 固定点 ⇒ golden 的 `long local_c8[4]` 种子在**库外**。GC 判例(sb-boollit):golden bool 声明 168 vs 库级 `'\x01'` = Java Data Type Propagation 层。
+
+即:**headless golden = C++ 库 + Java 分析器栈的提交物回灌**。库忠实 ≠ 输出等同;要追平正典,必须把 Java 侧的"加料"在驱动侧等价重建 —— 照 EX2(LAB_)/GA(switchD)/GD2+GJ(coderef)/EP(FS canary) 已验证的"驱动侧加料,库保持纯净"模式。
+
+## §1 两个 golden 的结构性差异(证据边界)
+
+| 维度 | headless 正典 | direct-runner |
+|---|---|---|
+| 生成 | 单进程 analyzeHeadless:完整 Java 默认分析(loader/PLT/references/demangler/FID/DWARF,无选项覆盖)→ postScript 同 JVM 逐函数反编译(`tools/ghidra_decompile_all.py`,DecompInterface 默认选项) | `golden_dump_1204` fixture:BfdArchitecture + BFD/PLT 符号注册,逐函数 hermetic 进程,完整 universal action(FIXTURE_CPP,regen_ghidra_golden.py:153-402) |
+| 函数集 | curl 124 / httpd 2010 | curl 74 / httpd 790(差集=analyzer 发现+plt.sec thunks) |
+| 地址基 | 0x100000 | 0(PIE VMA) |
+| provenance | `direct_runner_cross_check.equivalence_risks` 明列 6 条通道级差异(analyzer 栈/DWARF 原型/thunk 发现/名字剥离/导入符号/跨函数状态) | 同左 |
+
+双 golden 即现成的差分对:**凡 headless 有而 direct-runner 无的形态,按定义是 headless-only 加料**(FI 判例口径);再用 curl(带 DWARF)vs httpd(stripped)对照区分 DWARF 源与 analyzer 源。
+
+## §2 加料通道清单(量化 + 归因 + 现状)
+
+量化口径:diff 为函数块级配对(74/790 对齐函数),hunk=SequenceMatcher 差异块(变量名归一后);grep 行数为全文件口径。`H`=headless 正典侧,`D`=direct-runner 侧。
+
+| # | 通道 | curl 量化 | httpd 量化 | 归因(golden 知道什么/从哪知道) | 驱动桥现状 |
+|---|---|---|---|---|---|
+| C1 | **TYPE-SEED-LOCAL**(committed `local_*` 符号+类型层) | `local_` 引用 117,typed 声明 140 vs D undefined 326 | **`local_` 引用 5824(D=0),typed 声明 3173 vs D 4468**;TYPE-SEED hunk 316 | **Java 分析器提交环**:Decompiler Parameter ID(含 locals 提交)先跑库恢复→提交 DB→Data Type Propagation 等再升级类型→最终反编译读回。证据:①httpd stripped 无 DWARF 仍有 typed locals ⇒ 非 DWARF;②SPALIAS drill:hermetic oracle 收敛 unknown ⇒ 库外种子;③`local_` 名 C++ 全树零生成点(grep 无)⇒ 名字来自 Java DB;④C++ 消费机制在锁定源:`<localdb>`(funcdata.cc:804-810)→ `MapState::gatherSymbols`(varmap.cc:1044-1059)→ `RangeHint::fixed+typelock` | ❌ 未建模(SPALIAS/GC/FI/DP 四判例残差的上游总根) |
+| C2 | **THUNK-GOT**(GOT 槽 `PTR_x` 符号化 + thunk 标记 + 导入函数签名) | PTR_ 50 vs pcRam 313;THUNK-PAIR hunk 73;locked-storage 警告 51(D=0);D jumptable 警告 46(H=0) | PTR_ 372 vs pcRam 1659;THUNK-PAIR hunk 495;locked 警告 124;D jumptable 警告 431 | headless ELF loader+分析器:建 GOT 引用符号(`PTR_<extname>_<addr>`、`code*` 型)、把 PLT/plt.sec 标记为 thunk(免 jumptable 恢复)、对导入函数套用库签名(锁定参数存储)。httpd stripped ⇒ 签名来自 FID/外部签名库,非 DWARF | 部分:GOT PTR_ 标签+函数符号已桥(driver :557-563);**导入签名/thunk 标记/警告抑制 ❌** |
+| C3 | **SIG-LOCK 实函数**(原型锁定+参数名) | SIG hunk 22 + PARAM-NAME 26;`__x` 参数名 263 vs 72 | SIG hunk 418 + PARAM-NAME 146;`__x` 1562 vs 332 | curl=DWARF 函数原型(argc/argv/__stream/urls);httpd=analyzer 签名(FID/Parameter ID 提交)。与 C1 同机制不同载体(`<prototype>` 锁,fspec) | 部分:DWARF 自身+callsite 锁、24 libc 已桥(CALLSPEC-ENV-SCOPE-0001/GL);**导入面与 golden-harvest 面 ❌** |
+| C4 | **STRUCT-FIELD**(DWARF 组合类型下的字段步进) | STRUCT-FIELD hunk 33 + GLOBAL-SYM hunk 119(`::config`/`outs.stream`/`stdin` 等 typed 全局) | STRUCT-FIELD hunk 26(归因开放:stripped 下疑 FID 套型) | curl=DWARF composite(Configurable/URLGlob/FILE);全局符号带类型 | 部分:TYPEDEF_PREAMBLE 文本级 hack(:4845);真组合类型 ❌ |
+| C5 | STRSYM(字符串字面量实参) | H 43 vs D 0 | H 1681 vs D 10 | Java string/reference 分析器在 .rodata 建字符串数据 | ✅ 已桥(driver 字符串通道) |
+| C6 | BOOL-LIT 残余(Data Type Propagation 族) | true/false 34 vs 18 | 499 vs 289 | GC 判例:Java Data Type Propagation 把 bool 语义播种到库级 char | 部分:DWARF typedef-bool 已修(boollit);**DTP 族 ❌** |
+| C7 | NAME-NORM(GCC 后缀剥离) | H 后缀引用 0 vs D 10(`.constprop.0` 等) | 0/0 | headless demangler/分析器剥离 `.constprop/.isra/.cold` | ❌(小) |
+| C8 | FUNC-DISC(函数发现) | H-only 50(1×FUN_ + 49×plt.sec) | H-only 1220(464 FUN_ + 756 named) | analyzer 发现无符号代码 + plt.sec 注册 | 部分:124-fn ledger 钉住门禁面;无需库侧桥 |
+| C9 | PUSH-ABSORB | D 固定槽 push 29 行 | D 309 行 | DP 判例:headless 桥接层输入吸收;**预计随 C1/C3 落地自然收敛** | ❌(不单独建,跟踪 C1 效果) |
+| C10 | SPILL-PAIR | D 19 行 | D 271 行 | FI 判例:**库级非缺陷**;headless 由 Java 分析器栈改变 merge/type-lock 输入所致,预计随 C1 落地观察 | 不单独建(FI 终局口径) |
+| C11 | LABELS(LAB_/code_r) | H LAB_ 85 / D code_r 122 | H 2910 / D 1617 | Java DB 提供标号名 | ✅ EX2 |
+| C12 | switchD 命名 | — | — | 同上 | ✅ GA/SMALLFIX |
+
+已桥通道(C5/C11/C12 + C2 部分 + C3 部分)证明模式可行;**未建模主缺口 = C1(最大行质量)→ C2 → C3 → C4 → C6/C7(尾差)**。
+
+## §3 通道归因的证据链(按 B2 口径)
+
+每个通道的归因强度分三级:
+
+1. **机制级(C++ 源码,锁定 oracle)** —— C1 的库内消费链已逐行核实:
+   - `Funcdata::decode`(funcdata.cc:775-837):`<function>` 子元素 `<localdb>`(预填符号的 ScopeLocal)/`<override>`/`<prototype>`(锁定原型)/`<jumptablelist>`(预计算跳转表)—— **这就是 Java DecompInterface 与 C++ 库的全部接口**,驱动侧桥等价于在 Rust 侧重建同一协议的注入端。
+   - `MapState::gatherSymbols`(varmap.cc:1044-1059):DB 符号以 `RangeHint::fixed` + typelock 进 restructure;Rugra 侧 varmap.rs:1950-1964 已逐行对应(本 lane 复核)。**播种 API 已在库内,缺的只是驱动侧喂数据。**
+2. **差分级(双 golden)** —— §2 量化全部来自同源双 golden 对比;`local_` 0 vs 5824(direct vs headless)是 C1 存在性的直接观测。
+3. **消融级(analyzer 开关)** —— **尚缺**:headless dist 当前不可用(重启丢失,HEADLESS_DIST_DEAD)。待重建后跑"关 Parameter ID / 关 Data Type Propagation"受控重导入,观测 `local_` 计数与 typed 声明变化,把 C1/C6 的 analyzer 级归因钉死(登记为 §5 W0 前置)。当前 analyzer 名称为最可能假设(证据:provenance risk 列表 + SPALIAS/GC 判例 + httpd stripped 反证 DWARF),非终局。
+
+## §4 驱动侧通道设计(GD2/GJ 模式:数据从哪来/怎么注入/何时注入/怎么验证)
+
+总原则(已验证先例的公共形态):**控制器(canon 模式)持有加料数据 → `DecompileRequest` 协议字段 → worker 在明确生命周期点安装 → mirror/bare 模式不加载(库级契约保持纯净)→ per-fn 差分门禁验收**。
+
+### C1 TYPE-SEED-LOCAL(v1 主攻,详规见 §5)
+- 数据从哪来: **golden 收割 manifest**(捕获侧,同 124-fn ledger 先例)—— 从 headless golden 的声明层收割每函数 committed locals(名字内嵌偏移 `local_c8`→-0xc8,类型串)。
+- 怎么注入: worker 在 fd 构建后、`perform_action("decompile")` 前,经 `ScopeLocal::add_symbol_with_property`(varmap.rs:4041)安装 `(stack offset, name, type, typelock)`,类型经 `parse_c_type`(debugproto.rs,GL 已建,走 shared_default 工厂)。这是 **action 期种子**(区别于 GD2 的 print 期 DB):gather_symbols 在 NameVars/restructure 中段消费。
+- 何时注入: action 前,一次性;镜像模式(投影/RUGRA_MIRROR)与 bare-load 不注入。
+- 怎么验证: §5.5。
+
+### C2 THUNK-GOT
+- 数据: manifest 的导入函数签名表(name→proto)+ GOT 槽→`PTR_<name>_<addr>` 规则(.rela.plt 已有解析器,FIXTURE_CPP registerPltStubs 同源逻辑搬到 Rust 控制器——driver 已有 GOT PTR_ 标签半桥)。
+- 注入: ①thunk 函数集:对 ledger 外的 PLT/plt.sec 条目按 `<prototype>` 锁等价路径锁 `funcp`(复用 C3 的 sig 安装);②thunk 标记→抑制 jumptable 恢复尝试:driver 侧对该地址集传 `jumptablelist` 等价物(空表+thunk flag)——若库侧无对应 seam 则登记 RUGRA-GAP 评估最小接入点(预期在 flow/jumptable 查询入口加 DB 查询,属既有 `ACTION-SYMDB-DATASYM-0001` 同族)。
+- 验证: httpd 431 条 jumptable 警告→0;`PTR_` 372 全量符号化;per-fn 恒等校验。
+
+### C3 SIG-LOCK 实函数
+- 数据: golden 签名层收割(参数名/型/返回型 per fn);与现有 DWARF/libc 锁合流(已锁不动,未锁用 manifest 补)。
+- 注入: 复用 `link_call_specs` 的 locked_proto 构建器(CALLSPEC-ENV-SCOPE-0001 资产),扩为 self-sig manifest 源。
+- 验证: SIG/PARAM-NAME hunk 归零路径上的 per-fn 下降;`__x` 参数名计数对齐。
+
+### C4 STRUCT-FIELD
+- 数据: curl=DWARF composite(debugproto 已有 DWARF 类型通道,需组合类型 struct/field 语法扩展);httpd=FID 套型表(归因未钉死,先 curl)。
+- 注入: 类型工厂注册真组合类型,替换 TYPEDEF_PREAMBLE 文本 hack;全局符号带类型(driver 全局图已有 DWARF-typed 半桥,补 composite)。
+- 验证: STRUCT-FIELD/GLOBAL-SYM hunk 收敛;gcc 审计 URLGlob 族 FAIL 减少。
+
+### C6/C7 尾差
+- C6 BOOL-DTP:随 C1 类型播种大概率一并覆盖(bool 型在 manifest 内);残差单测。
+- C7 NAME-NORM:控制器符号表剥离 GCC 后缀(1 行级映射, golden 对照 `parseconfig.constprop.0→parseconfig`)。
+
+## §5 v1 规格 —— C1 类型播种(可实施)
+
+### 5.1 数据产物: `tests/golden/manifests/local_seed_httpd_1204.json`(及 curl 版)
+```json
+{
+  "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "corpus": "httpd", "golden_sha256": "<文件哈希>",
+  "harvest_rule": "decl-block lines matching '^\\s*(type)\\s+(local_[0-9a-f]+)(\\s*\\[\\d+\\])?;' before first statement; offset = -int(name[6:],16)",
+  "functions": {
+    "0x2ba90": { "name": "main", "locals": [
+      {"offset": -0xd8, "name": "local_d8", "type": "long",  "typelock": true},
+      {"offset": -0xd0, "name": "local_d0", "type": "long",  "typelock": true},
+      {"offset": -0xc8, "name": "local_c8", "type": "long[4]", "typelock": true},
+      {"offset": -0xa8, "name": "local_a8", "type": "undefined8 *", "typelock": true}
+    ]}
+  }
+}
+```
+收割器 `tools/harvest_local_manifest.py`:解析 golden 函数块 → 首语句前声明块 → 正则取 `(type,name,array)`;只收 `local_[0-9a-f]+`(偏移内嵌,保守域);manifest 记录 oracle commit + golden sha256(机制 B2 口径)。**含 undefined-typed 的 committed locals 一并收割**(它们改变 restructure 分区与命名 auStack_→local_,是提交层的一部分);若 W1 门禁显示 undefined-typed 种子在 curl 引发回归,降级为 typed-only 子 manifest(决策门在验收内)。
+
+### 5.2 协议: `DecompileRequest` 增 `committed_locals: Vec<CommittedLocal>`(`{offset: i64, name: String, type_expr: String}`)
+canon 模式控制器从 manifest 装载(按 vaddr 匹配);mirror/bare 模式恒空。worker 协议版本号同步 bump(GJ 先例 v3→v4)。
+
+### 5.3 worker 注入点(唯一 seam)
+fd 构建完成(含现有 DWARF/模型锁)之后、`db.perform_action("decompile", &mut fd_write)`(curl_decompile.rs:4057)之前:
+1. `parse_c_type` 逐条解析 `type_expr`(走 shared_default 工厂——GL 判例:类型身份域必须单一);
+2. `fd.scope.add_symbol_with_property(stack 空间 offset, name, type, typelock=true)`(varmap.rs:4041;对应 C++ `decodeScope` 恢复的 symbol 随 `<localdb>` 入库);
+3. 不触碰 funcp/寄存器参数(register 参数归 C3 域)。
+
+库侧预期零改动:`gather_symbols`(varmap.rs:1950)与 restructure 消费链已对应 varmap.cc:1044/1260。若发现 Rust `add_symbol_with_property` 无法表达 EntryMap 预填(maptable 物化路径),允许 varmap.rs 最小 GLUE 补口(须 `// RUGRA-GLUE` 注释 + 机制 C 复核——varmap 是白名单模块)。
+
+### 5.4 明确不做(边界)
+- 不改 restructure/merge/type-lock 算法本体(SPALIAS 两 TODO 的"库内自举"路线让位于本桥:种子在库外,库保持与 direct-runner 契约)。
+- 不播种寄存器参数/unaff_/extraout_(归 C3)。
+- mirror 投影与五投影 bundle 必须字节恒等(不加载 manifest)。
+
+### 5.5 验收门禁(v1)
+1. **镜像纯净性**: RUGRA_MIRROR=1 五投影(next_url/match_url/parseconfig/getparameter/myprogress)字节恒等(MATCH×5 保持)。
+2. **SPALIAS 定点**: httpd main 出现 `long local_c8 [4];` + `long local_d0; long local_d8;` 声明与 `plVar = local_c8` 直接符号形(SP 族 40 行残差显降,目标 ≤ 个位数;绑定 VARMAP-SPALIAS-RETYPE-0001 验收)。
+3. **E2E**: curl/httpd 差分 defects=0/numbering=0 保持,skeleton 下降(httpd 预期 −500 以上量级:5824 引用层的声明/形态收敛),per-fn 零回退(允许改善)。
+4. **确定性**: 双跑 byte-identical。
+5. **机制 B2**: harvest manifest 内函数逐个与 golden decl 层 fixture 对拍(收割器自校验);Rugra seeded-run vs golden 块:decl 层目标 MATCH,body 层差异如实登记(归后续 C2/C3)。
+6. gcc 审计 fail 集不新增。
+
+### 5.6 风险与开放项
+- **风险 R1**: committed locals 与 DWARF 自原型锁(param 溢出槽)的窗口重叠 → 验收 3 的 per-fn 门禁捕捉;必要时 manifest 收割时排除 param 槽区间(funcp local window 已有范围)。
+- **风险 R2**: undefined-typed 种子引发 curl 回归 → §5.1 决策门(typed-only 降级)。
+- **风险 R3**: analyzer 级归因未终局(W0 消融缺 headless dist)→ manifest 是"捕获侧真值",机制归因开放不影响 v1 可实施性;W0 补消融后再定 C6 是否独立通道。
+- **开放 O1**: httpd STRUCT-FIELD(26 hunk)在 stripped 下的类型来源(FID 套型?)—— W2/W4 时用 headless dist 消融钉死。
+
+## §6 分波排期
+
+| 波 | 内容 | 前置 | 预期主收益 |
+|---|---|---|---|
+| **W0**(可并行) | HEADLESS-BRIDGE-ATTRIB-0004:重建 headless dist;analyzer 开关消融(Parameter ID commit-locals / Data Type Propagation / FID)重导入 curl+httpd,钉 C1/C6 analyzer 归因;抓 `<localdb>` XML 真值交叉验证 manifest | 无(纯捕获侧) | 归因 NO_ORACLE→MATCH;manifest 交叉验证 |
+| **W1(v1 核心)** | HEADLESS-BRIDGE-V1-TYPESEED-0001:harvester + manifest + 协议字段 + worker 播种 + §5.5 全门禁;httpd 先行(最大行质量+SPALIAS 既有判决) | 无(不依赖 W0) | httpd `local_` 层 5824 引用建模;SPALIAS 定点;C9/C10 观察 |
+| W1b | curl roll-in(117 引用 + DWARF 名局部 `urls/urlnum` 同机制;含 NAME-NORM 顺带 3 hunk) | W1 | curl C1+C7 |
+| W2 | C2 THUNK-GOT(导入签名 manifest + thunk 标记/警告抑制) | W1(复用 manifest 框架) | httpd 431 jumptable 警告→0;THUNK-PAIR 495 hunk |
+| W3 | C3 SIG-LOCK 补全(real-fn 签名 manifest 合流 link_call_specs) | W1 | SIG 418 + PARAM-NAME 146 hunk(httpd) |
+| W4 | C4 组合类型(替换 TYPEDEF_PREAMBLE hack)+ C6 残余 + O1 归因 | W0 | STRUCT-FIELD/GLOBAL-SYM hunk;gcc 审计 |
+
+v1 交付判据 = W1(+W1b)全绿;每波独立 commit、独立 per-fn 零回退证明。
+
+## §7 与既有登记的关系
+
+- `VARMAP-SPALIAS-RETYPE-0001`:v1 验收直接绑定其验收点(`long local_c8[4]` 等);**路线变更**:库内自举(STORE 值反压/多轮往返)→ 驱动播种(种子已证在库外,SPALIAS drill)。lane GK 移交注记保留。
+- `RULEACTION-SPALIAS-INDIRECTPTR-0002`:独立(INDIRECT 传型链),不随 v1 收口,维持排队。
+- `MERGE-COPYNOISE-SPILLRESTORE-0001`(FI 终局)/`GOLDEN-CONTRACT-PUSHABSORB-0001`(DP):C10/C9 的观察哨——W1 落地后重测 spill 对/push 行是否随之收敛,并在各自 TODO 行回写结论。
+- `ACTION-SYMDB-DATASYM-0001`(SMALLFIX ③):C2 的 jumptable/thunk DB 查询接入点同族,W2 时合并考量。
+
+## §8 复现实验(本 lane 产物留档)
+
+```bash
+# 通道量化(全部产物在 /dev/shm/rugra-tests/bridge1/)
+python3 /dev/shm/rugra-tests/bridge1/parse_golden.py tests/golden/ghidra_curl_1204.c tests/golden/ghidra_curl_1204.direct-runner.c 0x100000
+python3 /dev/shm/rugra-tests/bridge1/diff_hunks.py tests/golden/ghidra_httpd_1204.c tests/golden/ghidra_httpd_1204.direct-runner.c 0x100000 /tmp/httpd_hunks.json
+# 机制源码锚点:funcdata.cc:775-837(<function> 协议) / varmap.cc:1044-1059(gatherSymbols) / varmap.rs:1950,4024,4041(Rust 消费+播种 API)
+# grep 口径行数:local_/PTR_/pcRam/LAB_/code_r/jumptable warn/locked warn/.constprop(见 §2 表)
+```
+
+---
+
+## §9 W1 交付记录（Lane BRIDGE1，2026-09-25，基=亲父 b255cce9）
+
+### 9.1 步骤① 通道内容 oracle 判定：**证实**
+
+仪器化方法（复用 RANGEHINT lane 的 git-archive 锁定库构建链）：新增
+`stage_seed_diag.cc`（/dev/shm/rugra-tests/bridge1/，构建=build_seed_diag.sh）——
+BfdArchitecture 裸加载 + 在 fd 解析后、followFlow 前把种子 XML 喂给
+`fd->getScopeLocal()->decode(decoder)`（**真实 `<localdb>` 协议链**：
+ScopeInternal::decode → Scope::addMapSym → Symbol::decodeHeader(typelock/
+namelock) + decodeType + SymbolEntry::decode(`<addr>`+`<rangelist>）→ addMap），
+然后按 golden 生成器契约驱动 + PrintC docFunction。
+
+锁定 oracle 库 + httpd main 种子（§5.1 收割清单）输出
+（/dev/shm/rugra-tests/bridge1/oracle_main_seeded.c）：
+
+- **声明层逐符号复现 canon**：`long local_d8; long local_d0; long[4] local_c8;
+  undefined8 *local_a8; undefined8[2] local_80; long[6] local_70; undefined8
+  local_40` + 未提交块 `axStack_9c [7]`——92B hermetic 整块被种子切成
+  28B+16B+48B，分区与 canon 一致（RANGEHINT 判定的"1B 反馈环"被 fixed
+  typelock hint 打破）。
+- **下标形族复现**：133 处 `plVar11[-N] =`（canon main 134 处；
+  hermetic 库为 0——`*(xunknown8*)((int8)p + -8)` 形）。
+- **证伪边界**：canon 的 15 处 `local_d0 = <retaddr>;` 直接赋值拼写连
+  seeded-oracle 也不产生（打印为 `plVar11[-1] = <retaddr>`，同一存储的
+  别名指针形）⇒ 该族需要种子之外的 headless 状态（Parameter ID 早轮
+  IR/别名挂接差异），**超出 C1 v1 范围**，归 HEAD 残差（W0 消融可再钉）。
+
+### 9.2 as-built 与 §5.2/5.3 的偏差（按实测修正）
+
+- 种子载体：`Funcdata::committed_locals: Vec<CommittedLocal>`
+  （funcdata.rs，RUGRA-GLUE）而非 `DecompileRequest` 协议字段——httpd
+  驱动是单进程线程模型，无 worker 协议可 bump；fd 字段即
+  `<localdb>` 载体的 Rust 形态。
+- 注入点：`ActionRestructureVarnode::apply` 的 scope 首次构造臂
+  （coreaction.rs，平台参数符号安装之后）而非"驱动在 perform 前
+  ScopeLocal::add_symbol"——Rugra 的 ScopeLocal 是首个 restructure
+  pass 才惰性构造的（fd.scope=None），None 臂构造点正是 oracle
+  "Funcdata 构造 → localdb decode → action" 生命周期的镜像位。
+  类型解析走 `parse_c_type`（debugproto.rs，扩展数组声明符+C1 基
+  类型表，shared_default 工厂保持类型身份域单一）。
+- opt-in 门：`RUGRA_TYPESEED=1`（`RUGRA_TYPESEED_MANIFEST` 可覆写路径，
+  默认 `tests/golden/manifests/local_seed_httpd_1204.json`，按
+  vaddr+0x100000=canon 地址匹配）；mirror 门下恒不装载（五投影纯净
+  性）。默认路径 committed_locals 恒空 ⇒ 输出与亲父 cmp 字节恒等。
+- 附带修复：prettyprint 声明回填 pass 现在识别后缀数组声明符
+  （`long local_c8 [4];` 旧实现在 declared 集里记下 `[4]` 而非
+  `local_c8`，回填注入了 `int local_c8;` 重复声明）。
+- v1 域收缩：收割器跳过结构体基类型种子（sigaction/sigset_t 各 1，
+  C4 组合类型域）；curl 侧 W1b 未并入（curl golden 局部名以 DWARF
+  语义名为主，local_ 保守域只收 4 函数/18 条，收益小，留 W1b 专项）。
+
+### 9.3 W1 验收（亲测，基=亲父 b255cce9）
+
+| 门禁 | 默认（无 env） | opt-in（RUGRA_TYPESEED=1） |
+|---|---|---|
+| httpd E2E canon | **1472/0/0**，cmp 亲父字节恒等 | **1360/0/0**（−112） |
+| curl E2E canon | **1099/0/0**（=亲父） | n/a（httpd manifest） |
+| 五投影银行 | **26/26 MATCH** | mirror 门恒不装载 |
+| cargo test --lib | 1709P/1F（预存 VHOST） | 同 |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+
+逐函数（6 个被播种函数全部改善、0 回退）：main 694→668；
+ap_parse_vhost_addrs 27→9；ap_fini_vhost_config 245→218；
+ap_update_vhost_from_headers 92→71；ap_ht_time 17→13；
+ap_os_is_path_absolute 23→7。
+
+main 族前后（vs canon）：local_* 引用 0→11（canon 44；**seeded-oracle
+同为 11**——C1 域内 Rugra==oracle）；auStack/uStack 命名 11→3（canon 4；
+oracle-seeded 同 3）；下标形 119（canon 116，oracle-seeded 133——差 14
+为既有库级 typeprop 域，非 C1 引入）；字符串族 0（canon 81）不动——
+C5-邻域，非 C1 目标。SPALIAS 定点（§5.5-2）：`long local_c8 [4]`/
+`local_d0`/`local_d8` 声明全量出现 ✓；`plVar = local_c8` 直接符号形 ✓
+（canon 的 `local_d0 = retaddr` 15 处拼写族按 §9.1 证伪边界豁免）。
+
+## §10 W1b 交付记录（Lane W1B，2026-09-25，基=亲父 1de6dd39=master TYPEFIX 后）
+
+curl 语料卷入：manifest 入库 + curl 驱动 opt-in 门，**零 src/ 改动**
+（BRIDGE1+TYPEFIX 后库侧通道在位，本波纯驱动/数据域）。
+
+### 10.1 manifest（`tests/golden/manifests/local_seed_curl_1204.json`）
+
+- harvest：BRIDGE1 方法原样（`tools/harvest_local_manifest.py` over
+  `tests/golden/ghidra_curl_1204.c`，oracle commit e40ed130 + golden
+  sha256 指纹齐备）——**3 函数 / 16 种子**：main 1（`int local_230`）、
+  helpf 13（`undefined1 local_b8[8]` + 12×`undefined8 local_*`）、
+  parseconfig 1（`char *local_160`）。
+- KNOWN_BASES 剔除生效：getparameter 的 `Configurable *local_5b8` /
+  `HttpPost *local_5a8`（结构体指针基，post-TYPEFIX parse_c_type
+  no-fallback bail ⇒ 若入库即为死条目，harvest 同逻辑剔除）；golden
+  内 18 个 distinct local_ 名全部归账（16 收 + 2 剔）。
+- 域边界（与 §9.2 一致）：curl golden 的具名 local 以 DWARF 语义名为主
+  （urlnum/urls/outs/heads/usedarg/filebuffer/ap(va_list) 等），名字不
+  内嵌偏移 ⇒ 保守 local_ 域不收（DWARF-named 扩展 = 独立后续 lane，
+  需 .debug_loc 位置表 fbreg→stack 偏移换算 + W0 `<localdb>` XML 交叉
+  验证；getparameter 结构指针基依赖 C4 组合类型通道）。
+
+### 10.2 驱动接线（`examples/curl_decompile.rs`，镜像 httpd 侧门）
+
+- `RUGRA_TYPESEED=1`（`RUGRA_TYPESEED_MANIFEST` 覆写路径，默认
+  `tests/golden/manifests/local_seed_curl_1204.json`）→ worker 进程
+  `decompile_request` 在 fd 构建后、perform_action 前把 canon 地址键
+  （vaddr+0x100000）的种子挂到 `fd.committed_locals`（`<localdb>`
+  transport 位；worker 子进程继承控制器 env ⇒ 同门；原型 pre-pass
+  永不播种——镜像 httpd 只在反编译线程播种的边界）。
+- OnceLock 每进程一次装载；**默认路径构造性恒等**：env 未设 →
+  无 manifest IO、committed_locals 恒空，亲父 cmp 字节恒等（实测）。
+- 镜像门恒不装载：任一 mirror 分量（RUGRA_MIRROR/RUGRA_FLOW_MIRROR/
+  RUGRA_BARE_LOAD/RUGRA_ORACLE_FIXTURE_DATA）在场即拒绝并告警；
+  实测 RUGRA_MIRROR=1+TYPESEED=1 输出与纯 mirror 运行 cmp 恒等。
+
+### 10.3 W1b 验收（亲测，基=亲父 1de6dd39）
+
+| 门禁 | 默认（无 env） | opt-in（RUGRA_TYPESEED=1） |
+|---|---|---|
+| curl E2E canon | **1099/0/0**，cmp 亲父字节恒等 | **1054/0/0**（−45） |
+| httpd E2E canon | **1472/0/0**（=亲父，例程未触碰） | **1360/0/0**（=BRIDGE1 见证复现） |
+| 投影银行 | —（frozen 钉） | mirror 门恒不装载 |
+| gcc 审计 | 103 OK/21 FAIL | fail 集逐名相同（零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+
+逐函数（全部改善、0 回退；121 个未播种函数字节恒等）：main 212→206、
+helpf 75→50、parseconfig 73→59。播种函数零回退硬门 ✓。
+
+−45 vs 目标 −50 的差额归因（域内无可收余量）：helpf 余 50 =
+va_list ap typedef 族（DWARF-named 域）+ 寄存器溢出赋值吸收族
+（库级 typeprop 域，与 §9.3 下标形残差同族）+ `&stack0x8` 拼写；
+parseconfig 余 59 = usedarg/filebuffer（DWARF-named bool）+ 临时编号
+偏移 + 字符串常量形（C5-邻域）；main 余 206 = urlnum/urls/outs/heads/
+progressbar/fileinfo/errorbuffer（DWARF-named/结构体域）。
+
+## §11 C2DWARF 交付记录（Lane C2DWARF，2026-09-25，基=亲父 36d5efb6）
+
+W1b 差额归因指认的 DWARF-named 域（curl −45 的余额大头）落成：C1 通道的
+DWARF 语义名扩展（名字来自 .debug_info，位置来自 inline DW_OP_fbreg，
+经 `<localdb>` 种子运输）。**零 src/ 改动**（机制 C 工具/驱动域豁免：
+tools/harvest_local_manifest.py 扩展 + manifest + examples 门）。
+
+### 11.1 oracle 级预验证（先行，BRIDGE1 方法论照做）
+
+仪器化：`stage_seed_diag`（锁定库 e40ed130，真 `<localdb>` decode 链）+
+pyelftools 全量 DWARF 盘点（/dev/shm/rugra-tests/c2dwarf/，21 条
+exprloc-fbreg 条目/9 函数）→ 按规则构造种子 XML → 逐函数 seeded/unseeded
+对照 canon：
+
+- **声明层逐名复现**：6 函数全部命中——main `int urlnum; bool[256]
+  errorbuffer`、myprogress `char[40] format; bool[256] line; bool[256]
+  outline`、my_get_line `bool[4096] buf`、file2string `bool[256] buffer`、
+  parseconfig `bool usedarg; bool[256] filebuffer`、getparameter
+  `time_t now`；下标形/`== true` 体形态同步复现。
+- **fbreg→偏移换算钉死**：offset = fbreg(N)+8（frame_base=
+  call_frame_cfa=CFA=RSP_entry+8，Ghidra stack 0=RSP_entry 槽）；机码级
+  校准 urlnum fbreg(-0x22c)→`cmpl 0x34(%rsp)`→-0x224、errorbuffer
+  fbreg(-0x150)→`lea 0x110(%rsp)`。
+- **canon-committed typing 判决**：DWARF 说 char[256]/[4096]，canon 打印
+  bool——char 种子（--dwarf-raw-types 形态）不匹配 canon decl，bool 种子
+  匹配 ⇒ Java 分析器提交层把 boolean 用途的 char 数组重定型为 bool
+  （C6 DTP 族交叠），manifest 取 canon-committed 形态。
+- **sec_offset 域判决**：canon 从不为 loc-list 变量命名（main 的
+  i/res/url/infd/... 全部无名）⇒ Ghidra DWARF importer 丢弃 loc-list，
+  harvest 同域排除（防 over-seed）。
+- **邻接吸收判决（file2string）**：仅 seed `buffer bool[256]` 时锁定
+  oracle 也产出 `bool abStack_150[8]`（数组吸收未提交邻槽）——canon 保持
+  `undefined8 uStack_150` 独立 ⇒ canon 的提交层含该合成槽（C1 无名提交）；
+  buffer+uStack_150 双种子下 oracle 复现 canon 分区 ⇒ harvest 增加
+  canon-decl 邻接采纳规则（source=canon-decl 标注）。
+- **槽主规则**：main -504 槽首声明 progressbar（struct，C4 残差）⇒
+  passarg（bool，后声明）canon 从不打印 ⇒ 首声明拥有槽，不可服务首声明
+  连带遮蔽后续同槽可服务者。
+
+### 11.2 manifest 与装载
+
+- `tests/golden/manifests/local_seed_curl_1204_dwarf.json`：6 函数/11 种子
+  （10 DWARF + 1 canon-decl 邻接守卫 uStack_150）+10 drops 全归账；指纹
+  齐备（oracle e40ed130 + binary sha256 + golden sha256 aca37988 实测
+  复核）；harvest_rule 全规则留档。
+- `examples/curl_decompile.rs`：`RUGRA_DWARFSEED=1`（+
+  `RUGRA_DWARFSEED_MANIFEST` 覆写，默认上述路径）独立门——与 W1b
+  `RUGRA_TYPESEED` 门共享 `load_committed_local_manifest` 解码器但 env
+  独立 ⇒ **TYPESEED=1 单开保持 W1b 见证字节恒等**（归因可分）；attach
+  在 TYPESEED 之后 extend committed_locals（偏移碰撞 = manifest 缺陷，
+  响亮告警）；mirror 四分量在场恒拒载（实测 RUGRA_MIRROR+双门输出与纯
+  mirror cmp 恒等）；默认路径构造性恒等（无 manifest IO）。
+
+### 11.3 C2DWARF 验收（亲测，基=亲父 36d5efb6）
+
+| 门禁 | 默认（无 env） | TYPESEED=1 | TYPESEED=1+DWARFSEED=1 |
+|---|---|---|---|
+| curl E2E canon | **1099/0/0**，cmp 亲父字节恒等 | **1054/0/0**，cmp 亲父字节恒等（W1b 见证保持） | **944/0/0**（−110） |
+| 投影银行 | 71/71 PASS（离线，frozen） | mirror 门恒闭 | mirror 门恒闭（实测拒载） |
+| gcc 审计 | 103 OK/21 FAIL（=亲父） | 同 | **104 OK/20 FAIL**（my_get_line 修复，零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 | cmp 恒等 |
+
+逐函数（TYPESEED→双门，**0 回退**硬门 ✓；118 未播种函数字节恒等）：
+main 206→186、myprogress 33→15、my_get_line 30→16（gcc FAIL 同步修复）、
+file2string 76→39（邻接守卫）、parseconfig 59→39、getparameter 385→384、
+helpf 50→50（未触碰）。
+
+### 11.4 残差登记（不可经本通道复现 → HEAD/C3/C4 域）
+
+main `URLGlob *urls`（C4 pointee）/`OutStruct outs,heads`/`ProgressData
+progressbar`（+passarg 槽遮蔽）/`stat fileinfo`/canon-only `URLGlob glob`
+（inlined glob_url 参数，C3+C4）；helpf `va_list ap`（typedef→struct，C4）；
+getparameter `stat statbuf`/`LongShort aliases[50]`（C4）；match_url
+`URLGlob glob`（栈参数，C3）；全部 sec_offset loc-list 变量（Ghidra 自身
+丢弃）。C4 组合类型（V4-W4）与 C3 签名锁（V3-W3）是这些残差的归属通道。
+
+## §12 C3NEXT 交付记录（Lane C3NEXT，2026-09-25，基=亲父 5fff5592）
+
+通道选择判决：§11.4 的 11 个不可复现族中 **8 个属 C4**（urls/outs/heads/
+progressbar+passarg/fileinfo/ap/statbuf/aliases + canon-decl local_5b8/
+local_5a8），仅 glob×2 属 C3；且 getparameter 384 与 main 186 残差主体为
+结构体声明层+字段形族。**选 C4 STRUCT-SEED**。写域=tools/harvest_local_
+manifest.py（--struct 模式）+tests/golden/manifests/local_seed_curl_1204_
+struct.json+examples/curl_decompile.rs（RUGRA_STRUCTSEED 门，镜像 C2DWARF
+形态）+docs；**src 触碰 1 处（声明）**：src/debugproto.rs（OUTSTRUCT-ID0
+身份修复，独立 commit bcaaf396，机制 C 白名单外——debugproto 非
+heritage/jumptable/blockaction/condexe/varmap/merge 域；printc.rs/varmap.rs
+全程未触碰）。
+
+### 12.1 oracle 级预验证（先行，BRIDGE1 方法论照做）
+
+stage_seed_diag（锁定库 e40ed130，真 `<localdb>` decode 链）+ pyelftools
+DWARF 盘点（/dev/shm/rugra-tests/c3next/：struct_inventory.py /
+dwarf_types.py / gen_struct_seed_xml.py + seed_*.xml + oracle_*_seeded.c）：
+
+- **DWARF 盘点**：结构体变量 9 条（main urls/outs/heads/progressbar/
+  fileinfo+passarg 同槽、getparameter statbuf/aliases、helpf ap）+
+  match_url glob 为 fbreg(0) 栈形参（C3 域，不收）。
+- **声明层逐符号复现（3/3 函数全命中）**：main `URLGlob * urls; OutStruct
+  outs; OutStruct heads; ProgressData progressbar; stat fileinfo;`；
+  getparameter `Configurable * local_5b8; HttpPost * local_5a8; stat
+  statbuf; LongShort[50] aliases;`；helpf `va_list ap;`。
+- **字段形族复现**：`outs.stream/outs.filename/heads.stream/heads.filename`
+  读写、`fileinfo.st_size`、`progressbar.total`、`glob_url(&urls,...)`/
+  `next_url(urls)`、getparameter 别名环 `->letter/&->lname`。
+- **va_list 域判决**：typedef 折叠为 struct 时 oracle 打印 `ap.field` 且
+  按 `&ap` 传递；**数组形**（`__va_list_tag[1]` 命名 va_list）时打印
+  `ap[0].field` 且按值传递 `ap`——canon 为数组形 ⇒ 种子必须以数组形
+  运输（gen_struct_seed_xml 的 typedef→array 链修复即此判决）。
+- **已知 harness 工件（非语义差异）**：种子态 oracle 打印抽象数组形
+  `bool[256] errorbuffer`/指针间距 `URLGlob * urls`，canon 打印声明符形
+  `bool errorbuffer [256]`/`URLGlob *urls`——C2DWARF 判例同款（Java 导入
+  器构建的类型对象形态差异）；Rugra 侧独立以 canon 形输出（E2E 实证）。
+- **指针型选举（getparameter 别名环）**：裸 oracle 里 LongShort* 胜出
+  （`pLVar6->letter`），canon 为 Configurable*（`pCVar13->useragent`）；
+  Rugra 全驱动（funcp 的 Configurable* 参数锁在场）落 canon 形 ✓。
+
+### 12.2 实现形态
+
+- **manifest** `tests/golden/manifests/local_seed_curl_1204_struct.json`：
+  3 函数/10 种子（main 5 DWARF + helpf 1 + getparameter 2 canon-decl +
+  2 DWARF）+12 drops 全归账 + residual_notes 5 条（glob×2/register var
+  `Configurable *config`/sec_offset 域/Unresolved 注释族）；指纹齐备
+  （oracle e40ed130 + binary sha256 + golden sha256）；harvest_rule 全
+  规则留档。
+- **harvester** `--struct` 模式：DWARF 复合体命名域（可直接命名的
+  structure/union/enum + typedef over composite/array）为准入门（TYPEFIX
+  规矩的 C4 等价物：未知命名基=工厂名树 None=死条目，剔除）；KNOWN_BASES
+  域显式排除（C1/C2 通道属地，按构造不相交）；首声明槽主规则（progressbar
+  遮蔽 passarg）延续；canon-decl 采纳=local_[hex] 声明 + 结构体指针基。
+- **驱动门** `RUGRA_STRUCTSEED=1`（+`RUGRA_STRUCTSEED_MANIFEST` 覆写）：
+  与 TYPESEED/DWARFSEED 同装载器、独立 env；attach 在 DWARFSEED 之后，
+  偏移碰撞=响亮 manifest 缺陷告警；mirror 四分量在场恒拒载（实测
+  RUGRA_MIRROR+三门输出与纯 mirror cmp 恒等）；默认路径构造性恒等。
+- **src 前置（bcaaf396）**：intern_named 的 id=hashName 派生（type.cc:675
+  镜像）+ 零尺寸不完整复合体守卫 + parse_c_type 名树 findByName 回退
+  （grammar.cc:2989 镜像）——直接命名复合体（OutStruct/stat/...）此前
+  从未进名树（id=0 被 find_add 拒绝后静默未注册），typedef 路径不受影响。
+
+### 12.3 C3NEXT 验收（亲测，基=亲父 5fff5592 + bcaaf396）
+
+| 门禁 | 默认（无 env） | TYPESEED=1 | TYPESEED+DWARFSEED | 三门全开 |
+|---|---|---|---|---|
+| curl E2E canon | **1096/0/0**（=bcaaf396 见证；亲父 5fff5592 为 1099，差额 −3 归因见 bcaaf396 Differential） | 1051/0/0 | **941/0/0** | **767/0/0**（−177 vs 亲父双门） |
+| 投影银行 | 71/71 PASS（离线，frozen） | mirror 门恒闭 | mirror 门恒闭 | mirror 门恒闭（实测拒载+cmp 恒等） |
+| gcc 审计 | 104 OK/20 FAIL | 同 | 104 OK/20 FAIL | **104 OK/20 FAIL**（fail 函数名集与双门态逐名相同，零新增） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 | cmp 恒等 | cmp 恒等 |
+
+逐函数（双门→三门，**0 回退**硬门 ✓；14 个未播种函数字节恒等）：
+main 185→**129**（−56）、getparameter 382→**277**（−105）、helpf 50→**37**
+（−13）。字段形实证：`outs.stream = stdout`/`outs.filename = ::config.outfile`/
+`fileinfo.st_size`/`progressbar.total`/`ap[0].gp_offset`/`LongShort
+aliases [50]`（canon 数组拼写形）全量出现；getparameter 别名环指针选举落
+canon 形（`pCVar13 = (Configurable *)aliases; ... ->useragent`）。
+
+### 12.4 残差登记（不可经本通道复现 → HEAD/C3 域）
+
+- main `URLGlob glob` 槽位发现（canon-only inlined 参数，DWARF 无 location；
+  双门态 decl 已在但槽位归属未钉）→ C3 域。
+- match_url `URLGlob glob` 栈形参（fbreg(0) 正槽）→ C3 原型锁域。
+- main `Configurable *config` 寄存器变量（无栈槽；canon decl 在场=驱动
+  DWARF 层产物）→ localdb register-symbol 域（HEAD）。
+- canon `/* Unresolved local var */` 注释块（Java 前端工件，decompile/cpp
+  无该串；main 3 行+getparameter ~20 行）→ 注释通道域。
+- getparameter/main 计数器分型（`for (var_8; ...)` vs `for (lVar11 =
+  0x96; ...)`）与 canary 声明位/编号级联 → 库级 typeprop/merge 域
+  （与 §9.3 下标形残差同族）。
+- sec_offset loc-list 全域（Ghidra importer 自身丢弃，预登记）。
+
+## §13 HSEED 交付记录（Lane HSEED，2026-09-25，基=亲父 33894226=master DFLIP 后）
+
+任务原设：把 curl 已验证的 C2(DWARF 名)/C4(结构体) 种子公式复制到 httpd 语料。
+
+### 13.1 语料判决：C2/C4 对 httpd **语料级不可用**（机器可复核）
+
+- `examples/httpd`（sha256 `805f89cdbdce827f…`，与 golden provenance 钉值一致）为
+  **stripped PIE——零 `.debug_*` 节**（`readelf -SW` 亲查；无 `.gnu_debuglink`）。
+  C2/C4 公式的输入端（`.debug_info` 的变量名 + exprloc fbreg 偏移 + 命名复合体集）
+  在该语料不存在。
+- 机器证据：`harvest_local_manifest.py --dwarf/--struct` 对 httpd 实测
+  **0 函数 / 0 种子 / 0 drops**；工具本轮加固——DWARF-less 语料显式
+  `WARNING: … carries no .debug_info section`（manifest 字节不变，curl 重收割
+  字节恒等复证，--struct residual_notes 按 corpus 参数化防跨语料残差串写）。
+- canon 侧交叉验证：`ghidra_httpd_1204.c` 声明层为纯合成名（`local_*`/`*Stack_*`/
+  `xVar*`，1046 条 local_ 全部 KNOWN_BASES——已尽收于 C1 manifest）；唯二结构体
+  类型声明 `sigaction local_b8`@ap_fatal_signal_setup(0x14a1b0) 与
+  `sigset_t local_c0`@ap_mpm_run(0x16ff30)（均带 C4 字段形用法：
+  `local_b8.sa_mask`/`.__sigaction_handler.sa_handler`）被 --struct 的
+  "base 必须存在于 DWARF 命名类型集" 规则正确丢弃——工厂名树
+  （curl 侧由 `parse_type_names` DWARF 导入填充，httpd 驱动无此源）为空，
+  parse_c_type 无回退 bail ⇒ 死条目。
+- oracle 预验证（§12.1 方法论）：**N/A（空集）**——无种子可 stage，抽验无从抽取；
+  空手写 manifest 或死门接线违反铁律 1.4（占位实现），故
+  `examples/httpd_decompile.rs` 本轮**零改动**（DWARFSEED/STRUCTSEED 门不接线）。
+- 解锁路径（root 级语料决策，TODO `HTTPD-CORPUS-DWARF-0001`）：①带 DWARF 的
+  httpd 构建产物入库 + ②`tools/regen_golden.py` 重生成 canon golden（需 Ghidra
+  headless 发行版，全量差分基线重置为预期行为）+ ③C1 manifest 重跑 + ④harvest
+  两模式 + ⑤stage_seed_diag 预验证 ≥3 函数。
+
+### 13.2 基线阶梯（SYMDB 默认脸 × TYPESEED 叠加态首次实测，亲测 @ 33894226）
+
+| 阶梯 | env | skeleton/defects/numbering | 附加验证 |
+|---|---|---|---|
+| 新默认脸 | （无） | **1315/0/0** | ==DFLIP final 逐字节；双跑 cmp 恒等 |
+| +TYPESEED | `RUGRA_TYPESEED=1` | **1197/0/0** | −118 全由 6 播种函数贡献（main 644→622、ap_fini_vhost_config 191→158、ap_update_vhost_from_headers 81→56、ap_parse_vhost_addrs 27→9、ap_os_is_path_absolute 23→7、ap_ht_time 17→13）；逐函数零回退；gcc 审计函数名集与默认脸逐名相同（14OK/15FAIL，pRam 未声明族=在账 PRINTC-AFINI-UNIQUELOC-0001 等预存项） |
+| 逃生门+TYPESEED | `RUGRA_SYMDB=0 RUGRA_TYPESEED=1` | **1360/0/0** | ==BRIDGE1 历史 opt-in 见证（1472 基）精确复现：通道完整性再证 |
+| mirror×TYPESEED | `RUGRA_MIRROR=1 RUGRA_TYPESEED=1` | — | 输出 cmp 恒等基线 mirror；`[TYPESEED] ignored under the mirror gate` 亲证：投影纯度在新默认脸保持 |
+
+判决：SYMDB 默认脸与 TYPESEED 门**正交可叠加、严格收敛、零回退**
+（组合语义=两通道各自收益相加：1315−118=1197，与旧脸 1472−112=1360 同构）。
+
+### 13.3 残差登记
+
+- httpd C2/C4 种子域=**空（语料性质）**，非通道缺陷；curl 侧两通道不受影响。
+- `sigaction`/`sigset_t` 两 golden decl（C4 字段形在场）=语料解锁后的首批
+  种子候选；当前无工厂名树不可服务。
+## §13 C3GLOB 交付记录（Lane C3GLOB，2026-09-25，基=亲父 199b23b1）
+通道判定：§12.4 的 C3 域残差（glob×2：main glob 槽位发现 + match_url
+glob 栈形参）oracle 级预验证**双证 CONFIRMED**——但 Rugra 侧 C3 数据传输
+通道**已在位**（master 的 DWARF 原型锁 + 平台参数符号安装 + callee 传播），
+残差重新归属到**库消费/渲染域**；**v1 不设第四门**（committed_locals 载体
+对参数槽实测有害，见 §13.3）。零 src/ 改动（docs/tools 域收口）。
+### 13.1 oracle 级预验证判决（先行，BRIDGE1/C3NEXT 方法论照做）
+仪器：`stage_c3_diag.cc`（锁定库 e40ed130，BRIDGE1 diag-build 对象链接；
+`/dev/shm/rugra-tests/c3glob/`：harness + `gen_c3_seed_xml.py` + 两个
+witness）——扩展 C1 harness 两处安装路径，均为真 funcdata.cc:789-810
+decode 链：`STAGE_SEED_XML`（`<localdb>` 参数符号）与
+`STAGE_CALLEE_PROTOS`（callee Funcdata 上的成对安装，供
+ActionDefaultParams coreaction.cc:2322-2330 copy 传播）。
+**协议发现（真传输形态）**：Java→C++ committed-signature 传输 =
+①`<localdb>` **cat="0" index=N 参数符号**（名字/typelock/namelock/锁定
+存储 `<addr>` + 全内联 `<type>` 图——ProtoStoreSymbol::getNumInputs 直读
+scope 的 function_parameter 类别，fspec.hh:1283-1285）+ ②`<prototype>`
+**仅 returnsym**（model+modellock；symbol-backed store 拒绝
+`<internallist>`，fspec.cc:3302 "Do not decode symbol-backed prototype
+through this interface"；返回值走 ProtoStoreSymbol::setOutput）。参数存储
+无 `<addr>` 时走 ProtoStoreInternal::decode 的 addressesdetermined=false
+臂（fspec.cc:3495-3520，model 从类型派生）——但该臂属 internal store，
+live Funcdata 的 funcp（ProtoStoreSymbol，funcdata.cc:69 setScope）只能
+收 localdb 符号路径。
+**Q1 match_url 判决：CONFIRMED**（witness `oracle_match_url_seeded.c`）。
+锁 `<localdb>`{filename cat=0 RDI char*、glob cat=0 stack+8[304] URLGlob
+全图} + returnsym(char* RAX) 后，canon 签名与体字段形**逐形复现**：
+`char * match_url(char * filename,URLGlob glob)`、
+`glob.size/2<=iVar4`、`glob.pattern[iVar4].type`、
+`.content.Set.elements/.Set.size/.Set.ptr_s/.NumRange.ptr_n`、
+`UPTCharRange/UPTNumRange/UPTSet` 枚举名。消融判决（`cat="-1"` 变体
+`oracle_match_url_nocat.c`）：**类别只管签名**（cat=-1 时签名退化单参），
+**体字段形只需 typelocked 符号盖住 stack+8[304]**——与类别无关。
+**Q2 main 判决：CONFIRMED，且槽位发现无需任何 main 侧种子**
+（witness `oracle_main_c3.c`，仅 callee 安装、main 零 localdb）：
+`URLGlob glob;` decl + **-0x388 槽**（= match_url 出栈区，rep movsq 目的
+`&stack0xfffffffffffffc78` 逐字节复现）+ `glob.literal[0..9]`/
+`glob.pattern[N].type/_4_4_/content` 族 + `glob._296_8_` + 计数器
+`for (iVar9 = 0x26; ...)` 形 + `match_url(pcRam...,glob)` 调用形全量。
+**glob 槽位/名字/类型的来源钉死**：结构=callee（match_url）DWARF 类型图
+（URLGlob 304B：literal[10]@0/pattern[9]@80/size@296，readelf 盘点）；
+槽位=**call 指令自身的出栈访问**（decompiler 自行派生 -0x388，非 DWARF
+非 analyzer——main 的 DWARF 子树实测无 glob 变量，25 个实体盘点为零命中）；
+名字=**callee 参数符号经 FuncProto::copy→ActionDefaultParams 传播**
+（ProtoStoreSymbol::clone 保 callee scope 指针，fspec.cc:3280-3295）。
+canon 的 in_stack 读/glob 写同区二元性（`glob.pattern[0].type =
+axVar19._0_4_` + `axVar19 = in_stack_...fc78._80_24_`）oracle 同构复现。
+### 13.2 Rugra 侧现状（探针证据，临时 DBG 后 revert）
+- **match_url 传输已在位**：`[PREPASS] applied locked DWARF prototype:
+  2 params`（默认态日志）→ set_pieces → model 派生 **Stack+0x8[304]**
+  （临时 `[DBG-C3PROBE]` 探针实证 `param[1] glob space=Stack offset=0x8
+  type=URLGlob size=304`）→ coreaction.rs:1509 平台参数符号臂安装
+  （typelock/namelock/cat=0，与 oracle localdb 符号状态等价）。签名
+  `char * match_url(char *filename,URLGlob glob)` 三门态已 canon 形。
+- **main 传播已在位**：link_call_specs callee 半边（GETPARAM-CALLEE-DWARF
+  判例资产）→ 三门态 main 已打印 `glob.pattern[8].content.Set.elements =
+  (char **)in_stack_...fd90` 等字段族 + `match_url(::config.outfile,glob)`，
+  与 canon 同构（§12.3 witness 内已实证，本车道复核确认）。
+- **残差全部在消费/渲染域**（见 §13.4），不在 C3 数据通道。
+### 13.3 为什么没有第四门（v1 边界判决）
+C3GLOB 门原设计 = committed_locals 运输 match_url 的 glob@+8 种子。
+探针（`probe_seed_matchurl.json` 经 RUGRA_TYPESEED_MANIFEST 覆写实测）
+证明该载体对参数槽是**错误传输**：与 coreaction.rs:1509 平台参数符号
+（同址 stack+8[304]）**重复**，实测 match_url 28→40 行——字段形退化为
+raw offset 形（`*(long *)(&glob + lVar6 + 0x58)`）**且枚举名丢失**
+（`iVar2 == 2` vs `UVar2 == UPTCharRange`）。正确传输（平台安装）已存在
+⇒ 第四门 = no-op 或有害，不 ship。**"四门 767 下降"预期不成立于本域**：
+预期建立在"C3 数据缺失"假设上；实测数据已在位，缺的是库消费（§13.4）。
+C1 载体与参数域的构造不相交原则（C2DWARF "栈参数不收（C3）"）由此获得
+正向证据：参数槽的正确运输者是原型锁路径，不是 localdb-locals 载体。
+### 13.4 残差重归属（出本车道写域；登记 TODO `HEADLESS-BRIDGE-C3-CONSUME-0008`）
+- **match_url 指针形字段访问**（三门态 28 行）：`(&glob)->pattern[iVar5]
+  ->type` + `*(long *)&((&glob)->pattern+iVar5)->content` vs canon
+  `glob.pattern[iVar5].type/.content.Set.elements`。同符号状态（typelock
+  304B stack+8 cat=0）oracle 产 canon 形；Rugra **标量字段解析、变址
+  数组字段读不解析**（`glob.size` ✓ vs `glob.pattern[i]` ✗）。域=
+  restructure/typeprop/printc 的符号消费（varmap/printc 白名单模块）。
+- **main `&0xfffffffffffffc78` 截断**（1 行）：canon `&stack0x...`（空间
+  名前缀，Ghidra AddrSpace::printRaw space.cc:206 `name+"0x"+offset`）；
+  Rugra 印裸 hex。print 域（printc.rs 地址常量渲染路径）。
+- **union 名拼写**（main 9 行）：`union_5a7`（Rugra offset 命名）vs
+  `anon_union_16_3_e2f18bb4_for_content`（Java DWARF 导入器合成名）。
+  名字组件部分可观察（size=16/序数/hash/member 名）但 hash 算法在 Java
+  侧（decompile/cpp 之外、本仓 ghidra/ 树无 Java）→ **不可推导登记**，
+  除非引入 Java 侧证据（W0 消融时顺带钉）。
+- 计数器分型/Unresolved 注释/`Configurable *config` 寄存器变量/
+  sec_offset：§12.4 预归属不变。
+### 13.5 验证（亲测，基=亲父 199b23b1）
+| 门禁 | 默认（无 env） | 三门全开 |
+|---|---|---|
+| curl E2E canon | **1096/0/0**，cmp 亲父字节恒等（docs/tools-only，构造性恒等；临时探针 revert 后重建 cmp 实证） | **767/0/0**（=C3NEXT 见证复现） |
+| gcc 审计 | — | **104 OK/20 FAIL**（=三门基线，fail 集不变） |
+| 双跑确定性 | cmp 恒等 | cmp 恒等 |
+src 零触碰（printc.rs/varmap.rs/debugproto.rs 全程只读；唯一临时 DBG
+eprintln 已 revert，default 输出 cmp 恒等双证）。
+
+### 13.6 消费域终局（Lane C3CONSUME，2026-09-25，基=master 8796274c SEEDFLIP 后，P-code 级归因）
+
+任务：§13.4 ①② 的消费链断点定位（varmap 假设检验）。**判决：varmap
+消费链无缺陷——断点全数在 printc 渲染 + coreaction/funcdata 联合体解析
+基础设施；varmap 域零改动，①② 修域移交**。
+
+**仪器**：`stage_c3_pcode.cc`（/dev/shm/rugra-tests/c3consume/，锁库
+e40ed130 BRIDGE1 对象链接，stage_c3_diag 同驱动协议 + 终态 P-code 逐
+op 转储：op 码/输入输出 varnode 的 high 类型/符号/符号偏移）。双
+witness 复跑字节恒等（match_url seeded + main callee-only）。
+
+**① match_url 28 行残差的 P-code 级分解**（oracle vs Rugra 同种子态）：
+
+- **顶层链 op 形完全一致**：`PTRSUB(RSP,#8){常量挂 sym=glob/304B}` →
+  `PTRSUB(·,#0x50)` → `PTRADD(·,sext(iVar),#0x18)` → `PTRSUB(·,#0)` →
+  `LOAD`——两侧逐 op 同形（Rugra RUGRA_DUMP_FUNC 转储对照）。glob 符号
+  挂接（linkSymbolReference 等价物）、字段名（pattern/type/content）、
+  标量字段（`glob.size` ✓）、常量下标形（main 的 `glob.pattern[8].type`
+  ✓）全部在位——**ScopeLocal/RangeHint 消费链工作正常**。
+- **残差 A（`.` vs `->` 与 `glob` vs `(&glob)` 基形态）**：canon 点形由
+  printc.cc:895-911 `isValueFlexible`（in0 隐式且 def=PTRSUB/PTRADD）+
+  :1039-1044 flex 臂 `pushVn(in0, m|print_load_value)`（基座翻转为
+  值形态，spacebase 臂 cc:1074 去掉 `&` 印 `glob`）产生。Rugra
+  printc.rs PTRSUB 臂明确注释"Rugra has no isValueFlexible; we treat
+  flex as false"（rpn 路径 printc.rs:2975 附近；legacy op_ptrsub
+  printc.rs:13135 同缺）——恒箭头形+基座无翻转 → `(&glob)->pattern[i]
+  ->type`。
+- **残差 B（联合体内字段名 `.Set.elements/.Set.size/.NumRange.ptr_n/
+  .Set.ptr_s`）**：oracle 走 12.0 ResolvedUnion 机制——coreaction.cc:
+  2490 `ActionSetCasts::resolveUnion`（读联合体指针的 op 前插
+  `PTRSUB(x,0)` 占位 + `Funcdata::setUnionField` 登记解析字段，
+  funcdata.cc:917-950 unionMap）+ printc.cc:979-990 opPtrsub 联合体臂
+  （`getUnionField` 取名）。**Rugra 无该机制**：内层偏移（content+2/
+  +4/+8/+0xa）退化为 `CAST(ptr→int8)+INT_ADD(·,c)+CAST(→ptr)` 链
+  （oracle 同位点为 `PTRSUB(·,#0:4)+PTRSUB(·,#c)` 规范式），LOAD 输出
+  类型停在 raw long（canon 为 char**/short 经解析字段类型传播）——
+  coreaction（resolveUnion+castOutput PTRSUB 规范化）+ funcdata
+  （unionMap）+ printc（联合体臂）三域联合缺口。
+- **残差 C（3 行 Unresolved 注释 + `&DAT_` vs 字面量 + LAB 缩进）**：
+  §12.4 预归属不变（注释通道/常量渲染/标签发射域）。
+
+**② main `&stack0x...fc78` 截断——判决：纯渲染，非 varmap 槽位分割**。
+Rugra op 形=canon 同形 `PTRSUB(RSP-input,#0xfffffffffffffc78)`，两侧
+符号解析**同样落空**（canon 也不挂 in_stack_...fc78 符号而印未名位
+置）；唯一差异=未名位置文本：canon 走 AddrSpace::printRaw（space.cc:
+206，`空间名+"0x"+offset` → `stack0xfffffffffffffc78`），Rugra
+printc.rs spacebase 未名回退印裸 `format!("0x{:x}", in1const)`
+（printc.rs:3121-3131 附近）→ `0xfffffffffffffc78`。
+
+**移交清单**（新登记 `PRINTC-C3FLEX-DOTFORM-0001`、
+`COREACT-C3-UNIONRES-0001`、`PRINTC-C3-UNNAMED-SPACE-NAME-0001`，
+见 TODO_BOARD C3-CONSUME 行）：
+1. printc.rs：isValueFlexible 移植 + flex 臂基座 `m|print_load_value`
+   翻转（`.name` 形；`&` 消除）——预期收敛残差 A 全族（~14 行）。
+2. coreaction.rs+funcdata.rs+printc.rs：ResolvedUnion（resolveUnion/
+   unionMap/getUnionField 联合体臂）+ castOutput PTRSUB 规范化——预期
+   收敛残差 B 全族（~10 行，含 decl 类型 char**/short 级联）。
+3. printc.rs：未名位置 space 前缀（AddrSpace::printRaw 形态）——收敛
+   main `&stack0x...` 族（1 行/处）。
+
+**门禁（C3CONSUME 亲测，基=master 8796274c，src 零改动归因 lane）**：
+默认脸（=SEEDFLIP 后种子态）curl **767/0/0**（main 129/match_url 28
+复现）；投影银行 **71/71 PASS**；gcc 审计 **104 OK/20 FAIL**（=基线
+fail 集）；双跑 cmp 恒等；witness 双复跑字节恒等。
+
+## §14 REGSYM 交付记录（Lane REGSYM，2026-09-25，基=亲父 aa62f6c0）
+
+任务原设：§12.4 登记的 `Configurable *config` 寄存器变量残差——判定 canon 的
+config 参数寄存器形与 `&::config` 体引用族是否需要 localdb register-symbol
+新传输（harvest+manifest+第四门）。
+
+### 14.1 oracle 级预验证判决（先行；C3GLOB/BRIDGE1 方法论照做）
+
+仪器：`stage_regsym_diag.cc`（锁定库 e40ed130，BRIDGE1 diag-build 对象链接；
+`/dev/shm/rugra-reports/regsym-evidence/`：harness + `gen_regsym_seed_xml.py`
++ 五份传输文档 + 全部 runs）——C3GLOB harness 扩展一条真实解码链安装路径
+`STAGE_GLOBAL_XML`（`ScopeInternal::decode` database.cc:2744 → addMapSym，
+即 Program DB 全局符号传输；BFD loader 只载 FUNCTION 符号 loadimage_bfd.cc
+advanceToNextSymbol，typed `config`@0x17520 必须走此路）。目标=
+`getparameter.constprop.0`@0x3f00（.symtab 实名；canon Program DB 命名为
+`getparameter`；`.constprop.0` 后缀=GCC 常量传播克隆，DWARF exprloc
+`DW_OP_addr(0x17520); DW_OP_stack_value` 即被传播的常量 `&::config`）。
+
+**传输分解矩阵**（CROSSBUILD 计数=终态 spacebase PTRSUB；opcodes.cc:28
+`PTRSUB` 的 get_opname 字串在 12.0 是 "CROSSBUILD"）：
+
+| witness | 参数符号(cat=0) | typed 全局 | GetStr callee | sb-PTRSUB | `&::config`/`::config.` |
+|---|---|---|---|---|---|
+| W0 裸 | — | — | — | 0 | 0/0 |
+| W1 | ✓(config@RCX) | — | — | 0 | 0/0 |
+| W2d | — | ✓ | — | 6 | 0/0（裸 `config.<f>`） |
+| W3 | ✓ | ✓ | — | 25 | 全 `::config.` 族 |
+| W4 | ✓ | ✓ | ✓ | 42 | **35/95 ≈ canon 34/94** |
+| W5 消融 | ✓(改名 renamed_cfg) | ✓ | ✓ | 42 | **0/0** |
+
+**判决（三段）**：
+
+1. **寄存器参数形：载体=committed-signature 参数符号，模型存储 RCX**。
+   W1 单独复现 canon 签名 `int getparameter(char *flag,char *nextarg,
+   bool *usedarg,Configurable *config)`，config 参数在体内**死**
+   （constprop 克隆里 RCX 从未被当 config 指针读；0x4229 实证 `COPY
+   const:17520→RCX`，LEA 直接携带折叠常量）。DWARF exprloc 常量**不是**
+   参数存储（canon 体内无 memory 形干扰=W1 同构）。Rugra 侧同构在位：
+   签名逐字相同 + dump 实证 `config:register:38`(RCX) typelock 死参数。
+2. **`&::config` 体引用族：载体=typed 全局符号 + 参数名遮蔽 + 类型传播**。
+   W4 逐形复现 canon：`GetStr(&::config.useragent,(char *)x)`、
+   `pCVar13 = &::config;`、`::config.crlf = '\x01'`、
+   `GetStr(&::config.cert_passwd,nextarg)`。机制钉死：`::` 前缀来自
+   `Symbol::getResolutionDepth`（database.cc:323-359）——参数符号名
+   `config` 占据函数局部名树（`ScopeInternal::isNameUsed` database.cc:
+   2417）→ 全局同名符号解析深度 1 → `PrintC::pushSymbolScope`
+   （printc.cc:202）印全局 scope 空名+`::`。**W5 消融（参数改名）使
+   `::` 全数消失（0/0）——因果链闭合**。空间基址 op 形两侧同构
+   （oracle `PTRSUB(const:0[sb],0x175XX)` vs Rugra dump 同形）。
+3. **无需任何新传输**：参数符号（coreaction.rs:1509 平台安装臂）、
+   typed 全局（Rugra 已印 `::config.outfile` 于 LOAD/STORE 路径）、
+   callee protos（link_call_specs）三载体全数在位 ⇒ 第四门=no-op，
+   C3GLOB 判例式收口：**载体已在，残差在 printc 消费侧**。
+
+### 14.2 残差重归属（出本车道写域；新登记 `PRINTC-SPACEBASE-SCOPEPREFIX-0001`）
+
+- **`&config` vs `&::config`（35 行=getparameter 34+main 1）**：Rugra
+  printc.rs spacebase 符号臂（~3145-3170）印符号名时**未调用已存在的
+  `symbol_scope_prefix` helper**（PRINTC-GLOBALSYM-LEAF-PRIORITY-0001
+  已落地该 helper，仅 7169/7183/7196 叶优先路径接线；oracle 对应
+  printc.cc:1905 pushSymbol→pushSymbolScope 链）。修域=printc.rs，
+  与 PDOTFORM 车道写域序列化。
+- **`&(&config)->field` vs `&::config.field`（同 35 行内）**：spacebase
+  mid-symbol 引用应走 `pushPartialSymbol`（printc.cc:2057，object_member
+  `.` 形，基座=全局对象 lvalue）；Rugra 落指针基座+箭头形。已登记
+  `PRINTC-SPACEBASE-PARTIALSYM-0001`（symbol-offset 通道缺口）+
+  `PRINTC-C3FLEX-DOTFORM-0001`（flex 域）覆盖，本车道不重复登记。
+- getparameter `::config.` 计数 61 vs canon 94 的差额=别名环/计数器分型
+  族（§12.4 预归属不变，库级 typeprop 域）。
+
+### 14.3 门禁（亲测，基=亲父 aa62f6c0，docs/tools-only 车道）
+
+默认脸 curl E2E canon **767/0/0**（getparameter 275/main 129 骨架）；
+投影银行 **391/391 PASS**；gcc 审计 **104 OK/20 FAIL**（=基线 fail 集）；
+双跑 cmp 恒等。src/ 零触碰（printc.rs/varmap.rs/coreaction.rs 全程只读）。
+
+### 14.4 复现
+
+```bash
+bash /dev/shm/rugra-reports/regsym-evidence/build_regsym_diag.sh   # 链 BRIDGE1 锁库
+setarch -R env -i STAGE_DRILL_FUNC=getparameter.constprop.0 STAGE_DRILL_ADDR=0x3f00 \
+  STAGE_SEED_XML=<seed_getparameter.xml> STAGE_PROTO_XML=<proto_getparameter.xml> \
+  STAGE_GLOBAL_XML=<global_config_sym.xml> \
+  STAGE_CALLEE_PROTOS="GetStr=<seed_getstr.xml>:<proto_getstr.xml>" \
+  ./stage_regsym_diag sleigh_specs <repo>/examples/curl        # = W4
+# W5 消融 = seed_getparameter_renamed.xml 替换 seed 后同跑（:: 全数消失）
+```
+
+## §15 SECSEED 交付记录（Lane SECSEED，2026-09-25，基=亲父 6aa8c2aa=master SCOPEPFX 后）
+
+**任务**：W1B 预登记的 "sec_offset 全域"（harvest 丢弃的 DWARF sec_offset 形态条目回收）
+终审。判定结果：**归因收口**（种子通道不可收；真身是注释通道，Rugra 侧一处
+src 阻塞，登记 `PRINTC-COMMENTFILL-ARM` 解锁）。零 src/ 改动。
+
+### 15.1 形态判决（任务①）
+
+curl（DWARF-bearing，units v4）concrete subprogram 下的变量盘点（probe1_census.py，
+pyelftools，/dev/shm/rugra-tests/secseed/）：
+
+| 位置形态 | 条数 | canon 可见形 |
+|---|---|---|
+| `DW_FORM_sec_offset`（.debug_loc 位置表） | **67** | `/* Unresolved local var */` 注释 |
+| `DW_FORM_exprloc`/block（现行 C2 通道） | 22 | 命名局部（已收割） |
+| 无 location | 11 | 同注释通道（size/configbuffer 等） |
+
+**sec_offset 不是 DWARF5 str_offsets/addr 表偏移形态**：`.debug_loclists`、
+`.debug_str_offsets`、`.debug_addr` 三节全部缺席，unit version=4——是
+DWAR4 `DW_AT_location` 指向 `.debug_loc` 位置列表（多区间、寄存器/表达式混合、
+部分区间 fbreg）。
+
+### 15.2 canon 可见形与种子通道判决（任务①续）
+
+- **0/67 成为命名局部**：canon 从不以 DWARF 名提交这些变量（main 的 `url` 只作
+  `::config.url` 成员出现；`letter`/`line` 为字符串/参数误命中，严格 decl 扫描为零）。
+  种子通道（committed_locals 注入）会**新增**差异 ⇒ 不可收（RENUM 判例式归因）。
+- 槽位重合三例（infilesize@-560≡`local_230`、home@-352≡`local_160`、
+  parse@-1448≡`local_5a8`）已由 C1/C4 canon-decl 通道正确服务（canon 印的是
+  合成名，不是 DWARF 名）。
+- 真身：**commentdb warning 记录**。canon 45 行 / 8 函数（getparameter 20、
+  parseconfig 7、my_get_token 4、file2string 4、main 3、match_url 3、
+  myprogress 2、my_get_line 2）。httpd 剥离 DWARF ⇒ 0 行（通道 curl 专属）。
+  main/myprogress 的函数域组在 canon 缺席（Java 侧创建条件未究——收割时以
+  canon 文本门控 presence，不猜规则）。
+- 组规则（canon+DWARF 实证）：同 scope 的未解析变量合并为一条注释记录
+  （文本内 `\n` 连接）；**锚规则**=函数域组→function low_pc，词法域组→scope
+  首区间 low_pc。
+
+### 15.3 oracle 预验证（任务①"不可跳"项）
+
+新 harness `stage_cmt_diag.cc`（bridge1 stage_seed_diag 的 commentdb 注入变体，
+编译于锁定库 e40ed130 对象树 + libdecomp.a，build_cmt_diag.sh）：
+`addComment(Comment::warning, fad, anchor, text)` 后按 golden 生成器契约驱动。
+
+- my_get_line（entry 锚）：`/* Unresolved local var: char * nl@[???]\n... */`
+  **逐字节复现 canon**（20 列 line_commentindent + 3 空格 comment fill 续行、
+  单记录单块、decl 后首语句前位置）。
+- getparameter：函数域组（entry 锚，敏感性扫描 0x3f00/0x3f07/0x3f27/…/0x3f52
+  界定了窗口）+ fnam@0x40f0（词法块首区间）双双落 canon 位置（后者在
+  `if (cVar1 == '-') {` 分支首语句前，与 canon 逐位对齐）。
+- myprogress（prevblock/thisblock@0x3503）、parseconfig（line/tok1/tok2@0x3d35）
+  同样落 canon 锚定语句（`if (dltotal+ultotal==0)` / `if (__stream != 0)` 前）。
+
+### 15.4 Rugra 侧发射链实证与阻塞点（任务②判定）
+
+驱动域注入探测（examples/curl_decompile.rs env 门，已回退）：commentdb →
+CommentSorter（printc.rs:14812 setup_function_comments）→ emit_comment_group →
+emit_line_comment **链路活着**——my_get_line 注入后位置/块形正确。两个发现：
+
+1. **锚约束**：Rugra 侧 op 地址为 spaceless `Address::new(vaddr)`，而
+   `block_basic_contains`（comment.rs:480）要求双方 space 均 `Some`——
+   contains 主路径对 spaceless 恒 false，实际放置全走 `op.addr == comm.addr`
+   的 backup 路径 ⇒ **锚必须精确等于一条存活 op 的地址**（工作注释
+   "Subroutine does not return" 同此路径）。canon 锚（函数入口）在 Rugra 侧
+   需校准到同语句的存活 op（如 my_get_line 0x3854）。
+2. **阻塞点**：emit_line_comment（printc.rs:11032）**不调 start_comment/
+   stop_comment**（注释称 "markup only"——对 EmitNoMarkup 成立，对
+   EmitPrettyPrint 不成立：二者压 BeginComment/EndComment token 置
+   commentmode，gate 续行 3 空格 fill，prettyprint.rs:3851/3929 已移植）。
+   结果续行列 20 vs canon 23。**这是 src/printc.rs 一处两行量级的缺口**
+   （`let id = self.emit.start_comment(); … self.emit.stop_comment(id);` 包住
+   token 走查；EmitNoMarkup 默认实现已是无字节 no-op），出本车道写域
+   （printc 在 GETPARAM 重审车道写域内），按铁律停下归因：
+   **`PRINTC-COMMENTFILL-ARM`**（P2，write-set=src/printc.rs + docs/api/printc.md）。
+   解锁后纯驱动域注释通道（harvest --cmt + RUGRA_CMTSEED 门 + manifest）
+   即可收割，预期 −45 行（624 的 7.2%）。
+
+### 15.5 验收与产物
+
+- 默认 curl E2E **624/0/0**，探测回退后重建 cmp 亲父构建**字节恒等**。
+- census 全归账：100 = 67 sec_offset + 22 exprloc + 11 no-location。
+- 产物（/dev/shm/rugra-tests/secseed/，root 集成后按回收纪律处理）：
+  probe1-6（census/loclist/slot/scope/firstbegins）、stage_cmt_diag.cc +
+  build_cmt_diag.sh + 二进制、oracle_mygetline_cmt.c / oracle_getparam_cmt.c、
+  curl_{default,cmtprobe,final}.c、cmt_*.txt。
+
+---
+
+## §16 V3SIG 交付记录（Lane V3SIG，2026-09-25，基=亲父 cf2e138f=master SHAPEFIX 后）
+
+> HEADLESS-BRIDGE-V3-SIGLOCK-0003 的 httpd 形状族收口面：被调函数锁定原型通道
+> （RUGRA_V3SIG=1 opt-in）。commit 与验收矩阵见 TODO_BOARD 行；证据
+> /dev/shm/rugra-tests/v3sig/（保留至 root 集成）。
+
+### 16.1 通道（SHAPEFIX 判决的运输层）
+
+canon golden 的 `long *` 下标/8 字节 load/canary 槽下标族来自 analyzeHeadless
+**Decompiler Parameter ID** 分析器提交到 Program DB 的被调函数锁定原型（双向实验：
+单条 ap_setup_prelinked_modules (long*)→long 即把锁定 oracle 的 main 翻成 canon 形，
+env-flip 154/156——/dev/shm/rugra-reports/LANE_SHAPEFIX_2026-09-25.md）。Rugra 的
+httpd 语料此前没有该通道：调用点全走 active recovery。本 lane 落地：
+
+1. **harvest**（`tools/harvest_local_manifest.py --callee GOLDEN.c CORPUS
+   ORACLE_COMMIT OUT.json`）：从 canon golden 的 main/ap_fini_vhost_config/
+   ap_vhost_iterate_given_conn 调用点形态反推被调原型。**以调用点实参形态为准，
+   不用被调自身 header**（Parameter ID 迭代漂移：canon 的
+   ap_setup_prelinked_modules 自印 `char * f(undefined8 *)` 而调用点显形
+   `(long*)→long`）。证据规则（全部 canon 文本可观察）：元数=各调用点实参计数
+   （不一致=varargs 弃收）；参数槽类型证据=裸局部（decl 类型，数组衰减指针）/
+   `x[k]`（元素型）/`x+k`/`*x`/`&x`/字符串字面量（char *）/cast 目标
+   （ActionSetCasts 恰把实参 cast 到调用点参数的 local type——`(char *)x` 即
+   char* 证据）/常量与其他表达式（无证据，永不冲突）；两处拼写冲突杀槽
+   （canon 以 long* 与 undefined8* 双型无 cast 传 apr_pool_create_ex param1 ⇒
+   canon 未锁该槽）；**全槽证据齐才锁输入**（部分证据条目保持 active 元数恢复，
+   仅锁返回）；返回锁=所有消费点无 cast 且消费变量类型一致（cast 存在或全未用
+   ⇒不锁；未用≠void）；无参数名（canon 调用方变量保持 plVar/puVar 拼写——与
+   SHAPEFIX harness 的 namelock 实验相反，namelock 会把 main 的变量改名 mod）。
+   TYPEFIX 规矩沿用：KNOWN_BASES 之外的基名槽即死。
+2. **manifest**（`tests/golden/manifests/callee_siglock_httpd_1204.json`，
+   oracle_commit + golden sha256 指纹齐备）：60 被调（27 全输入锁，26 返回锁），
+   3 drops（__printf_chk/ap_log_error/ap_run_post_config=元数冲突的 varargs/派生
+   被调——canon 自身未锁，弃收即对齐方向）。
+3. **装载**（`examples/httpd_decompile.rs`，RUGRA_V3SIG=1 opt-in +
+   RUGRA_V3SIG_MANIFEST 路径覆盖）：inject 后、action 管线前，按 canon 地址键
+   （entry+0x100000）把每条 manifest 原型装成锁定 FuncProto 挂到 fd.callspecs 的
+   callspec 上——全部走库内既有公开面：`FuncProto::from_model_carrier`（defaultfp
+   模型，set_arch 的 setScope 尾已绑）+ `update_all_types_from_pieces`（SYSV 存储
+   分配，fspec.cc:3843 setPieces 同路）+ `set_input_lock/set_output_lock/
+   set_model_lock`（镜像 SHAPEFIX proto_setup.xml 的 modellock/typelock 形态）。
+   类型经 arch TypeFactory `find_by_name` 解析（FuncProto::decode 同源，
+   grammar.cc:2989；"undefined" 是 data-org 唯一缺口，直接 1 字节 Unknown 核心
+   构造）。消费链全在库内：TypeOpCall::getInputLocal（typeop.cc:687-718）锚定
+   实参 typeprop、锁定输出臂（coreaction.cc:4637-4649）定型返回、ActionFuncLink
+   inputlocked 臂挂参数、ActionDefaultParams 因 has_model 跳过 setInternal。
+   **库侧无缺口——无需 src 改动、无移交**。switchD caseD 发射循环同位接线
+   （canon 0x154470 `strcasecmp(unaff_R12,...)` 双参形）。
+   门禁语义：mirror 恒拒（投影纯度，显式日志）；RUGRA_SEEDS=0 全局逃生；opt-in
+   极性待 V3 验证轮后再评估转正。
+
+### 16.2 验收（opt-in 态 vs 基线 1141/0/0）
+
+| 门 | 基线 | RUGRA_V3SIG=1 | 判定 |
+|---|---|---|---|
+| httpd 总量 | 1141/0/0 | **951/0/0**（−190） | defects/numbering 双零 |
+| main | 613 | **505**（−108） | 形状族+返回消费族翻转 |
+| ap_fini_vhost_config | 159 | **90**（−69） | void* __s1/undefined1* 族对齐 |
+| ap_update_vhost_from_headers | 56 | **51**（−5） | |
+| ap_matches_request_vhost | 6 | **2**（−4） | |
+| caseD_0（0x154470） | 4 | **0** | canon 逐字节（strcasecmp 双参 unaff 形） |
+| 其余 29 函数 | — | 恒等 | **零回退**（无任何函数 diff 上升） |
+| 默认脸（env 全空） | — | cmp 基线字节恒等 | ✓（caseD 接线后复证） |
+| mirror（含 RUGRA_V3SIG=1） | — | 恒拒 + 输出恒等 | ✓ |
+| 投影银行 | 391/391 | 391/391 MATCH | ✓ |
+| curl 默认 | 577/0/0 | 577/0/0（驱动未触） | ✓ |
+| gcc 审计 | 14 OK/15 FAIL | 同基线同名集 | ✓ |
+| 双跑 cmp | — | 恒等×2 | ✓ |
+
+翻转普查（原始行）：main 738 + ap_fini 191 = 929 行（含编号级联放大；SHAPEFIX
+oracle env-flip 154/156 为其子集——本通道额外收返回消费形 int 族与 (char*) cast
+实参族）。
+
+### 16.3 残差归因（951 的主族，均既有登记域）
+
+1. **cf 结构**：canon 把 apr_app_initialize 失败分支重构进 `if (iVar3 == 0) {`
+   嵌套，Rugra 保持 goto/while 形——该分支内消费变量 pcVar4 仍 char*（canon
+   iVar3 int）。返回锁已到位（cast 存在即证调用输出≠char*），消费侧类型归属
+   未重构 IR 的 typeprop 行为（GETPARAM-CVAR1-HOIST 同判域）。
+2. **编号级联**：pcVar4 残留使 uVar/pcVar 序列整体偏移（~几十行）。
+3. **undefined224* 伪影**：`&ap_prelinked_modules` 循环——ap_register_hooks
+   (undefined*,long) 锁让实参流变 undefined*（canon ✓ 三处贴齐：裸 &、
+   `(undefined *)0x0`、undefined* 实参），但 typeOrder 让 DB 符号的
+   undefined224*（dynsym st_size=224）压过使用流，增量步进印成
+   `(undefined224 *)((long)puVar15 + 8)`（canon `ppuVar14 + 1`）——
+   typeprop/SYMDB 优先级域残差，登记 `V3SIG-UND224-TYPEORDER-0001`。
+   **收口（2026-09-25 Lane UNDARR，§16.3 项 3 驱动侧根因关闭）**：
+   TYPEORDER 判决（W0–W6 oracle 见证）确认该残差系驱动 DATASYM 输入捏造
+   ——`undefined_t(st_size)` 造出 `TypeFactory::getBase` 结构上产不出的
+   >10 字节 unknown 标量（type.cc:3652-3657 该尺寸恒产 `undefined[size]`
+   数组）。两驱动 DATASYM 构造点已改为 oracle 真实输入形：整_extent 指针槽
+   （reloc 标记或 NULL 尾零槽）→ `undefined*[N]`（W6 oracle 验证形，canon
+   族形零 cast）；其余 8 整除 → `undefined8[N]`（W5 形）；非 8 整除 →
+   `undefined[size]`；≤10 保持标量。main 四行族（decl/init/load/step）翻
+   canon 族：`undefined **ppuVar15`/`*ppuVar15`（零 cast）/`+ 1`；
+   `undefined224` 全文计数=0。
+4. **varargs 3 drops** 与 **ap_run_post_config 元数冲突**：canon 未锁（站点
+   元数不一致即证），弃收即对齐方向。
+5. 间接调用拼写（`void(*V)()` vs `code *V`）、canary 物化（local_40 拆分）、
+   &DAT vs 字符串字面量：既有他域登记，维持。
+
+### 16.4 机制声明
+
+- 机制 C：examples/tools 写域豁免（src 零触碰，git diff 亲父=examples/
+  httpd_decompile.rs + tools/harvest_local_manifest.py + manifest + docs）。
+- 机制 B：examples 非白名单模块，Differential 块按车道要求随 commit 提交
+  （逐函数归因见 16.2/16.3）。
+- curl 侧（SIG 418+PARAM-NAME 146 hunk、C7 NAME-NORM）与转正评估（opt-in →
+  默认）维持 TODO 行排队，依赖本验证轮结论。
+
+### 16.5 CURLPREP 交付记录（Lane CURLPREP，2026-09-25，基=亲父 59ce2cd3=master V3FLIP 后）
+
+> curl 侧被调原型 harvest 预制（tools 域 only）：manifest + oracle 预验证 +
+> 量化判决。**驱动接线（examples/curl_decompile.rs 的 V3SIG 装载）不在本车道**
+> ——CMTFILL 释放 curl 驱动后另派（见 16.5.5 任务书）。
+
+#### 16.5.1 量化（curl 577 的三族普查，skeleton 归一后行对分类）
+
+curl 577/0/0 的函数级分布（本 lane 亲测）：getparameter 156、main 120、
+glob_set 44、file2string 35、parseconfig 33、helpf 31、glob_range 38、
+my_get_token 24、match_url 22、next_url 20、my_get_line 12、myprogress 11、
+其余 7 函数 ≤10。三族（V3SIG 在 httpd 收掉的形状/返回消费/cast 实参）普查
+（classify 工具按行对分类，/dev/shm/rugra-tests/curlprep/classify_curl.py）：
+**cast 实参/返回消费 ≈45 行对（≈90 原始行）+ 形状 ≈5 行对（≈10 行）≈ 100/577
+（17%）**；其余大族为 canon-only `/* Unresolved local var */` 注释块（45）、
+cf/结构（29）、decl 层差（23）、DAT_LAB（6）、纯重编号与混合 OTHER（147）。
+**判决：不满足 <30 行的降优先级条件，但依赖关系与 httpd 相反（见 16.5.3）**。
+
+#### 16.5.2 harvest（curl 适配）
+
+`tools/harvest_local_manifest.py --callee ... --dwarf-types BINARY`（curl 适配，
+全部在 --dwarf-types 门后；缺省= httpd 形态逐字节不变）：
+
+1. **cast 括号提取修复**：cast-结果站点 `x = (FILE *)fopen(a,b)` 的实参表
+   起点此前取 cast 的开括号（argstr=`FILE *` → 元数 1）——改为匹配尾的
+   被调开括号（`body.rfind("(", 0, m.end())`）。该缺陷同时潜伏于 httpd
+   （再生成 diff：5 条目变化，apr_palloc 元数 1→2、apr_getopt_init/memcmp
+   的假槽证据消失、apr_dynamic_fn_retrieve 新增 char* 锁——已提交的
+   httpd manifest 未动，再生成+重验登记为后续项，不属本车道写域）。
+2. **多星 cast 证据**：`(char **)0x0` 此前正则只收单星——`(\*+)` 保留星数。
+3. **`_ptr_type`/`base_of` 多指针拼写修复**：`char **` 归一为 `char * *`，
+   `base_of` 的 rstrip("*") 留内层星导致 servable-base 门误杀——改为全星
+   剥离。
+4. **--dwarf-types 证据域扩展**：servable 基名并入语料 DWARF 命名组合体/
+   typedef 集（FILE/Configurable/URLGlob/...，= 驱动 parse_type_names 的
+   find_by_name 面）；`::global` / `&::global.member` 实参形态从 DWARF
+   文件域静态变量+一层成员表取证（GetStr 的 17 站点 `&::config.<char*域>`
+   → char** 一致证据）。
+5. **manifest**：`tests/golden/manifests/callee_siglock_curl_1204.json`
+   （oracle_commit e40ed130 + golden sha256 + dwarf_types sha256 指纹齐备；
+   双跑字节恒等）——**55 被调：30 全输入锁 + 26 返回锁**，7 drops
+   （CARRY1/CONCAT44=伪 op 无 golden 头；__printf_chk/__fprintf_chk/
+   __sprintf_chk/helpf/strequal=varargs 元数冲突——canon 自身未锁，弃收
+   即方向）。GetStr(char**,char*)、getparameter(char*,char*,bool*,
+   Configurable*)、parseconfig(char*,Configurable*)、fopen(char*,char*)、
+   fclose(FILE*)、file2string(FILE*)、my_get_line(FILE*)、my_get_token(char*)
+   等全输入锁；strtol/fgets/strchr 等槽证据不全（数字槽无证据）保持
+   返回锁。
+
+#### 16.5.3 oracle 预验证（锁定库 e40ed130 直跑，不可跳项）
+
+stage_shape_diag harness 扩 `STAGE_CALLSITE_PROTOS=<hexaddr>=<doc>[,...]`
+（followFlow 后、action 前，按入口地址把锁定 `<prototype>` decode 进
+callspec——FuncProto::decode 需内部 store，经 scratch proto + FuncProto::copy
+= coreaction.cc:2322-2330 的 queryCall 运输镜像；PLT 桩在 BFD harness 无
+Funcdata，callspec 直装是唯一通路）。curl 内部静态符号带优化后缀
+（parseconfig.constprop.0）——补地址查询回退。三函数 A0（种子+own 原型，
+无被调原型）/ B（A0+manifest 全量 callsite 原型）双向实验：
+
+| 实验 | my_get_token 空参 | GetStr 17 站点 | fgets 站点 |
+|---|---|---|---|
+| A0（无原型） | `my_get_token(0)` 裸 | `GetStr(0x175d0,nextarg)` 无 cast | `(&_Stack,0x100,p)` 裸 |
+| B（manifest） | **`my_get_token((char *)0x0)` = canon 逐字** | **`GetStr((char **)0x17520,(char *)pCStack_5b8)`——(char*) 槽 cast 族全翻** | 返回锁 only，槽 cast 不出（证据保守） |
+| C（canon 全真值上限） | — | — | **`(char *)&_Stack_148` 槽 cast 出现** |
+| Rugra 现脸 | `(const char *)0x0`（DWARF const 漂移） | 无 cast | 无 cast |
+| canon | `(char *)0x0` | `(&::config.useragent,(char *)local_5b8)` | `(char *,0x100,(FILE *)file)` |
+
+A0→B 翻转普查：parseconfig 60 / getparameter 254 / file2string 55 原始行。
+**判决：manifest 内容经锁定 oracle 验证有效（B 态的 cast 族=canon 形）；但
+curl 的运输缺口与 httpd 相反**——curl 驱动的 link_call_specs 早已把 libc 表
++DWARF 原型装上 callspecs（getparameter 15 libc+28 DWARF 亲见 stderr），canon
+cast 族在 Rugra 仍不显形，缺口在**消费侧**：`ActionSetCasts::cast_input` 的
+opcode 分派表无 CALL 臂（src/coreaction.rs:5912 落 `input_metatype(opc)`→None
+→reqtype=通用基型；Ghidra 的 TypeOp::getInputCast→`op->inputTypeLocal(slot)`
+→TypeOpCall::getInputLocal（typeop.cc:687-718）→callspec 参型 typelock 锚，
+cast.cc:310-337 指针剥层+尺寸差→cast 插入）。httpd 的 manifest 翻转经
+implied 变量 typeprop 路线（strcmp((char*)plVar12[3])族）不触此臂；curl 的
+主力族是**typelock 符号实参**（local_5b8: Configurable*）——必须走 cast_input
+CALL 臂。**接线车道若只挂 manifest 不补该臂，curl cast 族近零翻转**。
+
+#### 16.5.4 验证矩阵
+
+| 门 | 结果 |
+|---|---|
+| harvest 双跑 | cmp 字节恒等 |
+| manifest JSON | 有效；指纹=golden sha256 aca37988…/dwarf sha256 8af50bca… |
+| curl 默认脸 | **577/0/0**（tools-only 构造性恒等，亲跑复证） |
+| httpd 默认脸 | **951/0/0**（驱动未触，manifest 未装新面——callee_siglock_curl 仅 curl 键） |
+| 投影银行 | **391/391 MATCH**（verify_projection_bank.sh exit 0 亲验） |
+| src/ | 零触碰（git diff 亲父=tools+manifest+docs） |
+
+#### 16.5.5 接线车道任务书要点（CURLWIRE，预留给下一车道）
+
+1. **写域**：examples/curl_decompile.rs（CMTFILL 释放后）+ 可选 src/
+   coreaction.rs cast_input CALL 臂。**顺序建议：先臂后 manifest**——臂单独
+   即可翻 DWARF/libc 已在位的主族（GetStr 17 站点等）；manifest 的增量=
+   const 漂移修正（my_get_token char* vs DWARF const char*）+ 无 DWARF/libc
+   条目的被调 + canon 真值参型。
+2. **cast_input CALL 臂移植**（铁律 1.2：先读 coreaction.cc:2655-2720 +
+   typeop.cc:293-300 + typeop.cc:687-718 + cast.cc:300-390）：CALL 落
+   TypeOp::getInputCast 基臂 = castStandard(getInputLocal(slot), highReadFacing,
+   false, true)；机制 C 强制独立复核（coreaction 白名单）。
+3. **manifest 装载**：照抄 httpd install_v3sig_callee_protos（canon 地址键
+   entry+0x100000；resolve 用 find_by_name，FILE/Configurable 在 curl 驱动的
+   parse_type_names 名树上）。转正评估（opt-out 极性）与 env 矩阵照抄
+   V3FLIP 形态。
+4. **httpd manifest 再生成**：括号修复后的 5 条目变化（16.5.2.1）需再生成
+   +差分门禁重验（apr_getopt_init 假槽 int 消失、memcmp 假槽 long 消失、
+   apr_dynamic_fn_retrieve 新增 char* 锁、apr_palloc 元数 2、
+   apr_app_initialize slot2 undefined8**）——预期 httpd 脸无回退（变化条目
+   原为 inert 或修复向），需亲测。
+5. **PLT 全真值上限决策**：canon 的 PLT 桩头（golden 自印
+   `char * fgets(char *__s,int __n,FILE *__stream)`）与调用点形一致
+   （generic_clib 稳定源，无 Parameter ID 漂移）——harvest 可选扩展：PLT
+   被调接受桩头全参型（C 实验判决：`(FILE *)`/`(char *)` 槽 cast 族上限）。
+   方法论注意：仅限 dynsym 导入桩（内部被调仍守调用点形规矩）。
+
+#### 16.5.6 产物
+
+- 证据：/dev/shm/rugra-tests/curlprep/（oracle_{parseconfig,getparameter,
+  file2string}_{A0,B}.c/.err + oracle_file2string_C.c 上限证 + xml/ 全部
+  种子/原型文档 + gen_curlprep_xml.py + run_curlprep_oracle.sh +
+  classify_curl.py + callee_run2.json 确定性对照）。
+- harness：stage_shape_diag.cc 增 STAGE_CALLSITE_PROTOS + 地址查询回退
+  （/dev/shm/rugra-tests/shapefix/，随 lane 证据保留）。
+- 回收：/dev/shm/rugra-targets/sb-curlprep 留 root 集成后回收。
+
+### 16.6 MANIFREGEN 交付记录（Lane MANIFREGEN，2026-09-25，基=master 363c9cfd=CVRHOIST 后）
+
+> HTTPD-MANIFEST-REGEN-0001：CURLPREP 的 harvester cast 括号修复（ba732be5）
+> 对 httpd 侧 manifest 的下游重生成。写域=manifest+docs；src/examples/tools 零触碰。
+
+#### 16.6.1 再生成 diff（5 条目，与 CURLPREP 预测逐条吻合）
+
+harvest 命令：`python3 tools/harvest_local_manifest.py --callee
+tests/golden/ghidra_httpd_1204.c httpd e40ed130… OUT.json`（缺省 targets=
+main/ap_fini_vhost_config/ap_vhost_iterate_given_conn；httpd 形态不开
+--dwarf-types 门）。golden sha256 与旧 manifest 逐字节同源（6b4c4f31…）。
+
+| 条目（canon 键） | 旧 | 再生成 | 装载器效应 | 判决 |
+|---|---|---|---|---|
+| apr_palloc 0x12abc0 | 元数 1 无锁 | 元数 2 无锁 | 无（evidence-free 条目跳过；cast-result 括号误取根因） | inert |
+| apr_app_initialize 0x12a6d0 | slot1 无证据 | slot1 `undefined8 * *` | 无（return-only 条目 params 不装载） | inert |
+| apr_getopt_init 0x12a450 | 全锁 (long*,long,int,long) | 无锁 | 全锁→跳过 | 脸恒等（见 16.6.2） |
+| memcmp 0x12acb0 | 全锁 (void*,undefined1*,long)→int | 仅返回锁 int | 输入锁消失 | **+7 回退→旧条目恢复** |
+| apr_dynamic_fn_retrieve 0x12b070 | 无 | 新全锁 (char*) | 新锁装载 | Rugra 脸恒等；oracle 侧 canon 翻转亲证 |
+
+净计数：27→26 全输入锁（−getopt−memcmp+dynfn）→ memcmp 恢复后回到
+27 全输入锁 + 26 返回锁 + 3 drops（__printf_chk/ap_log_error/
+ap_run_post_config，与旧恒等）。
+
+#### 16.6.2 oracle 预验证（锁定库 e40ed130 直跑，stage_shape_diag
+STAGE_CALLSITE_PROTOS；A0 与 SHAPEFIX oracle_main_seeded.c 字节恒等
+=装置复刻亲证）
+
+| 实验 | A0（种子 only） | B | canon | 判决 |
+|---|---|---|---|---|
+| main/dynfn | `func_0x0002b070(0x7a474)` 裸地址 | +char* 全锁→`(code *)func_0x0002b070("ap_signal_server")` | `apr_dynamic_fn_retrieve("ap_signal_server")` | **新锁=canon 翻转** ✓ |
+| main/getopt | `(plVar11+10,plVar11[9],xVar1,xVar5)` | 旧假锁→`(plVar12+10,plVar12[9],iVar1,lVar2)`（canon-long 变量被重定型 int） | `(plVar12+10,plVar12[9],(int)lVar2,lVar9)` | 旧锁偏离 canon 变量定型；移除=修复向 ✓ |
+| ap_fini/memcmp | `*(xunknown8 *)(…)` | 旧全锁→`*(void * *)(…)`+8 字节 cast==canon；return-only→退回 A0 形 | `*(void **)(…)`+`(long)` | **弱化丢 canon slot0 void\*\* 形** ✗ |
+
+Rugra E2E 亲测与 oracle 预测一致：再生成为 manifest 时 ap_fini_vhost_config
+80→87（+7：`*(void **)`→`*(undefined8 *)`、`pvVar5`→`lVar5` 重定型编号级联；
+slot2 `(long)` cast 自然恢复保留=槽证据丢失本身脸中性）。恢复 memcmp 旧条目后
+httpd 默认脸与基线**字节恒等**（908/0/0，env -i 本 worktree 口径；main 503/
+ap_fini 80）。getopt 移除与 dynfn 新锁在 Rugra 脸均恒等（dynfn 字面量形
+Rugra 自然恢复本就产出；新锁=oracle 侧正确的保守加固）。
+
+#### 16.6.3 harvester 侧缺口登记（HARVEST-SCALARCAST-0001，tools 域别修）
+
+CURLPREP ba732be5 把 `CALLEE_ARG_CAST` 的 `\*?` 改为 `\*+`——标量 cast
+（`(int)x`/`(long)x`）不再构成槽证据。canon 调用点的标量 cast 恰是被提交参数
+类型的直接强制证据（memcmp `(long)iVar6` = libc size_t 槽）；该缺口叠加
+"全槽证据才锁输入"的 all-or-nothing 规则，使 memcmp 退化为 return-only 并
+丢 canon slot0 void\*\* 形（16.6.2 第三行）。处置：本车道按"回退=剔除"恢复
+memcmp 旧条目（oracle MOLD 实验=canon 形逐字），harvester 修复（标量 cast
+证据恢复或部分槽锁策略）登记 TODO 另派 tools 车道。
+
+#### 16.6.4 验证矩阵（manifest=再生+memcmp 旧条目）
+
+| 门 | 基线（旧 manifest） | 本车道 | 判定 |
+|---|---|---|---|
+| httpd 默认脸 | 908/0/0 | **908/0/0 字节恒等** | ✓ |
+| curl 默认脸 | 546/0/0 | **546/0/0 字节恒等**（curl 驱动不载 httpd manifest） | ✓ |
+| 双跑确定性 | — | httpd stdout cmp 恒等 ×2 | ✓ |
+| gcc 审计 | curl 104/20、httpd 15/14 | fail 集逐名恒等（tmp 路径除外） | ✓ |
+| 投影银行 | 391/391 | **391/391 MATCH**（exit 0 亲验） | ✓ |
+| manifest 指纹 | — | oracle_commit+golden_sha256 亲核 | ✓ |
+
+## §18 CMTSEED 交付记录（Lane CMTSEED，2026-09-25，基=亲父 2dd4c813=master MANIFREGEN 后）
+
+CMTFILL 移交件的 manifest 化+默认转正：注释通道从 /dev/shm 种子文件（opt-in
+`RUGRA_CMTSEED=<tsv>`）升级为入库 manifest（harvester `--cmt` 模式一次性再生）+
+驱动门反转（manifest 在库即默认装载）。
+
+### 18.1 harvest --cmt 通道（tools/harvest_local_manifest.py 新模式，add-only）
+
+`--cmt BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json`，方法=CMTFILL
+build_cmt_seed.py 原样并入（独立函数，不触 --callee/--struct/--dwarf 既有代码）：
+
+- **文本门控**：canon golden 的 `/* Unresolved local var: ... */` 块逐字提取
+  （20 列 `/* ` 首行 / 23 列 commentfill 续行 / emitter 的 ` */` 尾剥除）——
+  记录文本即 canon 自印文本，绝不从 DWARF 重拼类型拼写；
+- **DWARF 锚**：函数域组→具体 subprogram low_pc；词法域组→scope low_pc，无
+  low_pc 时 DW_AT_ranges 首区间 begin；组成员=location 为 DW_FORM_sec_offset
+  或缺席的变量（exprloc 变量解析为命名局部，永不入注释记录）；
+- **匹配**：逐函数按精确变量名序列、canon 顺序，一组一记录；
+- **校准表**（curl 语料表入库+provenance）：CommentSorter::findPosition backup
+  路径（comment.cc:298-306）要求 op.addr==comm.addr 精确命中——死代码化的入口
+  prologue/落在指令中间的词法块起始锚没有存活 op，记录会被 excise。7 条 curl
+  校准把 DWARF 锚重锚到 canon 锚定语句的首个存活 op（RUGRA_DUMP_FUNC dump；
+  e40ed130 stage_cmt_diag oracle 复核=17 记录/45 行块逐字节==canon）；
+- **产出**：canon 地址键（ELF vaddr+0x100000，与其他 manifest 同约定）、
+  oracle_commit+binary/golden sha256 指纹齐备、harvest_rule 全文；非 curl 语料
+  校准表为空表（原始 DWARF 锚直出，无 curl 数据继承——同 --struct 残差账本
+  的语料隔离原则）。
+
+### 18.2 manifest 与门反转（examples/curl_decompile.rs）
+
+- `tests/golden/manifests/curl_cmt_1204.json`：8 函数/17 记录/45 行/7 校准/0
+  drops；harvest 双跑 cmp 字节恒等；派生 (addr,text) 记录集与 CMTFILL
+  /dev/shm 种子文件**逐字节恒等**（亲测 diff）。
+- 门极性（SEEDFLIP 同式）：默认开（manifest 在库即装）→ `RUGRA_CMTSEED=0`
+  单通道逃生 / `RUGRA_SEEDS=0` 全局裸脸逃生 / mirror 三组件恒拒（投影银行
+  纯度）/ manifest 缺失或坏 JSON=loud no-op（任意无 manifest 二进制=裸脸）。
+- `RUGRA_CMTSEED=<path>` 保留为 manifest 路径覆盖（JSON 形）；**CMTFILL 的
+  TSV 种子文件形态退役**（被入库 manifest 取代；oracle harness stage_cmt_diag
+  侧契约不受影响）。注意一处组合语义变化：旧 TSV 门不受 RUGRA_SEEDS 约束，
+  现全局逃生优先于通道门（`RUGRA_SEEDS=0`+`RUGRA_CMTSEED=<path>`=不注入）。
+- 注入语义不变：type=warning、fad=目标入口、[vaddr,vaddr+size) 窗过滤、
+  生产 CommentDatabaseInternal::add_comment；manifest 地址为 canon 空间，
+  插入前重基到 ELF 相对（op 树同空间）。
+
+### 18.3 验证矩阵（亲测，基=亲父 2dd4c813，curl 546/httpd 908）
+
+| 门 | 基线 | 本车道 | 判定 |
+|---|---|---|---|
+| curl 默认脸（=原注入脸） | 546/0/0（Matched 124） | **489/0/0**（−57=45 注释行+对齐回声；Matched 124 不降） | ✓ |
+| 新默认脸 vs CMTFILL oracle 复核脸 | — | **cmp 字节恒等**（逐函数零回退由此继承） | ✓ |
+| `RUGRA_CMTSEED=0` | — | **==基线默认脸 cmp 字节恒等** | ✓ |
+| `RUGRA_SEEDS=0` | 基线全局裸脸 | ==旧驱动 `RUGRA_SEEDS=0` 脸 cmp 字节恒等（旧驱动 A/B 重建对照） | ✓ |
+| mirror（match_url 单函数） | — | 旧/新驱动输出 cmp 字节恒等+stderr 仅"gate ignored"一行 | ✓ |
+| httpd 默认脸 | 908/0/0 | **908/0/0 恒等**（stripped 语料,通道 no-op） | ✓ |
+| gcc 审计 | 104 OK/20 FAIL | 同比,**逐名 verdict 恒等**（注释行不入 fail 集） | ✓ |
+| 投影银行 | 391/391 | **391/391 MATCH**（exit 0 亲验） | ✓ |
+| 双跑确定性 | — | 驱动 stdout cmp 恒等 ×2；harvest manifest cmp 恒等 ×2 | ✓ |
+| Unresolved 行数 | canon 45 | **45==45** | ✓ |
+
+机制 C：tools/examples 驱动域豁免（无 src/ 改动）；机制 B：examples 驱动不
+在白名单模块,但按 B2 精神保留了与 CMTFILL oracle 复核脸的逐字节对照（上表
+第二行）。
+### 16.7 HARVESTFIX 交付记录（Lane HARVESTFIX，2026-09-25，基=master 2dd4c813=MANIFREGEN bridge 后）
+HARVEST-SCALARCAST-0001（P2）收口：16.6.3 登记的 harvester 侧标量 cast 证据缺口
+在 tools 域修复。
+#### 16.7.1 修法（一句话）
+`CALLEE_ARG_CAST` 的星号量词 `\*+` → `\**`（零或多星）——是 CURLPREP 前
+`\*?`（0/1 星，标量 `(long)x` 是槽证据）与 CURLPREP `\*+`（1+ 星，
+`(char **)0x0` 保留星数）的严格并集：标量 cast 证据恢复、多星增益保持、
+零星路径落回 `\*?` 的既有语义（`_arg_evidence` 的 `return base` 分支本就在）。
+#### 16.7.2 双 manifest 再生成组成对比
+httpd（命令=16.6.1 形态，缺省 targets，不开 --dwarf-types）：
+60 被调 = 28 全输入锁 + 26 返回锁 + 3 drops（drops 恒等）。与提交态的 diff
+= 2 条目：
+| 条目 | 提交态 | 再生成 | 处置 |
+| memcmp 0x12acb0 | 全锁 (void*,undefined1*,long)→int | **逐字节恒等**（`(long)iVar6`/`(long)*(int *)` 标量证据自然恢复全锁） | 修复验证本体 ✓ |
+| apr_getopt_init 0x12a450 | slot2 无证据（inert） | 全锁 (long*,long,int,long)（`(int)lVar2` 标量证据恢复=V3SIG 原始形） | **恢复提交态**（16.6.2 假锁判例，16.7.3 本车道 oracle 复判） |
+getopt 条目恢复后再生成输出与提交 manifest **字节恒等**——httpd manifest
+文件零改动（memcmp 旧条目从此由修复后的 harvester 自然可再生，不再依赖
+手工恢复）。纯再生（getopt 带锁）的 httpd 脸亦字节恒等（A/B 亲测）——
+假锁处置是 oracle 侧保守性，非脸必要性。
+curl（命令=16.5 CURLPREP 形态：--dwarf-types=examples/curl + 全 17 targets）：
+55 被调 = 30 全输入锁 + 26 返回锁 + 7 drops（计数与 drops 恒等；
+golden/dwarf sha256 恒等；harvest_rule 文本随规则更新）。4 条目组成变化：
+| 条目 | 旧 | 新 | 判定 |
+| SetHTTPrequest 0x103c50 | 仅返回锁 int | 全锁 (HttpReq,HttpReq*)→int（`(HttpReq)pCVar13` 标量 cast 证据） | **新锁=canon 翻转**（16.7.3 oracle 亲证；且与 canon golden 头 `int SetHTTPrequest(HttpReq req,HttpReq *store)` 逐字一致） |
+| malloc 0x102430 | 全锁 (size_t) | 无锁 | 真冲突弃收：canon 站点 `__n + 1`（size_t decl 证据）vs `(long)(iVar3 + 1)`（标量 cast 证据）冲突，conflict-sensitivity 按设计不锁 |
+| realloc 0x102470 | slot1 无证据 | slot1 `long`（`(long)puVar9 +` 标量证据） | inert（input_lock=false 条目 params 不装载） |
+| strnequal 0x102570 | slot2 无证据 | slot2 `long`（`(long)(int)sVar5` 标量证据） | inert（同上） |
+#### 16.7.3 oracle 预验证（锁定库 e40ed130 直跑，stage_shape_diag
+STAGE_CALLSITE_PROTOS；装置复刻：httpd main A0 与 SHAPEFIX
+oracle_main_seeded.c 字节恒等、curl getparameter A0 与 CURLPREP
+oracle_getparameter_A0.c 字节恒等）
+| 实验 | A0 | +锁（MOLD） | canon | 判决 |
+|---|---|---|---|---|
+| httpd ap_fini/memcmp 全锁 | `*(xunknown8 *)(…)` | `*(void * *)(…)`（slot0 形恢复） | `*(void **)(…)` | **修复验证** ✓（=16.6.2 第三行复判） |
+| httpd main/getopt 全锁 | `(…,xVar1,xVar5)` | `(…,iVar1,lVar2)`（canon-long 变量被重定型 int、无 cast） | `(…,(int)lVar2,lVar9)` | **假锁复判**：偏离 canon 变量定型 → 不采纳 ✓ |
+| curl getparameter/SetHTTPrequest 全锁 | `SetHTTPrequest.part.0()`（无参形） | `SetHTTPrequest.part.0((HttpReq)flag,(HttpReq *)nextarg)` | `SetHTTPrequest((HttpReq)pCVar13,(HttpReq *)pCVar10)` | **新锁=canon 翻转**：实参 cast 形逐字 ✓（名/后缀属符号层与种子层，正交） |
+#### 16.7.4 验证矩阵（httpd manifest 零改动 + curl manifest=纯再生）
+| httpd 默认脸（env -i） | 908/0/0 | **908/0/0**（compare_ghidra 口径 908 skeleton/0 defects/0 numbering；双跑 cmp 恒等；纯再生 A/B 恒等） | ✓ |
+| curl 默认脸（env -i） | 546/0/0 | **546/0/0**（双跑 cmp 恒等；新/旧 manifest 字节 A/B 恒等=驱动不载该文件亲证） | ✓ |
+| gcc 审计 | curl 104/20、httpd 15/14 | 同计数 | ✓ |
+| manifest 指纹 | — | oracle_commit+golden_sha256+dwarf_types_sha256 亲核恒等 | ✓ |
+写域遵守：examples/ 零触碰（CMTSEED/PARAMID 并行车道租约）；
+harvest_local_manifest.py 仅改 CALLEE_ARG_CAST 证据区与规则文本句
+（CMTSEED 的 --cmt 模式函数未触，合并冲突由 root 并集解）。
+## §17 PARAMID 交付记录（Lane PARAMID，2026-09-25，基=亲父 363c9cfd=master CVRHOIST 后）
+> HEADLESS-BRIDGE-PARAMID-0001：Decompiler Parameter ID 自宿主迭代环——把
+> V3SIG 通道的输入从 harvested manifest 换成运行时自产数据
+> （`RUGRA_PARAMID=1` opt-in）。写域=`examples/httpd_decompile.rs`+docs；
+> src/ 零触碰（判定标准=manifest 输出行为等价，编排层车道）。证据
+> /dev/shm/rugra-tests/paramid/（保留至 root 集成）。
+### 17.1 迭代环形态（一句话）
+**round1 裸反编译（不装任何锁）→ 从管线终态按调用点收集证据（被调入口/机器元数/
+槽位类型/返回消费类型——varnode 终态类型，非打印文本）→ 按 harvest 合并规则
+构造与 manifest 同形的锁表 → round2 起以自产锁表复用 V3SIG 三锁装载臂
+重跑 → 单调迭代至不动点或 3 轮 → 最终打印 pass 装最终自产表。**
+关键设计决定（各带实验判决）：
+1. **迭代宇宙** = 打印窗口（29 函数，同 ledger 同 skip filter）∪ 前端
+   analyzer-discovered 调用目标（46 个 = call_targets∪code_ref，PLT 桩除外；
+   extent=下一已知入口邻界，8192 封顶——前端邻居启发式镜像）。
+   Parameter ID 只对反编译过的函数提交签名；驱动不反编译的函数无从自产。
+2. **提交负载=调用点证据**（callee 侧 fd.funcp 方案被实验否决）：canon 自身
+   的被调 header 与调用点形漂移（"Parameter ID 迭代漂移"，16.1 记录的
+   ap_setup_prelinked_modules 自印 `char* f(undefined8*)` vs 调用点
+   `(long*)→long`）；直接锁 callee 侧恢复原型把脸打坏（1189 > 裸 1097，
+   74 条全锁、精确率 5%/召回 11% 的实测）。调用点证据读的是与
+   harvest 同义的信息：untyped varnode（undefined 族标量）=「无证据」形，
+   指针型 varnode =「x[k]/&x/(T*)」形，活 CALL 输出=已消费返回形。
+3. **合并规则=harvest 移植**：元数冲突弃收（varargs）；槽位证据冲突杀槽；
+   undefined 族标量默认不算证据（strict——canon 文本里的裸 undefined8 局部
+   是 analyzer 已提交的形态，而 Rugra 每个 untyped varnode 都是 undefined<N>，
+   loose 模式（`RUGRA_PARAMID_EVIDENCE=loose`）作为召回量具保留）；
+   全槽证据齐→input lock；活消费类型一致→return lock（无 cast 探针，为
+   近似，实测返回侧零冲突）。
+4. **锁定站点继续出证据**：typeprop 后其 arg varnode 类型=锁回声，迭代因此
+   单调（锁→类型→证据→锁），实测 30→31→31 不动点（先前的跳过锁定站点
+   版本在 65→3→64 振荡——Ghidra 的重推导语义是继续采证，提交因复得而持久）。
+5. **PLT 槽条目整体弃收**：imported external location 不是被反编译函数，
+   canon 对那些槽的锁来自 import-signature 通道（generic_clib），本车道不
+   自宿主该通道。实测带 PLT 锁 1072（ap_update/ap_matches 族过锁 +21 回归）
+   vs 弃收后 1038。
+6. **门极性**：mirror 恒拒（投影纯度）→ RUGRA_SEEDS=0 全局逃生 →
+   RUGRA_PARAMID=1 opt-in（接管 callee-siglock 通道，manifest 装载跳过并
+   日志）；`RUGRA_PARAMID_ROUNDS`（默认 3，clamp 1..=3）；
+   `RUGRA_PARAMID_DEBUG=1` 逐条 dump；`RUGRA_PARAMID_COMPARE=0` 关对拍。
+### 17.2 对拍（自产锁 vs manifest 60 锁）
+| 配置 | 表条目 | overlap | exact | shape-diff | manifest-only | self-only | 精确率(entry) | 召回率(entry) | 槽位 equal/diff/m-only/s-only | 返回 equal/diff |
+|---|---|---|---|---|---|---|---|---|---|---|
+| strict（默认） | 31 | 17 | 5 | 12 | 43 | 14 | 29.4% | 8.3% | 18/10/8/1 | 9/0 |
+| loose（量具） | 58 | 24 | 10 | 14 | 36 | 34 | 41.7% | 16.7% | 26/15/0/5 | 13/0 |
+- **返回锁零冲突**（strict 9/9、loose 13/13+2 diff）：活消费类型侧证据与
+  canon 完全同形。
+- **manifest-only 43 的构成**：33 条 PLT/import 域（import-signature 通道，
+  车道边界外）+ 8 条槽位证据缺失（我们调用点 untyped：ap_getnameinfo/
+  strncasecmp/ap_process_config_tree/ap_mpm_query 族——裸恢复里实参就是
+  undefined 族标量）+ 2 条调用点属主在迭代宇宙外（strcasecmp 的唯一调用者
+  = switchD caseD 发射环的 0x154470 处理器，不在 ledger/调用目标宇宙）。
+- **shape-diff 主族=槽位内容差**（10 槽）：自产 `undefined8*` vs canon
+  `long*`（ap_setup_prelinked_modules/ap_run_rewrite_args——pointee 无类型，
+  typeprop 残差域）、自产 `undefined1*`/`int*` vs canon `long`（ap_fini/
+  ap_mpm_run/FUN_12c8e0——深类型分歧）、`int*` vs `void*`（memcmp 槽 0）。
+  全部为恢复质量域（typeprop/UND224/typeOrder，登记域 V3SIG-UND224
+  -TYPEORDER-0001 同族），非迭代深度差（不动点已达成）。
+### 17.3 验收矩阵
+| 门 | 数字/结果 | 判定 |
+|---|---|---|
+| 默认脸（env 全空） | cmp 亲父基线字节恒等 | ✓（重构后复证） |
+| RUGRA_V3SIG=0 | cmp 其亲父基线字节恒等 | ✓ |
+| mirror（±RUGRA_PARAMID=1） | 恒拒（显式日志）+ 输出 cmp 恒等 | ✓ |
+| RUGRA_SEEDS=0+PARAMID=1 | 门静默关闭（全局逃生） | ✓ |
+| PARAMID=1 strict | **1038/0/0**（34 函数；裸 1097、manifest 908） | 收回 manifest 增益的 31%（−59/−189），零 defects/numbering |
+| PARAMID=1 loose | 1071/0/0（过锁伤脸，量具态保留） | 记录 |
+| PARAMID 双跑 | cmp 恒等 | ✓ |
+| 迭代收敛 | 30→31→31 不动点（3 轮上限内） | ✓ |
+| 投影银行 | 391/391 MATCH（exit 0） | ✓ |
+| gcc 审计 | 15 OK/14 FAIL ==默认脸同名集 | ✓ |
+| src/ | 零触碰（git diff=examples+docs） | ✓ |
+| curl | 驱动与库未触（构造性不变） | ✓ |
+**逐函数（vs 裸/manifest 态）**：ap_fini_vhost_config 148→**89**（manifest
+80；void*/返回消费族大头）· main 611→**590**（manifest 503；long* 族未翻
+=槽位内容差域）· ap_matches_request_vhost 6→13（+7 回归）·
+ap_update_vhost_from_headers 56→70（+14 回归）——两处回归=自产锁内容差
+（int*/undefined1* 锚进调用链）把裸态的自然 long 族改写，属同一恢复质量域；
+其余 30 函数与裸态恒等。
+### 17.4 差距归因（1038 vs 908 的 130 行）
+1. **main 87 行**：manifest 的 (long*)→long/ap_run 族锚未自产——调用点
+   实参在 Rugra 恢复里是 undefined8*/undefined 族（无 strict 证据或锁成
+   undefined8*），canon 调用点显形 long* 靠其 typeprop 质量。迭代深度非因
+   （不动点已到）。
+2. **ap_update 族 21 行**：自产 int* 锁的级联（见 17.3 逐函数）。
+3. **caseD 4 行**：strcasecmp 无自产条目（调用点属主在宇宙外）。
+4. **其余 ~18 行**：ap_fini/ap_matches 的槽位差级联。
+### 17.5 机制声明与移交
+- 机制 C：examples 写域豁免（src 零触碰）。
+- 机制 B：examples 非白名单；Differential 精确率表随 commit（17.2）。
+- **移交排队**：①槽位内容差的根因在 typeprop/类型传播（src 域，
+  V3SIG-UND224-TYPEORDER-0001 同族登记域）——自产环已把「差在哪」量化成
+  逐槽表；②switchD caseD 处理器纳入迭代宇宙（当前 strcasecmp 类唯一调用
+  者不在 ledger/调用目标面）；③loose 模式若要转正需先解决 undefined 族
+  标量过锁（当前仅量具）。
+- 回收：/dev/shm/rugra-targets/sb-paramid 留 root 集成后回收；lane 证据
+  /dev/shm/rugra-tests/paramid/。
+
+## §17.6 PARAMID2 交付记录（Lane PARAMID2，2026-09-25，基=亲父 09739f13=master PARAMID 后）
+> HEADLESS-BRIDGE-PARAMID2-0001：自产签名提精度——差距分解驱动的四条
+> strict 守卫 + 默认证据层翻转。写域=`examples/httpd_decompile.rs`+docs；
+> src/ 零触碰。证据 /dev/shm/rugra-tests/paramid2/（保留至 root 集成）。
+
+### 17.6.1 差距根因（逐条实证，RUGRA_PARAMID_SITES=1 逐站点 dump）
+1. **回退根因（ap_matches +7 / ap_update_vhost +14）**：FUN_0012ce20 的
+   slot0 在 round 1 是真冲突（ap_matches 站 `int *` vs ap_update 站
+   `long`，合并正确杀槽）；round 1 的 ret=int 锁经 typeprop 涟漪改写
+   ap_update 站点链上的 varnode 类型，round 2 两站都显 `int *`——
+   逐轮新鲜合并把 round 1 的冲突"忘了"，毒锁落表并把 server_rec 链
+   改写成 `piVar15` 形（`*(long*)(lVar14+0x80)`→`*(long*)(piVar15+0x20)`）。
+2. **窄整型指针证据类**：canon 60 锁表 0 条 `int */uint */short */ushort *`
+   （拼写普查：long 37/int 1/char* 12/long* 9/undefined8 9/undefined8* 5/
+   undefined1* 3/undefined* 1/undefined4* 1/undefined8** 1/void* 1）；
+   Rugra 把 canon 恢复为宽标量（long）的链 typeprop 成了窄整指针——
+   两条回退 + strncmp/memcmp/ap_sockaddr_equal 毒锚全部同根。
+3. **退化 0 元调用点**：main caseD 发射环的 `strcasecmp()`（bare 脸
+   line 471；canon 同位 `strcasecmp((char *)__s1,"crit")`）——lift 丢参
+   线，作为站点证据是伪 0 元数，按元数冲突规则杀死整条目。
+4. **观测不全站点**：FUN_0012ce20 在 ap_matches 的站点（策略后）零贡献
+   ——锁它=对未采样的调用者外推，实测把 ap_matches 自己的签名改型
+   （头行 undefined8→int + param_2 undefined8→long，canon golden 从不
+   如此）。
+
+### 17.6.2 四条守卫 + 默认层翻转（全部实测判优）
+| 策略 | 机制 | 判决 |
+|---|---|---|
+| **sticky 冲突记忆** | 槽/返回/元数在任一轮冲突→永久死（harvest 单遍语义=全部轮观测的并集；锁回声不得翻案） | 单独 1038→1018；被 ②吸收后无独立增量但保留（防御其他类） |
+| **窄整指针降级** | `int */uint */short */ushort *` 在证据层=无证据（canon 0 条的 oracle 实测；根因是恢复残差不是策略差） | 1038→1016；回退主修 |
+| **退化站点过滤** | 0 元数站点 vs 正元数共识=lift 伪迹（非 varargs；真 varargs 仍是正元数间冲突：__printf_chk 2/5/7） | 中性（PLT 关闭时 strcasecmp 不在域）；保留防御 |
+| **静默站点否决**（sticky） | 多站点 callee 有一站零贡献（无槽证据+无活返回消费）→不提交（观测不全）；回声不算补证 | 1016→1015，ap_matches +1 清零 |
+| **默认证据层=全形态** | undefined 族标量计证据（canon 自己锁 9×undefined8+5×undefined8*）；守卫齐备后实测反超 | **1015→1009**；精确率 18.8%→63.2%（§17 的 1071 是无守卫 loose——守卫才是缺件，不是准入规则） |
+| 负结果：PLT 准入（RUGRA_PARAMID_PLT=1） | 36 条自证 PLT 锁 | 1019/1023 vs 1016——所有配置净负，维持整体弃收 |
+| 负结果：分阶段层（RUGRA_PARAMID_ROUND1=strict） | r1 保守层采证 | 1015 vs 1009——保守层把 undefined8 读成"无证据"制造静默站点误触发否决；守卫必须与喂它的层同层 |
+
+**机制注记（默认层为何反超）**：迭代回声不止单调——round 1 全形态锁
+落表后，typeprop 把宽标量链重定型，round 2+ 的证据拼写成 `long *`
+（ap_run_rewrite_args/ap_setup_prelinked_modules/ap_read_config slot0/
+FUN_0012c550 从 `undefined8 *` 自举到 manifest 精确形）。§17.2 的
+`undefined8 *` shape-diff 主族由此收敛。
+
+### 17.6.3 对拍（自产 vs manifest 60 锁，默认=守卫全形态）
+| 配置 | 条目 | overlap | exact | 精确率 | 召回率 | 槽位 eq/diff/m-only/s-only | 返回 |
+|---|---|---|---|---|---|---|---|
+| §17 基线 strict | 31 | 17 | 5 | 29.4% | 8.3% | 18/10/8/1 | 9/0 |
+| **PARAMID2 默认** | **49** | **19** | **12** | **63.2%** | **20.0%** | **20/1/11/3** | **13/0** |
+| 保守层（=strict 逃生门） | 28 | 16 | 3 | 18.8% | 5.0% | 10/9/15/1 | 9/0 |
+
+manifest-only 43→41 = **33 导入域**（PLT/import-signature 数据通道，
+binary stripped 无 DWARF 可读——`readelf -S` 仅 .dynsym；canon 的锁来自
+generic_clib 签名库按名应用，自宿主需签名库数据通道，登记见 17.6.5）
++ **8 in-text**：4 条 inert（FUN_0012c520/ap_run_optional_fn_retrieve/
+ap_show_directives/ap_show_modules——canon 通道也什么都不装，零脸差）
++ 3 条恢复残差槽冲突（ap_fini_vhost_config/ap_fixup_virtual_hosts
+slot0 `undefined1*` vs `undefined8` 两站不一致；FUN_0012cbd0 slot1
+`undefined8*` vs `long*`——sticky 杀，脸中性）+ 1 条降级代价
+（FUN_0012c8e0 slot0 `int *` 被降级，manifest 是 `long`；实测不锁更好：
+87 vs 89）。"2 窗外"旧分类修正：strcasecmp 的退化站点在 main 窗内
+（caseD 发射环），属上述退化类，非窗外。
+
+### 17.6.4 验收矩阵
+| 门 | 数字/结果 | 判定 |
+|---|---|---|
+| 默认脸（env 全空） | cmp 亲父基线字节恒等 | ✓ |
+| RUGRA_V3SIG=0 | cmp 亲父基线字节恒等 | ✓ |
+| mirror（±RUGRA_PARAMID=1） | 恒拒（显式日志）+ 输出 cmp 恒等 | ✓ |
+| RUGRA_SEEDS=0+PARAMID=1 | 门静默关闭 + 输出与纯 SEEDS=0 恒等 | ✓ |
+| **PARAMID=1 默认（守卫全形态）** | **1009/0/0**（裸 1097、manifest 908；收回 88/189=**46.6%**，§17 为 59/189=31.2%） | 零 defects/numbering |
+| 逐函数 vs 裸态 | ap_fini 148→87、main 611→584；**ap_matches 6→6、ap_update_vhost 56→56——回退清零**；其余恒等 | ✓ |
+| 保守层逃生门（EVIDENCE=strict） | 1015/0/0（=守卫 strict 形） | ✓ |
+| 迭代收敛 | 50→49→49 不动点（3 轮上限内） | ✓ |
+| PARAMID 双跑 | cmp 恒等 | ✓ |
+| 投影银行 | 391/391 MATCH（exit 0） | ✓ |
+| gcc 审计 | 15 OK/14 FAIL==默认脸同名集 | ✓ |
+| curl | 驱动与库未触（cargo check + E2E 差分，构造性不变） | ✓ |
+| src/ | 零触碰（git diff=examples+docs） | ✓ |
+
+### 17.6.5 剩余差距登记（101 行 = 1009 vs manifest 908 的逐函数构成）
+1. **main 81 行**（584 vs 503）：long/long* 锚族的 var 级涟漪（typeprop
+   域，V3SIG-UND224-TYPEORDER-0001 同族；自产环已把可自举的部分收敛，
+   残余=canon typeprop 产 long 形而 Rugra 产 undefined 族形的点差）。
+2. **导入域族 ~16 行**：ap_matches 4 + ap_update_vhost 5 + ap_fini 7
+   （memcmp 全锁 [void*, undefined1*, long] slot0 的 void* 形——canon
+   调用点带 cast；Rugra 无 void* 恢复）——全部经由 canon 的 33 条
+   import-signature 锁（strcasecmp/strncmp/memcmp/apr_ctone 族）作用，
+   binary stripped 无 DWARF 可直读（readelf -S 仅 .dynsym），自宿主需
+   签名库数据通道（登记为数据通道缺口，驱动域不可自产）。
+3. **caseD 4 行**：strcasecmp() 退化调用点的参数恢复缺陷（lift 丢参线，
+   src 域登记；canon 的 arity-2 锁同位可物化参数——锁通道已证，缺的是
+   参数恢复本身）。
+- 回收：/dev/shm/rugra-targets/sb-paramid2 留 root 集成后回收；lane 证据
+  /dev/shm/rugra-tests/paramid2/。
+
+## §17.7 IMPORTSIG 交付记录（Lane IMPORTSIG，2026-09-25，基=亲父 7090eb8c）
+
+**判决（车道首问：导入函数的原型是否已被 PARAMID 环用上）**：**未在**。
+httpd 驱动从不查询任何导入签名源——callspec 状态只靠
+`external_prototypes`（HashMap<u64,usize> 参数计数，唯一消费者是
+ActionDeindirect 的存在性检查）+ inject-path qlst 注册
+（CALLSPEC-DRIVER-0002）；PARAMID 环在合并步整体弃收 PLT 槽证据；
+binary stripped 无 DWARF。46.6% 恢复内含导入锁为零，§17.6.5 的 ~16 行
+残余正是该缺口。
+
+**通道形态（IMPORTSIG-DRIVER-0001）**：generic_clib 数据等价物 =
+`LibcSignatureTable`（库内 24 条 curl 导向表；httpd 交集 12 条经公共
+`lookup` 消费——首个库表消费者）+ 驱动侧 httpd 扩展 47 条
+（`HTTPD_IMPORT_SIGNATURES`，拼写=锁定 oracle golden 的 thunk 头逐字，
+glibc `__` 保留名含）。数据判据=canon 对拍：golden 内 124 条
+"Unknown calling convention" 横幅锁定 59 个唯一 libc thunk 签名
+（每 thunk 双打印）；7 个导入 canon 不锁（__fprintf_chk/
+__isoc99_sscanf/__printf_chk/__stack_chk_fail/__strncat_chk/__syslog_chk/
+apu_version_string）——不在 ledger（锁它们=发明 canon 没有的签名）。
+装载臂 `install_import_signatures` 与 V3SIG 同位（inject 后、action 管线
+前），走库公开面 `FuncProto::from_model_carrier +
+update_all_types_from_pieces`，完整复刻 `LibcSignatureTable::locked_proto`
+的边界态（per-param NAME_LOCKED fspec.cc:3503-3506/:3564、
+input/output/model 三锁、"unknown" 约定名）。结构基类型
+（FILE/rlimit/sigaction/sigset_t/tms/group/passwd/__compar_fn_t）在
+驱动 TypeFactory 无对应物→逐条跳过+日志（无一在打印窗口被调）。
+
+**门控**：analyzer transport——`RUGRA_PARAMID=1` 时开（本车道验收脸）、
+`RUGRA_IMPORTSIG=1` 独立量具、`RUGRA_IMPORTSIG=0` A/B 断路、mirror/
+`RUGRA_SEEDS=0` 绝对优先。默认脸构造性不动（门全关=死代码）。
+
+**数字（fast-release 亲测，A/B=HEAD 7090eb8c 二进制 cmp 逐字节）**：
+- PARAMID 脸 **999→753/0/0**（−246）；默认脸 **898 字节恒等**；
+  mirror/V3SIG=0/SEEDS=0 三门禁新旧二进制恒等；PARAMID 双跑恒等；
+  `RUGRA_IMPORTSIG=0` 下 PARAMID 脸与改前字节恒等（−246 全归因本通道）。
+- 逐函数 **0 回退**，11 函数改善：main −113、ap_update_vhost −34、
+  ap_pregsub −20、ap_getword −18、ap_make_dirstr_parent −17、
+  ap_fini −13、ap_field_noparam −12、ap_os_is_path_absolute −6、
+  ap_strcasecmp_match −5、ap_matches −4（§17.6.5 登记的 4 行全收）、
+  caseD −4（4→0——strcasecmp 锁使退化站点印出 canon 形）。
+- PARAMID 自产表 49→51（导入锁的参数类型经 typeprop 改善内部 callee
+  证据）；对拍 overlap 19→20/exact 13→14/precision 68.4%→70.0%/
+  slots equal 21→23/different 0。PLT 槽仍从自产表弃收（归因不变：
+  canon 的导入锁来自签名通道而非 Parameter ID）。
+- bank 391/391 exit 0；cargo test --lib 1725P/1F（nonzeromask 预存，
+  lib 未触碰）。
+
+**残余归因更新（§17.6.5 的 16 行收口）**：导入域族 ~16 行**全收**；
+ap_matches 剩 2 行=pRam code* 残差（非导入域）；ap_update 剩 22/
+ap_fini 剩 70=typeprop/pRam 域（V3SIG-UND224-TYPEORDER-0001 同族）。
+新登记 `IMPORTSIG-STRUCTBASES-0001`（P3）：9 条结构基类型 ledger 条目
+惰性（freopen/qsort/sigaction/sigaddset/sigemptyset/times/getgrnam/
+getpwnam/getpwuid/getrlimit——canon 锁、Rugra 工厂无名、窗口外零可观测）。
+另：canon 对 ap_strchr/ap_strrchr/ap_strstr(±_c) 六个内部包装函数也带
+锁+横幅（Parameter ID 提交域，非导入通道——PARAMID 自产表覆盖范围，
+非本车道缺口）。
+
+证据=/dev/shm/rugra-tests/importsig/（含改前后 A/B 双二进制与全部门禁
+输出）；target /dev/shm/rugra-targets/sb-importsig 留 root 集成后回收。
+
+### 17.7.1 IMPORTSIG-STRUCTBASES-0001 收口（Lane STRUCTB，2026-09-25，判例）
+
+**结论：补齐落地 + 实测收益 0 行（<5 行阈值）→ 判例收口。**
+数据准则（canon 锁定普查）与脸收益不匹配时的诚实处理：census 数据
+真实存在且补齐后通道行为与 canon 一致（11 个跳过点全部转正），
+但打印窗口内零可观测——登记关闭，不宣称脸改善。
+
+**盘点勘误**：原登记"9 条结构基类型条目"实列 **10 个名字**
+（freopen/qsort/sigaction/sigaddset/sigemptyset/times/getgrnam/
+getpwnam/getpwuid/getrlimit）；按基类型口径=9 条 struct 条目
+（FILE/rlimit/sigaction/sigset_t/tms/group/passwd 分布于 9 个函数条目）
++qsort 的 `__compar_fn_t` 函数指针 typedef（+getrlimit 首参
+`__rlimit_resource_t` enum typedef 同跳）。运行期唯一触发面=
+**ap_mpm_run**（迭代宇宙成员、非打印窗口）：每次反编译 21 锁+11 跳
+（sigaction×8/sigaddset×2/sigemptyset×1 首错位点）。
+
+**census 数据源（锁定 golden tests/golden/ghidra_httpd_1204.c，oracle
+e40ed130；stripped 无 DWARF → 硬数据入账本）**：
+- `sigset_t`：ap_mpm_run `sigset_t local_c0;`（@-0xc0，下个 local
+  @-0x40）→ **128 字节**；仅整体 `&` 使用（sigemptyset/sigaddset），
+  无成员路径 → canon 形=不透明 128 字节。
+- `sigaction`：ap_fatal_signal_setup `sigaction local_b8;`（@-0xb8，
+  下个 @-0x20）→ **152 字节**；canon 成员路径 `.sa_mask`（整体 & 进
+  sigemptyset→sigset_t 值成员）、`.sa_flags`（赋 -0x80000000→4 字节
+  int）、`.__sigaction_handler.sa_handler`（赋 FUN_→code*；两级路径
+  证明 union 成员）。glibc x86-64 位置：union@0(8)/sa_mask@8(128)/
+  sa_flags@136(4)；sa_restorer@144 canon 未印不录，152 尺寸显式保留。
+- `group`：canon 印 `->gr_gid`（ap_gname2id）→ oracle 侧为带字段的
+  archive 形；成员=glibc grp.h x86-64（gr_name@0/gr_passwd@8/
+  gr_gid@16 uint/gr_mem@24，size 32）。
+- `passwd`：canon 印 `->pw_name`/`->pw_uid` → glibc pwd.h x86-64
+  全形（pw_name@0..pw_shell@40，size 48）。
+- `FILE`/`rlimit`/`tms`：canon **仅** thunk 头拼写（`FILE *` 等；六个
+  FILE 指针声明、零字段路径、零值本地、零 extent）→ canon 形=仅名
+  incomplete struct（构造带尺寸字段形=发明 canon 无数据）。
+- `__compar_fn_t`=code* 的 typedef（8 字节）；`__rlimit_resource_t`
+  =4 字节 uint 形 typedef（glibc enum）。
+
+**实现**（examples/httpd_decompile.rs，库公开面 create_struct/
+set_fields_sized/get_type_union/set_union_fields_sized/get_type_code/
+get_typedef）：census 表 `CANON_GLIBC_STRUCT_BASES`（7 struct+1 union+
+2 typedef）+ `intern_canon_glibc_struct_bases` 在 main 内
+tracked_context_architecture 之后**单线程预注册**进共享工厂（工厂是
+全线程共享的单一 Arc<RwLock>——若在每次调用的解析里惰性注册，竞态
+窗口可能让某轮拿到 pointer-to-incomplete、后轮拿到完成形=跑跑不确定
+性；预注册后 `resolve_import_type` 的 `other` 臂 find_by_name 直接命中，
+解析路径零改动）。已有同名类型（未来 TYPESEED 等）优先保留、census
+跳过并计数。
+
+**验证（fast-release 亲测，A/B=HEAD 596fcd5f 双二进制 cmp 逐字节）**：
+- 八脸全部**字节恒等**：默认 898/0/0、PARAMID 753/0/0（双跑恒等）、
+  IMPORTSIG 独立 753、mirror、V3SIG=0、SEEDS=0、PARAMID+IMPORTSIG=0。
+- bank 391/391 exit 0（mirror 脸字节恒等→银行捕获不变传递证明）。
+- ap_mpm_run 装载 21+11 跳 → **32 锁 0 跳**；33 条跳过日志清零。
+- **收益=0 行**：三重结构性原因——①打印窗口 34 函数对 10 个 struct
+  导入的调用位点=0（golden 中 struct 使用者 ap_open_logs/ap_gname2id/
+  ap_fatal_signal_setup/ap_mpm_run 全部在窗口与迭代宇宙外或仅宇宙内
+  非打印）；②PARAMID 证据收割弃收 PLT 槽（struct 锁不进自产表）；
+  ③**本树上整个导入通道已脸中性**：RUGRA_IMPORTSIG=0 与开=753 字节
+  相同（IMPORTSIG 车道裁决树 7090eb8c 上 −246 的收益已被 TAGLINE
+  printc 提交（2e2997f4/cdd66875）吸收同一残差族——通道开关在本树
+  不再改变脸）。
+
+**判例**：canon 数据普查驱动补齐的通道完整性工作，若其唯一消费者在
+窗口外且证据通道弃收其位点，脸收益为结构性零——登记为判例收口
+（补齐保留：canon 一致性成立、零脸风险、跳过日志清零；不宣称
+PARAMID 态改善）。后续若打印窗口扩容到 ap_mpm_run/ap_fatal_signal_
+setup（struct 使用函数），本 census 直接承重。
+
+证据=/dev/shm/rugra-tests/structb/（A/B 双二进制+八脸输出+全门禁日志）。
+
+## §17.8 CURLPARAM 交付记录（Lane CURLPARAM，2026-09-25，基=master 94276edf=BOOLMARK 后）
+
+**任务形态**：httpd 侧已证自产+导入 753 < manifest 898（§17.7 数字）——curl 侧把
+`RUGRA_PARAMID=1` 迭代环（§17.1 形态 + §17.6 四守卫）整套复制到 curl 驱动，
+**去循环化的另一半**：curl 的 callee-siglock 通道输入从 harvested manifest 换成
+二进制自身运行时回收的原型。curl 与 httpd 的结构差异全部保留：驱动是
+**进程隔离 worker 协议**（每函数一个 `run_isolated_worker` 子进程，非线程闭包），
+迭代环的每一轮 = 对窗口内每个函数跑一次与打印 pass **完全同构的 worker 请求**
+（同一 `build_decompile_request` 构造点、同一二进制、同一超时隔离），只在请求上
+加两件事：本轮锁表（`paramid_table: Some(entries)` 拥有该通道——manifest 读
+整段跳过；round 1 空表=裸轮）与收割开关（worker 在 print 完成后从最终
+varnode 状态抽证据——与 httpd `decompile_one_function` 的收割位同位——经新增
+`WorkerPayload::DecompileHarvest` 返回）。**迭代窗口=124 全量语料减 48 个
+EXTERNAL 桩投影**（76 个真函数体；主循环桩臂的同一 skip）。四守卫
+（sticky 冲突记忆/窄整指针降级/退化站点过滤/静默站点否决）与全部仪器
+（ROUNDS/EVIDENCE=strict/STICKY/NOINTPTR/PLT=1/Round1=strict/EVICT/SITES/
+DEBUG/COMPARE）逐件带上；PLT 槽证据默认仍整表弃收（CURLPREP 判决：libc ABI
+表+DWARF 原型已在 callspecs 上，导入账本在 curl 侧无需建——装载臂的
+`has_model()` gap-fill 规则本来就跳过被覆盖位点）。证据策略（loose 层/
+窄指针降级）由**请求字段**下发（父进程单源，杜绝父/worker env 漂移；
+Round1=strict 分层仪器因此可只作用于第 1 轮）。
+
+**运行形态（亲测）**：round 1 裸 → 76 函数 63 条站点记录 → 12 锁；
+round 2 锁态 → 同 12 锁 → **round 2 不动点**（终表 12 = 4 全参锁 + 12 返回锁；
+monotone 收敛与 httpd 同形）。PARAMID 脸耗时 1m51s（默认 37s）。
+
+**三脸对照（硬门=自产 ≥ manifest + 零函数回退）——全等通过**：
+
+| 脸 | skeleton | defects | numbering | 逐函数 vs manifest |
+|---|---|---|---|---|
+| manifest（默认） | **396** | 0 | 0 | 基准（与基线 result/curl_cur.c **字节恒等**） |
+| 裸（RUGRA_V3SIG=0） | **396** | 0 | 0 | 与 manifest **字节恒等** |
+| 自产（RUGRA_PARAMID=1） | **396** | 0 | 0 | 与 manifest **字节恒等**（零回退平凡成立） |
+
+**结构性判决（本 lane 的核心发现，判例级）**：在 curl 树上 **callee-siglock
+通道是脸中性的——两种输入形态都是**。manifest 态装载 13 个原型
+（main 7 / parseconfig 1 / getparameter 2 / progressbarinit 1 / glob_range 2）
+而脸输出与裸态字节恒等；自产态终表 12 条**装载 0 个**（12 条全部命中
+`has_model()` DWARF-覆盖跳过——GetStr/my_get_line/parseconfig/getparameter/
+glob_url/next_url/match_url 等内部 callee 都有 DWARF 模型在位）。机制归因：
+CURLWIRE 的 src 侧 cast 臂（5e6aad2b）+ typeprop 已在 DWARF/libc 覆盖面把
+canon 形复现，锁只是把恢复本来就到的答案钉死——与 §17.7.1 STRUCTB 判例
+（"通道开关在本树不再改变脸"）同一形态，但更强：**输入自产化也不改变脸**。
+PARAMID 自产环在 curl 上的价值=通道运输层完整可用（去 manifest 依赖的
+half-looper 收口）+ 零风险（三脸全等），非脸改善——按判例诚实登记，不宣称
+PARAMID 态改善。
+
+**对拍（自产 12 vs manifest 55，RUGRA_PARAMID_COMPARE 默认开）**：
+- entry 级：overlap 12（self-only=0）| exact 4 / shape-diff 8 / manifest-only
+  43；precision(exact/overlap)=**33.3%**、recall=**7.3%**。
+- **DWARF 优势直接可见**：overlap 域内**零拼写冲突**——param slots
+  7 equal / **0 different**（httpd 同阶段 18 equal/10 diff）；returns
+  10 equal / **0 different** / 0 manifest-only / 2 self-only。证据回声
+  （link_call_specs 的 DWARF/libc 装载 → typeprop → arg varnode 类型）
+  使每个提交拼写与 canon 一致——收敛的不是覆盖率而是准确率。
+- manifest-only 43 分解：**40 = PLT/导入域**（策略弃收——libc/DWARF 通道
+  属地，`_init` 计入此类）+ **3 = 内部**：progressbarinit
+  （`ProgressData *` 结构拼写——KNOWN_BASES 准入门死证据，与 8 条
+  shape-diff 的锁深度损失同类：FILE */URLGlob */Configurable */HttpReq/
+  URLGlob/`int *`（glob_url slot2）等结构/窄指针槽位不进证据）、hugehelp
+  （manifest 惰性条目——无锁可装，合并规则按 httpd 形态正确弃收）、
+  GetStr（`char * *`/`char *` 均为已知基——见下节站点归因）。
+- shape-diff 8 条全部为 lock-flag 类（自产退化为 return-only；返回拼写
+  10/10 全对）。
+
+**GetStr 站点归因（RUGRA_PARAMID_SITES=1 亲测，17 位点全查）**：全部
+17 位点（caller 一律 getparameter）**零冲突、形态全同**——
+`arity=2 slots=["-", "char *"] ret=None`：slot1 `char *` 全证据一致；
+slot0（canon `char * *`）在**每一个**位点都无政策可采证据——打印脸该
+槽是 `&::config.useragent` 全局字段地址族（spacebase 相对 address-of
+形），槽 varnode 无类型/基名不在 KNOWN_BASES，运行时状态拼写通道看不
+穿该形；GetStr 又无返回消费证据 → 满证据 input-lock 规则下只能退
+return-only 而 ret=None → 惰性条目弃收。与 httpd §17.4 的
+"missing slot evidence (untyped args)" 同类——manifest 从 canon 打印
+文本 `&::config.X` 形读出 `char **`，运行时状态等价物需要全局字段
+指针类型回填（typeprop/DWARF-globals 联合域，非本车道 write-set）。
+
+**门禁（全过，亲测）**：默认脸与基线 result/curl_cur.c 字节恒等；mirror
+（RUGRA_MIRROR=1）± PARAMID 输出恒等（gate 日志拒绝行在场）；RUGRA_SEEDS=0
+± PARAMID 恒等（全局逃生门静默关）；RUGRA_V3SIG=0 恒等（单通道退）；
+PARAMID 双跑 cmp 恒等；默认双跑 cmp 恒等；bank 391/391 exit 0；gcc 审计
+104 OK/20 FAIL（PARAMID 脸=默认脸字节恒等→同名集平凡成立）；cargo test
+--lib 1729P+1 预存败（test_nonzeromask_pipeline_wiring——BOOLMARK/LOCKFIX
+行已档 master 干树同名同败，非本改动）；annotations/refs/gate-health 门禁
+过。src/ 零触碰（全走库公开面：`fd.callspecs`/`find_call_op`/`get_in`/
+`get_out`/`get_type`/`print_raw`）。
+
+**移交**：①结构拼写证据类（KNOWN_BASES 无 DWARF 域名）=与 httpd
+§17.6.5 typeprop 域同族的既有登记（C3 域），不新立 TODO；②GetStr 冲突族
+若未来要收口，路径=httpd HARVESTFIX 同法（标量 cast 槽证据恢复），登记在
+车道终报即可；③PLT 准入实验（RUGRA_PARAMID_PLT=1）在 curl 上未量测
+（has_model 跳过使其结构性 no-op，与 httpd 的净负测量一致）。
+
+证据=/dev/shm/rugra-tests/cparam/（三脸+双跑+全门禁输出+sites dump）；
+终报=本节。target /dev/shm/rugra-targets/sb-cparam 留 root 集成后回收。

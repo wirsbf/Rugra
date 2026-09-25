@@ -1,0 +1,190 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "curl",
+ "source": "dwarf",
+ "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+ "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+ "harvest_rule": "DWARF .debug_info walk (pyelftools): DW_TAG_variable under subprogram/lexical_block/inlined_subroutine with abstract-origin chasing; location must be DW_FORM_exprloc single-op DW_OP_fbreg(N) (sec_offset loc-lists never become named locals: the importer surfaces them as commentdb '/* Unresolved local var */' warning records instead — SECSEED 2026-09-25 census 67 entries / canon 45 comment lines / 0 named, oracle stage_cmt_diag e40ed130 placement-verified; DW_OP_addr statics are the global channel; formal parameters are C3); offset = fbreg(N)+8 (frame_base=call_frame_cfa, Ghidra stack offset 0 = RSP_entry slot; calibrated urlnum fbreg(-0x22c) -> -0x224); canon key = DW_AT_low_pc + 0x100000; types: KNOWN_BASES bases only (parse_c_type no-fallback), array count = upper_bound+1, char[256]/char[4096] remap to bool (canon-committed typing, stage_seed_diag-validated; --dwarf-raw-types keeps raw), first-DIE slot claim wins and unservable first claims shadow the slot (progressbar/passarg). Canon-decl adjacency adoption: a canon-committed synthesized stack slot (uStack_/iStack_/... form, offset embedded in the name) whose extent borders a DWARF-seeded slot is adopted with source='canon-decl' \u2014 the seed's typelock would otherwise absorb the uncommitted neighbor into the array (oracle-verified: file2string buffer-only seeding yields 'bool abStack_150[8]' in the locked oracle too, while canon commits undefined8 uStack_150 and keeps the partition; both-seeded oracle reproduces canon's separate slots)",
+ "functions": {
+  "0x103840": {
+   "name": "my_get_line",
+   "locals": [
+    {
+     "offset": -4136,
+     "name": "buf",
+     "type": "bool[4096]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  },
+  "0x1025a0": {
+   "name": "main",
+   "locals": [
+    {
+     "offset": -548,
+     "name": "urlnum",
+     "type": "int",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    },
+    {
+     "offset": -328,
+     "name": "errorbuffer",
+     "type": "bool[256]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  },
+  "0x1034d0": {
+   "name": "myprogress",
+   "locals": [
+    {
+     "offset": -616,
+     "name": "format",
+     "type": "char[40]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    },
+    {
+     "offset": -568,
+     "name": "line",
+     "type": "bool[256]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    },
+    {
+     "offset": -312,
+     "name": "outline",
+     "type": "bool[256]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  },
+  "0x103a90": {
+   "name": "file2string",
+   "locals": [
+    {
+     "offset": -336,
+     "name": "uStack_150",
+     "type": "undefined8",
+     "typelock": true,
+     "source": "canon-decl",
+     "adopt_reason": "borders DWARF seed (partition guard)"
+    },
+    {
+     "offset": -328,
+     "name": "buffer",
+     "type": "bool[256]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  },
+  "0x103c80": {
+   "name": "parseconfig",
+   "locals": [
+    {
+     "offset": -329,
+     "name": "usedarg",
+     "type": "bool",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    },
+    {
+     "offset": -328,
+     "name": "filebuffer",
+     "type": "bool[256]",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  },
+  "0x103f00": {
+   "name": "getparameter",
+   "locals": [
+    {
+     "offset": -1424,
+     "name": "now",
+     "type": "time_t",
+     "typelock": true,
+     "lex_scope": false,
+     "inline_origin": false,
+     "scope_range": null
+    }
+   ]
+  }
+ },
+ "harvest_drops": [
+  {
+   "function": "main",
+   "name": "progressbar",
+   "reason": "composite"
+  },
+  {
+   "function": "main",
+   "name": "outs",
+   "reason": "composite"
+  },
+  {
+   "function": "main",
+   "name": "heads",
+   "reason": "composite"
+  },
+  {
+   "function": "main",
+   "name": "urls",
+   "reason": "typedef-URLGlob"
+  },
+  {
+   "function": "main",
+   "name": "fileinfo",
+   "reason": "composite"
+  },
+  {
+   "function": "main",
+   "name": "fileinfo",
+   "reason": "duplicate"
+  },
+  {
+   "function": "main",
+   "name": "passarg",
+   "reason": "slot-owned-by-progressbar(composite)"
+  },
+  {
+   "function": "helpf",
+   "name": "ap",
+   "reason": "typedef-va_list"
+  },
+  {
+   "function": "getparameter",
+   "name": "aliases",
+   "reason": "composite"
+  },
+  {
+   "function": "getparameter",
+   "name": "statbuf",
+   "reason": "composite"
+  }
+ ]
+}

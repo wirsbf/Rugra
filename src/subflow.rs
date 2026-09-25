@@ -25,11 +25,13 @@
 //!   - `RuleSplitLoad`       (subflow.cc:2964)  trigger: LOAD
 //!   - `RuleSplitStore`      (subflow.cc:2985)  trigger: STORE
 //!
-//! `RuleSubfloatConvert` (subflow.cc:3483, FLOAT_FLOAT2FLOAT) is partially
-//! ported: the full `SubfloatFlow` precision trace is not yet ported, but the
-//! constant-fold subset (re-encoding a constant FLOAT2FLOAT at the destination
-//! precision → COPY) now fires; non-constant inputs defer until the full trace
-//! lands; see below.
+//! `RuleSubfloatConvert` (subflow.cc:3483, FLOAT_FLOAT2FLOAT) is fully
+//! ported: `SubfloatFlow` (subflow.cc:3070-3481) — the `TransformManager`
+//! subclass tracing a logical lower-precision float through the data-flow —
+//! runs the complete forward/backward trace with the `maxPrecisionMap` and
+//! rewrites the data-flow at the smaller precision via
+//! `TransformManager::apply` (transform.cc:756-765), new Varnodes and ops,
+//! no retype of the originals.
 //!
 //! # Known infrastructure gaps (do NOT work around — reported, not simplified)
 //!
@@ -65,9 +67,13 @@
 //!     extension_patch case that calls it is emulated with per-slot
 //!     `op_set_input` + `op_remove_input`.
 //!   - Per-op `FuncCallSpecs` identity lookup now exists through
-//!     `Funcdata::get_call_specs_of_op`, but this identity-only D0 does not wire
-//!     the `try_call_pull` / `try_call_return_push` guard-and-patch consumers.
-//!     They retain the pre-D0 conservative skip under `CALLSPEC-0001`.
+//!     `Funcdata::get_call_specs_of_op`, and the `try_call_pull`
+//!     guard-and-patch consumer is wired 1:1 with subflow.cc:208-228
+//!     (consume guard, getCallSpecs, isInputActive, isInputLocked &&
+//!     !isDotdotdot, parameter_patch + pullcount). The
+//!     `try_call_return_push` consumer still retains the conservative skip
+//!     under `CALLSPEC-0001` (indirect-creation trims are not exercised by
+//!     the current corpora).
 //!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
 //!     artificial-halt guard is conservatively skipped and logged.
 //!   - `copy_symbol_if_valid` and `Address::is_big_endian` are not threaded
@@ -78,9 +84,10 @@
 //!     `SplitDatatype::new` (subflow.cc:2701-2709) and the split gates run
 //!     through the canonical `TypeFactory::get_exact_piece`
 //!     (SPLITDATATYPE-EXACTPIECE-0001).
-//!   - `SubfloatFlow` / `LaneDivide` / `SplitFlow` (`TransformManager`
-//!     subclasses) are not ported; `RuleSubfloatConvert` and the
-//!     `RuleSplitFlow` rewrite are therefore documented TODOs.
+//!   - `SubfloatFlow` and `LaneDivide` (`TransformManager` subclasses,
+//!     subflow.cc:3070-3481 / 3518-4128) are ported on top of the shared
+//!     `TransformManager` in `transform.rs`; the `RuleSubfloatConvert` and
+//!     `RuleSplitFlow` rewrites run the full oracle trace + apply.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -682,16 +689,18 @@ impl SubvariableFlow {
 
     // Ghidra: subflow.cc:208 SubvariableFlow::tryCallPull
     /// Determine if the given subgraph variable can act as a parameter to the
-    /// given CALL op. Corresponds to `SubvariableFlow::tryCallPull`
-    /// (subflow.cc:208-228), but the callspec consumer is incomplete under
-    /// `CALLSPEC-0001`.
-    ///
-    /// `Funcdata::get_call_specs_of_op` now supplies the exact per-op owner,
-    /// but the input-active/input-locked/varargs consumer and its patch
-    /// projection have not yet received a paired oracle fixture. Under
-    /// `CALLSPEC-0001`, this identity-only D0 retains the conservative false
-    /// result and does not claim the Ghidra transform.
-    fn try_call_pull(&mut self, op: &Arc<RwLock<PcodeOp>>, rvn: usize, slot: i32) -> bool {
+    /// given CALL op. Faithful to `SubvariableFlow::tryCallPull`
+    /// (subflow.cc:208-228): the consume-mask guard, then the exact per-op
+    /// `Funcdata::getCallSpecs` lookup (funcdata.cc:484-497) with the
+    /// input-active / input-locked-non-varargs guards, then the
+    /// `parameter_patch` PatchRecord and pullcount bump.
+    fn try_call_pull(
+        &mut self,
+        fd: &Funcdata,
+        op: &Arc<RwLock<PcodeOp>>,
+        rvn: usize,
+        slot: i32,
+    ) -> bool {
         if slot == 0 {
             return false;
         }
@@ -705,15 +714,37 @@ impl SubvariableFlow {
                 return false;
             }
         }
-        // CALLSPEC-0001: exact per-op lookup is available, but the
-        // input-active/input-locked/varargs guard and ParameterPatch consumer
-        // remain outside this identity-only D0.
-        let _ = op;
-        // Preserve the legacy diagnostic bytes until this UNTESTED branch has
-        // a bilateral fixture. The wording is not the current premise: exact
-        // lookup exists, while the CALLSPEC-0001 consumer remains unwired.
-        eprintln!("[subflow] tryCallPull: per-op FuncCallSpecs lookup unavailable; skipping trim");
-        false
+        // Ghidra: subflow.cc:216-219
+        //   FuncCallSpecs *fc = fd->getCallSpecs(op);
+        //   if (fc == (FuncCallSpecs *)0) return false;
+        //   if (fc->isInputActive()) return false;
+        //   if (fc->isInputLocked() && (!fc->isDotdotdot())) return false;
+        let fc_arc = match fd.get_call_specs_of_op(&PcodeOpRef(op.clone())) {
+            Some(fc) => fc,
+            None => return false,
+        };
+        {
+            let fc = fc_arc.read().unwrap();
+            if fc.is_input_active() {
+                return false; // Don't trim while in the middle of figuring out params
+            }
+            if fc.prototype.is_input_locked() && !fc.prototype.is_varargs() {
+                return false;
+            }
+        }
+        // Ghidra: subflow.cc:221-227
+        //   patchlist.emplace_back(); type=parameter_patch;
+        //   patchOp=op; in1=rvn; slot=slot; pullcount += 1;
+        self.patchlist.push(PatchRecord {
+            patch_type: PatchType::ParameterPatch,
+            patch_op: op.clone(),
+            in1: rvn,
+            in2: None,
+            slot,
+            pull_modification: true,
+        });
+        self.pullcount += 1; // A true terminal modification
+        true
     }
 
     // Ghidra: subflow.cc:238 SubvariableFlow::tryReturnPull
@@ -1434,7 +1465,7 @@ impl SubvariableFlow {
                             i += 1;
                         }
                     }
-                    if !self.try_call_pull(&op_arc, rvn, slot as i32) {
+                    if !self.try_call_pull(fd, &op_arc, rvn, slot as i32) {
                         return false;
                     }
                     hcount += 1;
@@ -1958,7 +1989,7 @@ impl SubvariableFlow {
                             i += 1;
                         }
                     }
-                    if !self.try_call_pull(&op_arc, rvn, slot as i32) {
+                    if !self.try_call_pull(fd, &op_arc, rvn, slot as i32) {
                         return false;
                     }
                     hcount += 1;
@@ -4662,10 +4693,16 @@ impl Rule for RuleSplitFlow {
 /// (subflow.cc:2616-2672), `buildInConstants` (subflow.cc:2474-2488), the
 /// splitStore LOAD-value trace (subflow.cc:2812-2835) and the splitLoad
 /// COPY-follow (subflow.cc:2761-2771) are ported 1:1 as of
-/// SUBFLOW-ROOTPOINTER-PORT-0001. Remaining structural gap (see module
-/// docs): the `buildInSubpieces`/`buildOutVarnodes`/`buildOutConcats` raw
-/// op-DAG shapes (address-placed outputs, protoPartial PIECE stacks,
-/// generateConstants folding) keep the stand-in forms.
+/// SUBFLOW-ROOTPOINTER-PORT-0001. The ten union facing consults
+/// (cc:2118/2157/2772/2822/2828/2914/2950/2951) run through the fd-aware
+/// twins (`vn_type_read_facing`/`vn_type_def_facing`, unionresolve.rs) as of
+/// UNIONRESOLVE-PKG-E-0001: the oracle derives the containing Funcdata inside
+/// `TypeUnion::findResolve` (type.cc:2138) and consults `fd->getUnionField`;
+/// Rugra threads the `SplitDatatype::data`/`Funcdata` channel explicitly.
+/// Remaining structural gap (see module docs): the
+/// `buildInSubpieces`/`buildOutVarnodes`/`buildOutConcats` raw op-DAG shapes
+/// (address-placed outputs, protoPartial PIECE stacks, generateConstants
+/// folding) keep the stand-in forms.
 pub struct SplitDatatype<'a> {
     /// The containing function. Faithful to `data`.
     pub data: &'a mut Funcdata,
@@ -4736,7 +4773,20 @@ impl RootPointer {
     /// (funcdata_varnode.cc:69/88) whose metatype is not TYPE_PTR, so the
     /// `None` read-facing result rejects exactly like the oracle's non-ptr
     /// metatype check (cc:2119-2120).
-    fn back_up_pointer(&mut self, implied_base: Option<&Arc<crate::type_system::Datatype>>) -> bool {
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2118 consult
+    /// `tmpPointer->getTypeReadFacing(addOp)`: the oracle's
+    /// `TypeUnion::findResolve` derives the Funcdata from
+    /// `op->getParent()->getFuncdata()` (type.cc:2138) and consults
+    /// `fd->getUnionField`; Rugra's `PcodeOp` carries no back-pointer, so the
+    /// containing function is threaded through explicitly and the consult
+    /// goes through [`crate::unionresolve::vn_type_read_facing`]
+    /// (slot 0: `tmpPointer` is `addOp->getIn(0)`).
+    fn back_up_pointer(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        implied_base: Option<&Arc<crate::type_system::Datatype>>,
+    ) -> bool {
         use crate::type_system::{Datatype, TypeMetatype};
 
         let pointer = match &self.pointer {
@@ -4764,13 +4814,14 @@ impl RootPointer {
             return false;
         }
         let tmp_pointer = add_op.read().unwrap().get_in(0).cloned().unwrap();
-        let ct = {
-            let add_guard = add_op.read().unwrap();
-            tmp_pointer
-                .read()
-                .unwrap()
-                .get_type_read_facing_op(&add_guard, 0)
-        };
+        // cc:2118: tmpPointer->getTypeReadFacing(addOp) — slot 0 consult
+        // through fd.union_map (see the fd channel note above).
+        let ct = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &tmp_pointer,
+            &crate::op::PcodeOpRef(add_op.clone()),
+            0,
+        );
         let ct = match ct {
             Some(ct) => ct,
             None => return false, // untyped == undefinedN, not TYPE_PTR (cc:2119)
@@ -4820,8 +4871,14 @@ impl RootPointer {
     /// point at the value-type; then back up through at most 3 hops of
     /// nested struct/array pointers that have a lone descendant, accumulating
     /// the offset in `base_offset`.
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2157 consult
+    /// `pointer->getTypeReadFacing(op)` (slot 1: `pointer` is the LOAD/STORE
+    /// `in(1)`) and for the `backUpPointer` hops — see the channel note on
+    /// [`Self::back_up_pointer`].
     pub fn find(
         &mut self,
+        fd: &crate::funcdata::Funcdata,
         op: &Arc<RwLock<PcodeOp>>,
         value_type: &Arc<crate::type_system::Datatype>,
     ) -> bool {
@@ -4847,10 +4904,14 @@ impl RootPointer {
         let pointer = op.read().unwrap().get_in(1).cloned().unwrap();
         self.first_pointer = Some(pointer.clone());
         self.pointer = Some(pointer.clone());
-        let ct = {
-            let op_guard = op.read().unwrap();
-            pointer.read().unwrap().get_type_read_facing_op(&op_guard, 1)
-        };
+        // cc:2157: pointer->getTypeReadFacing(op) — slot 1 consult through
+        // fd.union_map (see the fd channel note above).
+        let ct = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &pointer,
+            &crate::op::PcodeOpRef(op.clone()),
+            1,
+        );
         let ct = match ct {
             Some(ct) => ct,
             None => return false,
@@ -4864,7 +4925,7 @@ impl RootPointer {
             if implied_base.is_some() {
                 return false;
             }
-            if !self.back_up_pointer(implied_base.as_ref()) {
+            if !self.back_up_pointer(fd, implied_base.as_ref()) {
                 return false;
             }
             let ptr_to = match self.ptr_type.as_ref().unwrap().as_ref() {
@@ -4885,7 +4946,7 @@ impl RootPointer {
             if addr_tied || lone {
                 break;
             }
-            if !self.back_up_pointer(implied_base.as_ref()) {
+            if !self.back_up_pointer(fd, implied_base.as_ref()) {
                 break;
             }
         }
@@ -4976,7 +5037,14 @@ impl<'a> SplitDatatype<'a> {
     /// the canonical `TypeFactory::getExactPiece` (type.cc:4090-4117), which
     /// can produce `TypePartialStruct`/`TypePartialUnion`/`TypePartialEnum`
     /// pieces. Returns `None` when no splittable interpretation exists.
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2914 consult
+    /// `loadStore->getIn(1)->getTypeReadFacing(loadStore)` (slot 1): the
+    /// oracle derives the Funcdata inside `TypeUnion::findResolve`
+    /// (type.cc:2138); Rugra threads it explicitly into
+    /// [`crate::unionresolve::vn_type_read_facing`].
     pub fn get_value_datatype(
+        fd: &crate::funcdata::Funcdata,
         load_store: &Arc<RwLock<PcodeOp>>,
         size: usize,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
@@ -4985,13 +5053,14 @@ impl<'a> SplitDatatype<'a> {
         use crate::type_system::{Datatype, TypeMetatype};
 
         let ptr_vn = load_store.read().unwrap().get_in(1).cloned()?;
-        let ptr_type = {
-            let op_guard = load_store.read().unwrap();
-            ptr_vn
-                .read()
-                .unwrap()
-                .get_type_read_facing_op(&op_guard, 1)
-        }?;
+        // cc:2914: loadStore->getIn(1)->getTypeReadFacing(loadStore) —
+        // slot 1 consult through fd.union_map.
+        let ptr_type = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &ptr_vn,
+            &crate::op::PcodeOpRef(load_store.clone()),
+            1,
+        )?;
         // if (ptrType->getMetatype() != TYPE_PTR) return 0; (cc:2917-2918)
         let pointer = match ptr_type.as_ref() {
             Datatype::Pointer(pointer) => pointer,
@@ -5046,7 +5115,7 @@ impl<'a> SplitDatatype<'a> {
         None
     }
 
-    // Ghidra: subflow.cc:2208 SplitDatatype::getComponent
+    // Ghidra: subflow.cc:2215 SplitDatatype::getComponent
     /// Obtain the component of the given data-type at the specified offset.
     /// Faithful to `SplitDatatype::getComponent` (subflow.cc:2208-2234):
     /// descends `getSubType` until the offset lands exactly at a component
@@ -5093,7 +5162,7 @@ impl<'a> SplitDatatype<'a> {
         }
     }
 
-    // Ghidra: subflow.cc:2237 SplitDatatype::categorizeDatatype
+    // Ghidra: subflow.cc:2244 SplitDatatype::categorizeDatatype
     /// Categorize if and how a data-type should be split. Faithful to
     /// `SplitDatatype::categorizeDatatype` (subflow.cc:2237-2274):
     /// -1 = not splittable, 0 = struct-based split, 1 = array-based split,
@@ -5152,7 +5221,7 @@ impl<'a> SplitDatatype<'a> {
         }
     }
 
-    // Ghidra: subflow.cc:2285 SplitDatatype::testDatatypeCompatibility
+    // Ghidra: subflow.cc:2296 SplitDatatype::testDatatypeCompatibility
     /// Can the two given data-types be mutually split into matching logical
     /// components. Faithful to `SplitDatatype::testDatatypeCompatibility`
     /// (subflow.cc:2285-2367): both sides are categorized, the load/store
@@ -5333,6 +5402,13 @@ impl<'a> SplitDatatype<'a> {
     /// per-component COPY (with SUBPIECE extraction and PIECE reassembly),
     /// destroying the original COPY.
     ///
+    /// Structural note: the oracle reads the in/out facing types in
+    /// `RuleSplitCopy::applyOp` (cc:2950/2951) and passes them in as
+    /// parameters; Rugra re-reads them inline here with the identical
+    /// consult keys (COPY op, slot 0 / def) — `testCopyConstraints` between
+    /// the two reads writes nothing to `fd.union_map`, so the values are
+    /// the same and the inline form is kept.
+    ///
     /// Returns `true` if the split was performed. Returns `false` (no change)
     /// if either side is not a composite type that should be split, or if the
     /// in/out component layouts do not match.
@@ -5351,8 +5427,16 @@ impl<'a> SplitDatatype<'a> {
         if !self.test_copy_constraints(copy_op, &in_vn, &out_vn) {
             return Ok(false);
         }
-        let in_type = in_vn.read().unwrap().get_type_read_facing();
-        let out_type = out_vn.read().unwrap().get_type_def_facing();
+        // cc:2950/2951 (read in RuleSplitCopy::applyOp, re-read here — see the
+        // structural note in the doc comment): in(0) read-facing the COPY at
+        // slot 0, out def-facing — both consult fd.union_map.
+        let in_type = crate::unionresolve::vn_type_read_facing(
+            self.data,
+            &in_vn,
+            &crate::op::PcodeOpRef(copy_op.clone()),
+            0,
+        );
+        let out_type = crate::unionresolve::vn_type_def_facing(self.data, &out_vn);
         let (in_type, out_type) = match (in_type, out_type) {
             (Some(i), Some(o)) => (i, o),
             _ => return Ok(false),
@@ -5367,75 +5451,316 @@ impl<'a> SplitDatatype<'a> {
         if is_arithmetic_input(&out_vn) {
             return Ok(false); // Sanity check on output (cc:2734)
         }
-        // Rewrite per component: SUBPIECE(input, offset) -> temp -> PIECE
-        // chain back into the original output (buildInSubpieces /
-        // buildOutConcats analogue, cc:2730-2744).
-        let pieces: Vec<(i32, i32)> = self
-            .data_type_pieces
-            .iter()
-            .map(|c| (c.offset, c.in_type.get_size() as i32))
-            .collect();
-        let num = pieces.len();
-        // Build the output reconstruction: chain of PIECE ops recombining the
-        // per-component temps back into the original output Varnode.
-        let mut piece_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
-        for i in 0..num {
-            let size = pieces[i].1;
-            // Per-component temp holding the copied value.
-            let temp = self.data.new_unique(size as usize);
-            piece_out_vns.push(temp);
-        }
-        // Per-component COPYs: SUBPIECE(input, offset) -> temp.
-        for i in 0..num {
-            let in_off = pieces[i].0;
-            let in_size = pieces[i].1;
-            let off_const = self.data.new_constant(8, in_off as u64);
-            // SUBPIECE to extract the input piece.
-            let sub_op = self.data.new_op(2, op_addr);
-            self.data.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
-            let sub_out = self.data.new_unique_out(in_size as usize, &sub_op);
-            self.data.op_set_input(&sub_op, in_vn.clone(), 0);
-            self.data.op_set_input(&sub_op, off_const, 1);
-            self.data.op_insert_before(&sub_op, &crate::op::PcodeOpRef(copy_op.clone()));
-            // COPY the piece into the per-component temp.
-            let copy_i = self.data.new_op(1, op_addr);
-            self.data.op_set_opcode(&copy_i, OpCode::CPUI_COPY);
-            self.data.op_set_output(&copy_i, piece_out_vns[i].clone());
-            self.data.op_set_input(&copy_i, sub_out, 0);
-            self.data.op_insert_before(&copy_i, &crate::op::PcodeOpRef(copy_op.clone()));
-        }
-        // Reassemble the output: PIECE(piece_out_vns[last], ..., piece_out_vns[0]).
-        if num == 1 {
-            // Single piece — directly write the whole output.
-            let copy_whole = self.data.new_op(1, op_addr);
-            self.data.op_set_opcode(&copy_whole, OpCode::CPUI_COPY);
-            self.data.op_set_output(&copy_whole, out_vn);
-            self.data.op_set_input(&copy_whole, piece_out_vns[0].clone(), 0);
-            self.data.op_insert_before(&copy_whole, &crate::op::PcodeOpRef(copy_op.clone()));
+        // splitCopy (cc:2730-2744): SUBPIECE/constant inputs → root+off
+        // addressed piece outputs → PIECE reassembly stack → per-piece COPYs
+        // → destroy the original COPY. All four builders are faithful ports
+        // (see build_in_subpieces / build_out_varnodes / build_out_concats).
+        let mut in_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut out_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        if in_vn.read().unwrap().is_constant() {
+            // cc:2732-2733: constant input splits into per-piece constants.
+            let big_endian = out_vn.read().unwrap().get_space().is_big_endian();
+            self.build_in_constants(&in_vn.clone(), &mut in_varnodes, big_endian);
         } else {
-            // Build a left-leaning chain of PIECE ops.
-            // PIECE takes (high, low). Start from the most-significant piece.
-            let mut acc = piece_out_vns[num - 1].clone();
-            for i in (0..num - 1).rev() {
-                let piece_op = self.data.new_op(2, op_addr);
-                self.data.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
-                if i == 0 {
-                    // Final PIECE writes the whole output.
-                    self.data.op_set_output(&piece_op, out_vn.clone());
-                } else {
-                    let acc_out = self.data.new_unique_out(
-                        (pieces[i].1 + pieces[i + 1].1) as usize,
-                        &piece_op,
-                    );
-                    acc = acc_out;
-                }
-                self.data.op_set_input(&piece_op, acc.clone(), 0); // high (already accumulated)
-                self.data.op_set_input(&piece_op, piece_out_vns[i].clone(), 1); // low
-                self.data.op_insert_before(&piece_op, &crate::op::PcodeOpRef(copy_op.clone()));
-            }
+            // cc:2734-2735: any other input splits via SUBPIECE extraction.
+            self.build_in_subpieces(&in_vn.clone(), copy_op, &mut in_varnodes);
+        }
+        self.build_out_varnodes(&out_vn.clone(), &mut out_varnodes);
+        self.build_out_concats(&out_vn.clone(), copy_op, &mut out_varnodes);
+        // cc:2738-2744: one COPY per piece, all inserted before the original
+        // (which is destroyed last, cc:2745).
+        for i in 0..in_varnodes.len() {
+            let new_copy_op = self.data.new_op(1, op_addr);
+            self.data.op_set_opcode(&new_copy_op, OpCode::CPUI_COPY);
+            self.data.op_set_input(&new_copy_op, in_varnodes[i].clone(), 0);
+            self.data.op_set_output(&new_copy_op, out_varnodes[i].clone());
+            self.data
+                .op_insert_before(&new_copy_op, &crate::op::PcodeOpRef(copy_op.clone()));
         }
         self.data.op_destroy(&crate::op::PcodeOpRef(copy_op.clone()));
         Ok(true)
+    }
+
+    // Ghidra: subflow.cc:2409 SplitDatatype::generateConstants
+    /// If the given Varnode is an extended precision constant (ZEXT of a
+    /// constant, or PIECE of two constants), create split constants for the
+    /// pieces and destroy the defining op. Faithful to
+    /// `SplitDatatype::generateConstants` (subflow.cc:2409-2465): the lone
+    /// descendant guard, the ZEXT/PIECE constant inputs, the big-endian
+    /// shift arithmetic (`sa`/`val` from `hi`/`lo`), `calc_mask` truncation,
+    /// per-piece `newConstant` + `updateType`, then `opDestroy` of the
+    /// defining op.
+    fn generate_constants(
+        &mut self,
+        vn: &Arc<RwLock<Varnode>>,
+        in_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) -> bool {
+        // cc:2412-2413: loneDescend + isWritten guards.
+        if vn.read().unwrap().lone_descend().is_none() {
+            return false;
+        }
+        let def = vn.read().unwrap().get_def();
+        let def = match def {
+            Some(d) => d,
+            None => return false,
+        };
+        let (opc, in0, in1) = {
+            let d = def.read().unwrap();
+            (d.opcode, d.get_in(0).cloned(), d.get_in(1).cloned())
+        };
+        if opc == OpCode::CPUI_INT_ZEXT {
+            if !in0.as_ref().is_some_and(|v| v.read().unwrap().is_constant()) {
+                return false;
+            }
+        } else if opc == OpCode::CPUI_PIECE {
+            if !in0.as_ref().is_some_and(|v| v.read().unwrap().is_constant())
+                || !in1.as_ref().is_some_and(|v| v.read().unwrap().is_constant())
+            {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        // cc:2425-2438: split the extended value into hi/lo words.
+        let fullsize = vn.read().unwrap().get_size();
+        let is_big_endian = vn.read().unwrap().get_space().is_big_endian();
+        let (hi, lo, losize) = if opc == OpCode::CPUI_INT_ZEXT {
+            let c = in0.unwrap();
+            let g = c.read().unwrap();
+            (0u64, g.get_offset(), g.get_size())
+        } else {
+            let (h, l) = (in0.unwrap(), in1.unwrap());
+            let (hg, lg) = (h.read().unwrap(), l.read().unwrap());
+            (hg.get_offset(), lg.get_offset(), lg.get_size())
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.in_type;
+            // cc:2441-2444: piece wider than uintb cannot be formed.
+            if dt.get_size() > std::mem::size_of::<u64>() {
+                in_varnodes.clear();
+                return false;
+            }
+            // cc:2446-2449: byte shift of the piece within the whole.
+            let sa = if is_big_endian {
+                fullsize as i64 - (piece.offset as i64 + dt.get_size() as i64)
+            } else {
+                piece.offset as i64
+            };
+            let mut val = if sa >= losize as i64 {
+                hi >> (sa - losize as i64)
+            } else {
+                let mut v = lo >> (sa * 8) as u64;
+                if sa + dt.get_size() as i64 > losize as i64 {
+                    v |= hi << ((losize as i64 - sa) * 8) as u64;
+                }
+                v
+            };
+            val &= crate::address::calc_mask(dt.get_size());
+            // cc:2459-2461: newConstant + updateType per piece.
+            let out_vn = self.data.new_constant(dt.get_size(), val);
+            out_vn.write().unwrap().update_type(dt.clone());
+            in_varnodes.push(out_vn);
+        }
+        // cc:2463: destroy the extended-precision defining op.
+        self.data
+            .op_destroy(&crate::op::PcodeOpRef(def));
+        true
+    }
+
+    // Ghidra: subflow.cc:2497 SplitDatatype::buildInSubpieces
+    /// Build input Varnodes by extracting SUBPIECEs from the root. Faithful
+    /// to `SplitDatatype::buildInSubpieces` (subflow.cc:2497-2519): the
+    /// `generateConstants` fold (cc:2500-2501), per-piece SUBPIECE at the
+    /// input root's own address + piece offset (`addr.renormalize` is a
+    /// no-op outside join spaces in Rugra's flat offset model), the
+    /// big-endian offset mirror (cc:2508-2509), `newConstant(4, off)` as the
+    /// shift input (cc:2513), `newVarnodeOut(size, addr, subpiece)` carrying
+    /// the input root's SPACE (cc:2514), `updateType(inType)` (cc:2516) and
+    /// insertion before the follow op (cc:2517).
+    fn build_in_subpieces(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        follow_op: &Arc<RwLock<PcodeOp>>,
+        in_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:2500-2501: ZEXT/CONCAT extended constants fold into split
+        // constants instead of SUBPIECEs.
+        if self.generate_constants(root_vn, in_varnodes) {
+            return;
+        }
+        let (base_off, base_space, root_size, big_endian, follow_addr) = {
+            let g = root_vn.read().unwrap();
+            (
+                g.get_offset(),
+                g.get_space(),
+                g.get_size(),
+                g.get_space().is_big_endian(),
+                follow_op.read().unwrap().get_addr(),
+            )
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.in_type;
+            let off = piece.offset as i64;
+            // cc:2506: addr = baseAddr + off (little-endian layout address).
+            let addr = crate::address::Address::new(base_off.wrapping_add(off as u64));
+            // cc:2508-2509: big-endian mirrors the SUBPIECE shift amount.
+            let sub_off = if big_endian {
+                root_size as i64 - off - dt.get_size() as i64
+            } else {
+                off
+            };
+            // cc:2510-2517: SUBPIECE(root, off) inserted before followOp,
+            // out at the root-space piece address, typed with inType.
+            let subpiece = self.data.new_op(2, follow_addr);
+            self.data.op_set_opcode(&subpiece, OpCode::CPUI_SUBPIECE);
+            self.data.op_set_input(&subpiece, root_vn.clone(), 0);
+            let off_const = self.data.new_constant(4, sub_off as u64);
+            self.data.op_set_input(&subpiece, off_const, 1);
+            let out_vn = self
+                .data
+                .new_varnode_out_full(dt.get_size(), base_space, addr, &subpiece);
+            in_varnodes.push(out_vn.clone());
+            out_vn.write().unwrap().update_type(dt.clone());
+            self.data
+                .op_insert_before(&subpiece, &crate::op::PcodeOpRef(follow_op.clone()));
+        }
+    }
+
+    // Ghidra: subflow.cc:2527 SplitDatatype::buildOutVarnodes
+    /// Build output Varnodes with storage based on the given root. Faithful
+    /// to `SplitDatatype::buildOutVarnodes` (subflow.cc:2527-2539): per
+    /// piece, `newVarnode(size, rootAddr + off, outType)` carries the output
+    /// root's SPACE (cc:2536).
+    fn build_out_varnodes(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        out_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let (base_off, base_space) = {
+            let g = root_vn.read().unwrap();
+            (g.get_offset(), g.get_space())
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.out_type;
+            let addr = crate::address::Address::new(base_off.wrapping_add(piece.offset as u64));
+            // cc:2536: newVarnode(dt->getSize(), addr, dt) — the explicit
+            // type lands via updateType.
+            let out_vn = self
+                .data
+                .new_varnode_in_space(dt.get_size(), base_space, addr);
+            out_vn.write().unwrap().update_type(dt.clone());
+            out_varnodes.push(out_vn);
+        }
+    }
+
+    // Ghidra: subflow.cc:2548 SplitDatatype::buildOutConcats
+    /// Concatenate output Varnodes into the given root Varnode. Faithful to
+    /// `SplitDatatype::buildOutConcats` (subflow.cc:2548-2603): the
+    /// unused-root early out (cc:2551-2552), the protoPartial pre-mark of
+    /// all pieces when the root is not address-tied (cc:2559-2562), the
+    /// most-significant-first PIECE stack with intermediate outputs at
+    /// address-derived storage (`outVarnodes[i]->getAddr()` renormalized,
+    /// cc:2576/2592-2594) carrying the root's SPACE, protoPartial marks on
+    /// intermediates (cc:2577-2578/2595-2596), the final PIECE flagged
+    /// `partialRoot` and bound to the root output (cc:2599-2600), and
+    /// `registerProtoPartialRoot` when no piece is address-tied
+    /// (cc:2601-2602).
+    fn build_out_concats(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        previous_op: &Arc<RwLock<PcodeOp>>,
+        out_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:2551-2552: no concatenation needed if the root is unused.
+        if root_vn.read().unwrap().has_no_descend() {
+            return;
+        }
+        let (base_space, big_endian, previous_addr) = {
+            let g = root_vn.read().unwrap();
+            (g.get_space(), g.get_space().is_big_endian(), {
+                previous_op.read().unwrap().get_addr()
+            })
+        };
+        let address_tied = root_vn.read().unwrap().is_addr_tied();
+        // cc:2559-2562: creating a CONCAT stack — mark pieces appropriately.
+        for vn in out_varnodes.iter() {
+            if !address_tied {
+                vn.write().unwrap().set_proto_partial();
+            }
+        }
+        let mut concat_op: Option<crate::op::PcodeOpRef> = None;
+        if big_endian {
+            // cc:2564-2579: big-endian walks pieces most to least
+            // significant (index 0 is most significant).
+            let mut vn = out_varnodes[0].clone();
+            let mut pre_op = crate::op::PcodeOpRef(previous_op.clone());
+            let mut i = 1usize;
+            loop {
+                let concat = self.data.new_op(2, previous_addr);
+                self.data.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+                self.data.op_set_input(&concat, vn.clone(), 0); // Most significant
+                self.data
+                    .op_set_input(&concat, out_varnodes[i].clone(), 1); // Least significant
+                self.data.op_insert_after(&concat, &pre_op);
+                concat_op = Some(concat.clone());
+                if i + 1 >= out_varnodes.len() {
+                    break;
+                }
+                pre_op = concat.clone();
+                let sz = vn.read().unwrap().get_size() + out_varnodes[i].read().unwrap().get_size();
+                // cc:2574-2576: intermediate storage at the root base
+                // address renormalized to the accumulated size.
+                let addr = crate::address::Address::new(
+                    root_vn.read().unwrap().get_offset().wrapping_add(0),
+                );
+                vn = self.data.new_varnode_out_full(sz, base_space, addr, &concat);
+                if !address_tied {
+                    vn.write().unwrap().set_proto_partial();
+                }
+                i += 1;
+            }
+        } else {
+            // cc:2582-2597: little-endian walks pieces most to least
+            // significant (last index is most significant).
+            let mut vn = out_varnodes[out_varnodes.len() - 1].clone();
+            let mut pre_op = crate::op::PcodeOpRef(previous_op.clone());
+            let mut i = out_varnodes.len() as i64 - 2;
+            loop {
+                let concat = self.data.new_op(2, previous_addr);
+                self.data.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+                self.data.op_set_input(&concat, vn.clone(), 0); // Most significant
+                self.data
+                    .op_set_input(&concat, out_varnodes[i as usize].clone(), 1); // Least significant
+                self.data.op_insert_after(&concat, &pre_op);
+                concat_op = Some(concat.clone());
+                if i <= 0 {
+                    break;
+                }
+                pre_op = concat.clone();
+                let sz = vn.read().unwrap().get_size()
+                    + out_varnodes[i as usize].read().unwrap().get_size();
+                // cc:2592-2594: intermediate storage at the current piece's
+                // address renormalized to the accumulated size.
+                let addr = crate::address::Address::new(
+                    out_varnodes[i as usize].read().unwrap().get_offset(),
+                );
+                vn = self.data.new_varnode_out_full(sz, base_space, addr, &concat);
+                if !address_tied {
+                    vn.write().unwrap().set_proto_partial();
+                }
+                i -= 1;
+            }
+        }
+        // cc:2599-2600: the final PIECE becomes the partial root defining
+        // the original output.
+        let concat_op = concat_op.expect("buildOutConcats ran with zero pieces");
+        concat_op.0.write().unwrap().set_partial_root();
+        self.data.op_set_output(&concat_op, root_vn.clone());
+        // cc:2601-2602: register the unmapped CONCAT stack with the merge
+        // process so groupPartials can group it into a single variable.
+        if !address_tied {
+            self.data.merge_state.register_proto_partial_root(root_vn);
+        }
     }
 
     // Ghidra: subflow.cc:2474 SplitDatatype::buildInConstants
@@ -5460,7 +5785,19 @@ impl<'a> SplitDatatype<'a> {
             if big_endian {
                 off = root_size as i32 - off - dt.get_size() as i32;
             }
-            let val = (base_val >> ((8 * off) as u64)) & calc_mask(dt.get_size());
+            // cc:2483 `baseVal >> (8*off)`: plain constants are at most
+            // sizeof(uintb) wide on the oracle side, so 8*off < 64 there by
+            // construction (wider values arrive as ZEXT/PIECE and fold via
+            // generateConstants). Rugra can hold >8-byte plain constants
+            // whose get_offset() carries only the low 8 bytes, so pieces at
+            // off >= 8 read the (absent) high bytes as zero instead of
+            // panicking on the C++ UB boundary.
+            let shift = (8 * off).max(0) as u64;
+            let val = if shift >= 64 {
+                0
+            } else {
+                (base_val >> shift) & calc_mask(dt.get_size())
+            };
             let out_vn = self.data.new_constant(dt.get_size(), val);
             out_vn.write().unwrap().update_type(dt);
             in_varnodes.push(out_vn);
@@ -5639,10 +5976,10 @@ impl<'a> SplitDatatype<'a> {
             None => out_vn_initial,
         };
         let out_size = out_vn.read().unwrap().get_size();
-        let out_type = out_vn
-            .read()
-            .unwrap()
-            .get_type_def_facing()
+        // cc:2772: outVn->getTypeDefFacing() — def-facing consult through
+        // fd.union_map; the untyped fallback mirrors the oracle's `undefined`
+        // bank type (see unknown_of).
+        let out_type = crate::unionresolve::vn_type_def_facing(self.data, &out_vn)
             .or_else(|| self.unknown_of(out_size));
         let out_type = match out_type {
             Some(t) => t,
@@ -5655,7 +5992,7 @@ impl<'a> SplitDatatype<'a> {
             return Ok(false); // Sanity check on output (cc:2774-2776)
         }
         let mut root = RootPointer::new();
-        if !root.find(load_op, in_type) {
+        if !root.find(self.data, load_op, in_type) {
             return Ok(false);
         }
         let insert_point = match &copy_op {
@@ -5754,20 +6091,22 @@ impl<'a> SplitDatatype<'a> {
         if let Some(lo) = &load_op {
             let size = in_vn.read().unwrap().get_size();
             if let Some(types) = self.types.as_ref() {
-                in_type = SplitDatatype::get_value_datatype(lo, size, types);
+                in_type = SplitDatatype::get_value_datatype(self.data, lo, size, types);
             }
             if in_type.is_none() {
                 load_op = None;
             }
         }
         if in_type.is_none() {
-            let read_facing = {
-                let store_guard = store_op.read().unwrap();
-                in_vn
-                    .read()
-                    .unwrap()
-                    .get_type_read_facing_op(&store_guard, 2)
-            };
+            // cc:2822: inVn->getTypeReadFacing(storeOp) — slot 2 consult
+            // through fd.union_map; untyped fallback mirrors the oracle's
+            // `undefined` bank type (see unknown_of).
+            let read_facing = crate::unionresolve::vn_type_read_facing(
+                self.data,
+                &in_vn,
+                &crate::op::PcodeOpRef(store_op.clone()),
+                2,
+            );
             in_type = read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
         }
         let in_constant = in_vn.read().unwrap().is_constant();
@@ -5780,13 +6119,14 @@ impl<'a> SplitDatatype<'a> {
                 // If not compatible while considering the LOAD, check again,
                 // but without the LOAD (cc:2825-2832).
                 load_op = None;
-                let read_facing = {
-                    let store_guard = store_op.read().unwrap();
-                    in_vn
-                        .read()
-                        .unwrap()
-                        .get_type_read_facing_op(&store_guard, 2)
-                };
+                // cc:2828: inVn->getTypeReadFacing(storeOp) retry — same
+                // slot 2 consult through fd.union_map.
+                let read_facing = crate::unionresolve::vn_type_read_facing(
+                    self.data,
+                    &in_vn,
+                    &crate::op::PcodeOpRef(store_op.clone()),
+                    2,
+                );
                 let retry_type =
                     read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
                 let Some(retry_type) = retry_type else {
@@ -5805,12 +6145,12 @@ impl<'a> SplitDatatype<'a> {
             return Ok(false); // Sanity check (cc:2837)
         }
         let mut store_root = RootPointer::new();
-        if !store_root.find(store_op, out_type) {
+        if !store_root.find(self.data, store_op, out_type) {
             return Ok(false);
         }
         let mut load_root = RootPointer::new();
         if let Some(lo) = &load_op {
-            if !load_root.find(lo, &in_type) {
+            if !load_root.find(self.data, lo, &in_type) {
                 return Ok(false);
             }
         }
@@ -5908,7 +6248,7 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
-    // Ghidra: subflow.cc:2370 SplitDatatype::testCopyConstraints
+    // Ghidra: subflow.cc:2386 SplitDatatype::testCopyConstraints
     /// Test specific constraints for splitting the given COPY operation into
     /// pieces. Faithful to `SplitDatatype::testCopyConstraints`
     /// (subflow.cc:2370-2384): don't split function inputs, don't split
@@ -5986,7 +6326,7 @@ fn is_arithmetic_opcode(opc: OpCode) -> bool {
     )
 }
 
-// Ghidra: subflow.cc:2673 SplitDatatype::isArithmeticInput
+// Ghidra: subflow.cc:2677 SplitDatatype::isArithmeticInput
 /// Iterate through descendants of the given Varnode, looking for arithmetic
 /// ops. Faithful to `SplitDatatype::isArithmeticInput` (subflow.cc:2673-2684).
 fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool {
@@ -5996,7 +6336,7 @@ fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool {
         .any(|op| is_arithmetic_opcode(op.read().unwrap().opcode))
 }
 
-// Ghidra: subflow.cc:2690 SplitDatatype::isArithmeticOutput
+// Ghidra: subflow.cc:2693 SplitDatatype::isArithmeticOutput
 /// Check if the defining PcodeOp is arithmetic. Faithful to
 /// `SplitDatatype::isArithmeticOutput` (subflow.cc:2690-2696).
 fn is_arithmetic_output(vn: &Arc<RwLock<Varnode>>) -> bool {
@@ -6020,9 +6360,10 @@ fn load_store_space(op: &Arc<RwLock<PcodeOp>>, slot: usize) -> AddressSpace {
     }
 }
 
-// Ghidra: subflow.hh:271 RootPointer::subpieceValue
+// Ghidra: subflow.cc:2497 SplitDatatype::buildInSubpieces
 /// Extract a byte-range piece of `value_vn` via a SUBPIECE op inserted before
-/// `before`, returning the piece Varnode.
+/// `before`, returning the piece Varnode. The trailing offset constant is
+/// `newConstant(4, off)` per subflow.cc:2513 (SUBFLOW-SUBPIECE-WIDTH-0001).
 fn subpiece_value(
     fd: &mut Funcdata,
     value_vn: &Arc<RwLock<Varnode>>,
@@ -6034,7 +6375,7 @@ fn subpiece_value(
     let sub_op = fd.new_op(2, addr);
     fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
     let sub_out = fd.new_unique_out(size as usize, &sub_op);
-    let off_const = fd.new_constant(8, offset as u64);
+    let off_const = fd.new_constant(4, offset as u64);
     fd.op_set_input(&sub_op, value_vn.clone(), 0);
     fd.op_set_input(&sub_op, off_const, 1);
     fd.op_insert_before(&sub_op, before);
@@ -6098,14 +6439,24 @@ impl Rule for RuleSplitCopy {
         // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out
         // data-types and only proceed when one side is
         // PARTIALSTRUCT/ARRAY/STRUCT. Rugra's TypeMetatype covers all three.
+        // cc:2950/2951: in(0) read-facing the COPY at slot 0, out def-facing —
+        // both consult fd.union_map via the fd-aware twins.
         use crate::type_system::TypeMetatype;
-        let (in_type, out_type) = {
+        let (in_vn, out_vn) = {
             let o = op_arc.read().unwrap();
-            (
-                o.get_in(0).and_then(|v| v.read().unwrap().get_type_read_facing()),
-                o.get_out().and_then(|v| v.read().unwrap().get_type_def_facing()),
-            )
+            (o.get_in(0).cloned(), o.get_out().cloned())
         };
+        let in_type = in_vn.as_ref().and_then(|v| {
+            crate::unionresolve::vn_type_read_facing(
+                fd,
+                v,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                0,
+            )
+        });
+        let out_type = out_vn
+            .as_ref()
+            .and_then(|v| crate::unionresolve::vn_type_def_facing(fd, v));
         let in_meta = in_type.as_ref().map(|t| t.get_metatype());
         let out_meta = out_type.as_ref().map(|t| t.get_metatype());
         let is_composite = |m: Option<TypeMetatype>| {
@@ -6162,7 +6513,7 @@ impl Rule for RuleSplitLoad {
             Some(output) => output.read().unwrap().get_size(),
             None => return Ok(action_status::NO_CHANGE),
         };
-        let in_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+        let in_type = match SplitDatatype::get_value_datatype(fd, op_arc, size, &types) {
             Some(in_type) => in_type,
             None => return Ok(action_status::NO_CHANGE),
         };
@@ -6215,7 +6566,7 @@ impl Rule for RuleSplitStore {
             Some(value) => value.read().unwrap().get_size(),
             None => return Ok(action_status::NO_CHANGE),
         };
-        let out_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+        let out_type = match SplitDatatype::get_value_datatype(fd, op_arc, size, &types) {
             Some(out_type) => out_type,
             None => return Ok(action_status::NO_CHANGE),
         };
@@ -6243,6 +6594,672 @@ impl Rule for RuleSplitStore {
 }
 
 // =====================================================================
+// SubfloatFlow — TransformManager subclass tracing float precision
+// (subflow.hh:379-406, subflow.cc:3070-3481)
+// =====================================================================
+
+// RUGRA-GLUE: Ghidra reaches the float formats through
+// `fd->getArch()->translate->getFloatFormat(size)` (translate.hh:322,
+// translate.cc:979-989), which returns NULL when no format is registered
+// for the size. Rugra's spec registers exactly IEEE754 single (4) and
+// double (8) — the two sizes `FloatFormat::new` supports — so this helper
+// returns None for every other size the same way getFloatFormat returns
+// NULL, and `SubfloatFlow::new` then skips `setReplacement` (cc:3446-3447).
+fn subfloat_float_format(size: usize) -> Option<crate::float_emulate::FloatFormat> {
+    if size == 4 || size == 8 {
+        Some(crate::float_emulate::FloatFormat::new(size))
+    } else {
+        None
+    }
+}
+
+// RUGRA-GLUE: virtual-dispatch hook for `SubfloatFlow::preserveAddress`
+// (subflow.cc:3451-3455), installed via
+// `TransformManager::set_preserve_address_override`. The base-class
+// implementation (transform.cc:348) is replaced wholesale by the override,
+// which only preserves addresses for input varnodes.
+fn subfloat_preserve_address(vn: &Varnode, _bit_size: i32, _lsb_offset: i32) -> bool {
+    vn.is_input()
+}
+
+/// Internal state for walking floating-point data-flow and computing
+/// precision. Faithful to `SubfloatFlow::State` (subflow.hh:381-390).
+struct SubfloatState {
+    /// Operation being traversed.
+    op: Arc<RwLock<PcodeOp>>,
+    /// Input edge being traversed.
+    slot: usize,
+    /// Maximum precision traversed through inputs so far.
+    max_precision: i32,
+}
+
+/// Class for tracing changes of precision in floating point variables.
+/// Faithful to `SubfloatFlow` (subflow.hh:379-406): it follows the flow of a
+/// logical lower precision value stored in higher precision locations and
+/// then rewrites the data-flow in terms of the lower precision, eliminating
+/// the precision conversions. Rust has no inheritance, so (like `SplitFlow`
+/// and `LaneDivide`) this struct owns a `TransformManager` and forwards to
+/// it; the `preserveAddress` override is installed as the manager's
+/// virtual-dispatch hook.
+pub struct SubfloatFlow {
+    /// The owned TransformManager (Ghidra subclassing).
+    pub mgr: TransformManager,
+    /// Number of bytes of precision in the logical flow.
+    precision: i32,
+    /// Number of terminating nodes reachable via the root.
+    terminator_count: i32,
+    /// The floating-point format of the logical value (None = unsupported).
+    format: Option<crate::float_emulate::FloatFormat>,
+    /// Current list of placeholders that still need to be traced (arena
+    /// indices into `mgr.new_varnodes`).
+    worklist: Vec<usize>,
+    /// Maximum precision flowing into a particular floating-point op, keyed
+    /// by `Arc::as_ptr` identity (Ghidra: `map<PcodeOp*,int4>`).
+    max_precision_map: std::collections::HashMap<usize, i32>,
+}
+
+impl SubfloatFlow {
+    // Ghidra: subflow.cc:3079 SubfloatFlow::maxPrecision
+    /// Calculate the maximum floating-point precision reaching a given
+    /// Varnode. Faithful to `maxPrecision` (subflow.cc:3079-3175): an
+    /// iterative DFS over MULTIEQUAL/COPY/unary-float defs with an explicit
+    /// op stack, marking ops while they are on the stack and caching each
+    /// completed op's precision in `maxPrecisionMap`. Binary float ops
+    /// contribute 0 (delay checking); FLOAT2FLOAT/INT2FLOAT defs contribute
+    /// `min(in(0) size, vn size)`; anything else contributes `vn size`.
+    fn max_precision(&mut self, vn: &Arc<RwLock<Varnode>>) -> i32 {
+        if !vn.read().unwrap().is_written() {
+            return vn.read().unwrap().get_size() as i32;
+        }
+        let op = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return vn.read().unwrap().get_size() as i32,
+        };
+        match op.read().unwrap().opcode {
+            OpCode::CPUI_MULTIEQUAL
+            | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR
+            | OpCode::CPUI_FLOAT_ROUND
+            | OpCode::CPUI_COPY => {}
+            OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT | OpCode::CPUI_FLOAT_DIV => {
+                return 0; // Delay checking other binary ops
+            }
+            OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_INT2FLOAT => {
+                // Treat integer as having precision matching its size.
+                let in0_size = op.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i32);
+                let vn_size = vn.read().unwrap().get_size() as i32;
+                return match in0_size {
+                    Some(s) if s > vn_size => vn_size,
+                    Some(s) => s,
+                    None => vn_size,
+                };
+            }
+            _ => return vn.read().unwrap().get_size() as i32,
+        }
+        let op_key = Arc::as_ptr(&op) as usize;
+        if let Some(&cached) = self.max_precision_map.get(&op_key) {
+            return cached;
+        }
+        let mut op_stack: Vec<SubfloatState> = vec![SubfloatState {
+            op: op.clone(),
+            slot: 0,
+            max_precision: 0,
+        }];
+        op.write().unwrap().set_mark();
+        let mut max = 0;
+        while !op_stack.is_empty() {
+            // Ghidra: `State &state(opStack.back())` — the slot-scan exit.
+            let state_op = op_stack.last().unwrap().op.clone();
+            if op_stack.last().unwrap().slot >= state_op.read().unwrap().num_input() {
+                let state_max = op_stack.last().unwrap().max_precision;
+                max = state_max;
+                state_op.write().unwrap().clear_mark();
+                self.max_precision_map.insert(Arc::as_ptr(&state_op) as usize, state_max);
+                op_stack.pop();
+                if let Some(parent) = op_stack.last_mut() {
+                    parent.max_precision = parent.max_precision.max(max);
+                }
+                continue;
+            }
+            // Ghidra: `Varnode *nextVn = state.op->getIn(state.slot);
+            //          state.slot += 1;`
+            let state_slot = op_stack.last().unwrap().slot;
+            let next_vn = match state_op.read().unwrap().get_in(state_slot).cloned() {
+                Some(v) => v,
+                None => {
+                    op_stack.last_mut().unwrap().slot += 1;
+                    continue;
+                }
+            };
+            op_stack.last_mut().unwrap().slot += 1;
+            if !next_vn.read().unwrap().is_written() {
+                let sz = next_vn.read().unwrap().get_size() as i32;
+                op_stack.last_mut().unwrap().max_precision =
+                    op_stack.last_mut().unwrap().max_precision.max(sz);
+                continue;
+            }
+            let next_op = match next_vn.read().unwrap().get_def() {
+                Some(d) => d,
+                None => continue,
+            };
+            if next_op.read().unwrap().is_mark() {
+                continue; // Truncate the cycle edge
+            }
+            let next_code = next_op.read().unwrap().opcode;
+            match next_code {
+                OpCode::CPUI_MULTIEQUAL
+                | OpCode::CPUI_FLOAT_NEG
+                | OpCode::CPUI_FLOAT_ABS
+                | OpCode::CPUI_FLOAT_SQRT
+                | OpCode::CPUI_FLOAT_CEIL
+                | OpCode::CPUI_FLOAT_FLOOR
+                | OpCode::CPUI_FLOAT_ROUND
+                | OpCode::CPUI_COPY => {
+                    let next_key = Arc::as_ptr(&next_op) as usize;
+                    if let Some(&cached) = self.max_precision_map.get(&next_key) {
+                        // Seen the op before, incorporate its cached precision.
+                        op_stack.last_mut().unwrap().max_precision =
+                            op_stack.last_mut().unwrap().max_precision.max(cached);
+                    } else {
+                        next_op.write().unwrap().set_mark();
+                        op_stack.push(SubfloatState {
+                            op: next_op.clone(),
+                            slot: 0,
+                            max_precision: 0,
+                        });
+                    }
+                }
+                OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT | OpCode::CPUI_FLOAT_DIV => {}
+                OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_INT2FLOAT => {
+                    let in0_size = next_op.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i32);
+                    let nv_size = next_vn.read().unwrap().get_size() as i32;
+                    let sz = match in0_size {
+                        Some(s) if s > nv_size => nv_size,
+                        Some(s) => s,
+                        None => nv_size,
+                    };
+                    op_stack.last_mut().unwrap().max_precision =
+                        op_stack.last_mut().unwrap().max_precision.max(sz);
+                }
+                _ => {
+                    let sz = next_vn.read().unwrap().get_size() as i32;
+                    op_stack.last_mut().unwrap().max_precision =
+                        op_stack.last_mut().unwrap().max_precision.max(sz);
+                }
+            }
+        }
+        max
+    }
+
+    // Ghidra: subflow.cc:3186 SubfloatFlow::exceedsPrecision
+    /// Determine if the given binary float op exceeds our precision.
+    /// Faithful to `exceedsPrecision` (subflow.cc:3186-3193).
+    fn exceeds_precision(&mut self, op: &Arc<RwLock<PcodeOp>>) -> bool {
+        let (in0, in1) = {
+            let o = op.read().unwrap();
+            (o.get_in(0).cloned(), o.get_in(1).cloned())
+        };
+        let val1 = match in0 {
+            Some(v) => self.max_precision(&v),
+            None => 0,
+        };
+        let val2 = match in1 {
+            Some(v) => self.max_precision(&v),
+            None => 0,
+        };
+        let min = if val1 < val2 { val1 } else { val2 };
+        min > self.precision
+    }
+
+    // Ghidra: subflow.cc:3200 SubfloatFlow::setReplacement
+    /// Create and return a placeholder associated with the given Varnode,
+    /// adding it to the worklist when it must be traced further. Faithful to
+    /// `setReplacement` (subflow.cc:3200-3240): marks are checked first
+    /// (`getPiece` for revisits), constants are re-encoded at the precision
+    /// (`convertEncoding`), free varnodes abort, `addrforce` and typelock
+    /// guards reject incompatible sizes, inputs must already match the
+    /// precision, and finally the varnode is marked and either reused as
+    /// preexisting (size == precision) or split off as a new piece plus a
+    /// worklist entry.
+    fn set_replacement(&mut self, vn: &Arc<RwLock<Varnode>>) -> Option<usize> {
+        if vn.read().unwrap().is_mark() {
+            return Some(self.mgr.get_piece(vn.clone(), self.precision * 8, 0));
+        }
+        if vn.read().unwrap().is_constant() {
+            let form2 = subfloat_float_format(vn.read().unwrap().get_size())?;
+            // Return the converted form of the constant.
+            let offset = vn.read().unwrap().get_offset();
+            let converted = self
+                .format
+                .as_ref()
+                .expect("SubfloatFlow invariant: format present when setReplacement runs")
+                .convert_encoding(offset, &form2);
+            return Some(self.mgr.new_constant(self.precision, 0, converted));
+        }
+        if vn.read().unwrap().is_free() {
+            return None; // Abort
+        }
+        if vn.read().unwrap().is_addr_force() && (vn.read().unwrap().get_size() as i32) != self.precision {
+            return None;
+        }
+        {
+            let rg = vn.read().unwrap();
+            if rg.is_type_lock() {
+                let partial = rg
+                    .get_type()
+                    .map(|t| t.get_metatype() == crate::type_system::TypeMetatype::PartialStruct)
+                    .unwrap_or(false);
+                if !partial {
+                    let sz = rg.get_type().map(|t| t.get_size() as i32).unwrap_or(0);
+                    if sz != self.precision {
+                        return None;
+                    }
+                }
+            }
+        }
+        if vn.read().unwrap().is_input() {
+            // Must be careful with inputs
+            if vn.read().unwrap().get_size() as i32 != self.precision {
+                return None;
+            }
+        }
+        vn.write().unwrap().set_mark();
+        let res;
+        // Check if vn already represents the logical variable being traced.
+        if vn.read().unwrap().get_size() as i32 == self.precision {
+            res = self.mgr.new_preexisting_varnode(vn.clone());
+        } else {
+            res = self.mgr.new_piece(vn.clone(), self.precision * 8, 0);
+            self.worklist.push(res);
+        }
+        Some(res)
+    }
+
+    // Ghidra: subflow.cc:3249 SubfloatFlow::traceForward
+    /// Try to trace the logical value forward through descendant ops.
+    /// Faithful to `traceForward` (subflow.cc:3249-3330). Binary arithmetic
+    /// aborts on `exceedsPrecision`; pass-through ops get an op-replacement
+    /// placeholder whose output placeholder comes from `setReplacement`;
+    /// downstream FLOAT2FLOAT/comparison/TRUNC/NAN become preexisting-op
+    /// terminators (comparisons honour `preexistingGuard` and the
+    /// repeated-input `getRepeatSlot` adjustment).
+    fn trace_forward(&mut self, rvn: usize) -> bool {
+        let origvn = match self.mgr.new_varnodes[rvn].vn.clone() {
+            Some(v) => v,
+            None => return true,
+        };
+        // Snapshot the descendant ops (Ghidra iterates beginDescend..endDescend).
+        let descend_ops: Vec<Arc<RwLock<PcodeOp>>> = origvn.read().unwrap().descend_iter().collect();
+        let mut op_index = 0;
+        while op_index < descend_ops.len() {
+            let op = descend_ops[op_index].clone();
+            let cur_index = op_index;
+            op_index += 1;
+            let outvn = op.read().unwrap().get_out().cloned();
+            if let Some(ref out) = outvn {
+                if out.read().unwrap().is_mark() {
+                    continue;
+                }
+            }
+            let op_code = op.read().unwrap().opcode;
+            match op_code {
+                OpCode::CPUI_FLOAT_ADD
+                | OpCode::CPUI_FLOAT_SUB
+                | OpCode::CPUI_FLOAT_MULT
+                | OpCode::CPUI_FLOAT_DIV
+                | OpCode::CPUI_MULTIEQUAL
+                | OpCode::CPUI_COPY
+                | OpCode::CPUI_FLOAT_CEIL
+                | OpCode::CPUI_FLOAT_FLOOR
+                | OpCode::CPUI_FLOAT_ROUND
+                | OpCode::CPUI_FLOAT_NEG
+                | OpCode::CPUI_FLOAT_ABS
+                | OpCode::CPUI_FLOAT_SQRT => {
+                    if matches!(
+                        op_code,
+                        OpCode::CPUI_FLOAT_ADD
+                            | OpCode::CPUI_FLOAT_SUB
+                            | OpCode::CPUI_FLOAT_MULT
+                            | OpCode::CPUI_FLOAT_DIV
+                    ) && self.exceeds_precision(&op)
+                    {
+                        return false;
+                    }
+                    let n_inputs = op.read().unwrap().num_input();
+                    let rop = self.mgr.new_op_replace(n_inputs, op_code, PcodeOpRef(op.clone()));
+                    let out = match &outvn {
+                        Some(o) => o.clone(),
+                        None => return false,
+                    };
+                    let outrvn = match self.set_replacement(&out) {
+                        Some(i) => i,
+                        None => return false,
+                    };
+                    let slot = op
+                        .read()
+                        .unwrap()
+                        .inrefs
+                        .iter()
+                        .position(|v| Arc::ptr_eq(v, &origvn));
+                    let slot = match slot {
+                        Some(s) => s,
+                        None => return false,
+                    };
+                    self.mgr.op_set_input(rop, rvn, slot);
+                    self.mgr.op_set_output(rop, outrvn);
+                }
+                OpCode::CPUI_FLOAT_FLOAT2FLOAT => {
+                    let out_size = match &outvn {
+                        Some(o) => o.read().unwrap().get_size() as i32,
+                        None => return false,
+                    };
+                    if out_size < self.precision {
+                        return false;
+                    }
+                    let opc = if out_size == self.precision {
+                        OpCode::CPUI_COPY
+                    } else {
+                        OpCode::CPUI_FLOAT_FLOAT2FLOAT
+                    };
+                    let rop = self.mgr.new_preexisting_op(1, opc, PcodeOpRef(op.clone()));
+                    self.mgr.op_set_input(rop, rvn, 0);
+                    self.terminator_count += 1;
+                }
+                OpCode::CPUI_FLOAT_EQUAL
+                | OpCode::CPUI_FLOAT_NOTEQUAL
+                | OpCode::CPUI_FLOAT_LESS
+                | OpCode::CPUI_FLOAT_LESSEQUAL => {
+                    if self.exceeds_precision(&op) {
+                        return false;
+                    }
+                    let first_slot = op
+                        .read()
+                        .unwrap()
+                        .inrefs
+                        .iter()
+                        .position(|v| Arc::ptr_eq(v, &origvn));
+                    let mut slot = match first_slot {
+                        Some(s) => s as i32,
+                        None => return false,
+                    };
+                    let other_vn = op.read().unwrap().get_in((1 - slot) as usize).cloned();
+                    let other_vn = match other_vn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    let rvn2 = match self.set_replacement(&other_vn) {
+                        Some(i) => i,
+                        None => return false,
+                    };
+                    if rvn == rvn2 {
+                        // Ghidra: `ourIter = iter; --ourIter;` — the current
+                        // descendant position — then `getRepeatSlot(vn, slot,
+                        // ourIter)` (op.cc:93-111): count = 1 + occurrences
+                        // of this op in descend[0..current), count==1 returns
+                        // firstSlot, otherwise the count-th inrefs slot.
+                        slot = subfloat_get_repeat_slot(
+                            &op,
+                            &origvn,
+                            slot as usize,
+                            &descend_ops[..cur_index],
+                        );
+                    }
+                    // Ghidra passes `slot` (possibly -1 from getRepeatSlot,
+                    // though that is unreachable: count never exceeds the
+                    // input occurrence count) to preexistingGuard, whose only
+                    // slot test is `slot == 0` — -1 behaves as any nonzero.
+                    let guard_slot = if slot == 0 { 0usize } else { 1usize };
+                    if TransformManager::preexisting_guard(guard_slot, &self.mgr.new_varnodes[rvn2]) {
+                        let rop = self.mgr.new_preexisting_op(2, op_code, PcodeOpRef(op.clone()));
+                        if slot >= 0 {
+                            self.mgr.op_set_input(rop, rvn, slot as usize);
+                            self.mgr.op_set_input(rop, rvn2, (1 - slot) as usize);
+                        }
+                        self.terminator_count += 1;
+                    }
+                }
+                OpCode::CPUI_FLOAT_TRUNC | OpCode::CPUI_FLOAT_NAN => {
+                    let rop = self.mgr.new_preexisting_op(1, op_code, PcodeOpRef(op.clone()));
+                    self.mgr.op_set_input(rop, rvn, 0);
+                    self.terminator_count += 1;
+                }
+                _ => return false, // Everything else we abort
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3339 SubfloatFlow::traceBackward
+    /// Trace the logical value backward through the defining op one level.
+    /// Faithful to `traceBackward` (subflow.cc:3339-3419). Pass-through defs
+    /// reuse the existing placeholder def (or create one) and fill unset
+    /// input slots; INT2FLOAT defs become replacements over the preexisting
+    /// integer input; FLOAT2FLOAT defs become COPY/FLOAT2FLOAT replacements
+    /// with the constant leg re-encoded at the precision.
+    fn trace_backward(&mut self, rvn: usize) -> bool {
+        let origvn = match self.mgr.new_varnodes[rvn].vn.clone() {
+            Some(v) => v,
+            None => return true,
+        };
+        let op = match origvn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return true, // If vn is input
+        };
+        let op_code = op.read().unwrap().opcode;
+        match op_code {
+            OpCode::CPUI_FLOAT_ADD
+            | OpCode::CPUI_FLOAT_SUB
+            | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV
+            | OpCode::CPUI_COPY
+            | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR
+            | OpCode::CPUI_FLOAT_ROUND
+            | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_MULTIEQUAL => {
+                if matches!(
+                    op_code,
+                    OpCode::CPUI_FLOAT_ADD
+                        | OpCode::CPUI_FLOAT_SUB
+                        | OpCode::CPUI_FLOAT_MULT
+                        | OpCode::CPUI_FLOAT_DIV
+                ) && self.exceeds_precision(&op)
+                {
+                    return false;
+                }
+                let rop = match self.mgr.new_varnodes[rvn].def {
+                    Some(d) => d,
+                    None => {
+                        let n_inputs = op.read().unwrap().num_input();
+                        let r = self.mgr.new_op_replace(n_inputs, op_code, PcodeOpRef(op.clone()));
+                        self.mgr.op_set_output(r, rvn);
+                        r
+                    }
+                };
+                let n_inputs = op.read().unwrap().num_input();
+                for i in 0..n_inputs {
+                    if self.mgr.new_ops[rop].input.get(i).copied().flatten().is_none() {
+                        let inv = match op.read().unwrap().get_in(i).cloned() {
+                            Some(v) => v,
+                            None => return false,
+                        };
+                        let newvar = match self.set_replacement(&inv) {
+                            Some(x) => x,
+                            None => return false,
+                        };
+                        self.mgr.op_set_input(rop, newvar, i);
+                    }
+                }
+                true
+            }
+            OpCode::CPUI_FLOAT_INT2FLOAT => {
+                let vn = match op.read().unwrap().get_in(0).cloned() {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if !vn.read().unwrap().is_constant() && vn.read().unwrap().is_free() {
+                    return false;
+                }
+                let rop = self.mgr.new_op_replace(1, OpCode::CPUI_FLOAT_INT2FLOAT, PcodeOpRef(op.clone()));
+                self.mgr.op_set_output(rop, rvn);
+                let newvar = self.mgr.get_preexisting_varnode(vn);
+                self.mgr.op_set_input(rop, newvar, 0);
+                true
+            }
+            OpCode::CPUI_FLOAT_FLOAT2FLOAT => {
+                let vn = match op.read().unwrap().get_in(0).cloned() {
+                    Some(v) => v,
+                    None => return false,
+                };
+                let newvar;
+                let opc;
+                if vn.read().unwrap().is_constant() {
+                    opc = OpCode::CPUI_COPY;
+                    if vn.read().unwrap().get_size() as i32 == self.precision {
+                        newvar = self
+                            .mgr
+                            .new_constant(self.precision, 0, vn.read().unwrap().get_offset());
+                    } else {
+                        // Convert constant to precision size
+                        newvar = match self.set_replacement(&vn) {
+                            Some(x) => x,
+                            None => return false, // Unsupported float format
+                        };
+                    }
+                } else {
+                    if vn.read().unwrap().is_free() {
+                        return false;
+                    }
+                    opc = if vn.read().unwrap().get_size() as i32 == self.precision {
+                        OpCode::CPUI_COPY
+                    } else {
+                        OpCode::CPUI_FLOAT_FLOAT2FLOAT
+                    };
+                    newvar = self.mgr.get_preexisting_varnode(vn);
+                }
+                let rop = self.mgr.new_op_replace(1, opc, PcodeOpRef(op.clone()));
+                self.mgr.op_set_output(rop, rvn);
+                self.mgr.op_set_input(rop, newvar, 0);
+                true
+            }
+            _ => false, // Everything else we abort
+        }
+    }
+
+    // Ghidra: subflow.cc:3427 SubfloatFlow::processNextWork
+    /// Push the trace one hop from the placeholder at the top of the
+    /// worklist: backward through the defining op, then forward through all
+    /// readers. Faithful to `processNextWork` (subflow.cc:3427-3436).
+    fn process_next_work(&mut self) -> bool {
+        let rvn = *self.worklist.last().unwrap();
+        self.worklist.pop();
+        if !self.trace_backward(rvn) {
+            return false;
+        }
+        self.trace_forward(rvn)
+    }
+
+    // Ghidra: subflow.cc:3441 SubfloatFlow::SubfloatFlow
+    /// Construct a SubfloatFlow on the given root Varnode and precision.
+    /// Faithful to the constructor (subflow.cc:3441-3449): when the
+    /// precision has no registered float format the object is left inert
+    /// (no root placeholder, empty worklist) and `doTrace` will fail.
+    pub fn new(fd: &mut Funcdata, root: Arc<RwLock<Varnode>>, precision: i32) -> Self {
+        let mut mgr = TransformManager::new();
+        mgr.init(fd);
+        mgr.set_preserve_address_override(subfloat_preserve_address);
+        let mut sf = SubfloatFlow {
+            mgr,
+            precision,
+            terminator_count: 0,
+            format: subfloat_float_format(precision as usize),
+            worklist: Vec::new(),
+            max_precision_map: std::collections::HashMap::new(),
+        };
+        if sf.format.is_some() {
+            sf.set_replacement(&root);
+        }
+        sf
+    }
+
+    // Ghidra: subflow.cc:3462 SubfloatFlow::doTrace
+    /// Trace the logical value as far as possible, constructing the
+    /// transform. Faithful to `doTrace` (subflow.cc:3462-3481): drains the
+    /// worklist, clears varnode marks, and demands at least one terminator
+    /// regardless of trace consistency.
+    pub fn do_trace(&mut self) -> bool {
+        if self.format.is_none() {
+            return false;
+        }
+        self.terminator_count = 0; // Have seen no terminators
+        let mut retval = true;
+        while !self.worklist.is_empty() {
+            if !self.process_next_work() {
+                retval = false;
+                break;
+            }
+        }
+        self.mgr.clear_varnode_marks();
+        if !retval {
+            return false;
+        }
+        if self.terminator_count == 0 {
+            return false; // Must see at least 1 terminator
+        }
+        true
+    }
+
+    // Ghidra: transform.cc:756 TransformManager::apply
+    /// Apply the full transform to the function. Faithful to the inherited
+    /// `apply()` (transform.cc:756-765): `create_ops` -> `create_varnodes` ->
+    /// `remove_old` -> `transform_input_varnodes` -> `place_inputs`.
+    pub fn apply(&mut self, fd: &mut Funcdata) {
+        self.mgr.apply(fd);
+    }
+}
+
+// Ghidra: op.cc:93 PcodeOp::getRepeatSlot
+/// Given a Varnode that appears in multiple input slots of an op, find the
+/// specific slot corresponding to the descendant occurrence currently being
+/// visited. Faithful to the iterator overload
+/// `getRepeatSlot(const Varnode *vn,int4 firstSlot,list<PcodeOp *>::const_iterator iter)`
+/// (op.cc:93-111): `count` is 1 plus the occurrences of this op in the
+/// Varnode's descendant list strictly before the current position; count==1
+/// returns `firstSlot` (op.cc:101), otherwise the inrefs slot of the
+/// count-th occurrence is returned, -1 if absent. Inlined here (instead of
+/// `PcodeOp::get_repeat_slot`) because the op.rs count-parametered variant
+/// lacks the count==1 early return — registered as
+/// OPS-GETREPEATSLOT-COUNT1-0001 for the op.rs owner; this helper carries
+/// the full oracle semantics for the only in-tree call site.
+fn subfloat_get_repeat_slot(
+    op: &Arc<RwLock<PcodeOp>>,
+    vn: &Arc<RwLock<Varnode>>,
+    first_slot: usize,
+    descend_prefix: &[Arc<RwLock<PcodeOp>>],
+) -> i32 {
+    let count = 1 + descend_prefix.iter().filter(|d| Arc::ptr_eq(d, op)).count();
+    if count == 1 {
+        return first_slot as i32;
+    }
+    let inrefs = op.read().unwrap().inrefs.clone();
+    let mut recount = 1;
+    for i in (first_slot + 1)..inrefs.len() {
+        if Arc::ptr_eq(&inrefs[i], vn) {
+            recount += 1;
+            if recount == count {
+                return i as i32;
+            }
+        }
+    }
+    -1
+}
+
+// =====================================================================
 // RuleSubfloatConvert — FLOAT_FLOAT2FLOAT
 // (subflow.hh:409-418, subflow.cc:3483-3507)
 // =====================================================================
@@ -6258,31 +7275,6 @@ impl Rule for RuleSplitStore {
 /// backward, accumulating the maximum precision reaching each float op in a
 /// `maxPrecisionMap`, and only applies the transform when the trace is
 /// consistent and reaches at least one terminator.
-///
-/// Rugra port: the full `SubfloatFlow` trace + precision map is not yet ported
-/// (it requires the precision-aware `traceForward`/`traceBackward`/`exceedsPrecision`
-/// machinery plus a complete `TransformManager::apply`). This rule implements two
-/// **safe subsets**:
-///
-/// 1. **Constant folding** — what `SubfloatFlow::traceBackward` does for a
-///    `FLOAT_FLOAT2FLOAT` whose input is *constant* (subflow.cc:3389-3413):
-///    the constant is re-encoded at the smaller precision and the op folds to a
-///    constant `COPY` (`newConstant(precision, 0, vn->getOffset())`).
-///
-/// 2. **Non-constant precision tracking** — the pragmatic minimum of
-///    `SubfloatFlow`'s effect without the full transform. `applyOp`
-///    (subflow.cc:3489-3507) selects the root Varnode and precision
-///    (`outvn`+`insize` when widening, `invn`+`outsize` when narrowing), so the
-///    logical value's effective precision is `min(insize, outsize)`. Rather than
-///    rewriting Varnode sizes (which needs the trace to be proven consistent),
-///    we propagate the determined precision *through the type system*: the root
-///    Varnode is tagged with the float type of the effective precision
-///    (mirroring `setReplacement`'s `newPiece(vn, precision*8, 0)`,
-///    subflow.cc:3236). Downstream type propagation then carries the precision
-///    forward. This is safe: `update_type` honours existing type-locks and the
-///    `isAddrForce` guard from `setReplacement` (subflow.cc:3217-3218); when no
-///    float type of the precision is available (e.g. unsupported size or no
-///    `TypeFactory` wired up) the rule defers (NO_CHANGE).
 pub struct RuleSubfloatConvert;
 impl RuleSubfloatConvert {
     // Ghidra: subflow.hh:409 RuleSubfloatConvert::new
@@ -6293,99 +7285,34 @@ impl RuleSubfloatConvert {
 impl Rule for RuleSubfloatConvert {
     // Ghidra: subflow.cc:3489 RuleSubfloatConvert::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507).
-        // Constant inputs are folded (subflow.cc:3394-3403); non-constant inputs
-        // take the precision-tracking path below (see struct doc comment).
+        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507), verbatim
+        // structure: pick the wider side as the SubfloatFlow root and the
+        // narrower size as the precision, run the full trace, apply on
+        // success. There is no constant special case — constants flow
+        // through the same trace (traceBackward's FLOAT_FLOAT2FLOAT leg
+        // re-encodes them at the precision, subflow.cc:3394-3403).
         let (invn, outvn) = {
             let o = op_arc.read().unwrap();
             let invn = match o.get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
             let outvn = match o.output.clone() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
             (invn, outvn)
         };
-        let insize = invn.read().unwrap().get_size() as usize;
-        let outsize = outvn.read().unwrap().get_size() as usize;
-
-        // SubfloatFlow constant case (subflow.cc:3394-3403): a constant input is
-        // re-encoded at the destination precision. Ghidra keeps FLOAT2FLOAT only
-        // when re-encoding would change the value; otherwise it collapses to COPY.
-        if invn.read().unwrap().is_constant() {
-            // Only IEEE754 single/double are supported by Rugra's FloatFormat.
-            if (insize == 4 || insize == 8) && (outsize == 4 || outsize == 8) {
-                let inoffset = invn.read().unwrap().get_offset();
-                let infmt = crate::float_emulate::FloatFormat::new(insize);
-                let outfmt = crate::float_emulate::FloatFormat::new(outsize);
-                // Re-encode the constant value at the output precision.
-                let new_offset = infmt.op_float2_float(inoffset, &outfmt);
-                // Fold the FLOAT_FLOAT2FLOAT into a COPY of the re-encoded
-                // constant (faithful to SubfloatFlow's newConstant + COPY).
-                let op_ref = PcodeOpRef(op_arc.clone());
-                let newconst = fd.new_constant(outsize, new_offset);
-                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
-                fd.op_set_input(&op_ref, newconst, 0);
-                return Ok(action_status::CHANGE);
+        let insize = invn.read().unwrap().get_size() as i32;
+        let outsize = outvn.read().unwrap().get_size() as i32;
+        if outsize > insize {
+            let mut subflow = SubfloatFlow::new(fd, outvn, insize);
+            if !subflow.do_trace() {
+                return Ok(action_status::NO_CHANGE);
             }
-            // Unsupported float format — defer to the full SubfloatFlow trace.
-            return Ok(action_status::NO_CHANGE);
+            subflow.apply(fd);
+        } else {
+            let mut subflow = SubfloatFlow::new(fd, invn, outsize);
+            if !subflow.do_trace() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            subflow.apply(fd);
         }
-
-        // -----------------------------------------------------------------
-        // Non-constant input: precision-tracking path (pragmatic minimum).
-        //
-        // Ghidra's `RuleSubfloatConvert::applyOp` (subflow.cc:3489-3507) builds
-        // a `SubfloatFlow` rooted at `outvn` with `precision = insize` when the
-        // op widens (`outsize > insize`), or rooted at `invn` with
-        // `precision = outsize` when it narrows. In both cases the *effective*
-        // precision of the logical float value is `min(insize, outsize)`: the
-        // wider operand merely holds a value that genuinely fits in the smaller
-        // precision. `SubfloatFlow` rewrites the data-flow so the smaller
-        // precision becomes the explicit Varnode size.
-        //
-        // The full `SubfloatFlow` trace (`traceForward`/`traceBackward` +
-        // `maxPrecisionMap`, subflow.cc:3079-3419) plus a precision-aware
-        // `TransformManager::apply` are not yet ported. The pragmatic minimum
-        // below propagates the determined precision *through the type system*:
-        // the logical value has the smaller precision, so the root Varnode is
-        // tagged with the float type of the smaller size. This mirrors
-        // `SubfloatFlow::setReplacement`'s effect of making "the smaller
-        // precision the explicit size" by encoding it in the Varnode's type,
-        // which downstream type propagation then carries forward. It only acts
-        // when a float type of the effective precision exists (Rugra supports
-        // IEEE754 single/double, i.e. sizes 4/8) and is otherwise a safe
-        // no-op (no rewrites, no type-lock violations).
-        //
-        // For the narrowing case (`outsize < insize`) Ghidra roots at `invn`;
-        // for the widening case (`outsize > insize`) it roots at `outvn`. We
-        // tag whichever is the *root* — that is where the sub-precision value
-        // lives — using the smaller size as the precision.
-        if !(insize == 4 || insize == 8) || !(outsize == 4 || outsize == 8) {
-            // Only IEEE754 single/double are supported; otherwise defer.
-            return Ok(action_status::NO_CHANGE);
-        }
-        let eff_prec = if insize < outsize { insize } else { outsize };
-        // If the conversion is a no-op size-wise there is no precision to track.
-        if eff_prec == insize && insize == outsize {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: the oracle's
-        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507) runs a full
-        // SubfloatFlow trace and REWRITES the data-flow at the smaller
-        // precision (root = the wider side of the conversion: `outvn` when
-        // widening, `invn` when narrowing; `setReplacement`'s newPiece +
-        // TransformManager::apply, subflow.cc:3194-3237) — it never retypes
-        // the original wider Varnode. Rugra's transform layer is not ported,
-        // and the previous shortcut (stamping the smaller-precision float
-        // type onto the wider root) mis-sized the Varnode's Datatype and
-        // oscillated forever against ActionInferTypes::writeBack (which
-        // re-derives the size-correct interned type every round), driving
-        // localcount to the "Type propagation algorithm not settling" cap
-        // (coreaction.cc:5390-5392) on float-heavy functions (myprogress).
-        // With the equal-size case already deferred above, defer everything
-        // to the SubfloatFlow port and make no change here.
-        let _ = fd
-            .get_arch()
-            .and_then(|a| a.get_base_type(eff_prec, crate::type_system::TypeMetatype::Float));
-        Ok(action_status::NO_CHANGE)
+        Ok(action_status::CHANGE)
     }
     // Ghidra: subflow.hh:409 RuleSubfloatConvert::getName
     fn get_name(&self) -> &str {
@@ -7184,8 +8111,10 @@ mod tests {
 
     #[test]
     fn test_rule_subfloat_convert_nonconst_defers() {
-        // Non-constant input: full SubfloatFlow trace not ported -> NO_CHANGE.
-        // Mirrors the guard at the end of RuleSubfloatConvert::apply_op.
+        // Non-constant free input (no defining op, no input flag): narrowing
+        // roots at it (subflow.cc:3501-3504) and setReplacement aborts on
+        // free varnodes (subflow.cc:3214-3215) — the worklist stays empty
+        // and doTrace fails. NO_CHANGE.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let invn = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
         let outvn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
@@ -7198,41 +8127,87 @@ mod tests {
 
     #[test]
     fn test_rule_subfloat_convert_constant_fold() {
-        // Constant input: the FLOAT_FLOAT2FLOAT is folded to a COPY of the
-        // re-encoded constant (subflow.cc:3394-3403 constant branch). We use the
-        // IEEE754 encoding of 1.0 in single precision (0x3F800000) and re-encode
-        // it to double, which must round-trip exactly to 1.0 (0x3FF0000000000000).
+        // Constant input, widening (4->8): applyOp roots at the *output*
+        // (subflow.cc:3496-3499), so the constant flows through the full
+        // SubfloatFlow trace. traceBackward's FLOAT_FLOAT2FLOAT leg
+        // (subflow.cc:3394-3397) keeps the constant offset as-is when the
+        // input size equals the precision and builds a COPY replacement; a
+        // downstream FLOAT_FLOAT2FLOAT (out8 -> mid4) is the required
+        // terminator (subflow.cc:3285-3293). Without the terminator the
+        // rule makes no change (doTrace's terminatorCount==0, cc:3479).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // 1.0f as a 4-byte constant = 0x3F800000
         let invn = fd.vbank.create_constant(4, 0x3F800000);
         let outvn = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
-        let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn));
+        let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn.clone()));
+        // Terminator: mid4 = FLOAT2FLOAT(out8) — output size 4 == precision.
+        let mid4 = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
+        let term_op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![outvn], Some(mid4.clone()));
         let rule = RuleSubfloatConvert::new();
         let res = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(res, action_status::CHANGE);
-        // Op must now be a COPY.
-        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
-        // The COPY input is a constant holding 1.0 in double precision.
-        let new_in = op.read().unwrap().get_in(0).cloned().unwrap();
-        assert!(new_in.read().unwrap().is_constant());
-        assert_eq!(new_in.read().unwrap().get_offset(), 0x3FF0_0000_0000_0000);
+        // The original FLOAT2FLOAT was replaced (op_replacement) and destroyed.
+        assert!(op.read().unwrap().is_dead());
+        // The terminator FLOAT2FLOAT became a preexisting COPY whose input is
+        // the new 4-byte piece temp of the old 8-byte output.
+        assert_eq!(term_op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let term_in = term_op.read().unwrap().get_in(0).cloned().unwrap();
+        assert_eq!(term_in.read().unwrap().get_size(), 4);
+        assert!(!Arc::ptr_eq(&term_in, &mid4));
+        // The replacement COPY reads the 4-byte constant (kept verbatim:
+        // input size == precision, subflow.cc:3396-3397) and writes a
+        // 4-byte temp.
+        let rep_copy = fd
+            .obank
+            .optree
+            .iter()
+            .find(|o| {
+                let r = o.0.read().unwrap();
+                r.opcode == OpCode::CPUI_COPY
+                    && r.get_in(0)
+                        .map(|v| {
+                            let vr = v.read().unwrap();
+                            vr.is_constant() && vr.get_size() == 4 && vr.get_offset() == 0x3F800000
+                        })
+                        .unwrap_or(false)
+            })
+            .cloned();
+        let rep_copy = rep_copy.expect("replacement COPY of the re-encoded constant exists");
+        let rep_out = rep_copy.0.read().unwrap().output.clone().unwrap();
+        assert_eq!(rep_out.read().unwrap().get_size(), 4);
     }
 
     #[test]
     fn test_rule_subfloat_convert_constant_downcast() {
-        // Constant input, double -> single downcast. 1.0 (0x3FF0000000000000)
-        // re-encoded to single = 0x3F800000.
+        // Constant input, narrowing (8->4): applyOp roots at the *input*
+        // (subflow.cc:3501-3504). A constant root never enters the worklist
+        // (setReplacement returns a constant placeholder without marking or
+        // pushing, subflow.cc:3206-3212), so the trace is empty, no
+        // terminator is ever seen and doTrace fails (cc:3479) — the rule
+        // makes no change. Ghidra never folds a constant narrowing through
+        // RuleSubfloatConvert.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let invn = fd.vbank.create_constant(8, 0x3FF0_0000_0000_0000);
         let outvn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
         let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn));
         let rule = RuleSubfloatConvert::new();
         let res = rule.apply_op(&op, &mut fd).unwrap();
-        assert_eq!(res, action_status::CHANGE);
-        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
-        let new_in = op.read().unwrap().get_in(0).cloned().unwrap();
-        assert!(new_in.read().unwrap().is_constant());
-        assert_eq!(new_in.read().unwrap().get_offset(), 0x3F80_0000);
+        assert_eq!(res, action_status::NO_CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
+    }
+
+    /// Constant widening *without* a downstream terminator: doTrace demands
+    /// at least one terminator (subflow.cc:3479), so even the constant fold
+    /// leg must not fire when the widened output has no float reader.
+    #[test]
+    fn test_rule_subfloat_convert_constant_no_terminator_nochange() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let invn = fd.vbank.create_constant(4, 0x3F800000);
+        let outvn = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
     }
 
     #[test]
@@ -7445,69 +8420,108 @@ mod tests {
     /// tests above (subflow.cc:3394-3403 constant branch). The tests below
     /// exercise the **non-const precision-tracking path** added here.
 
-    /// Non-const widening (4->8): the root is the *output*, and we tag it with
-    /// the single-precision float type (eff_prec = insize = 4). This is the
-    /// non-const precision-tracking path (subflow.cc:3496-3499: root=outvn,
-    /// precision=insize). Returns CHANGE and sets the type.
+    /// Non-const widening (4->8) with a downstream terminator: the oracle
+    /// REWRITES the data-flow at precision 4 (subflow.cc:3496-3499: root =
+    /// the 8-byte output, precision = insize). The widened FLOAT2FLOAT is
+    /// replaced by a COPY of the (preexisting) 4-byte input into a 4-byte
+    /// piece temp of the old output, and the downstream FLOAT2FLOAT becomes
+    /// a preexisting COPY terminator. Full mutation check: original op
+    /// destroyed, new op wired, terminator retargeted, no retype of the
+    /// original wider Varnode.
     #[test]
-    fn test_rule_subfloat_convert_nonconst_widening_tags_output() {
-        let mut fd = fd_with_types();
+    fn test_rule_subfloat_convert_nonconst_widening_rewrites() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // Non-constant 4-byte input produced by a COPY (so it is "written").
         let src = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
         let inv = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
         let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
-        // 8-byte output.
+        // 8-byte output, read by a second FLOAT_FLOAT2FLOAT (terminator).
         let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
-        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out.clone()));
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv.clone()], Some(out.clone()));
+        let mid4 = fd.vbank.create_with_space(4, AddressSpace::Register, 0x40);
+        let term_op = make_op(2, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![out], Some(mid4));
         let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
-        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: the oracle rewrites the
-        // data-flow (newPiece at the smaller precision) instead of retyping
-        // the wider root, and a smaller float type on the 8-byte root would
-        // oscillate against ActionInferTypes::writeBack (the myprogress
-        // "not settling" root cause) — defer with no type change.
-        assert_eq!(res, action_status::NO_CHANGE);
-        let stamped_smaller = out
-            .read()
-            .unwrap()
-            .get_type()
-            .map(|t| t.get_size() == 4 && t.get_metatype() == TypeMetatype::Float)
-            .unwrap_or(false);
-        assert!(
-            !stamped_smaller,
-            "wider root must not carry the smaller-precision float until the SubfloatFlow transform port"
-        );
+        assert_eq!(res, action_status::CHANGE);
+        // Original widening FLOAT2FLOAT destroyed (op_replacement leg).
+        assert!(op.read().unwrap().is_dead());
+        // Terminator FLOAT2FLOAT is now a preexisting COPY reading the 4-byte
+        // piece temp (subflow.cc:3289: outsize==precision -> CPUI_COPY).
+        assert_eq!(term_op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let term_in = term_op.read().unwrap().get_in(0).cloned().unwrap();
+        assert_eq!(term_in.read().unwrap().get_size(), 4);
+        // The replacement COPY reuses the preexisting 4-byte input verbatim
+        // (subflow.cc:3405-3407: getPreexistingVarnode) and writes a 4-byte
+        // temp — the wider root is never retyped, it is *replaced*.
+        let rep_copy = fd
+            .obank
+            .optree
+            .iter()
+            .find(|o| {
+                let r = o.0.read().unwrap();
+                r.opcode == OpCode::CPUI_COPY && r.get_in(0).map(|v| Arc::ptr_eq(v, &inv)).unwrap_or(false)
+            })
+            .cloned()
+            .expect("replacement COPY of the preexisting 4-byte input exists");
+        let rep_out = rep_copy.0.read().unwrap().output.clone().unwrap();
+        assert_eq!(rep_out.read().unwrap().get_size(), 4);
+        assert!(!Arc::ptr_eq(&rep_out, &inv));
     }
 
-    /// Non-const narrowing (8->4): Ghidra roots at the input and rewrites at
-    /// precision=outsize (subflow.cc:3501-3504); Rugra defers (no retype).
+    /// Non-const narrowing (8->4) with an INT2FLOAT source and a
+    /// FLOAT2FLOAT terminator: roots at the 8-byte input with precision =
+    /// outsize (subflow.cc:3501-3504). The INT2FLOAT source op is replaced
+    /// by a new INT2FLOAT writing a 4-byte piece temp, and the narrowing
+    /// FLOAT2FLOAT itself becomes a preexisting COPY of that temp.
     #[test]
-    fn test_rule_subfloat_convert_nonconst_narrowing_tags_input() {
-        let mut fd = fd_with_types();
-        // Non-constant 8-byte input.
-        let src = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
-        let inv = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
-        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
-        // 4-byte output.
-        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
-        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv.clone()], Some(out));
+    fn test_rule_subfloat_convert_nonconst_narrowing_rewrites() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // i8 --INT2FLOAT--> inv8 --F2F--> out4 --TRUNC--> t8
+        // i8 is a function input: traceBackward's INT2FLOAT leg only rejects
+        // free non-constant inputs (subflow.cc:3381-3382).
+        let i8 = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
+        i8.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let int2f_out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let int2f = make_op(0, OpCode::CPUI_FLOAT_INT2FLOAT, vec![i8.clone()], Some(int2f_out.clone()));
+        let out4 = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
+        let op =
+            make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![int2f_out.clone()], Some(out4.clone()));
+        let t8 = fd.vbank.create_with_space(8, AddressSpace::Register, 0x40);
+        let trunc = make_op(2, OpCode::CPUI_FLOAT_TRUNC, vec![out4.clone()], Some(t8));
         let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
-        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: same defer as the widening leg.
-        assert_eq!(res, action_status::NO_CHANGE);
-        let stamped_smaller = inv
-            .read()
-            .unwrap()
-            .get_type()
-            .map(|t| t.get_size() == 4 && t.get_metatype() == TypeMetatype::Float)
-            .unwrap_or(false);
-        assert!(
-            !stamped_smaller,
-            "wider root must not carry the smaller-precision float until the SubfloatFlow transform port"
-        );
+        assert_eq!(res, action_status::CHANGE);
+        // The narrowing FLOAT2FLOAT itself became a preexisting COPY reading
+        // the 4-byte piece temp (it is the traceForward terminator).
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let op_in = op.read().unwrap().get_in(0).cloned().unwrap();
+        assert_eq!(op_in.read().unwrap().get_size(), 4);
+        assert!(!Arc::ptr_eq(&op_in, &int2f_out));
+        // The INT2FLOAT source op was replaced (destroyed) by a new
+        // INT2FLOAT writing the 4-byte temp (subflow.cc:3378-3388).
+        assert!(int2f.read().unwrap().is_dead());
+        let rep_i2f = fd
+            .obank
+            .optree
+            .iter()
+            .find(|o| {
+                let r = o.0.read().unwrap();
+                r.opcode == OpCode::CPUI_FLOAT_INT2FLOAT
+                    && r.get_in(0).map(|v| Arc::ptr_eq(v, &i8)).unwrap_or(false)
+            })
+            .cloned()
+            .expect("replacement INT2FLOAT of the integer input exists");
+        let rep_out = rep_i2f.0.read().unwrap().output.clone().unwrap();
+        assert_eq!(rep_out.read().unwrap().get_size(), 4);
+        assert!(Arc::ptr_eq(&rep_out, &op_in));
+        // The TRUNC below the conversion is untouched (outside the trace).
+        assert_eq!(trunc.read().unwrap().opcode, OpCode::CPUI_FLOAT_TRUNC);
+        let trunc_in = trunc.read().unwrap().get_in(0).cloned().unwrap();
+        assert!(Arc::ptr_eq(&trunc_in, &out4));
     }
 
-    /// Non-const but no Architecture/TypeFactory wired up -> the float type
-    /// cannot be resolved, so the rule safely defers (NO_CHANGE) rather than
-    /// guessing.
+    /// Non-const with no downstream float reader: the widened output has no
+    /// descendant, so the trace never sees a terminator and doTrace fails
+    /// (subflow.cc:3479). Architecture wiring is irrelevant to the trace
+    /// (the float formats are static), which this test also pins.
     #[test]
     fn test_rule_subfloat_convert_nonconst_no_types_defers() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10); // no arch
@@ -7520,9 +8534,10 @@ mod tests {
         assert_eq!(res, action_status::NO_CHANGE);
     }
 
-    /// Non-const with a type-lock already set on the root: update_type honours
-    /// the lock and returns false -> NO_CHANGE (faithful to
-    /// setReplacement's typelock guard, subflow.cc:3220-3224).
+    /// Non-const with a type-lock already set on the root: setReplacement
+    /// rejects a locked non-PARTIALSTRUCT type whose size differs from the
+    /// precision (subflow.cc:3220-3224) — the worklist stays empty and
+    /// doTrace fails. NO_CHANGE.
     #[test]
     fn test_rule_subfloat_convert_nonconst_typelock_defers() {
         let mut fd = fd_with_types();
@@ -7530,7 +8545,7 @@ mod tests {
         let inv = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
         let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
         let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
-        // Lock the output (root for widening) to a double so update_type bails.
+        // Lock the output (root for widening) to a double (size 8 != 4).
         let dbl = fd
             .get_arch()
             .unwrap()
@@ -7542,8 +8557,9 @@ mod tests {
         assert_eq!(res, action_status::NO_CHANGE);
     }
 
-    /// Non-supported float sizes (e.g. a hypothetical 2-byte float) -> the
-    /// rule defers (only IEEE754 single/double are supported).
+    /// Non-supported float sizes (e.g. a hypothetical 2-byte float):
+    /// getFloatFormat returns NULL for the precision, the SubfloatFlow is
+    /// left inert (subflow.cc:3446-3447) and doTrace fails immediately.
     #[test]
     fn test_rule_subfloat_convert_unsupported_size_defers() {
         let mut fd = fd_with_types();

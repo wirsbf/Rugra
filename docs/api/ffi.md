@@ -69,6 +69,13 @@ Get the version of Rugra as a C string
 Set the current program for comparison
 This is called by Rugra before starting the comparison with Ghidra
 
+**2026-09-24**：`CURRENT_PROGRAM` 四个访问点（`set_current_program` /
+`rugra_init_test_program` / `rugra_add_test_op` / `rugra_compare_pcode`）的
+`.lock().unwrap()` 改为 `unwrap_or_else(|p| p.into_inner())`（中毒恢复）。
+互斥语义不变；修复 TESTLIB-STATE-CONTAMINATION-0001 的次级污染向量——某测试
+在持锁临界区内 panic 时毒化单例，后续所有 `set_current_program` 调用者级联
+`PoisonError`。调用者总是在读取前整槽覆写，恢复边界不会泄漏对拍状态。
+
 ### `pub extern "C" fn rugra_init_test_program()`
 
 Initialize a blank program for FFI testing

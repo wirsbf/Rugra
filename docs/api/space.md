@@ -3,6 +3,19 @@
 **状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/space.rs`
 
+## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — Register addr_size 8→4
+
+`AddressSpace::addr_size()` 的 Register 臂由 8 改为 4。依据：oracle
+`Heritage::normalizeReadSize/normalizeWriteSize`（heritage.cc:393/445/466）以
+`newConstant(addr.getAddrSize(), ...)` 构造 SUBPIECE 偏移常量，寄存器空间范围
+（`in(0)=n:register:8:8`）的 oracle 投影输出为 `c:0:4`/`c:4:4` —— next_url 全语料
+2668/2668 SUBPIECE 尾常量均为宽 4，证明 x86-64 oracle 的 register space
+addressSize=4。原注释"ram/register/stack 按 x86-64 production 8/8/8 建模"对
+register 是错误假设。`addr_size()` 全部 17 个消费方（heritage/funcdata/
+coreaction/fspec/ruleaction/translate/constseq/pcodeparse/printc）随之取 4，
+与 oracle `getAddrSize()` 语义一致；ADDRESS-0001（enum→registry per-spec
+size）仍为后续正式载体。
+
 ## 2026-08-28：dead-code/heritage space flags
 
 `does_deadcode` 现在按锁定构造器 flags 仅对 Const、Iop/FSPEC 投影和专用 OTHER
@@ -281,13 +294,23 @@ Decode from string format "id:base_space_id:name"
  
 
 ### 2026-07-05: AddressSpace delay/deadcodedelay/is_heritaged
-- `get_delay`(space.hh): 锁定 x86-64 oracle 值（2026-08-25 MAINDIFF-UNIQLEAK-0001
-  修正）：ram=1、stack=2（architecture.cc:566 `addSpacebase` 合成为 ram delay+1）、
-  unique/register=0（x86-64.sla space 表）。此前 Rugra 硬编码 Ram=0/Stack=1，
-  导致 ram 提前一个 pass 被 heritage（pass 0 起允许 dead removal →
-  "Heritage AFTER dead removal" bump/restart）、stack 比 oracle 的首个
-  stack pass（pass 2）早一个 pass。
-- `get_deadcode_delay`: = get_delay。
+- `get_delay`(space.hh): 锁定 x86-64 oracle 值（2026-09-22 RCA-2 修正）：ram=1、
+  stack=**1**（architecture.cc:565 `addSpacebase` 合成为 `ptrdata.space->getDelay()+1`，
+  ptrdata=栈指针寄存器（register 空间，delay 0，architecture.cc:1004
+  `translate->getRegister`），**不是** basespace(ram)+1；SpacebaseSpace 将该 dl 同时
+  作 delay/deadcodedelay 转发 AddrSpace，translate.cc:57-59）、unique/register=0
+  （x86-64.sla space 表）。oracle HeritageInfo 实测 `stack delay=1`。
+  - 历史 1（MAINDIFF-UNIQLEAK-0001，2026-08-25）：此前 Rugra 硬编码 Ram=0/Stack=1，
+    ram 提前一个 pass 被 heritage 是真缺陷（已修正 ram=1）；但当时依据“oracle 首个
+    stack pass 在 pass 2”把 Stack 拔到 2 是误读——该 pass 号按 mainloop 轮计数，
+    恰对应 heritage delay=1。
+  - 历史 2（RCA-2，2026-09-22）：Stack=2 使 stack 首次 heritage/占位符解析推迟一遍
+    （freePlaceholderSlot→maxpass 翻转与 ActionActiveParam build 各晚 1 遍，oracle
+    build@pass2 vs rugra build@pass3），并经 ParamList::calcDelay 抬高
+    getMaxInputDelay（2 vs 1，initActiveInput 侧 maxdelay_in）。单行回改 1 即把
+    maxdelay_in 与翻转相位同时拉回 oracle（充分性实验见
+    /dev/shm/rugra-tests/sb-integration/RCA2_MAXPASS.md §4.3/§5）。
+- `get_deadcode_delay`: = get_delay（SpacebaseSpace 构造 `dl, dl` 同源）。
 - `is_heritaged`: Const/Iop/Join 不 heritaged。
  
  

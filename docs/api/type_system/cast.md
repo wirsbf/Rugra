@@ -78,7 +78,7 @@ the integer cases: size 1→char/byte, 2→short, 4→int, 8→long (signed) /
 ulong (unsigned). Used by input-type-local to derive the type an op
 expects for its input slot (`TypeOpBinary::getInputLocal`, typeop.cc:329-333).
 
-### `pub fn cast_standard_full(&self, reqtype: &Datatype, curtype: &Datatype, care_uint_int: bool, care_ptr_uint: bool) -> Option<Arc<Datatype>>`
+### `pub fn cast_standard_full(&self, reqtype: &Arc<Datatype>, curtype: &Arc<Datatype>, care_uint_int: bool, care_ptr_uint: bool) -> Option<Arc<Datatype>>`
 
 Faithful 1:1 port of Ghidra `CastStrategyC::castStandard` (cast.cc:300-392).
 Determines whether an explicit cast is required when a varnode of
@@ -86,6 +86,15 @@ Determines whether an explicit cast is required when a varnode of
 
 - Returns `Some(reqtype)` if a cast IS needed (caller inserts CPUI_CAST),
   or `None` if no cast is needed.
+
+2026-09-23 identity 语义修正（MATCHURL-SETCASTS-337-0001）：签名改为
+`&Arc<Datatype>`，返回值 `Arc::clone(reqtype)` 保留调用方传入的 interned
+对象身份（Ghidra 返回同一 interned `Datatype*`，cast.cc:303/307/392）；
+开头的 `curtype == reqtype` 与剥层后的 `curbase == reqbase`
+（cast.cc:302/329）用 `Arc::ptr_eq` 镜像。旧实现把两侧参数包进
+`Arc::new(reqtype.clone())` 新对象，恒不等，下游依赖 interned 身份的
+比较（如 castOutput 的 token==outHigh 短路，coreaction.cc:2544）永远
+失效。
 - `care_uint_int` — if true, distinguish signed/unsigned (under pointers);
   if false, treat int/uint interchangeably (most arithmetic ops).
 - `care_ptr_uint` — if true, casting a pointer to an integer needs a cast
@@ -97,5 +106,53 @@ metatype-specific same-size rules (cast.cc:339-389). Rugra's Datatype
 lacks typedef chains, variable-length arrays, and per-pointer AddrSpace;
 those branches are faithful no-ops.
 
+2026-09-23 partial 免 cast 五臂补齐（CAST-PARTIAL-REQ-NOCAST-0001）：
+oracle `CastStrategyC::castStandard` 对 TYPE_PARTIALSTRUCT/
+TYPE_PARTIALUNION 有五处免 cast 点，Rugra 此前一处都没有（SB-FINALCAST
+的移植范围未覆盖 partial 臂）：
+
+1. **req 侧免 cast**（cast.cc:341-343）：partial 作为 cast 请求类型直接
+   `return 0`——"As they are ultimately stripped, treat partials as
+   undefined"。可观测影响：STORE 值槽 `pointedToType` 为 partial 片时
+   （TypeOpStore::getInputCast slot2，typeop.cc:554
+   `castStandard(pointedToType,valueType,false,true)`）不再插
+   `(undefined8)` 前缀——main 的 `glob._296_8_ = (undefined8)uVar32`
+   → 裸（golden 792 `uVar29`）、
+   `glob.pattern[8].content.Set.elements/_8_8_` 两行同消。
+2. **curmeta 侧四点**：uint !care 臂（cast.cc:348-349）、int !care 臂
+   （cast.cc:366-367）的宽容名单补 `PartialStruct|PartialUnion`；
+   uint/int care 臂的 `isptr &&` 子臂（cast.cc:356-357/374-375，"Don't
+   cast pointers to unknown"）从仅 `Unknown` 扩为
+   `Unknown|PartialStruct|PartialUnion`。
+
+注意 `CastStrategyJava::castStandard`（cast.cc:471 起）有同形 partial
+臂，但 Rugra 只移植 C 策略（CastStrategyC），Java 侧不在写域。新增
+`test_cast_standard_full_partial_no_cast` 锁五臂（req/!care×2/isptr×2/
+size 门控制组/非指针 care 控制组）。
+
+2026-09-23 enum 元类型规范化（SETCASTS-COPYINPUT-0001）：req/cur 两侧
+metatype 先经 `ghidra_meta` 规范化——`Enum→Int`、`PartialEnum→Uint`。
+Oracle 依据：Ghidra `TypeEnum` 的全部构造路径都把 metatype 强制存为
+TYPE_INT/TYPE_UINT（内联构造器 type.hh:491-494
+`metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT`，decode 路径
+type.cc:1475 同转），枚举性由 ENUMTYPE flag 携带；cast.cc:347/363 的
+"meta can be TYPE_INT/UINT ... if typedef/enumerated" 注释即此呈现。
+因此 cast.cc:339-389 的 switch 永远看不到独立的枚举 metatype，其
+TYPE_INT/TYPE_UINT 宽容臂（`!care_uint_int` 下 UNKNOWN/INT/UINT/BOOL
+免 cast）对枚举同样生效。Rugra 的独立 `Enum` metatype（有符号默认，
+cf. `get_submeta` 的 IntEnum 映射）若不规范化会落进 default 臂恒判
+"需 cast"——修复前 main 的 9 条 `glob.pattern[i].type =
+(URLPatternType)…` 过cast 与 `(int)::config.httpreq & …` 前缀均源于
+此（golden 两处均无 cast）。
+
 
 <!-- annotation-pass: 2026-07-04 -->
+
+## 2026-09-22：int_promotion_type 可见性 pub（SB-ORD332-SETCASTS-0001）
+
+`CastStrategyC::int_promotion_type`（cast.cc:178）可见性 private → pub：
+coreaction.rs 的 ActionSetCasts::cast_input 新移植的 getInputCast 覆写臂
+（TypeOpIntRight/Sright slot0 的 UNSIGNED/SIGNED_EXTENSION 门、TypeOpIntZext/
+Sext 的 checkIntPromotionForExtension、TypeOpIntDiv/Sdiv/Rem/Srem 的同族门）
+直接消费该扩展码，与 CastStrategyC 自家 checkIntPromotionForCompare_op 同一
+访问层级。语义零改动（纯可见性）。

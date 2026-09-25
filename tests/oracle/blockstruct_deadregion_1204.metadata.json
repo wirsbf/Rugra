@@ -1,65 +1,42 @@
 {
- "schema": 1,
- "fixture_id": "BLOCKSTRUCT-DEADREGION-1204",
- "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
- "task_id": "BLOCKSTRUCT-NORETURN-DEADREGION-0001",
- "oracle": {
-  "project": "Ghidra 12.0.4",
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc,blockaction.hh,block.cc,block.hh,flow.cc}",
-  "signature": "void CollapseStructure::collapseAll(void); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs)"
- },
- "rugra_base_commit": "5cf34c1f5cea0e361b61c6554374b69eb0953278",
- "architecture": "synthetic FlowBlock graphs (production BlockGraph newBlock/addEdge on both sides)",
- "comparand_sha256": {
-  "cpp_fixture_sha256": "c2f8f38f21c8fb04c62e621fd909ec07e31518975538c5979efeac8ec2547efc",
-  "rust_fixture_sha256": "ebad29436404bdb8fd70a1b3b6d1c0d1cd0c44f4a81eb68b1052e9317f218304",
-  "runner_sha256": "ef6df87bd7d6487a8ff321046562d31925b65dce1dbd0046b8328d2981548e02",
-  "rugra_blockaction_sha256": "408d39d2dbd55e58aacf5367e306e5783a43acbbfb2bd67088b3f6b6a2231101",
-  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615"
- },
- "covered_projection_status": "MISMATCH",
- "coverage": {
-  "noret_halt_loop_body": {
-   "status": "MISMATCH",
-   "covers": "termination of collapseAll on the 19-vertex glob_word topology with halt sinks (the previous port never converged); the reachable remainder structures into 2 top-level components vs the oracle's 1 (missing DoWhile wrap of the back-edge chain)",
-   "residual_todo_ids": [
-    "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001",
-    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
-   ]
-  },
-  "canary_if_halt": {
-   "status": "MISMATCH",
-   "covers": "the __stack_chk_fail shape: both sides form properif{halt-arm, ok-arm} inside one top-level list; consumed-edge retention and the cond flip flag differ (known model divergence)",
-   "residual_todo_ids": [
-    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
-   ]
-  },
-  "partial_reachable_after_halt": {
-   "status": "MISMATCH",
-   "covers": "mid-function halt whose trailing region stays reachable through a second entry: both sides form properif + list; consumed-edge retention differs (known model divergence)",
-   "residual_todo_ids": [
-    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
-   ]
-  }
- },
- "residual_diffs": [
-  {
-   "todo_id": "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001",
-   "note": "case noret_halt_loop_body: oracle collapses to 1 top-level component (list > properif > dowhile chain); Rugra produces 2 components — the back-edge chain never forms the DoWhile (ruleBlockDoWhile needs the cat chain to feed back onto itself; the selectGoto edge-selection order still diverges from TraceDAG's)"
-  },
-  {
-   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
-   "note": "consumed vertices keep their out edges (labelled) in Rugra's install-in-place model while the oracle's identifyInternal removes them from the top-level list; cond flip flag on the canary/partial arms"
-  }
- ],
- "unit_tests": "cargo test --lib: 23 failures vs master's 2 — the shape change (halt-tail cat chains, IfNoExit on structured clauses, BlockGoto sink) breaks shallow-traversal expectations in funcdata tests (BlockCondition depth, CONTINUE tagging via DoWhile, type inference); registered as BLOCKSTRUCT-DEADREGION-TESTEXPECT-0001 for root adjudication",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
- "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
  "analysis_options": {
   "entrypoint": "CollapseStructure::collapseAll driven on synthetic FlowBlock graphs built through production BlockGraph newBlock/addEdge on both sides (oracle.signature: void CollapseStructure::collapseAll(void); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs)); no AddrSpace, no Funcdata, no PcodeOps"
  },
+ "architecture": "synthetic FlowBlock graphs (production BlockGraph newBlock/addEdge on both sides)",
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "c2f8f38f21c8fb04c62e621fd909ec07e31518975538c5979efeac8ec2547efc",
+  "rugra_blockaction_sha256": "9bd3fd519ad3b2e48328683ae392e176140eb97a16e9df9c6a29bfef8d9a522c",
+  "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
+  "runner_sha256": "b30115d6442afa10c8a10da4f01756bfe2c7b94877f768004f951a25b87b4f38",
+  "rust_fixture_sha256": "ebad29436404bdb8fd70a1b3b6d1c0d1cd0c44f4a81eb68b1052e9317f218304"
+ },
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "coverage": {
+  "canary_if_halt": {
+   "covers": "the __stack_chk_fail shape: oracle forms properif{halt-arm, ok-arm} inside one top-level list; Rugra now forms c0(dowhile){basic flip=1 out=2}+2 sibling basics — consumed vertices keep listed=1 out edges (known model divergence, re-observed 2026-09-26; earlier both sides formed properif+list)",
+   "residual_todo_ids": [
+    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+   ],
+   "status": "MISMATCH"
+  },
+  "noret_halt_loop_body": {
+   "covers": "termination of collapseAll on the 19-vertex glob_word topology with halt sinks (the previous port never converged); the reachable remainder now forms one flat list of c0(dowhile)+18 sibling basics vs the oracle's single deeply nested list>properif>dowhile chain (re-observed 2026-09-26 after the blockaction 9bd3fd51/tracedag 366fe3f2 re-pin; earlier observations were 2 top-level components before the DoWhile head formed)",
+   "residual_todo_ids": [
+    "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001",
+    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+   ],
+   "status": "MISMATCH"
+  },
+  "partial_reachable_after_halt": {
+   "covers": "mid-function halt whose trailing region stays reachable through a second entry: oracle forms properif+list nesting; Rugra now forms c0(dowhile)+4 sibling basics with consumed-edge retention (known model divergence, re-observed 2026-09-26; earlier both sides formed properif+list)",
+   "residual_todo_ids": [
+    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+   ],
+   "status": "MISMATCH"
+  }
+ },
+ "covered_projection_status": "MISMATCH",
+ "fixture_id": "BLOCKSTRUCT-DEADREGION-1204",
  "input_manifest": {
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
   "cases": [
@@ -68,5 +45,28 @@
    "partial_reachable_after_halt: mid-function halt with a second reachable entry"
   ],
   "sha256": "fac251100fa3e91804ebe3743e28b07d3bbe072f0461c33afe27c349c25e6646"
- }
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "project": "Ghidra 12.0.4",
+  "signature": "void CollapseStructure::collapseAll(void); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs)",
+  "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc,blockaction.hh,block.cc,block.hh,flow.cc}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "residual_diffs": [
+  {
+   "note": "case noret_halt_loop_body: oracle collapses to 1 deeply nested top-level component (list > properif > dowhile chain); Rugra terminates but leaves one flat list of c0(dowhile)+18 sibling basic components (the DoWhile head forms, the cat-chain absorption into nested components does not; selectGoto edge-selection order still diverges from TraceDAG's) — re-observed 2026-09-26 at blockaction 9bd3fd51/tracedag 366fe3f2, runner diff 149 lines (was 185 on 2026-09-22, 110 pre-tracedag-repin)",
+   "todo_id": "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001"
+  },
+  {
+   "note": "consumed vertices keep their out edges (labelled) in Rugra's install-in-place model while the oracle's identifyInternal removes them from the top-level list; all three cases now show the Rugra c0(dowhile)-head + flat-siblings shape (canary/partial evolved from properif+list to the dowhile head by the 2026-09-26 re-observation)",
+   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+  }
+ ],
+ "rugra_base_commit": "5cf34c1f5cea0e361b61c6554374b69eb0953278",
+ "schema": 1,
+ "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
+ "task_id": "BLOCKSTRUCT-NORETURN-DEADREGION-0001",
+ "unit_tests": "cargo test --lib: 23 failures vs master's 2 — the shape change (halt-tail cat chains, IfNoExit on structured clauses, BlockGoto sink) breaks shallow-traversal expectations in funcdata tests (BlockCondition depth, CONTINUE tagging via DoWhile, type inference); registered as BLOCKSTRUCT-DEADREGION-TESTEXPECT-0001 for root adjudication"
 }

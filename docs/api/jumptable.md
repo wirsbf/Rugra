@@ -9,6 +9,24 @@ consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍�
 （`BILATERAL_24_CASE_BYTE_IDENTICAL`，covered projection=MATCH，
 R2 独立复核 APPROVE）。
 
+## 2026-09-22：JUMPTABLE-PARENTFACTS-0001 — jt_parentfacts 双侧 fixture 衍生的两处移植缺陷修复
+
+`tests/oracle/jt_parentfacts_1204.{cc,rs}`（JumpParentFacts 两通道 B2 fixture，
+M1 multistage/usenezmask + P1/P0 兄弟 BRANCHIND 身份）实证两处缺陷：
+
+1. `JumpBasic::find_determining_varnodes` 空点回退（jumptable.cc:586-590）：
+   Ghidra 用原始 `op`/`slot` 参数构造单点 meld；Rust 旧实现读
+   `path.first().unwrap()`，DFS 栈弹空（全常量叶子树，P1/P0 形态）时 panic。
+   修复为克隆原始 `op`（`root_op`）。
+2. `JumpBasic::sanity_check` 计数器起点（jumptable.cc:1581）：Ghidra for-init
+   `i=1`（entry 0 已由 first!=0 验证）；Rust 旧实现 i=0 起步、循环体内才赋值，
+   单条目表（size==1）误判 `return false`（M1 stage1 形态实证）。修复为
+   进入循环前置 `i=1`，break 不改 i（此时 i==j 即 Ghidra break 语义）。
+
+验证：双侧 fixture 46/46 记录 byte-identical；`cargo test --lib jumptable`
+36/36。检测力：把 JumpParentFacts 快照临时改为 pre-fix dummy（partial=false/
+indirect=None）后，M1.stage2 guards 3≠2、P1 guards 3≠6，两通道均被捕获。
+
 ## 2026-08-24：JUMPTABLE-PIPELINE-0001 段1 — 模型选择链 / find_normalized 委托 / EMULFN
 
 - **模型选择链（`JUMPTABLE-SELECTION-0001` 关闭）**：`JumpTable::recover_model`
@@ -203,7 +221,8 @@ TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入�
   （cc:2761）。
 - `quasi_copy` / `pull_back_through_op`：改读原始 `nzm` 字段
   （`Varnode::get_nzm`，对应 varnode.hh:231 的 inline `getNZMask` 字段读），
-  不再用按 size 截断的近似。
+  不再用按 size 截断的近似。（`pull_back_through_op` 后已于 2026-09-23 删除，
+  jumptable 调用点改走正典 `CircleRange::pull_back`，见该日小节。）
 - 门禁：`tools/run_jt_guards_oracle.sh` + `tests/oracle/jt_guards_1204.*`
   （FX-GUARD，oracle 12.0.4 e40ed130 双侧）：sc2_unrolled/sc4_other_switch/
   sc5_pathout MATCH；sc1/sc3 MISMATCH = `JUMPTABLE-GUARDS-RESIDUAL-0001`
@@ -284,7 +303,7 @@ All paths from a putative switch variable to the BRANCHIND (jumptable.hh:72).
 | `set_path(&[PcodeOpNode])` | Initialise to a single path. |
 | `set_single(op, vn)` | Initialise to a single-node path. |
 | `append(&PathMeld)` | Append a new set of paths. |
-| `meld(&mut Vec<PcodeOpNode>)` | Meld a new path in (jumptable.cc:970). |
+| `meld(&mut Vec<PcodeOpNode>)` | Meld a new path in (jumptable.cc:968). |
 | `mark_paths(val, start_varnode)` | Mark/unmark ops from a start varnode. |
 | `clear()` | Empty the container. |
 
@@ -323,14 +342,17 @@ Iterator over values a switch variable can take (jumptable.hh:166).
 ### `JumpModel`
 A jump-table execution model (jumptable.hh:243).
 - `is_override()`, `get_table_size()`,
-- `recover_model(fd, indop, matchsize, maxtablesize) -> bool`,
+- `recover_model(fd, indop, matchsize, maxtablesize, parent) -> bool`,
 - `build_addresses(fd, indop, addresstable, loadpoints, loadcounts)`,
 - `find_unnormalized(maxaddsub, maxleftright, maxext)`,
 - `build_labels(fd, addresstable, label, orig)`,
 - `fold_in_normalization(fd, indop) -> Option<Varnode>`,
 - `fold_in_guards(fd, jump) -> bool`,
 - `sanity_check(fd, indop, addresstable, loadpoints, loadcounts) -> bool`,
-- `clone_model(jt) -> Box<dyn JumpModel>`, `clear()`.
+- `clone_model() -> Box<dyn JumpModel>`, `clear()`.
+- `as_any() -> &dyn Any` (RUGRA-GLUE，Ghidra 侧对应物是调用方对
+  `JumpModel*` 做 `dynamic_cast<JumpBasic*>` 读 `selectguards`；Rust trait
+  object 需要 `Any` 出口，五个模型实现均返回 `self`)。
 
 ## `JumpValuesRange` / `JumpValuesRangeDefault`
 Implementations of `JumpValues` for a single-entry range / a range plus an
@@ -353,7 +375,7 @@ The basic switch model (jumptable.hh:374). Notable methods:
 - `new(jt)`, `get_path_meld()`, `get_value_range()`.
 - `is_prune(Varnode)`, `is_point(Varnode)`, `get_stride(Varnode)`,
   `get_max_value(Varnode)`, `duplicate_varnodes(&[Varnode])`.
-- `find_determining_varnodes(op, slot)` (jumptable.cc:556).
+- `find_determining_varnodes(op, slot)` (jumptable.cc:554).
 - `calc_range(vn, &mut CircleRange)` (jumptable.cc:1120). **2026-08-23 修正
   (JUMPTABLE-CALCRANGE-0001)**：初始 range 按 oracle 三分支派发——constant 取
   single(offset,size) 且**不再提前 return**（继续走守卫交集与 positive 截断）；
@@ -438,10 +460,16 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 
 **新增自由函数**：
 - `pull_back_through_op(rng, op, usenzmask) -> Option<Varnode>`（rangeutil.cc:1022）：通过 PcodeOp 反向范围，返回未知输入 varnode。处理一元/二元操作 + NZ 掩码交集 + SUBPIECE usenzmask 特殊情况（2026-07-16 补齐 rangeutil.cc:1053-1064）。
+  **2026-09-23 更新**：该自由包装已删除；`analyze_guards`（cc:1106）与
+  `check_unrolled_guard`（cc:1366）两调用点改走 `rangeutil.rs` 正典
+  `CircleRange::pull_back(op, usenzmask, &mut None)`——discard 槽镜像
+  oracle 两处的 `Varnode *markup; // Throw away markup information`
+  （12.0.4 jumptable 路径从不读取 markup，唯一消费者是 RuleRangeMeld
+  cc:1416，EZ 车道已接）。
 
 **JumpBasic 新增/升级方法**：
 - `analyze_guards`：现执行完整 pullBack 扩展循环（jumptable.cc:1119），从布尔 varnode 反向最多 2 步，每步创建新 GuardRecord。
-- `backup2_switch(output, outvn, invn) -> Option<u64>`（jumptable.cc:474）：从规范化值反向模拟到未规范化值，使用 opbehavior::recover_input_unary/binary。
+- `backup2_switch(output, outvn, invn) -> Option<u64>`（jumptable.cc:472）：从规范化值反向模拟到未规范化值，使用 opbehavior::recover_input_unary/binary。
 - `find_unnormalized`：现执行完整 ADD/SUB/ZEXT/SEXT 链遍历（jumptable.cc:1484），计数 addsub/ext 限制。
 - `flows_only_to_model(vn, trail_op) -> bool`（jumptable.cc:1293）：检查 varnode 是否仅流向模型。
 - `build_labels`：现使用 backup2_switch 恢复 case 标签（jumptable.cc:1528），不再全部发 NO_LABEL。
@@ -524,3 +552,140 @@ dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 earl
   完整移植：被提升表间接 op 推回 `tablelist`（JUMPTABLE-MULTISTAGE 缺口关闭）。
 - `Funcdata::stage_jump_table` isPartial 分支改走 recover_multistage（此前
   RUGRA-GAP 注释声称未移植）。
+
+## 2026-09-22：JUMPTABLE-TABLEAPI-0001 P0-A — SwitchNorm 表级 API + foldIn* 语义修正
+
+**JumpTable 新增表级方法**（cc 行号=锁定 12.0.4 e40ed130）：
+- `match_model(fd)`（jumptable.cc:2683-2708）：isRecovered 前置 → 非 override
+  存 saveModel / override 清 savedModel+警告 → recoverModel(maxtablesize=
+  arch.max_jumptable_size) → 表尺寸不匹配时（单条目且模型>1）insertMultistageJump+
+  setRestartPending 早退，否则警告。
+- `recover_labels(fd)`（jumptable.cc:2714-2735）：jmodel 在场 → findUnnormalized+
+  buildLabels（origmodel 为空/零表时 orig=jmodel 自身）；jmodel 缺席 →
+  JumpModelTrivial 兜底（recoverModel/buildAddresses/trivialSwitchOver/
+  buildLabels）；全路径收尾 clearSavedModel。trivialSwitchOver 的尺寸不匹配
+  LowlevelError 经 `JumpTableRecoveryError::Lowlevel` 穿透。
+- `trivial_switch_over()`（jumptable.cc:2594-2609）：block2addr=(i,i) 全对、
+  lastBlock=sizeOut-1、defaultBlock=-1。
+- `fold_in_normalization(fd)`（jumptable.cc:2574-2591）：jmodel->
+  foldInNormalization 后按 minimalmask(NZMask) 设 switch_var_consume，全覆盖时
+  对 INT_SEXT def 退化为 calc_mask(输入尺寸)。（2026-09-22 sb-foldinnorm：minimalmask
+  修正为 address.hh:525 整字节阶梯真身后，本调用点语义方才与 oracle 一致——
+  修正前 coveringmask 别名系统性低估 consumed 位，见 docs/api/address.md 同日节。）
+- `fold_in_guards(fd)`（jumptable.hh:615 inline）：委托 jmodel->foldInGuards
+  （Rust 以 take/put-back 表达 C++ 的 this 别名，无实现读 jt.jmodel）。
+
+**foldIn* 家族语义修正（对齐 12.0.4，修复旧近似）**：
+- `JumpBasic::fold_in_one_guard`（cc:1373-1409）：补 cc:1391 `hasFoldedDefault&&
+  getDefaultBlock!=pos` 单折叠目标守卫（pos 含 not-found==sizeOut 语义）、补
+  cc:1394 `noInterveningStatement` 守卫、GOTO_EDGE_1 近似换 `getFlipPath()`
+  （block.hh:297）、常量值补 `isBooleanFlip` 异或（cc:1402）。
+- `JumpBasic::fold_in_guards`（cc:1555-1570）：null cbranch=continue（不 clear），
+  dead cbranch=clear+continue（旧版两者合并）。
+- `JumpBasic::fold_in_normalization`（cc:1546-1553）：改走 `fd.op_set_input`
+  （维持 Varnode descend 记账；旧版裸写 inrefs 丢 bookkeeping）。
+- `JumpBasic2`：结构改为忠实形态——`fold_in_one_guard`（cc:1634-1649，
+  setLastAsDefault+clear+true）为 override，`fold_in_guards` 继承 JumpBasic 循环
+  并虚派发到该 override（旧版整体 clear+恒 true，空守卫集时返回值错误）。
+- `JumpAssisted::fold_in_normalization`（cc:2193-2206）：真实实现——assist op
+  出边全部后代 opSetInput(slot0=switchvn)（先快照后代再改，因 op_set_input 会
+  切断 outvn descend）+ opDestroy(assistOp)；旧版仅返回 indop 输入。
+- `JumpAssisted::fold_in_guards`（cc:2208-2214）：origVal 记录→setLastAsDefault→
+  比较返回（旧版恒 true）。
+- `JumpBasicOverride::fold_in_normalization`（hh:485）：删除 INVENTED 的
+  is_trivial 分支，纯继承 JumpBasic。
+- `JumpTable::add_block_to_switch`（cc:2535-2543）：lastBlock 改
+  `indirect->parent->size_out()`（旧版用 addresstable.len() 近似，截断表上错位）；
+  test_jump_table_add_block 相应改为真实 indirect+双出边夹具。
+
+Annotation 修正（机制 D cited-line-drift）：foldInOneGuard 1392→1373、
+foldInNormalization 1568→1546、foldInGuards 1577→1555、JumpAssisted foldIn*
+补 cc:2193/2208。ActionSwitchNorm 消费接线见 docs/api/coreaction.md；
+noInterveningStatement 见 docs/api/block.md。
+
+## 2026-09-22（返修）：机制 C 复核 REJECT 修复 — 模型父表状态真值下传
+
+复核实证的两处行为分歧（dummy parent Arc）已修：
+- 通道① `analyze_guards` 的 `usenzmask`（cc:1052 `!jt->isPartial()`）：改读
+  `JumpParentFacts::partial_table` 快照——multistage 表(partialTable=true)
+  不再被空 dummy 恒 false 误判。
+- 通道② 守卫回走 i>0 的兄弟 BRANCHIND 身份检查（cc:1083-1090
+  `jt->getIndirectOp()`）：改用 `JumpParentFacts::indirect` 真实 indirect op
+  ——同 switch 的兄弟边守卫继续收集，只有别的 switch 才 break。
+
+设计（`JumpParentFacts`，RUGRA-GLUE）：恢复全程在表自身 RwLock 写锁下
+（stageJumpTable/ActionSwitchNorm 均经 `Arc::write()` 进入），模型内锁真父
+Arc=同线程重入死锁;模型存强 Arc=与 `JumpTable::jmodel` 成环泄漏;故
+`JumpTable::recover_model` 在 `&mut self` 上直接快照 `partial_table` 与
+`indirect` 两个纯值,经 `JumpModel::recover_model` trait 参数下传至
+`find_normalized`→`analyze_guards` 两处使用。模型结构体不再持有
+`jumptable` 父字段（Trivial/Basic/Assisted 删除,构造器与 `clone_model`
+去 jt 参数,funcdata.rs 流程克隆调用点同步）。
+
+验证：curl 全量输出与返修前逐字节相同（sha256 3a1dadf2…，3705/0/0）；
+gp 864/0/0、glob_set 90/0/0 保持；httpd 与基线逐字节相同；单线程
+cargo test 17 failed 与 FUNCDATA-TESTS-FLAKY-0001 已知集相同（复核抽测
+单测隔离全过）,新增=0。
+
+## 2026-09-22：switchOver + block→index 查询四件（JUMPTABLE-TABLEAPI-0001 数据层）
+
+label 管道数据层落地（wt/sb-jtlabel）：
+- `switch_over(&mut self, flow: &FlowInfo)`（jumptable.cc:2528-2569）：addresstable
+  逐地址经 `FlowInfo::target` 解析目标 op→基本块，在 switch 基本块出边里找槽位，
+  填 `block2addr: Vec<IndexPair>`；`last_block`=末条目槽位；按
+  `IndexPair::operator<`（hh:628, position→addressIndex）排序；defaultBlock 扫描
+  取重复条目数>1 的槽位。目标未链接 → `JumpTableRecoveryError::Lowlevel`
+  （"Jumptable destination not linked"，cc:2545-2546 同语义传播）。
+- `block2_position(&self, bl)`（jumptable.cc:2337-2349，private）：bl 的入边里找
+  indirect op 父块，返回 reverse_index（switch 出边槽）。Ghidra throw 处 Rust 返回
+  None，两个查询调用方据此降级为 0 indices（构造期入边恒在）。
+- `num_indices_by_block(&self, bl)`（jumptable.cc:2438-2445）：equal_range
+  （compareByPosition）宽度，`partition_point` 双侧实现。
+- `get_index_by_block(&self, bl, i)`（jumptable.cc:2485-2500）：lower_bound 起顺序
+  扫描计数，返回 addressIndex；Ghidra throw（cc:2499）处返回 None。
+
+调用接线：`Funcdata::switch_over_jump_tables`（funcdata_block.cc:678）由
+`follow_flow_range` 在 `generate_blocks()` 后调用（funcdata_op.cc:777-778 同位），
+见 docs/api/funcdata.md 与 docs/api/flow.md。后续 finalizePrinting 消费链见
+docs/api/block.md / blockaction.md。
+
+## 2026-09-23：JUMPTABLE-MARKUP-CONSUMER 接线 — 正典 pullBack 调用形态（Lane FB）
+
+**oracle 事实核对（12.0.4 e40ed130，逐行读过 jumptable.cc:1046-1112/1338-1371）**：
+- cc:1103（analyzeGuards）与 cc:1362（checkUnrolledGuard）两处均为
+  `Varnode *markup; // Throw away markup information`，声明后传入
+  `rng.pullBack(readOp,&markup,usenzmask)`（cc:1106/cc:1366）但**从不读取**。
+- jumptable.cc 全文无 `copySymbolIfValid`/`copySymbol` 调用；12.0.4 中
+  pullBack markup 的唯一消费者是 RuleRangeMeld（ruleaction.cc:1416，
+  EZ 车道 0d4e1602 已接）。车道前提"jumptable.cc:1106/1366 消费 markup"
+  对本 oracle 不成立——不存在"恢复路径 EquateSymbol 标注"链路可接。
+
+**实际改动**（wt/jtmarkup）：
+- 删除 jumptable.rs 本地自由包装 `pull_back_through_op`（与 EZ 在 ruleaction
+  侧删除 `pull_back_op` 简化版同型：重复实现 + 非正典调用形态 + 行为微差
+  ——包装对 missing out 用 `unwrap_or(in_size)` 续算，正典按"Ghidra 必然
+  解引用 getOut()"语义返回 None）。
+- `analyze_guards`（cc:1106 镜像）与 `check_unrolled_guard`（cc:1366 镜像）
+  两调用点切正典 `rng.pull_back(&op, usenzmask, &mut None)`——discard 槽
+  逐字镜像 oracle 的 throw-away 局部；`usenzmask` 仍为
+  `!parent.partial_table`（cc:1052）/参数透传（cc:1337）。
+- 顺带修正两调用点周围 cc 行号注释漂移（1365→1366 等 8 处，CR14 注册的
+  annotation-drift 尾巴，限本 write-set 内）。
+- `nzm` 读取无行为差：`get_nzm()` 与 `get_nz_mask()` 均返回裸字段
+  （varnode.hh:231 inline），包装的"raw nzm"注释与正典实现等价。
+
+## 2026-09-24：RESIDMAP-PRINTBATCH —— 恢复失败消息的 opaddress printRaw 拼写
+
+- `recover_addresses_classified`（cc:2626-2640 镜像）三处错误消息
+  （"Could not recover jumptable at {}. Too many branches" ×2 与 "Jumptable with
+  0 entries at {}"）中的 `opaddress` 改经 `fd.print_raw_code_addr` 渲染
+  （oracle 对 `opaddress` 流式输出走 `Address::printRaw`，space.cc:206），
+  携带 `display_image_base` 的 canon 基址差；行为语义（LowlevelError 通道、
+  触发条件、table size 判零）零改动。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 61 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

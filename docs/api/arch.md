@@ -154,7 +154,7 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 `reset_defaults()` (architecture.cc:1438 — now forwards to
 `allacts.reset_defaults()` when the database exists, mirroring
 architecture.cc:1442; the printlist arm stays deferred),
-`build_action()` (architecture.cc:582 — `universal_action()` +
+`build_action()` (architecture.cc:585 — `universal_action()` +
 `reset_defaults()` on the embedded database; `parseExtraRules` is a
 registered residual ARCH-PARSEEXTRARULES-0001), `get_model(name)`, `has_model(name)`,
 `set_default_model(name)` (architecture.cc:323), `get_default_model()`,
@@ -363,7 +363,7 @@ translator —— sleigh_arch.cc:181/185，Sleigh 构造器持它做反汇编 co
   早返回、"No address space indicated in range tag"/"Illegal range tag"
   逐字）+ `last_addr_open`（address.cc:265-281：last==highest → 下一空间
   基址 0，Rugra 以 `(space_id+1, 0)` 表达）+ `decode_tracked`
-  （globalcontext.cc:85：clear + 文档序 append）+
+  （globalcontext.cc:91：clear + 文档序 append）+
   `decode_tracked_context`（globalcontext.cc:56：`Expecting <set> but got
   <X>` 逐字）+ `varnode_data_from_attributes`（pcoderaw.cc:33-53：space
   分支 rewind 重扫 offset/size、`Address is missing offset`；name 分支
@@ -477,3 +477,32 @@ ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后�
 far_pointer=None）真实执行，替换原 recorded-no-op。缺此接线时
 TypeFactory::getBase 的 findAdd 因对齐映射未初始化在 downChain/
 get_type_pointer 全路径 panic。
+
+## 2026-09-23：ARCH-REGISTERDATA-LANE-0001 — pspec register_data → lanerecords 装载
+
+新增 `Architecture::decode_register_data`（architecture.cc:929-977
+ELEM_REGISTER_DATA 臂逐行）：`<register vector_lane_sizes="1,2,4,8">` 经
+`LanedRegister::parse_sizes`（transform.cc:300）入 `maskList[wholeSize]`，
+循环后按尺寸重建 lanerecords（`set_lane_records` 同序同并）。此前 lane 记录
+仅测试装载，生产恒空 → `getMinimumLanedRegisterSize()==-1` → Funcdata
+`min_laned_size=u32::MAX` → `check_for_laned_register` 永不触发 →
+ActionLaneDivide 空转（match_url Phase 2 ordinal 29：oracle 2 vs rugra 0）。
+装载后 min=16（XMM 整尺寸），XMM0(16) 读写入 laned map。两个易错点已修：
+① **rewind**——oracle cc:945 在 storage 解析前显式 `rewindAttributes()`
+（旋钮循环已耗尽属性流），漏掉则 walk 空转返回默认 (0,0)，lanerecords 得
+wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
+属性经 `SleighBase::getRegister` 解析整存储并立即返回。
+**残差 ARCH-REGISTERDATA-VOLATILE-0001**：`volatile` 臂（cc:960-963
+`symboltab->setPropertyRange`）未接——锁定 x86-64.pspec 零 volatile 声明
+（grep 干净），臂不可达；命中时 stderr 报告（[ARCH] 标签）。
+消费链：`decode_register_data`（curl/httpd driver pspec 循环，文档顺序与
+`parseProcessorConfig` 一致）→ lane_records → `Funcdata::min_laned_size`
+（funcdata_varnode.cc:148 家族的 `s >= minLanedSize` 门）→ laned_map →
+`ActionLaneDivide::apply` 的 beginLaneAccess 迭代。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

@@ -170,7 +170,12 @@ pub fn scope_local_find_overlap(
     offset: u64,
     size: i32,
 ) -> Option<&crate::varmap::LocalSymbol> {
-    let last = offset + size as u64 - 1;
+    // database.cc:2397: addr.getOffset()+size-1 — evaluated in the oracle's
+    // uint8 (uint64) modular domain: the int4 size converts by sign
+    // extension and both operators wrap (C++ unsigned arithmetic, UB-free).
+    // Stack-space offsets near 2^64 (negative stack slots) legitimately
+    // wrap here (FUNCDATA-SCOPELOCALOVERFLOW-0001), so Rust must wrap too.
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     // Records in this space's EntryMap: (first, last) inclusive.
     let candidates: Vec<&crate::varmap::LocalSymbol> = scope
         .symbols
@@ -197,10 +202,18 @@ pub fn scope_local_find_overlap(
     // rangemap.hh:420-421: if ((*iter).first <= end) return iter; — among
     // the records covering the unit (== records covering hit_address), the
     // multiset order picks the smallest subsort; equal subsorts keep Vec
-    // order (std::multiset insertion order of equivalent keys).
+    // order (std::multiset insertion order of equivalent keys). The
+    // containment test is the oracle's `first <= p <= last` form where
+    // `last` is the modular first+size-1 (records straddle no space
+    // boundary, so first <= last holds): a `p < first+size` rewrite would
+    // deviate for records at the top of the stack space where first+size
+    // wraps to 0, and would trap in debug on the same wrap.
     candidates
         .iter()
-        .filter(|sym| sym.start <= hit_address && hit_address < sym.start + sym.size as u64)
+        .filter(|sym| {
+            let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+            sym.start <= hit_address && hit_address <= sym_end
+        })
         .min_by_key(|sym| entry_subsort_key(sym))
         .copied()
 }
@@ -237,7 +250,10 @@ fn scope_local_in_scope(
     size: i32,
     _usepoint: Option<u64>,
 ) -> bool {
-    let last = offset + size as u64 - 1;
+    // address.cc:484: addr.getOffset()+size-1 — same uint8 modular domain
+    // as findOverlap (database.cc:2397); stack-space queries near 2^64 wrap
+    // (FUNCDATA-SCOPELOCALOVERFLOW-0001).
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     scope
         .local_range
         .iter()
@@ -371,6 +387,26 @@ impl Ord for LanedStorage {
     }
 }
 
+/// One analyzer-committed stack local harvested from the canonical golden's
+/// declaration layer (C1 TYPE-SEED-LOCAL, HEADLESS-BRIDGE-V1-TYPESEED).
+/// RUGRA-GLUE: the `<localdb>` `<mapsym>` payload of the headless transport
+/// (funcdata.cc:804-810 -> database.cc:1564 Scope::addMapSym): stack offset
+/// (negative = below the frame base), the committed name (`local_c8`), and
+/// the C type spelling (`long[4]`, `undefined8 *`) that
+/// `Symbol::decodeBody` -> `TypeFactory::decodeType` materializes. Installed
+/// name+type locked so `ScopeLocal::restructureVarnode`'s
+/// `clearUnlockedCategory(-1)` keeps them and `MapState::gatherSymbols`
+/// feeds them as `RangeHint::fixed` boundaries (varmap.cc:1044-1059).
+#[derive(Debug, Clone)]
+pub struct CommittedLocal {
+    /// Stack offset in bytes, negative for frame locals (−0xc8 → -200).
+    pub offset: i64,
+    /// The committed symbol name (`local_c8`).
+    pub name: String,
+    /// C type spelling as printed by the canon golden (`long[4]`).
+    pub type_expr: String,
+}
+
 /// Main container for a function being decompiled
 ///
 /// Corresponds to Ghidra's `Funcdata` class. This class ties together
@@ -399,6 +435,18 @@ pub struct Funcdata {
     /// `ActionSetCasts::apply` (coreaction.cc:2728).
     pub cast_phase_index: u32,
 
+    // RUGRA-GLUE: display_image_base (RESIDMAP-PRINTBATCH-0001 transport; no
+    // single Ghidra counterpart — the oracle's Funcdata Addresses ARE the
+    // loaded analyzeHeadless addresses, while Rugra's pipeline runs on
+    // ELF-relative offsets (ADDRESS-0001) and the drivers add the image-base
+    // delta at display time, exactly like PrintC::code_label_base for
+    // labels). Warning texts that embed an address (funcdata_block.cc:374
+    // "Removing unreachable block", jumptable "Could not recover jumptable
+    // at", flow.cc:1380 "Possible PIC construction at") render the oracle's
+    // printRaw spelling through this delta: 0 = ELF-relative harness contract
+    /// (direct-runner golden), 0x100000 = canon analyzeHeadless golden.
+    pub display_image_base: u64,
+
     /// Bank of all varnodes in this function
     pub vbank: VarnodeBank,
     /// Bank of all P-code operations in this function
@@ -425,6 +473,21 @@ pub struct Funcdata {
 
     /// Address → function/symbol name mapping (populated from ELF symtab)
     pub symbol_table: HashMap<u64, String>,
+    /// Address → entry size for the mapGlobals proxy symbols
+    /// (`symbol_table` names this lane's `map_globals` inserts for
+    /// symbol-less persist groups). FUNCDATA-MAPGLOBALS-PROXYSIZE-0001:
+    /// Ghidra's `Scope::addSymbol` → `addMap` records the mapping size
+    /// (`ct->getSize()`, database.cc:1126-1151), so a re-run of
+    /// `mapGlobals` (RULE_REPEATAPPLY restart) finds the entry WITH its
+    /// size and the cc:1711 extension test `(addr+ct->getSize())-1 >
+    /// (entry->getAddr().getOffset()+entry->getSize())-1` is false —
+    /// no `inconsistentuse`, no warning. The name-only proxy previously
+    /// modeled the entry as size 0, making the test always-true and
+    /// re-arming the "Globals starting with '_' overlap smaller
+    /// symbols" warning on every restart. Driver-seeded entries (ELF
+    /// function names via `add_symbol`) carry no size here and keep the
+    /// historical size-0 comparison form.
+    pub symbol_table_sizes: HashMap<u64, i32>,
     /// Address → string literal mapping (populated from ELF .rodata)
     pub string_table: HashMap<u64, String>,
     /// Address → struct-pointer Datatype for known global variables derived
@@ -447,6 +510,20 @@ pub struct Funcdata {
     /// (coreaction.cc:2274) and queried by printc's stack-variable resolution.
     /// Corresponds to Ghidra's `Funcdata::getScopeLocal()`.
     pub scope: Option<crate::varmap::ScopeLocal>,
+    /// Committed-local seeds carried from the driver's C1 TYPE-SEED-LOCAL
+    /// manifest (HEADLESS-BRIDGE-V1-TYPESEED). RUGRA-GLUE: models the
+    /// `<localdb>` transport channel of `Funcdata::decode`
+    /// (funcdata.cc:804-810: `<localdb>` -> `Database::decodeScope` ->
+    /// `ScopeInternal::decode` installs the analyzer-committed symbols
+    /// BEFORE any action runs). The headless canon golden is produced with
+    /// that channel present; the bare driver contract (direct-runner
+    /// golden) is produced with it absent. Rugra's driver installs the
+    /// harvested list here under the opt-in env gate and
+    /// ActionRestructureVarnode materializes the symbols into the fresh
+    /// ScopeLocal at its first apply (the lifecycle position mirroring the
+    /// oracle's construction -> localdb-decode -> action order). Empty by
+    /// default — the default path stays byte-identical to the bare load.
+    pub committed_locals: Vec<CommittedLocal>,
     /// HighVariable → ScopeLocal symbol index association (keyed by the
     /// HighVariable's Arc pointer). RUGRA-GLUE: models `HighVariable::symbol`
     /// (variable.hh:161-176) for the varmap `ScopeLocal` symbol model — the
@@ -569,6 +646,7 @@ impl Funcdata {
             flags: 0,
             high_level_index: 0,
             cast_phase_index: 0,
+            display_image_base: 0,
             vbank: VarnodeBank::new(),
             obank: PcodeOpBank::new(),
             bblocks: BlockGraph::new(),
@@ -577,6 +655,7 @@ impl Funcdata {
             merge_state: crate::merge::MergePersistentState::default(),
             self_ref: None,
             symbol_table: HashMap::new(),
+            symbol_table_sizes: HashMap::new(),
             string_table: HashMap::new(),
             global_struct_ptrs: HashMap::new(),
             funcp: FuncProto::new(
@@ -589,6 +668,7 @@ impl Funcdata {
             ),
             external_prototypes: HashMap::new(),
             scope: None,
+            committed_locals: Vec::new(),
             high_symbols: HashMap::new(),
             symbol_entry_cache: HashMap::new(),
             callspecs: Vec::new(),
@@ -607,7 +687,7 @@ impl Funcdata {
             stack_pointer_size: 8,
             stack_grows_negative: true,
         };
-        // Ghidra: funcdata.cc:48 Funcdata::Funcdata
+        // Ghidra: funcdata.cc:34 Funcdata::Funcdata
         // `glb = scope->getArch();` — construction-time Architecture
         // binding (funcdata.cc:49 `minLanedSize = glb->...` tail runs in
         // set_arch). Canonical default stands in until a caller attaches
@@ -706,6 +786,44 @@ impl Funcdata {
         vn
     }
 
+    // Ghidra: funcdata_varnode.cc:148 Funcdata::newVarnode
+    /// Typed explicit-space form of `Funcdata::newVarnode(int4 s,const
+    /// Address &m,Datatype *ct)` — the cc:153-168 body with the caller's
+    /// data-type: `ct == 0` falls back to the factory unknown base, which
+    /// is the Varnode constructor default in Rust (varnode.rs
+    /// `default_unknown_type`, the stand-in for cc:154
+    /// `glb->types->getBase(s,TYPE_UNKNOWN)`); then `vbank.create(s,m,ct)`,
+    /// `assignHigh`, the laned-register check, and the queryProperties
+    /// symbol tail with the INVALID usepoint of cc:162. This is the arm
+    /// `Funcdata::splitUses` cc:1556 reaches through
+    /// `newVarnode(vn->getSize(),vn->getAddr(),vn->getType())`
+    /// (FUNCDATA-SPLITUSES-NEWVN-TYPECARRY-0001).
+    pub(crate) fn new_varnode_typed_in_space(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+        ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:156: vn = vbank.create(s,m,ct) — the type is not a bank tree
+        // key (VarnodeBank::create keys on space/loc/def), so installing it
+        // after the insert preserves the tree order (same pattern as
+        // create_unique_typed, varnode.cc:1265).
+        let vn = self.vbank.create_with_space(size, space, addr.as_u64());
+        if let Some(ct) = ct {
+            vn.write().unwrap().v_type = Some(ct);
+        }
+        // cc:157: assignHigh(vn)
+        let _ = self.assign_high(&vn);
+        // cc:159-160: if (s >= minLanedSize) checkForLanedRegister(s,m)
+        if size >= self.min_laned_size as usize {
+            self.check_for_laned_register(size, space, addr);
+        }
+        // cc:161-166: queryProperties symbol tail (usepoint = INVALID).
+        self.new_varnode_symbol_tail(&vn, None);
+        vn
+    }
+
     // RUGRA-GLUE: explicit-space adapter for Ghidra's Address-valued
     // Funcdata::newVarnode; ADDRESS-0001 keeps space and offset split across
     // Rugra until the entire comparison domain migrates atomically.
@@ -715,15 +833,9 @@ impl Funcdata {
         space: crate::space::AddressSpace,
         addr: crate::address::Address,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_with_space(size, space, addr.as_u64());
-        let _ = self.assign_high(&vn);
-        if size >= self.min_laned_size as usize {
-            self.check_for_laned_register(size, space, addr);
-        }
         // cc:239-246: the explicit-space overload delegates to the full
         // newVarnode(s,m,ct) — including the queryProperties symbol tail.
-        self.new_varnode_symbol_tail(&vn, None);
-        vn
+        self.new_varnode_typed_in_space(size, space, addr, None)
     }
 
     // Ghidra: funcdata_varnode.cc:161-166 Funcdata::newVarnode (symbol tail)
@@ -843,13 +955,49 @@ impl Funcdata {
     /// `Funcdata::setInputVarnode` (funcdata_varnode.cc:340-373).
     ///
     /// Thin wrapper over `VarnodeBank::set_input_varnode` which ports
-    /// steps (1)+(2)+(3) of Ghidra (early-out / overlap dedup / setInput).
-    /// Step (4) ProtoModel effect properties omitted (conservative subset).
+    /// steps (1)+(2)+(3) of Ghidra (early-out / overlap dedup / setInput)
+    /// plus step (4), the ProtoModel effect tail (unaffected /
+    /// return_address flag writes, funcdata_varnode.cc:365-370).
     pub fn set_input_varnode(
         &mut self,
         vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        self.vbank.set_input_varnode(vn)
+        // cc:344: if (vn->isInput()) return vn — no property pass on the
+        // early-out (funcdata_varnode.cc:344).
+        let already_input = vn.read().unwrap().is_input();
+        let promoted = self.vbank.set_input_varnode(vn.clone());
+        // cc:363-364: vn = vbank.setInput(vn); setVarnodeProperties(vn) —
+        // the property pass runs only when the bank freshly promoted this
+        // varnode (the dedup arm returns the preexisting input without it,
+        // cc:356-357). set_varnode_properties' isMapped guard keeps this a
+        // no-op when the creating site's newVarnode tail already attached.
+        if !already_input && std::sync::Arc::ptr_eq(&promoted, &vn) {
+            self.set_varnode_properties(&promoted);
+            // cc:365-370: the ProtoModel effect query tail. Ghidra reads
+            // `funcp.hasEffect(vn->getAddr(),vn->getSize())` and sets
+            // Varnode::unaffected (and return_address) from the record.
+            // try_has_effect is the Rust-glue non-panicking form: a FuncProto
+            // with neither an effect list nor a bound model has no Ghidra
+            // counterpart (Ghidra's model pointer is always live by the
+            // time inputs register), so None skips the flag writes.
+            let (space, offset, size) = {
+                let guard = promoted.read().unwrap();
+                (guard.get_space(), guard.get_offset(), guard.get_size())
+            };
+            if let Some(effecttype) = self.funcp.try_has_effect(space, offset, size as i32) {
+                let mut guard = promoted.write().unwrap();
+                if effecttype == crate::fspec::EffectType::Unaffected {
+                    guard.set_unaffected();
+                }
+                if effecttype == crate::fspec::EffectType::ReturnAddress {
+                    // Should be unaffected over the course of the function
+                    // (funcdata_varnode.cc:369).
+                    guard.set_unaffected();
+                    guard.set_return_address();
+                }
+            }
+        }
+        promoted
     }
 
     // RUGRA-GLUE: fallible Rust adapter around the checked portion of
@@ -1094,6 +1242,33 @@ impl Funcdata {
         Ok(())
     }
 
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Render an offset the way the oracle's `AddrSpace::printRaw` renders a
+    /// ram-space Address: `"0x"` + zero-padded hex of `2*sz` digits, where sz
+    /// shrinks from the space's address size (8 for x86-64 ram) to 4 bytes
+    /// when the offset's top 32 bits are zero, or 6 bytes when the top 48
+    /// are (space.cc:210-215). Wordsize > 1 would append `+cut`, but ram's
+    /// wordsize is 1 so the branch is unreachable for code addresses.
+    /// `display_image_base` transports the loader delta (see the field doc).
+    pub fn print_raw_code_addr(&self, offset: u64) -> String {
+        let display = offset.wrapping_add(self.display_image_base);
+        let sz = if display >> 32 == 0 {
+            4
+        } else if display >> 48 == 0 {
+            6
+        } else {
+            8
+        };
+        format!("0x{:0width$x}", display, width = 2 * sz)
+    }
+
+    // RUGRA-GLUE: set_display_image_base (RESIDMAP-PRINTBATCH-0001; driver
+    // handoff for print_raw_code_addr — canon analyzeHeadless drivers install
+    /// 0x100000, ELF-relative harness paths keep the default 0).
+    pub fn set_display_image_base(&mut self, base: u64) {
+        self.display_image_base = base;
+    }
+
     // Ghidra: funcdata.cc:135 Funcdata::warningHeader
     /// Attach a warning comment to this function. Faithful to
     /// `Funcdata::warningHeader` (funcdata.cc:135-145). Uses the arch's
@@ -1132,7 +1307,7 @@ impl Funcdata {
     /// mirroring the named-ctor chain so a later locked-prototype overlay
     /// (DWARF/PLT) can never observe `model_locked && !has_model`.
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
-        // Ghidra: funcdata_varnode.cc:69 Funcdata::newConstant
+        // Ghidra: funcdata_varnode.cc:66 Funcdata::newConstant
         // Every newVarnode* caller supplies a Datatype from this Funcdata's
         // Architecture-owned `glb->types`.  Rugra's bank resolves that
         // required argument internally, so attach the identical factory
@@ -1305,12 +1480,15 @@ impl Funcdata {
 
     // Ghidra: funcdata.cc:34 Funcdata::findVarnodeInput
     /// Find an input varnode of the given size at the given address.
-    /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324).
-    /// Used by ActionRestrictLocal and AncestorRealistic.
+    /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324): the
+    /// Address carries the space, so the bank lookup is space-qualified
+    /// (BANK-FINDINPUT-SPACE-0001). Used by ActionRestrictLocal and
+    /// AncestorRealistic.
     pub fn find_varnode_input(
-        &self, size: usize, addr: crate::address::Address,
+        &self, size: usize, space: crate::space::AddressSpace,
+        addr: crate::address::Address,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-        self.vbank.find_input(size, addr)
+        self.vbank.find_input(size, space, addr)
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::addSymbol
@@ -1542,7 +1720,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_varnode.cc:1207 Funcdata::linkSymbolReference
+    // Ghidra: funcdata_varnode.cc:1193 Funcdata::linkSymbolReference
     // (scope->queryContainer call site) + coreaction.cc:1151
     // (data.getScopeLocal()->getParent()->queryContainer call site)
     /// The Funcdata query channel into the faithful `Database`/`Scope`
@@ -2006,6 +2184,7 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:83 Funcdata::newUnique
     /// Create a new temporary Varnode (no defining op). Faithful to
     /// `Funcdata::newUnique` (funcdata_varnode.cc:83-95):
+    ///   if (ct == 0) ct = glb->types->getBase(s,TYPE_UNKNOWN);
     ///   Varnode *vn = vbank.createUnique(s, ct);
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
@@ -2014,6 +2193,38 @@ impl Funcdata {
         &mut self, s: usize,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create_unique(s);
+        // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
+        if s >= self.min_laned_size as usize {
+            let (space, addr) = {
+                let vn = vn.read().unwrap();
+                (
+                    vn.get_space(), crate::address::Address::new(vn.get_offset()),
+                )
+            };
+            self.check_for_laned_register(s, space, addr);
+        }
+        vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:83 Funcdata::newUnique
+    /// Typed overload of `new_unique` mirroring the full
+    /// `Funcdata::newUnique(int4 s, Datatype *ct)` signature: a null ct is
+    /// defaulted to the factory unknown base (cc:86-87) exactly as in
+    /// Ghidra; a non-null ct becomes the varnode's data-type via
+    /// `VarnodeBank::createUnique(s, ct)` (the ctor's `type = dt`,
+    /// varnode.cc:583). Callers that carry a source varnode's type
+    /// (e.g. Merge::allocateCopyTrim merge.cc:416/429, Merge::trimOpOutput
+    /// merge.cc:668/677) must use this form so the trim COPY's output
+    /// observes the same data-type as the oracle.
+    pub fn new_unique_typed(
+        &mut self, s: usize, ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:86-87: if (ct == (Datatype *)0) ct = getBase(s,TYPE_UNKNOWN)
+        let ct = ct.unwrap_or_else(|| {
+            crate::varnode::default_unknown_type(None, s)
+        });
+        let vn = self.vbank.create_unique_typed(s, ct);
         // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
         if s >= self.min_laned_size as usize {
@@ -2054,10 +2265,13 @@ impl Funcdata {
         op.0.write().unwrap().flags |= masked;
     }
 
-    // Ghidra: funcdata_op.cc:21 Funcdata::opSetOpcode
+    // Ghidra: funcdata_op.cc:25 Funcdata::opSetOpcode
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
     pub fn op_set_opcode(&mut self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:25-33); env
+        // gate makes this a no-op in normal builds.
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:29 delegates to PcodeOpBank::changeOpcode. Besides resetting
         // opcode-derived flags, this removes the op from its old LOAD/STORE/
         // RETURN/CALLOTHER list and inserts it into the new one.
@@ -2085,6 +2299,19 @@ impl Funcdata {
     pub fn op_set_input(
         &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
     ) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:104-125):
+        // Ghidra's cc:107 same-input early-out precedes the hook at
+        // cc:116-119, so test it first under a read guard (this function
+        // holds a write guard below, and the recorder takes its own).
+        if crate::drillobserve::is_enabled() {
+            let same_input = {
+                let o = op.0.read().unwrap();
+                slot < o.inrefs.len() && std::sync::Arc::ptr_eq(&vn, &o.inrefs[slot])
+            };
+            if !same_input {
+                crate::drillobserve::mod_check(self.arch.as_ref(), op);
+            }
+        }
         let mut o = op.0.write().unwrap();
         // Ghidra has nullable preallocated slots. For Rugra's Vec model, a
         // sequential slot exactly at len is the representable NULL boundary
@@ -2186,6 +2413,10 @@ impl Funcdata {
     pub fn op_insert_input(
         &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
     ) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:308-317 hook
+        // at :313, before insertInput; the delegated op_set_input's hook
+        // no-ops via the MODIFIED addl-flag, like Ghidra's first-touch).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:315 op->insertInput(slot) — PcodeOp::insertInput
         // (op.cc:311-318) pushes a NULL slot at `slot` and shifts existing
         // inputs at/after `slot` up by one. Descend entries store the op
@@ -2227,6 +2458,9 @@ impl Funcdata {
         if slot >= op.0.read().unwrap().inrefs.len() {
             return;
         }
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:291-299 hook
+        // at :296, after the bounds guard, before the unlink).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         self.op_unset_input(op, slot);
         let mut o = op.0.write().unwrap();
         if slot < o.inrefs.len() {
@@ -2239,6 +2473,15 @@ impl Funcdata {
     /// (funcdata.hh). Used by RuleBoolNegate to reorder operands when flipping
     /// a comparison (e.g. `!(V < W) => W <= V`).
     pub fn op_swap_input(&self, op: &crate::op::PcodeOpRef, slot1: usize, slot2: usize) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:150-160 hook
+        // at :155, before the swap; guarded by the bounds precondition).
+        {
+            let o = op.0.read().unwrap();
+            if slot1 < o.inrefs.len() && slot2 < o.inrefs.len() {
+                drop(o);
+                crate::drillobserve::mod_check(self.arch.as_ref(), op);
+            }
+        }
         let mut o = op.0.write().unwrap();
         if slot1 < o.inrefs.len() && slot2 < o.inrefs.len() {
             o.inrefs.swap(slot1, slot2);
@@ -2261,6 +2504,9 @@ impl Funcdata {
         if same_output {
             return;
         }
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:70-87 hook
+        // at :76, after the same-output early-out, before the mutation).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         if op.0.read().unwrap().output.is_some() {
             self.op_unset_output(op);
         }
@@ -2281,19 +2527,26 @@ impl Funcdata {
     /// (funcdata_op.cc:203-222). Destroys the output Varnode, unsets all
     /// inputs, and removes an integrated op from its exact basic block.
     pub fn op_destroy(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:203-222 hook
+        // at :208, before any destruction).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:211-212: snapshot before destroyVarnode, so the op read guard
         // cannot overlap destroyVarnode's write to the same output slot.
         let output = { op.0.read().unwrap().output.clone() };
         if let Some(output) = output {
             self.destroy_varnode(&output);
         }
-        // cc:213-217: clear every non-null input in slot order. Rugra cannot
-        // retain Ghidra's NULL slots, so the detached dead op has an empty Vec.
+        // cc:213-217: clear every non-null input in slot order. Each
+        // opUnsetInput erases the descend link and NULLs the slot in place
+        // (op.cc:98 clearInput), so the destroyed op KEEPS its numInput()
+        // slots as NULLs — represented by the shared null_slot_sentinel.
+        // The op stays in the dead list with its input-slot count intact,
+        // matching the oracle's post-opDestroy observable state
+        // (SB-ORD159-NULLSLOT-0001).
         let input_count = op.0.read().unwrap().inrefs.len();
         for slot in 0..input_count {
             self.op_unset_input(op, slot);
         }
-        op.0.write().unwrap().inrefs.clear();
         // cc:218-221: parentless ops are already dead. Integrated ops move to
         // the dead bank and leave their owning block.
         let parent = op.0.read()
@@ -2437,14 +2690,22 @@ impl Funcdata {
     /// Ghidra's `clearInput` (op.hh:136) NULLs the slot in place, so every
     /// later reader sees `getIn(slot) == NULL` and skips it — most
     /// importantly `opDestroy` (funcdata_op.cc:213-215), which guards each
-    /// slot with `if (vn != NULL) opUnsetInput(op,i)`. Rugra's inrefs Vec
-    /// cannot hold null, so the stale Arc survives; descend membership is
-    /// the durable record of whether the (op,slot)→vn link is still live.
-    /// If `op` is not in `vn`'s descend list the link was already severed,
-    /// and skipping the erase reproduces Ghidra's NULL-slot no-op. This
-    /// makes repeated unsets on the same slot idempotent instead of
-    /// re-erasing a descend entry that is no longer there.
+    /// slot with `if (vn != NULL) opUnsetInput(op,i)`. The slot is then
+    /// cleared in place (cc:98 `op->clearInput(slot)`): Rugra writes the
+    /// shared `null_slot_sentinel` (Ghidra's `(Varnode *)0`), preserving the
+    /// slot count — a dead op keeps `numInput()` NULL slots, exactly like
+    /// Ghidra's inrefs array (SB-ORD159-NULLSLOT-0001). Descend membership
+    /// is checked before the erase: if `op` is not in `vn`'s descend list
+    /// the link was already severed, and skipping the erase reproduces
+    /// Ghidra's NULL-slot no-op. This makes repeated unsets on the same slot
+    /// idempotent instead of re-erasing a descend entry that is no longer
+    /// there.
     pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:130-140 hook
+        // at :136, after the null-input guard, before the unlink).
+        if op.0.read().unwrap().inrefs.get(slot).is_some() {
+            crate::drillobserve::mod_check(self.arch.as_ref(), op);
+        }
         let in_vn = {
             let o = op.0.read().unwrap();
             o.inrefs.get(slot).cloned()
@@ -2461,15 +2722,24 @@ impl Funcdata {
                 vn.write().unwrap().erase_descend(&op.0);
             }
         }
-        // Ghidra cc:98: op->clearInput(slot) — implicit in Rugra (Vec slot
-        // overwritten on next set; callers must set or remove before relying
-        // on inrefs[slot]).
+        // Ghidra cc:98: op->clearInput(slot) — the slot is nulled in place,
+        // keeping the array size. The shared sentinel stands in for the NULL
+        // pointer; writing it over itself (already-sentinel slot) is the
+        // idempotent NULL no-op.
+        if let Some(slot_vn) = op.0.write().unwrap().inrefs.get_mut(slot) {
+            *slot_vn = crate::op::null_slot_sentinel();
+        }
     }
 
     // Ghidra: funcdata_op.cc:52 Funcdata::opUnsetOutput
     /// Remove an op's output, return the old Varnode to the bank's free class,
     /// and discard its Cover.
     pub fn op_unset_output(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:52-66 hook
+        // at :61, after the null-output guard, before the mutation).
+        if op.0.read().unwrap().output.is_some() {
+            crate::drillobserve::mod_check(self.arch.as_ref(), op);
+        }
         let old = op.0.write().unwrap().output.take();
         let Some(old) = old else { return };
         self.vbank.make_free_prevalidated(&old);
@@ -2498,21 +2768,39 @@ impl Funcdata {
         addr: crate::address::Address,
         op: &crate::op::PcodeOpRef,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_def_with_space(
-            size,
-            crate::space::AddressSpace::Register,
-            addr.as_u64(),
-            &op.0,
-        );
+        // Rugra split-Address adapter: callers without a known true space keep
+        // the historical Register pin; the full newVarnodeOut sequence runs in
+        // new_varnode_out_full below.
+        self.new_varnode_out_full(size, crate::space::AddressSpace::Register, addr, op)
+    }
+
+    // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
+    /// Space-preserving `Funcdata::newVarnodeOut`: the oracle's `m` is a full
+    /// `Address` (space + offset). Rugra's scalar `Address` cannot carry the
+    /// space, so callers that must reproduce the oracle's full storage address
+    /// — e.g. `CloneBlockOps::buildVarnodeOutput`
+    /// (funcdata_block.cc:988 `data.newVarnodeOut(opvn->getSize(),opvn->getAddr(),cloneOp)`)
+    /// — pass the true space explicitly. Sequence is 1:1 with
+    /// funcdata_varnode.cc:107-121, and the symbol tail is the UNCONDITIONAL
+    /// `localmap->queryProperties(m,s,op->getAddr(),vflags)` form
+    /// (`new_varnode_symbol_tail`, usepoint = op->getAddr()), NOT the
+    /// isMapped-guarded `getUsePoint` form of `setVarnodeProperties`
+    /// (funcdata_varnode.cc:25-42), which is a different function.
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001, FUNCDATA-NODESPLIT-SPACE-0001)
+    pub fn new_varnode_out_full(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+        op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create_def_with_space(size, space, addr.as_u64(), &op.0);
         op.0.write().unwrap().output = Some(vn.clone());
         // cc:110: assignHigh(vn) — comes BEFORE the queryProperties leg.
         // (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
         if size >= self.min_laned_size as usize {
-            self.check_for_laned_register(
-                size,
-                crate::space::AddressSpace::Register,
-                addr);
+            self.check_for_laned_register(size, space, addr);
         }
         // cc:114-119: queryProperties(m, s, op->getAddr(), vflags) with the
         // op address as usepoint, then the shared symbol tail.
@@ -2585,7 +2873,7 @@ impl Funcdata {
     /// Faithful to `BlockGraph::moveOutEdge` (block.cc). This redirects the
     /// edge by updating both the source's outgoing list and the old/new
     /// destinations' incoming lists.
-    // Ghidra: block.cc:1439 BlockGraph::moveOutEdge
+    // Ghidra: block.cc:1502 BlockGraph::moveOutEdge
     /// Move an out-edge of `bb` (at `slot`) to `bbnew`. Faithful to
     /// `BlockGraph::moveOutEdge` (block.cc:1439-1449): capture the target
     /// `outbl` and its in-slot `i` from the edge's reverse_index, then run
@@ -2889,7 +3177,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:328 Funcdata::removeDoNothingBlock
+    // Ghidra: funcdata_block.cc:327 Funcdata::removeDoNothingBlock
     /// Remove a basic block that does nothing (only marker ops + optional
     /// single branch). Faithful to `Funcdata::removeDoNothingBlock`
     /// (funcdata_block.cc:328-337): setDead, blockRemoveInternal(bb,false),
@@ -3117,10 +3405,10 @@ impl Funcdata {
         self.bblocks.remove_block_arc(bb);
     }
 
-    // Ghidra: funcdata_block.cc:790 Funcdata::nodeJoinCreateBlock
+    // Ghidra: funcdata_block.cc:779 Funcdata::nodeJoinCreateBlock
     /// Create a joined block from two blocks that share exit targets.
     /// Faithful to `Funcdata::nodeJoinCreateBlock`
-    /// (funcdata_block.cc:790-826).
+    /// (funcdata_block.cc:779-815).
     pub fn node_join_create_block(
         &mut self,
         block1: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -3136,10 +3424,22 @@ impl Funcdata {
             .write()
             .unwrap()
             .set_flags(crate::block::block_flags::JOINED_BLOCK);
-        // setInitialRange(addr, addr) — Rugra's create_new_block uses Address(0);
-        // the range is informational only (used for cover/debug), so we skip it.
+        // cc:786: newblock->setInitialRange(addr, addr). The join block's
+        // cover anchors its address range and is NOT informational:
+        // BlockBasic::getStop reads only the cover (block.hh:476), and
+        // Merge::buildDominantCopy places the dominant copy at
+        // domBl->getStop() (merge.cc:1168); leaving stop=Address(0) built
+        // it at 0:903 instead of 3e84:903.
 
-        // Delete 2 of the original edges into exita and exitb (merge.cc:807-818).
+        newblock
+            .write()
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("nodeJoinCreateBlock: newblock must be a BlockBasic")
+            .set_initial_range(addr, addr);
+
+        // Delete 2 of the original edges into exita and exitb (funcdata_block.cc:789-805).
         let swapa = if fora_block1ishigh {
             self.bblocks.remove_edge_blocks(block1, exita);
             block2.clone()
@@ -3247,7 +3547,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:835 Funcdata::nodeSplitBlockEdge
+    // Ghidra: funcdata_block.cc:824 Funcdata::nodeSplitBlockEdge
     /// Create a duplicate block that inherits the same out-edges but only the
     /// one indicated in-edge, which is moved from the original block.
     /// Faithful to `Funcdata::nodeSplitBlockEdge` (funcdata_block.cc:835-848).
@@ -3265,7 +3565,18 @@ impl Funcdata {
             .write()
             .unwrap()
             .set_flags(crate::block::block_flags::DUPLICATE_BLOCK);
-        // copyRange(b) — Rugra blocks don't track address range; skip.
+        // cc:832: bprime->copyRange(b) — the duplicate inherits the original
+        // block's whole address cover.
+        {
+            let b_rg = b.read().unwrap();
+            let mut bprime_rg = bprime.write().unwrap();
+            if let (Some(src), Some(dst)) = (
+                b_rg.as_any().downcast_ref::<crate::block::BlockBasic>(),
+                bprime_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>(),
+            ) {
+                dst.copy_range(src);
+            }
+        }
         // switchEdge(a, b, bprime)
         self.switch_edge(&a, b, &bprime);
         // Add all of b's out-edges to bprime.
@@ -3281,7 +3592,7 @@ impl Funcdata {
         bprime
     }
 
-    // Ghidra: funcdata_block.cc:856 Funcdata::nodeSplit
+    // Ghidra: funcdata_block.cc:845 Funcdata::nodeSplit
     /// Split control-flow into a basic block, duplicating its p-code into a
     /// new block. Faithful to `Funcdata::nodeSplit` (funcdata_block.cc:856-882).
     pub fn node_split(
@@ -3681,12 +3992,24 @@ impl Funcdata {
         for blk in &list {
             blk.write().unwrap().set_flags(block_flags::DEAD);
             if issuewarning {
+                // cc:372-378: ostringstream s; s << "Removing unreachable
+                // block ("; s << bb->getStart().getSpace()->getName();
+                // s << ','; bb->getStart().printRaw(s); s << ')'.
+                // Space name: Rugra block covers carry spaceless
+                // ELF-relative addresses (ADDRESS-0001); code blocks live in
+                // ram, so a tagged address prints its own space name and the
+                // spaceless transport prints the oracle's "ram". The offset
+                // renders through printRaw + the display base delta
+                // (print_raw_code_addr).
                 let (space_name, start_raw) = {
                     let blk_rg = blk.read().unwrap();
                     let start = blk_rg.get_start_addr();
                     (
-                        start.get_space().map(|s| s.get_name()).unwrap_or_default(),
-                        format!("{:x}", start.as_u64()),
+                        start
+                            .get_space()
+                            .map(|s| s.get_name())
+                            .unwrap_or_else(|| "ram".to_string()),
+                        self.print_raw_code_addr(start.as_u64()),
                     )
                 };
                 self.warning_header(&format!(
@@ -3827,6 +4150,20 @@ impl Funcdata {
                 bb_bb.set_order();
             }
         }
+        // cc:942: bl->mergeRange(outbl) — update the address cover BEFORE the
+        // graph splice (Ghidra order).  The union cover's FIRST range (by
+        // offset) becomes this block's getStart(); for a backward
+        // jump-splice that is the absorbed block's address.
+        if !std::sync::Arc::ptr_eq(bb, &out_block) {
+            let out_rg = out_block.read().unwrap();
+            let mut bb_rg = bb.write().unwrap();
+            if let (Some(out_bb), Some(bb_bb)) = (
+                out_rg.as_any().downcast_ref::<crate::block::BlockBasic>(),
+                bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>(),
+            ) {
+                bb_bb.merge_range(out_bb);
+            }
+        }
         // Splice the CFG edges, faithful to BlockGraph::spliceBlock
         // (block.cc:1597-1620):
         //   fl1 = bl->flags & (f_unstructured_targ | f_entry_point)   // keep from bl
@@ -3866,10 +4203,8 @@ impl Funcdata {
                 bb_bb.flags = fl1 | fl2;
             }
         }
-        // bl->mergeRange(outbl) (funcdata_block.cc:953) — update address cover.
-        // TODO: Rugra has no Cover system yet; address-cover merge is a known
-        // infrastructure gap (recorded in ALIGNMENT_ROADMAP). Does not affect
-        // correctness of CFG splice for current pipeline.
+        // bl->mergeRange(outbl) (funcdata_block.cc:942) — done above, before
+        // the CFG splice, in Ghidra's statement order.
         self.structure_reset();
         true
     }
@@ -4065,16 +4400,28 @@ impl Funcdata {
     ///   - op flags |= extra_flags (0 for CALL guards, `indirect_store`
     ///     for STORE guards — the caller decides, exactly as in Ghidra)
     ///   - inserted before the causing op via `opInsertBefore`
-    /// The constructor performs no setActiveHeritage — Ghidra's callers
+    /// The constructor performs no setActiveHeritage – Ghidra's callers
     /// (guardCalls/guardStores, heritage.cc:1512-1516/1553-1556) do that
     /// after construction, so Rugra callers must too.
-    /// Both `newVarnode` (cc:689, funcdata_varnode.cc:148-165) and
-    /// `newVarnodeOut` (cc:692, funcdata_varnode.cc:104-127) apply their
-    /// property-flag tail — `localmap->queryProperties` then
-    /// `setFlags(vflags & ~typelock)` (or `setSymbolProperties` on a hit,
-    /// which folds to the same flag bits) — inside the constructor, so a
-    /// persist-band/stack-window in/out carries the range flags as soon as
-    /// the INDIRECT exists (FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001).
+    /// Both varnode constructors run the symbol tail inside themselves,
+    /// with two distinct usepoint paths (FUNCDATA-INDIRECT-SYMBOLTAIL-0001):
+    ///   - `newVarnode` (cc:689, funcdata_varnode.cc:148-169) on the free
+    ///     input: `localmap->queryProperties(addr, size, Address(), vflags)`
+    ///     (cc:162) — usepoint is the INVALID default `Address()`, so per
+    ///     `SymbolEntry::inUse` (database.cc:117-119) only addr-tied entries
+    ///     can attach; window-limited entries never match an invalid
+    ///     usepoint. On an entry hit `vn->setSymbolProperties(entry)`
+    ///     (varnode.cc:404-421) runs `entry->updateType(vn)` (type force),
+    ///     attaches `mapentry` for type-locked symbols, and folds
+    ///     `setFlags(entry->getAllFlags() & ~typelock)`; otherwise
+    ///     `setFlags(vflags & ~typelock)` (cc:166).
+    ///   - `newVarnodeOut` (cc:692, funcdata_varnode.cc:104-122) on the
+    ///     defined output: the tail runs AFTER the `op->setOutput(vn)`
+    ///     wiring with `queryProperties(m, s, op->getAddr(), vflags)`
+    ///     (cc:115) — usepoint is the DEFINING op's address (= the causing
+    ///     op's address here, since `newOp(2, indeffect->getAddr())`), and
+    ///     the same `setSymbolProperties`/`setFlags` split applies
+    ///     (cc:116-119).
     pub fn new_indirect_op(
         &mut self,
         indeffect: &crate::op::PcodeOpRef,
@@ -4083,10 +4430,12 @@ impl Funcdata {
         sz: usize,
         extra_flags: u32,
     ) -> crate::op::PcodeOpRef {
-        // cc:689: newin = newVarnode(sz, addr); — newVarnode applies the
-        // property tail (funcdata_varnode.cc:148-165) with an INVALID
-        // usepoint before returning.
+        // cc:689: newin = newVarnode(sz, addr); — the newVarnode symbol tail
+        // (funcdata_varnode.cc:161-166) queries with the INVALID `Address()`
+        // usepoint, so only addr-tied entries can attach
+        // (FUNCDATA-INDIRECT-SYMBOLTAIL-0001).
         let newin = self.vbank.create_with_space(sz, space, offset);
+        self.set_varnode_properties(&newin);
         Heritage::apply_new_varnode_flags(self, &newin);
         // cc:690: newop = newOp(2, indeffect->getAddr());
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
@@ -4099,8 +4448,12 @@ impl Funcdata {
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
-        // newVarnodeOut's property tail (funcdata_varnode.cc:121-126) runs
-        // after the setOutput wiring, with usepoint = op->getAddr().
+        // newVarnodeOut's symbol tail (funcdata_varnode.cc:114-119) runs after
+        // the setOutput wiring with usepoint = op->getAddr() (= the causing
+        // op's address); `set_varnode_properties` computes exactly this via
+        // `get_use_point` on the now-written varnode
+        // (FUNCDATA-INDIRECT-SYMBOLTAIL-0001).
+        self.set_varnode_properties(&newout);
         Heritage::apply_new_varnode_flags(self, &newout);
         // cc:693: opSetOpcode(newop, CPUI_INDIRECT);
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
@@ -4136,6 +4489,10 @@ impl Funcdata {
             crate::space::AddressSpace::Iop,
             ptr_addr,
         );
+        // OPACTION_DEBUG-equivalent drill registration: IopSpace::printRaw
+        // (op.cc:41-47) resolves the iop offset back to the referenced op,
+        // so the recorder needs the pointer->op mapping.
+        crate::drillobserve::register_iop(ptr_addr as usize, &op.0);
         vn.write()
             .unwrap()
             .set_flags(crate::varnode::varnode_flags::ANNOTATION);
@@ -4322,9 +4679,14 @@ impl Funcdata {
     /// caller's (space, offset) — e.g. the Register-space RAX range for a
     /// killed-by-call guard — instead of Unique. All flag and IOP semantics
     /// are identical to the oracle constructor — including `newVarnodeOut`'s
-    /// property-flag tail (funcdata_varnode.cc:121-126) on the output — and
-    /// no setActiveHeritage is done here (guardCalls cc:1523 does it after
-    /// construction).
+    /// symbol tail (funcdata_varnode.cc:114-119) on the output: after the
+    /// `op->setOutput(vn)` wiring it queries
+    /// `localmap->queryProperties(m, s, op->getAddr(), vflags)` with the
+    /// DEFINING op's address as usepoint, attaching the SymbolEntry
+    /// (`setSymbolProperties`, varnode.cc:404-421: updateType force +
+    /// mapentry attach for type-locked symbols) on a hit, else folding
+    /// `setFlags(vflags & ~typelock)` — and no setActiveHeritage is done
+    /// here (guardCalls cc:1523 does it after construction).
     // RUGRA-GLUE: split entry because Rugra Address lacks space identity; the
     // legacy Unique-space entry keeps out-of-write-set callers compiling.
     pub fn new_indirect_creation_in_space(
@@ -4344,15 +4706,19 @@ impl Funcdata {
         let newop = self.new_op(2, indeffect_addr);
         // cc:718: newop->flags |= PcodeOp::indirect_creation;
         newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
-        // cc:719: newout = newVarnodeOut(sz, addr, newop); — newVarnodeOut
-        // applies its property tail (funcdata_varnode.cc:121-126) after the
-        // setOutput wiring, before the INDIRECT_CREATION bits below
-        // (FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001).
+        // cc:719: newout = newVarnodeOut(sz, addr, newop); — the
+        // newVarnodeOut symbol tail (funcdata_varnode.cc:114-119) runs after
+        // the setOutput wiring with usepoint = op->getAddr() (= the causing
+        // op's address), BEFORE the INDIRECT_CREATION bits below
+        // (cc:720-722); `set_varnode_properties` computes exactly this
+        // usepoint via `get_use_point` on the now-written varnode
+        // (FUNCDATA-INDIRECT-SYMBOLTAIL-0001).
         let newout = self.vbank.create_with_space(sz, space, addr);
         let newout = self
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
+        self.set_varnode_properties(&newout);
         Heritage::apply_new_varnode_flags(self, &newout);
         // cc:720-722: if (!possibleout) newin |= indirect_creation;
         //             newout |= indirect_creation;
@@ -4484,6 +4850,9 @@ impl Funcdata {
     /// Remove `op` from its basic block and move it from the alive list to the
     /// dead list.  Its Varnode input/output links remain intact.
     pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:323-331
+        // opUninsert's #ifdef block; placed after the parentless guard so
+        // legacy no-op uninserts leave no phantom record).
         let parent = op
             .0.read()
             .unwrap()
@@ -4499,6 +4868,7 @@ impl Funcdata {
                 .retain(|candidate| !std::sync::Arc::ptr_eq(&candidate.0, &op.0));
             return;
         };
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         self.obank.mark_dead(op.clone());
         Self::block_remove_op(op, &parent);
     }
@@ -4584,14 +4954,15 @@ impl Funcdata {
     pub fn op_set_all_input(
         &mut self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
     ) {
-        // Unset all existing inputs (funcdata_op.cc:276-278).
+        // Unset all existing inputs (funcdata_op.cc:276-278). Each
+        // opUnsetInput NULLs its slot in place (op.cc:98 clearInput).
         let num = op.0.read().unwrap().num_input();
         for i in 0..num {
             self.op_unset_input(op, i);
         }
-        // cc:280 replaces every slot with NULL. Clear the Vec so identical
-        // old/new pointers cannot trigger op_set_input's early return before
-        // rebuilding the descendant edge.
+        // cc:280 replaces every slot with NULL: setNumInputs(vvec.size()).
+        // Clear the Vec so identical old/new pointers cannot trigger
+        // op_set_input's early return before rebuilding the descendant edge.
         op.0.write().unwrap().inrefs.clear();
         // cc:282-283: restore exact input order via the normal const-dedup path.
         for (i, vn) in vvec.iter().cloned().enumerate() {
@@ -4760,18 +5131,20 @@ impl Funcdata {
     ///   }
     ///   if (vn->cover == NULL && isHighOn()) vn->calcCover();
     ///
-    /// Query routing (B3-COREACTION-CONSTANTPTR-0001 channel): Ghidra's ONE
-    /// `localmap->queryProperties` transparently walks ScopeLocal → parent →
-    /// global scope (database.cc:1268 stackContainer). Rugra's ScopeLocal
-    /// query models the local leg; the parent/global leg is the Database
-    /// query channel (`query_properties_parent_scope`). For default-data
-    /// (RAM) space varnodes the channel answers first — this is where the
-    /// global scope's `mapped|addrtied|persist` fold (database.cc:1271-1277)
-    /// lands, marking global storage persistent for `mapGlobals`
+    /// Query routing: Ghidra's ONE `localmap->queryProperties` walks
+    /// ScopeLocal → parent → global scope (database.cc:1268 stackContainer).
+    /// Rugra composes the same walk: the ScopeLocal leg runs FIRST
+    /// (`ScopeLocal::query_properties_ex` over `fd.scope`, usepoint =
+    /// `get_use_point` — a VALID address, unlike newVarnode's invalid
+    /// `Address()` form), and only when the local scope does not terminate
+    /// the walk does the parent/global leg run — the Database channel
+    /// (`query_properties_parent_scope`), where the global scope's
+    /// `mapped|addrtied|persist` fold (database.cc:1271-1277) lands, marking
+    /// global storage persistent for `mapGlobals`
     /// (funcdata_varnode.cc:1669's `if (!vn->isPersist()) continue;`).
-    /// Non-RAM spaces keep the `symbol_table` name proxy (the channel models
-    /// the global scope over RAM only; the ScopeLocal leg remains the
-    /// registered funcdata_audit gap).
+    /// Non-RAM spaces unclaimed by the local scope keep the `symbol_table`
+    /// name proxy (the Database channel models the global scope over RAM
+    /// only). (FUNCDATA-SETVARNODE-SCOPELOCAL-0001)
     pub fn set_varnode_properties(
         &mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
@@ -4784,10 +5157,55 @@ impl Funcdata {
                 (r.get_space(), r.get_offset(), r.get_size() as i32)
             };
             // cc:30-31: queryProperties(addr, size, usepoint, vflags). The
-            // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703).
+            // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703) — a
+            // VALID address (the defining op's address for written
+            // varnodes, fd->getAddress()-1 otherwise).
             let usepoint = vn.read().unwrap().get_use_point(self);
-            let mut answered = false;
-            if space == crate::space::AddressSpace::Ram {
+            // database.cc:1268 — the ScopeLocal leg: localmap->
+            // queryProperties' stackContainer starts at the querying scope
+            // itself, so the function-local scope is consulted FIRST —
+            // findContainer (database.cc:952, entry hit → getAllFlags) then
+            // the in-scope "discovery of new variable" stop (database.cc:
+            // 957-958 → 1271-1277 mapped|addrtied(|persist)+property).
+            // Rugra's ScopeLocal carries no live SymbolEntry
+            // (DB-LOCALSCOPE-MAP-0001 split), so the entry hit degrades to
+            // the observable flags fold — the same treatment as the local
+            // leg of `new_varnode_symbol_tail` (varnode.cc:422).
+            // (FUNCDATA-SETVARNODE-SCOPELOCAL-0001)
+            let property = |spc: crate::space::AddressSpace, off: u64| -> u32 {
+                if spc != crate::space::AddressSpace::Ram {
+                    return 0;
+                }
+                self.arch
+                    .as_ref()
+                    .and_then(|a| a.symboltab.clone())
+                    .map(|t| t.read().unwrap().get_property(crate::address::Address::new(off)))
+                    .unwrap_or(0)
+            };
+            let local = self.scope.as_ref().map(|s| {
+                s.query_properties_ex(
+                    space,
+                    addr,
+                    size as i64,
+                    Some(usepoint.as_u64()),
+                    None,
+                    &property,
+                )
+            });
+            let mut answered = matches!(
+                &local,
+                Some(outcome) if !matches!(outcome.final_scope, crate::varmap::QueryFinalScope::None)
+            );
+            if answered {
+                // cc:34-35: setFlags(vflags & ~typelock) — the local leg
+                // answered, so the walk never reaches the parent
+                // (database.cc:1269/1271 return the answering scope).
+                if let Some(outcome) = local {
+                    let fl = outcome.flags & !crate::varnode::varnode_flags::TYPELOCK;
+                    vn.write().unwrap().set_flags(fl);
+                }
+            }
+            if !answered && space == crate::space::AddressSpace::Ram {
                 if let Some((hit, vflags)) = self.query_properties_parent_scope(
                     crate::address::Address::new(addr),
                     size,
@@ -5608,10 +6026,37 @@ impl Funcdata {
                     .write()
                     .unwrap()
                     .set_flags(crate::varnode::varnode_flags::SPACEBASE);
-                // Note: Ghidra also sets TypeSpacebase pointer type on the
-                // input register (funcdata.cc:263-264). Rugra's type system
-                // does not yet have TypeSpacebase; the SPACEBASE flag alone is
-                // sufficient for varmap/ActionStackPtrFlow recognition.
+                // Ghidra funcdata.cc:262-264: only the input spacebase
+                // register gets the TypeSpacebase pointer type
+                // (`vn->updateType(ptr,true,true)`). Re-enabled with the
+                // LOAD-claim chain (HERITAGE-LOADCLAIM-0001): the Rugra
+                // pipeline now matches the oracle's claim sequence (LOAD
+                // directified by RuleLoadVarnode in mainloop iter1 oppool2 ->
+                // restart -> heritage refinement/refineRead claims the free
+                // 304B stack read into the 280+8+8+8 PIECE ladder feeding the
+                // CALL), so the v1-era retraction premise (LOAD stuck
+                // directified, no claim ladder) no longer holds. The mount
+                // activates ActionInferTypes::propagateSpacebaseRef
+                // (coreaction.cc:5265, INFERTYPES-SPACEREF-0001 receiver
+                // already ported) to type the stack shadows through the
+                // SP-relative ADD tree. The v1-era regressions
+                // (glob_set/glob_range drift, __spacebase_1_* name leaks) are
+                // re-gated by the config-domain A/B in this commit's evidence.
+                if vn_arc.read().unwrap().is_input() {
+                    if let Some(types) = self.arch.as_ref().and_then(|a| a.types.clone()) {
+                        // cc:245-246: ct = getTypeSpacebase(spc, getAddress());
+                        // ptr = getTypePointer(point.size, ct, spc->getWordSize()).
+                        // The space indexed by this base register is the stack
+                        // space (word size 1), scoped to this function's entry.
+                        let frame = self.get_address().clone();
+                        let mut factory = types.write().unwrap();
+                        let ct = factory
+                            .get_type_spacebase(Some(crate::space::AddressSpace::Stack), frame);
+                        let ptr = factory.get_type_pointer(sb_size, ct, 1);
+                        drop(factory);
+                        vn_arc.write().unwrap().update_type_lock(ptr, true, true);
+                    }
+                }
             }
         }
     }
@@ -5647,6 +6092,33 @@ impl Funcdata {
         vn
     }
 
+    // RUGRA-GLUE: TypeSpacebase live-map publish — the Rust ownership seam
+    // standing in for Ghidra's dynamic getMap resolution (type.cc:2935-2945:
+    // every `TypeSpacebase::getSubType` re-resolves
+    // `queryFunction(localframe)->fd->getScopeLocal()` and therefore observes
+    // the CURRENT map). Rugra's Funcdata owns the ScopeLocal and the
+    // factory-cached stack spacebase type holds a shared handle (attached at
+    // construction, see TypeFactory::get_type_spacebase); this refresh makes
+    // the handle contents match the Funcdata's just-mutated scope, so
+    /// subsequent spacebase subtype queries observe the live map. Call after
+    /// every ScopeLocal map mutation (ActionRestructureVarnode passes,
+    /// parameter-symbol bootstrap).
+    pub fn publish_scope_to_spacebase(&mut self) {
+        let Some(scope) = self.scope.as_ref() else { return; };
+        let Some(types) = self.arch.as_ref().and_then(|a| a.types.clone()) else {
+            return;
+        };
+        let frame = self.baseaddr.clone();
+        let mut tf = types.write().unwrap();
+        let sb = tf.get_type_spacebase(Some(crate::space::AddressSpace::Stack), frame);
+        drop(tf);
+        if let crate::type_system::datatype::Datatype::Spacebase(sb) = sb.as_ref() {
+            if let Some(handle) = &sb.fd {
+                *handle.write().unwrap() = scope.clone();
+            }
+        }
+    }
+
     // Ghidra: funcdata.cc:291 Funcdata::findSpacebaseInput
     /// Locate the unique input Varnode holding the incoming value of the base
     /// register for `id`. Faithful to `Funcdata::findSpacebaseInput`
@@ -5663,9 +6135,15 @@ impl Funcdata {
         let (_sp_space, sp_offset, sp_size) = (
             self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size,
         );
-        // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset)).
-        self.vbank
-            .find_input(sp_size, crate::address::Address::new(sp_offset))
+        // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset))
+        // — point.space is the REGISTER space of the base register
+        // (stack_pointer_space), not the space being pointed into.
+        // (BANK-FINDINPUT-SPACE-0001)
+        self.vbank.find_input(
+            sp_size,
+            self.stack_pointer_space,
+            crate::address::Address::new(sp_offset),
+        )
     }
 
     // Ghidra: funcdata.cc:309 Funcdata::constructSpacebaseInput
@@ -6042,7 +6520,10 @@ impl Funcdata {
         }
         // cc:481-493: SegmentOp chain. Rugra: skipped (no userops handle);
         // x86-64 has no segment ops so this branch is dead code for the
-        // current target.
+        // current target. Width note (FUNCDATA-SPACEID-WIDTH-0001): the
+        // cc:488 SEGMENTOP spaceid input is also newVarnodeSpace(containerid)
+        // = width sizeof(AddrSpace*) = 8; when this branch is implemented it
+        // must call new_varnode_space(containerid), never a 1-byte constant.
         addout
     }
 
@@ -6056,8 +6537,6 @@ impl Funcdata {
     ///   opInsertAfter(storeop, addout->getDef());
     ///   return storeop;
     /// The Varnode value being stored must still be set on the returned op.
-    /// Rugra: `newVarnodeSpace` is approximated by a constant encoding the
-    /// space id (the actual `newVarnodeSpace` is in the missing-API list).
     pub fn op_stack_store(
         &mut self,
         spc: crate::space::AddressSpace,
@@ -6073,10 +6552,20 @@ impl Funcdata {
         let storeop = self.new_op(3, op.0.read().unwrap().get_addr());
         self.op_set_opcode(&storeop, crate::opcodes::OpCode::CPUI_STORE);
         // cc:523: opSetInput(storeop, newVarnodeSpace(spc->getContain()), 0).
-        // Rugra: encode the stack container space as a constant varnode. The
-        // container of the stack space is the ram-like space; we use `spc`
-        // itself as a best-effort (matching existing STORE lowering).
-        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        // spc->getContain() (space.hh:505, SpacebaseSpace override
+        // translate.hh:187) is the container of the (stack) space — ram on
+        // x86-64 — NOT spc itself. Rugra resolves it via
+        // Architecture::get_contain (arch.rs:968); a missing container is
+        // unreachable here (Ghidra would pass NULL to newVarnodeSpace = UB).
+        // cc:523 + funcdata_varnode.cc:190-198: the spaceid input is
+        // newVarnodeSpace(container), whose width is sizeof(AddrSpace*) = 8
+        // (FUNCDATA-SPACEID-WIDTH-0001; the 1-byte form leaked through the
+        // mirror emitter's s: gate, which requires size==8).
+        let contain_spc = self
+            .get_arch()
+            .and_then(|a| a.get_contain(spc))
+            .expect("opStackStore: spc has no container space (Ghidra: getContain() == null is UB)");
+        let space_vn = self.new_varnode_space(contain_spc);
         self.op_set_input(&storeop, space_vn, 0);
         // cc:524: opSetInput(storeop, addout, 1).
         self.op_set_input(&storeop, addout, 1);
@@ -6115,7 +6604,23 @@ impl Funcdata {
         let loadop = self.new_op(2, op.0.read().unwrap().get_addr());
         self.op_set_opcode(&loadop, crate::opcodes::OpCode::CPUI_LOAD);
         // cc:547: opSetInput(loadop, newVarnodeSpace(spc->getContain()), 0).
-        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        // spc->getContain() (space.hh:505, SpacebaseSpace override
+        // translate.hh:187) is the container of the (stack) space — ram on
+        // x86-64 — NOT spc itself. Rugra resolves it via
+        // Architecture::get_contain (arch.rs:968); a missing container is
+        // unreachable here (Ghidra would pass NULL to newVarnodeSpace = UB).
+        // Using spc's own id broke RuleLoadVarnode::correctSpacebase
+        // (`assoc->getContain() != loadspace` always true → rule never fired;
+        // FUNCDATA-OPSTACKLOAD-CONTAIN-0001).
+        // cc:547 + funcdata_varnode.cc:190-198: the spaceid input is
+        // newVarnodeSpace(container), whose width is sizeof(AddrSpace*) = 8
+        // (FUNCDATA-SPACEID-WIDTH-0001; the 1-byte form leaked through the
+        // mirror emitter's s: gate, which requires size==8).
+        let contain_spc = self
+            .get_arch()
+            .and_then(|a| a.get_contain(spc))
+            .expect("opStackLoad: spc has no container space (Ghidra: getContain() == null is UB)");
+        let space_vn = self.new_varnode_space(contain_spc);
         self.op_set_input(&loadop, space_vn, 0);
         // cc:548: opSetInput(loadop, addout, 1).
         self.op_set_input(&loadop, addout, 1);
@@ -6237,7 +6742,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::splitUses
+    // Ghidra: funcdata_varnode.cc:1540 Funcdata::splitUses
     ///
     /// If `vn` is defined by an op (e.g. INT_ADD) and has multiple
     /// descendants, duplicate the defining op so each reader gets its own
@@ -6253,22 +6758,22 @@ impl Funcdata {
             }
         };
 
-        // Collect descendant ops (readers), preserving order.
-        let descendents: Vec<(crate::op::PcodeOpRef, i32)> = {
+        // Collect descendant ops (readers), preserving order. Ghidra walks
+        // the live `descend` list while each rewrite erases the processed
+        // entry; since erase removes exactly one occurrence (one per input
+        // slot), the live walk processes precisely these entries in this
+        // order (funcdata_varnode.cc:1549-1552).
+        let descendents: Vec<crate::op::PcodeOpRef> = {
             let vn_g = vn.read().unwrap();
             vn_g.descend_iter()
-                .map(|op| {
-                    let opref = crate::op::PcodeOpRef(op.clone());
-                    let slot = self.op_get_slot(&opref, vn);
-                    (opref, slot)
-                })
+                .map(crate::op::PcodeOpRef)
                 .collect()
         };
         if descendents.len() <= 1 {
             return; // Only one (or zero) descendant — nothing to split.
         }
 
-        // Clone the defining op for each descendant except the last.
+        // Clone the defining op for each descendant.
         let num_inputs = def_arc.read().unwrap().inrefs.len();
         let def_addr = def_arc.read().unwrap().get_addr();
         let def_opcode = def_arc.read().unwrap().opcode;
@@ -6278,26 +6783,40 @@ impl Funcdata {
         let vn_size = vn.read().unwrap().get_size();
         let vn_addr = vn.read().unwrap().loc.clone();
         let vn_space = vn.read().unwrap().address_space;
+        let vn_type = vn.read().unwrap().get_type();
 
         // Faithful to funcdata_varnode.cc:1549-1565: the descendant iterator
         // is advanced BEFORE each rewrite, so EVERY original descendant is
         // processed exactly once — there is no "keep the last reader on the
         // original op" special case; the original op is left dead for
-        // dead-code removal. Rugra snapshots the descendant list up front,
-        // which preserves the same one-pass order.
-        for (useop, slot) in descendents {
+        // dead-code removal. cc:1554 evaluates `slot = useop->getSlot(vn)`
+        // at the TOP of each iteration on the live op — AFTER earlier
+        // iterations already re-pointed their slots — so when one op reads
+        // `vn` in multiple slots (e.g. a MULTIEQUAL with duplicated RSP
+        // inputs), each iteration claims the next still-unclaimed slot.
+        for useop in descendents {
+            let slot = self.op_get_slot(&useop, vn);
             if slot < 0 {
                 continue;
             }
             // newop = newOp(op->numInput(), op->getAddr())
             let newop = self.new_op(num_inputs, def_addr.clone());
-            // cc:1556: newvn = newVarnode(vn->getSize(), vn->getAddr(),
-            // vn->getType()) — VarnodeBank::create (varnode.cc:1250) inserts
-            // the free varnode under its FINAL (space, loc) tree keys, so no
+            // cc:1556: newvn = newVarnode(vn->getSize(),vn->getAddr(),
+            // vn->getType()) — the FULL Funcdata::newVarnode(s,m,ct) path
+            // (funcdata_varnode.cc:148-169): typed bank create, assignHigh,
+            // the laned-register check (s >= minLanedSize), and the
+            // queryProperties symbol tail with the INVALID usepoint of
+            // cc:162 — same carries PM-F2S proved observable.
+            // VarnodeBank::create (varnode.cc:1250) inserts the free
+            // varnode under its FINAL (space, loc) tree keys, so no
             // post-insert key mutation can drift the tree order.
-            let newvn = self
-                .vbank
-                .create_with_space(vn_size, vn_space, vn_addr.as_u64());
+            // (FUNCDATA-SPLITUSES-NEWVN-TYPECARRY-0001)
+            let newvn = self.new_varnode_typed_in_space(
+                vn_size,
+                vn_space,
+                vn_addr,
+                vn_type.clone(),
+            );
             // cc:1557: opSetOutput(newop,newvn) — Funcdata::opSetOutput
             // (funcdata_op.cc:70-87) routes through VarnodeBank::setDef for
             // the WRITTEN flag and the def-tree re-key; never an in-place
@@ -6320,28 +6839,116 @@ impl Funcdata {
 
     // Ghidra: funcdata.cc:34 Funcdata::cseElimination
     /// Eliminate a common subexpression between two ops. Faithful to
-    /// `Funcdata::cseElimination` (funcdata_op.cc:1358-1398). Keeps the
-    /// earlier-ordered op (by sequence number), total_replaces the other's
-    /// output, and destroys the duplicate.
+    /// `Funcdata::cseElimination` (funcdata_op.cc:1356-1398). Same block:
+    /// the earlier intra-block `SeqNum::order` wins. Different blocks: the
+    /// op whose parent IS the closest common dominator survives; if neither
+    /// dominates, a fresh op is built at the common block's stop address and
+    /// both originals are destroyed.
     pub fn cse_elimination(
         &mut self,
         op1: &crate::op::PcodeOpRef,
         op2: &crate::op::PcodeOpRef,
     ) -> crate::op::PcodeOpRef {
-        // Determine which op to keep (earlier sequence order).
-        let order1 = op1.0.read().unwrap().start.get_order();
-        let order2 = op2.0.read().unwrap().start.get_order();
-        let (replace, dup) = if order1 <= order2 {
-            (op1.clone(), op2.clone())
-        } else {
-            (op2.clone(), op1.clone())
+        // cc:1359-1364: same parent (or both unattached) — order compare.
+        let parent1 = op1.0.read().unwrap().parent.as_ref().and_then(std::sync::Weak::upgrade);
+        let parent2 = op2.0.read().unwrap().parent.as_ref().and_then(std::sync::Weak::upgrade);
+        let same_parent = match (&parent1, &parent2) {
+            (None, None) => true, // Ghidra: null == null takes the order branch
+            (Some(p1), Some(p2)) => std::sync::Arc::ptr_eq(p1, p2),
+            _ => false,
         };
-        let replace_out = replace.0.read().unwrap().output.clone();
-        let dup_out = dup.0.read().unwrap().output.clone();
-        if let (Some(rep_out), Some(dup_o)) = (replace_out, dup_out) {
-            self.total_replace(&dup_o, rep_out);
+        let replace = if same_parent {
+            // cc:1360-1363: compare the intra-block order field.
+            let order1 = op1.0.read().unwrap().get_seq_num().get_order();
+            let order2 = op2.0.read().unwrap().get_seq_num().get_order();
+            if order1 < order2 {
+                op1.clone()
+            } else {
+                op2.clone()
+            }
+        } else {
+            // cc:1365-1387: different blocks — findCommonBlock picks the
+            // survivor; neither parent dominating spawns a fresh op at the
+            // common block's stop address.
+            let (p1, p2) = match (parent1, parent2) {
+                (Some(a), Some(b)) => (a, b),
+                // Mixed attached/unattached cannot reach cseElimination from
+                // cseEliminateList (dead ops are filtered), and Ghidra would
+                // dereference null here; fail loudly rather than diverge.
+                _ => panic!("cseElimination requires both ops to be inserted"),
+            };
+            let common =
+                crate::block::BlockGraph::find_common_block(&p1, &p2);
+            let common = match common {
+                Some(c) => c,
+                // Ghidra's mark-walk always finds a common dominator when
+                // dominator info exists (both chains reach the entry block);
+                // a null return there is a crash, not a silent fallback.
+                None => panic!("cseElimination: findCommonBlock found no common dominator"),
+            };
+            if std::sync::Arc::ptr_eq(&common, &p1) {
+                op1.clone()
+            } else if std::sync::Arc::ptr_eq(&common, &p2) {
+                op2.clone()
+            } else {
+                // cc:1372-1386: build the replacement at the common block.
+                let (num_inputs, opcode, out_size, out_space, out_addr, inrefs) = {
+                    let o1 = op1.0.read().unwrap();
+                    let out = o1.get_out().expect("cseElimination: op1 has output");
+                    let out_rg = out.read().unwrap();
+                    (
+                        o1.inrefs.len(),
+                        o1.opcode,
+                        out_rg.get_size(),
+                        out_rg.get_space(),
+                        *out_rg.get_addr(),
+                        o1.inrefs.clone(),
+                    )
+                };
+                let stop_addr = {
+                    let c_rg = common.read().unwrap();
+                    c_rg
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockBasic>()
+                        .map(|bb| bb.get_stop_addr())
+                        .unwrap_or_else(|| c_rg.get_start_addr())
+                };
+                let replace = self.new_op(num_inputs, stop_addr);
+                self.op_set_opcode(&replace, opcode);
+                self.new_varnode_out_full(out_size, out_space, out_addr, &replace);
+                for (i, vn) in inrefs.iter().enumerate() {
+                    let (is_const, size, offset) = {
+                        let rg = vn.read().unwrap();
+                        (rg.is_constant(), rg.get_size(), rg.get_offset())
+                    };
+                    if is_const {
+                        let cv = self.new_constant(size, offset);
+                        self.op_set_input(&replace, cv, i);
+                    } else {
+                        self.op_set_input(&replace, vn.clone(), i);
+                    }
+                }
+                self.op_insert_end(&replace, &common);
+                replace
+            }
+        };
+        // cc:1388-1395: totalReplace the loser's output and destroy it.
+        if !std::sync::Arc::ptr_eq(&replace.0, &op1.0) {
+            let out1 = op1.0.read().unwrap().get_out().cloned();
+            let rep_out = replace.0.read().unwrap().get_out().cloned();
+            if let (Some(old), Some(new)) = (out1, rep_out) {
+                self.total_replace(&old, new);
+            }
+            self.op_destroy(&op1.clone());
         }
-        self.op_destroy(&dup);
+        if !std::sync::Arc::ptr_eq(&replace.0, &op2.0) {
+            let out2 = op2.0.read().unwrap().get_out().cloned();
+            let rep_out = replace.0.read().unwrap().get_out().cloned();
+            if let (Some(old), Some(new)) = (out2, rep_out) {
+                self.total_replace(&old, new);
+            }
+            self.op_destroy(&op2.clone());
+        }
         replace
     }
 
@@ -6375,13 +6982,37 @@ impl Funcdata {
                 if !is_dead1 && !is_dead2 {
                     let is_match = op1.0.read().unwrap().is_cse_match(&op2.0.read().unwrap());
                     if is_match {
-                        let res_op = self.cse_elimination(&op1, &op2);
-                        let out_opt = {
-                            let r = res_op.0.read().unwrap();
-                            r.output.clone()
+                        // cc:1434-1437: both outputs must exist and be
+                        // heritaged (Heritage::heritagePass >= 0 on the
+                        // output's address) before eliminating.
+                        let (out1, out2) = {
+                            let r1 = op1.0.read().unwrap();
+                            let r2 = op2.0.read().unwrap();
+                            (r1.get_out().cloned(), r2.get_out().cloned())
                         };
-                        if let Some(out) = out_opt {
-                            outlist.push(out);
+                        let heritaged = |vn: &Option<
+                            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                        >| {
+                            // cc:1436: `(outvn == 0) || isHeritaged(outvn)` — a
+                            // null output passes; a present output must have
+                            // been covered by a heritage pass.
+                            vn.as_ref().is_none_or(|v| {
+                                let rg = v.read().unwrap();
+                                self.heritage.globaldisjoint.find_pass(
+                                    rg.get_space(),
+                                    *rg.get_addr(),
+                                ) >= 0
+                            })
+                        };
+                        if heritaged(&out1) && heritaged(&out2) {
+                            let res_op = self.cse_elimination(&op1, &op2);
+                            let out_opt = {
+                                let r = res_op.0.read().unwrap();
+                                r.output.clone()
+                            };
+                            if let Some(out) = out_opt {
+                                outlist.push(out);
+                            }
                         }
                     }
                 }
@@ -6483,13 +7114,22 @@ impl Funcdata {
             // PcodeEmitFd::dump: the output varnode is created between
             // newOp and opSetOpcode, before any input (funcdata.cc:884-890).
             if let Some(out_raw) = raw.output() {
-                // newVarnodeOut → VarnodeBank::createDef (ctor flags +
-                // written|coverdirty from setDef + insert from xref).
-                let out_vn = self.vbank.create_def_with_space(
+                // newVarnodeOut → VarnodeBank::createDef + op->setOutput +
+                // assignHigh + laned probe + the queryProperties symbol tail
+                // with usepoint = op->getAddr() (funcdata_varnode.cc:104-122,
+                // FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001). The pre-fix direct
+                // create_def_with_space + laned probe dropped assignHigh and
+                // the symbol tail — the tail is what attaches
+                // Database::setPropertyRange flags (PLTSTUB-THUNKRELRO-0001:
+                // Varnode::readonly on the RELRO `.got` range, consumed by
+                // JumpBasic::findNormalized's single-branch readonly rescue,
+                // jumptable.cc:1212-1230) to import-time free ram varnodes
+                // the way the oracle's PcodeEmitFd::dump does.
+                let out_vn = self.new_varnode_out_full(
                     out_raw.size,
                     out_raw.space,
-                    out_raw.offset,
-                    &op_ref.0,
+                    crate::address::Address::new(out_raw.offset),
+                    &op_ref,
                 );
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
@@ -6523,17 +7163,53 @@ impl Funcdata {
                 }
             }
             // Remaining inputs: newVarnode (fresh Varnode per reference — no
-            // location dedup for either constants or storage reads).
+            // location dedup for either constants or storage reads: each
+            // reference gets its own Varnode, and opSetInput's
+            // has-no-descend guard (funcdata_op.cc opSetInput) therefore
+            // never triggers for dump-time inputs).
             for input_raw in &raw.inputs()[slot..] {
-                let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
-                    self.vbank.create_constant(input_raw.size, input_raw.offset)
-                } else {
-                    self.vbank
-                        .create_with_space(
-                        input_raw.size,
-                        input_raw.space,
-                        input_raw.offset)
-                };
+                // funcdata.cc:904-907 has ONE arm for every remaining input
+                // — constants included:
+                //   vn = fd->newVarnode(vars[i].size,vars[i].space,vars[i].offset);
+                //   fd->opSetInput(op,vn,i);
+                // (CONST-IMPORT-ASSIGNHIGH-0001 closure: the const-only
+                // create_constant arm was CURB's registered residual; the
+                // chain specialized to the const space is behavior-identical
+                // to create_constant at dump time on x86-64 —)
+                // - vbank.create(s, Address(constspace,off), base type):
+                //   identical Varnode identity to create_constant
+                //   (getConstant(val) IS Address(constant space,val),
+                //   translate.hh:532-535; the ctor derives constant|nzm from
+                //   the space type alone, varnode.cc:592-597);
+                // - assignHigh is highlevel_on-gated (funcdata_varnode.cc:51)
+                //   and the flag is still off at dump time — its sole setter
+                //   is setHighLevel (cc:598-599) via ActionAssignHigh
+                //   (coreaction.hh:346), which runs after ActionStart's
+                //   followFlow; dump-time constants receive their
+                //   HighVariable later through setHighLevel's catch-up loop
+                //   on both sides (funcdata.rs set_high_level, no constant
+                //   filter);
+                // - the laned probe matches by size only (architecture.cc
+                //   getLanedRegister never reads the space), so a lane-sized
+                //   constant records a const-space lanedMap entry on
+                //   laned-register architectures exactly as the oracle does;
+                //   x86-64.pspec carries vector_lane_sizes (XMM/YMM/ZMM) so
+                //   the gate IS live here (minLanedSize=16), but the corpus
+                //   census shows dump-time constants are sizes 1/2/4/8 only
+                //   — no const input ever reaches the 16-byte gate (probe:
+                //   3597+1253+2468+3 sites, curl+httpd, all minlaned=16,
+                //   all highlevel_on=false);
+                // - the queryProperties tail is hard-zero for constants:
+                //   stackContainer returns null before any scope walk
+                //   (database.cc:950 `if (addr.isConstant()) return 0;`),
+                //   leaving flags = getProperty(const addr) = 0
+                //   (varmap.rs query_properties_ex mirrors the early-out in
+                //   its const arm; the parent leg returns for non-Ram).
+                let in_vn = self.new_varnode_in_space(
+                    input_raw.size,
+                    input_raw.space,
+                    crate::address::Address::new(input_raw.offset),
+                );
                 in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
             }
@@ -6797,6 +7473,121 @@ impl Funcdata {
 
         eprintln!("[INJECT] {} phase1 done ops={}", self.name, op_refs.len());
 
+        // flow.cc:336-338 (xrefControlFlow CALL arm) -> flow.cc:683-686
+        // (FlowInfo::setupCallSpecs): every CPUI_CALL op carries a
+        // FuncCallSpecs at flow time — `new FuncCallSpecs(op)` captures the
+        // call target from in(0) (fspec.cc:4931-4938), then in(0) is
+        // replaced with the fspec-space annotation Varnode
+        // (`data.opSetInput(op, data.newVarnodeCallSpecs(res), 0)`,
+        // varnode.cc:599-601: FSPEC-space storage is born annotation|
+        // coverdirty, nzm=~0) and the spec joins qlst. On the followFlow
+        // path FlowInfo::setup_call_specs (flow.rs) anchors inside
+        // xref_control_flow; this linear-scan driver path has no xref walk,
+        // so inject_raw_ops — the phase-1.5 boundary between the raw dump
+        // and block formation (the same position the override application
+        // documents above) — carries the guarantee that ActionDeadCode's
+        // cc:3846 first-operand consume, printc's fc->getName() and the
+        // has_callspec flag proxy (typeop.cc:663) all rely on
+        // (CALLSPEC-DRIVER-0001). CALLIND (flow.cc:340-342 ->
+        // setupCallindSpecs flow.cc:704-723) creates a spec WITHOUT the
+        // in(0) swap — the ctor leaves the entry address invalid for
+        // indirect calls (fspec.cc:4931-4938) and the swap lives only on
+        // the overridden-to-direct path (flow.cc:717-721), unreachable on
+        // this override-free driver path. The iced lifter DOES emit
+        // CPUI_CALLIND for register-indirect calls (x86_lift.rs:4890-4894),
+        // so the anchor loop below mirrors the CALLIND arm; the FlowInfo
+        // path anchors CALLIND via setup_call_ind_specs inside
+        // xref_control_flow. The FlowInfo-level steps of
+        // setupCallSpecs (applyPrototype/queryCall/cycle check, flow.cc:
+        // 688-693) have no linear-scan counterpart here: this path seeds no
+        // overrides, and callee resolution is the driver's pre-flow
+        // prototype table.
+        // flow.cc:336-338 (xrefControlFlow CALL arm) -> flow.cc:683-686
+        // (FlowInfo::setupCallSpecs): every CPUI_CALL op carries a
+        // FuncCallSpecs at flow time — `new FuncCallSpecs(op)` captures the
+        // call target from in(0) (fspec.cc:4931-4938), then in(0) is
+        // replaced with the fspec-space annotation Varnode
+        // (`data.opSetInput(op, data.newVarnodeCallSpecs(res), 0)`,
+        // varnode.cc:599-601: FSPEC-space storage is born annotation|
+        // coverdirty, nzm=~0) and the spec joins qlst. On the followFlow
+        // path FlowInfo::setup_call_specs (flow.rs) anchors inside
+        // xref_control_flow; this linear-scan driver path has no xref walk,
+        // so inject_raw_ops — the phase-1.5 boundary between the raw dump
+        // and block formation (the same position the override application
+        // documents above) — carries the guarantee that ActionDeadCode's
+        // cc:3846 first-operand consume, printc's fc->getName() and the
+        // has_callspec flag proxy (typeop.cc:663) all rely on
+        // (CALLSPEC-DRIVER-0001). The CALLIND arm below mirrors flow.cc:
+        // 340-342 -> setupCallindSpecs (flow.cc:704-723): spec without the
+        // in(0) swap, qlst registration gated identically to the CALL arm.
+        //
+        // CALLSPEC-DRIVER-0002 (registration gate): Ghidra's setupCallSpecs
+        // is ATOMIC — flow.cc:686 `qlst.push_back(res)` never happens
+        // without the flow-time tail (flow.cc:688-694: applyPrototype /
+        // queryCall / checkForFlowModification), and that tail's callee
+        // resolution rides on the architecture's model space
+        // (queryFunction -> otherfunc->getFuncProto() -> the cspec-bound
+        // defaultfp; flow.cc:660-664). Rugra's linear-scan drivers split
+        // that atomicity: a driver whose Funcdata carries no bound model
+        // (fd.funcp.has_model() == false — e.g. the httpd driver's bare
+        // `Architecture::new()`) cannot run the tail's resolution half at
+        // all, so registering the half-initialized spec into qlst there
+        // activates Heritage's per-call effect guarding
+        // (Heritage::callOpIndirectEffect, heritage.cc:362-364: a spec flips
+        // the conservative no-spec polarity to a model lookup) while
+        // ActionFuncLink/ActionActiveParam have no model to attach
+        // call-site inputs against — every call site gains indirect-effect
+        // barriers whose reload copies no param/return consumption can
+        // absorb (measured: httpd 29/29 functions, skeleton 2344 -> 3576,
+        // +379 `x = x` dead-copy chains; main alone 137 -> 669 lines).
+        // Gate the qlst registration on the model carrier the tail needs;
+        // the annotation swap (the has_callspec/printc/deadcode surface
+        // CALLSPEC-DRIVER-0001 named) stays unconditional. Curl's prototype
+        // workers bind a cspec model (FUNCPROTO-MODEL-BIND-0001:
+        // FuncProto::setScope -> setModel(defaultfp)) and keep the full
+        // anchoring; its final path anchors via FlowInfo::setup_call_specs
+        // either way. Repair path (removes this gate): port the
+        // queryCall/checkForFlowModification tail onto the driver boundary
+        // with a driver-fed callee table + defaultfp model, and port
+        // ActionCopyPropagation (coreaction.cc:5510-5511, absent from
+        // Rugra's universal tree — the reason the guarded reload copies
+        // survive as statements today).
+        let register_specs = self.funcp.has_model();
+        for op_ref in &op_refs {
+            let op_opcode = op_ref.0.read().unwrap().opcode;
+            if op_opcode == OpCode::CPUI_CALL {
+                let fc = crate::fspec::FuncCallSpecs::new_for_op(
+                    op_ref,
+                    crate::flow::default_call_spec_proto(),
+                );
+                let owner = Arc::new(RwLock::new(fc));
+                let call_spec_vn = self.new_varnode_call_specs(&owner);
+                self.op_set_input(op_ref, call_spec_vn, 0);
+                if register_specs {
+                    self.add_call_specs_owner(owner);
+                }
+            } else if op_opcode == OpCode::CPUI_CALLIND {
+                // Ghidra: flow.cc:340-342 FlowInfo::xrefControlFlow CALLIND arm ->
+                // flow.cc:704-723 setupCallindSpecs. The CALLIND spec mirror has
+                // NO in(0) swap: `res = new FuncCallSpecs(op)` (flow.cc:708)
+                // leaves the entry address invalid for indirect calls
+                // (fspec.cc:4931-4938 ctor reads in(0) only for CPUI_CALL), and
+                // the annotation swap lives exclusively on the
+                // overridden-to-direct path (flow.cc:717-721), which this
+                // override-free driver path cannot take. qlst registration
+                // (flow.cc:709) rides the same CALLSPEC-DRIVER-0002 model gate
+                // as the CALL arm above.
+                let fc = crate::fspec::FuncCallSpecs::new_for_op(
+                    op_ref,
+                    crate::flow::default_call_spec_proto(),
+                );
+                let owner = Arc::new(RwLock::new(fc));
+                if register_specs {
+                    self.add_call_specs_owner(owner);
+                }
+            }
+        }
+
         // Phase 2: Build basic blocks from the linear op sequence
         self.build_blocks_from_ops(&op_refs);
         eprintln!(
@@ -6859,6 +7650,38 @@ impl Funcdata {
                 {
                     drop(vn); // Release read lock before write
                     let canonical = self.vbank.set_input_prevalidated(in_arc);
+                    // PRINTC-BADSPACEBASE-RENDER-0001: Funcdata::
+                    // setInputVarnode's effect tail (funcdata_varnode.cc:
+                    // 365-370) must also run for iced-prelude promotions —
+                    // Ghidra marks every input through setInputVarnode, so
+                    // the ProtoModel unaffected/return_address records
+                    // (x86-64 cspec <unaffected> RSP/RBP/RBX) reach every
+                    // input varnode. Without the tail the RSP input misses
+                    // Varnode::unaffected, HighVariable::hasName
+                    // (variable.cc:737-744) then names the spacebase high,
+                    // and printc leaks a `BADSPACEBASE *in_register_…`
+                    // declaration (ActionNameVars::linkSymbols coreaction.cc:
+                    // 2961-2962 hasName gate).
+                    {
+                        let (space, offset, size) = {
+                            let guard = canonical.read().unwrap();
+                            (guard.get_space(), guard.get_offset(), guard.get_size())
+                        };
+                        if let Some(effecttype) =
+                            self.funcp.try_has_effect(space, offset, size as i32)
+                        {
+                            let mut guard = canonical.write().unwrap();
+                            if effecttype == crate::fspec::EffectType::Unaffected {
+                                guard.set_unaffected();
+                            }
+                            if effecttype == crate::fspec::EffectType::ReturnAddress {
+                                // Should be unaffected over the course of
+                                // the function (funcdata_varnode.cc:369).
+                                guard.set_unaffected();
+                                guard.set_return_address();
+                            }
+                        }
+                    }
                     debug_assert!(op_ref
                         .0
                         .read()
@@ -7038,6 +7861,7 @@ impl Funcdata {
             let block = Arc::new(RwLock::new(BlockBasic::new(block_idx as i32, block_addr)));
 
             // Add ops to this block
+            let mut stop_addr = start_addr;
             for op_ref in &op_refs[start..end] {
                 {
                     let mut op = op_ref.0.write().unwrap();
@@ -7046,9 +7870,34 @@ impl Funcdata {
                         &(block.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
                     ));
                 }
+                // flow.cc:1010-1012: stop tracks the biggest op address seen
+                // (FlowInfo::splitBasic's setBasicBlockRange(cur, start, stop)
+                // at flow.cc:1004/1016 → BlockBasic::setInitialRange,
+                // block.cc:2625). The cover is the block's ORIGINAL
+                // instruction range and must never move when later Actions
+                // remove leading ops: BlockBasic::getEntryAddr (block.cc:2302)
+                // reads the cover, falling back to the first op's address only
+                // for multi-range covers — without a cover, dead-code removal
+                // of a leading op (observed: the stack-canary reload mov at
+                // httpd 0x12cfc6/0x12d7f0 and the loop-increment add at
+                // 0x12e410) drifted every goto label built on
+                // getEntryAddr/emitLabel (printc.cc:3164-3193) to the next
+                // op's address.
+                let op_addr = op_ref.0.read().unwrap().get_addr().as_u64();
+                if stop_addr < op_addr {
+                    stop_addr = op_addr;
+                }
                 let insert_pos = block.read().unwrap().get_ops().len();
                 block.write().unwrap().insert_op(insert_pos, op_ref.clone());
             }
+            // flow.cc:1016: close the block's range. Synthetic empty blocks
+            // (an instruction the lifter emitted no p-code for) still anchor
+            // the degenerate closed range [taddr, taddr] so a goto targeting
+            // the address resolves a stable label.
+            block
+                .write()
+                .unwrap()
+                .set_initial_range(block_addr, crate::address::Address::new(stop_addr));
 
             blocks.push(block);
         }
@@ -7108,8 +7957,24 @@ impl Funcdata {
                     }
                 }
                 OpCode::CPUI_CBRANCH => {
-                    // CBRANCH gets BOTH edges, but ORDER MATTERS for Structure Collapse!
-                    // Edge 0: branch target (true branch)
+                    // CBRANCH gets BOTH edges. Edge ORDER follows Ghidra's
+                    // FlowInfo::generateBlockEdges (flow.cc:960-967): the
+                    // FALL-THRU edge is pushed FIRST (out edge 0), the branch
+                    // target SECOND (out edge 1). All Ghidra consumers index
+                    // out edges as [falseOut=0, trueOut=1] (block.hh:294-301),
+                    // e.g. ActionConditionalConst::findConstCompare
+                    // (coreaction.cc:4496 constEdge=1 for INT_EQUAL) and
+                    // JumpTable analysis true-slot indexing; the previous
+                    // [target, fallthru] order inverted the true/false
+                    // meaning of getOut(0)/getOut(1) and made condconst
+                    // substitute the branch constant into the wrong path.
+                    // Edge 0: fallthrough (false branch) to next sequential block
+                    if i + 1 < blocks.len() {
+                        self.bblocks
+                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
+                    }
+
+                    // Edge 1: branch target (true branch)
                     if let Some(target_addr) = branch_target_offset {
                         for j in 0..blocks.len() {
                             let target_start = blocks[j].read().unwrap().get_start_addr().as_u64();
@@ -7118,12 +7983,6 @@ impl Funcdata {
                                 break;
                             }
                         }
-                    }
-
-                    // Edge 1: fallthrough (false branch) to next sequential block
-                    if i + 1 < blocks.len() {
-                        self.bblocks
-                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
                     }
                 }
                 _ => {
@@ -7358,9 +8217,12 @@ impl Funcdata {
     ///   setUnionField(parent, op, slot, resolve);
     /// Rugra: relative pointers (pointerRel) are not modeled as a distinct
     /// Datatype flag yet; the rewrite to a standard pointer is a no-op until
-    /// that metadata lands. The ResolvedUnion is built via `with_field`, which
-    /// needs a TypeFactory; when no arch is attached we fall back to the
-    /// plain `new(parent)` self-resolution.
+    /// that metadata lands. The ResolvedUnion is built via `with_field`
+    /// under a TypeFactory **write** guard (UNIONRESOLVE-PKG-G-0001): the
+    /// cc:51-55 pointer arm interns through `getTypePointer`, mirroring the
+    /// oracle's `*glb->types` mutation channel, so the resolve Arc is
+    /// factory-canonical for the `Arc::ptr_eq` identity family. When no arch
+    /// is attached we fall back to the plain `new(parent)` self-resolution.
     pub fn force_facing_type(
         &mut self,
         parent: std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -7377,11 +8239,11 @@ impl Funcdata {
         // cc:984-985: ResolvedUnion resolve(parent, fieldNum, *glb->types).
         let resolve = if let Some(arch) = &self.arch {
             if let Some(tg) = &arch.types {
-                let tg_guard = tg.read().unwrap();
+                let mut tg_guard = tg.write().unwrap();
                 crate::unionresolve::ResolvedUnion::with_field(
                     parent.clone(),
                     field_num,
-                    &tg_guard)
+                    &mut tg_guard)
             } else {
                 crate::unionresolve::ResolvedUnion::new(parent.clone())
             }
@@ -7426,7 +8288,7 @@ impl Funcdata {
     // Expression normalization (funcdata_op.cc:1132-1500)
     // =========================================================================
 
-    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
+    // Ghidra: funcdata_op.cc:1130 Funcdata::collapseIntMultMult
     /// Fold two chained constant INT_MULTs into one. Faithful to
     /// `Funcdata::collapseIntMultMult` (funcdata_op.cc:1132-1153). Given
     ///   vn = INT_MULT(A, c1)
@@ -7518,7 +8380,7 @@ impl Funcdata {
         true
     }
 
-    // Ghidra: funcdata_op.cc:1161 Funcdata::buildCopyTemp
+    // Ghidra: funcdata_op.cc:1159 Funcdata::buildCopyTemp
     /// Return a unique-space Varnode defined by a COPY of `vn`, available at
     /// `point`. Faithful to `Funcdata::buildCopyTemp` (funcdata_op.cc:1161-1213).
     /// If a preexisting COPY into unique space exists and is usable at `point`,
@@ -7667,7 +8529,7 @@ impl Funcdata {
         out_vn
     }
 
-    // Ghidra: funcdata_op.cc:1223 Funcdata::opFlipInPlaceTest
+    // Ghidra: funcdata_op.cc:1221 Funcdata::opFlipInPlaceTest
     /// Trace a boolean value to the set of PcodeOps whose opcodes must flip to
     /// negate it. Faithful to `Funcdata::opFlipInPlaceTest`
     /// (funcdata_op.cc:1223-1275). Returns 0 if the flip normalizes, 1 if
@@ -7794,7 +8656,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_op.cc:1282 Funcdata::opFlipInPlaceExecute
+    // Ghidra: funcdata_op.cc:1280 Funcdata::opFlipInPlaceExecute
     /// Apply the precomputed op-code flips to negate a boolean value. Faithful
     /// to `Funcdata::opFlipInPlaceExecute` (funcdata_op.cc:1282-1315). For
     /// each op in `fliplist`: look up its boolean-flip target via
@@ -7857,7 +8719,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_op.cc:1326 Funcdata::cseFindInBlock
+    // Ghidra: funcdata_op.cc:1324 Funcdata::cseFindInBlock
     /// Find a duplicate calculation of `op` that reads `vn` in block `bl`
     /// earlier than `earliest`. Faithful to `Funcdata::cseFindInBlock`
     /// (funcdata_op.cc:1326-1347). Only 1-level matches are considered: the
@@ -7867,7 +8729,7 @@ impl Funcdata {
         &self,
         op: &crate::op::PcodeOpRef,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        bl: Option<&std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
         earliest: Option<&crate::op::PcodeOpRef>,
     ) -> Option<crate::op::PcodeOpRef> {
         // cc:1331-1345: for each descendant res of vn:
@@ -7886,9 +8748,11 @@ impl Funcdata {
                 .parent
                 .clone()
                 .and_then(|w| w.upgrade());
-            // cc:1334: if (res->getParent() != bl) continue.
+            // cc:1334: if (res->getParent() != bl) continue — raw pointer
+            // inequality, so a null -bl- matches ONLY parentless ops.
             let parent_matches = match (&res_parent, bl) {
-                (Some(rp), bp) => std::sync::Arc::ptr_eq(rp, bp),
+                (Some(rp), Some(bp)) => std::sync::Arc::ptr_eq(rp, bp),
+                (None, None) => true,
                 _ => false,
             };
             if !parent_matches {
@@ -7913,7 +8777,7 @@ impl Funcdata {
         None
     }
 
-    // Ghidra: funcdata_op.cc:1459 Funcdata::moveRespectingCover
+    // Ghidra: funcdata_op.cc:1457 Funcdata::moveRespectingCover
     /// Move `op` past COPY/CAST ops toward `lastOp`, within its basic block,
     /// only when no data-flow interference occurs. Faithful to
     /// `Funcdata::moveRespectingCover` (funcdata_op.cc:1459-1500). The move
@@ -8046,16 +8910,13 @@ impl Funcdata {
     /// Build the p-code that displays an encoded string constant. Faithful
     /// to `Funcdata::getInternalString` (funcdata_varnode.cc:1413-1434):
     ///   - reject non-pointer types
-    ///   - register the raw bytes with the StringManager, returning a hash;
-    ///     hash==0 means the encoding is not a legal string → return null
+    ///   - register the raw bytes with the StringManager
+    ///     (`registerInternalStringData`), returning a hash; hash==0 means
+    ///     the encoding is not a legal string → return null
     ///   - register the BUILTIN_STRING_DATA user-op
     ///   - emit `CALLOTHER(string_data_id, hash)` before `readOp`, returning
     ///     its unique output typed as `ptrType`
     /// Returns the new Varnode, or None if the encoding is not a string.
-    /// RUGRA-GAP: Rugra's StringManager has no `registerInternalStringData`;
-    /// we validate the encoding via `check_characters`/`has_char_terminator`
-    /// and synthesize a stable hash from (addr, bytes). When no arch/string
-    /// manager is attached, returns None (caller treats as non-string).
     pub fn get_internal_string(
         &mut self,
         buf: &[u8],
@@ -8072,32 +8933,19 @@ impl Funcdata {
             Datatype::Pointer(p) => p.ptr_to.clone(),
             _ => return None,
         };
-        // cc:1420-1423: hash = glb->stringManager->registerInternalStringData(...).
-        // Rugra: validate + synthesize hash. charsize inferred from char_type size.
-        let charsize = char_type.get_size().max(1) as i32;
+        // cc:1420: const Address &addr(readOp->getAddr()).
         let addr = read_op.0.read().unwrap().get_addr();
+        let charsize = char_type.get_size().max(1) as i32;
+        // cc:1420-1423: hash = glb->stringManager->registerInternalStringData(
+        //   addr, buf, size, charType); hash == 0 (illegal encoding) returns
+        //   null. The ported manager (stringmanage.rs) keys the entry at the
+        //   constant-space address of the hash, which is exactly the address
+        //   PrintC::printCharacterConstant reads back through the
+        //   STRINGDATA CALLOTHER's hash input (printc.cc:701-714).
         let hash = if let Some(arch) = &self.arch {
             if let Some(sm_arc) = &arch.string_manager {
-                let mut sm = sm_arc.write().unwrap();
-                // Validate the encoding (faithful to StringManager logic).
-                let num_chars = crate::stringmanage::check_characters(buf, charsize, false);
-                if num_chars < 0
-                    || !crate::stringmanage::has_char_terminator(buf, charsize as usize)
-                {
-                    return None;
-                }
-                let mut data = crate::stringmanage::StringData::default();
-                crate::stringmanage::assign_string_data(
-                    &mut data,
-                    buf,
-                    charsize,
-                    num_chars,
-                    false,
-                    sm.get_maximum_chars(),
-                );
-                sm.insert_string_data(addr, data);
-                // Synthesize a stable hash from addr (low 56 bits) | charsize<<56.
-                (addr.as_u64() & 0x00ff_ffff_ffff_ffff) | ((charsize as u64) << 56)
+                let sm = sm_arc.write().unwrap();
+                sm.register_internal_string_data(addr, buf, charsize)
             } else {
                 return None;
             }
@@ -8349,6 +9197,12 @@ impl Funcdata {
                 if !added {
                     // Legacy fallback: the symbol_table name proxy.
                     self.symbol_table.insert(vn_addr.as_u64(), sym_name);
+                    // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: coverVarnodes'
+                    // addSymbol goes through Scope::addMap like any other
+                    // (database.cc:1126-1151) — record the entry size (the
+                    // TYPE's size per addMapPoint) so mapGlobals' cc:1711
+                    // extension test sees the true entry end on re-runs.
+                    self.symbol_table_sizes.insert(vn_addr.as_u64(), sym_size);
                     vn.write()
                         .unwrap()
                         .set_flags(crate::varnode::varnode_flags::MAPPED);
@@ -8390,11 +9244,13 @@ impl Funcdata {
         // cc:1645-1647: fldNum + ResolvedUnion(parent, fldNum, types); setLock.
         let resolve = if let Some(arch) = &self.arch {
             if let Some(tg) = &arch.types {
-                let tg_guard = tg.read().unwrap();
+                // Write guard: with_field interns the pointer arm through the
+                // factory (unionresolve.cc:54, UNIONRESOLVE-PKG-G-0001).
+                let mut tg_guard = tg.write().unwrap();
                 let mut r = crate::unionresolve::ResolvedUnion::with_field(
                     parent.clone(),
                     field_num,
-                    &tg_guard,
+                    &mut tg_guard,
                 );
                 r.set_lock(true);
                 r
@@ -8770,7 +9626,7 @@ impl Funcdata {
     // Group 2: Jumptable recovery (funcdata_block.cc:427-686)
     // =========================================================================
 
-    // Ghidra: funcdata_block.cc:427 Funcdata::linkJumpTable
+    // Ghidra: funcdata_block.cc:426 Funcdata::linkJumpTable
     /// Link an existing (possibly override) jump-table to the given BRANCHIND
     /// op by setting its indirect op. Faithful to `Funcdata::linkJumpTable`
     /// (funcdata_block.cc:427-441). Returns the matching table, or `None` if
@@ -8798,7 +9654,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:464 Funcdata::installJumpTable
+    // Ghidra: funcdata_block.cc:463 Funcdata::installJumpTable
     /// Install a fresh (empty) jump-table at the given address, suitable for
     /// an override. Must be called before flow is traced. Faithful to
     /// `Funcdata::installJumpTable` (funcdata_block.cc:464-477). Returns the
@@ -8967,7 +9823,7 @@ impl Funcdata {
         Ok(crate::jumptable::RecoveryMode::Success)
     }
 
-    // Ghidra: funcdata_block.cc:555 Funcdata::earlyJumpTableFail
+    // Ghidra: funcdata_block.cc:554 Funcdata::earlyJumpTableFail
     /// Backtrack from a BRANCHIND looking for ops that might affect the
     /// destination. If an uninjected CALLOTHER is in the flow path, the
     /// jump-table analysis will fail and `FailCallother` is returned.
@@ -9160,28 +10016,35 @@ impl Funcdata {
         Ok(Some(trial_jt))
     }
 
-    // Ghidra: funcdata_block.cc:679 Funcdata::switchOverJumpTables
+    // Ghidra: funcdata_block.cc:678 Funcdata::switchOverJumpTables
     /// For each jump-table, for each address, compute the corresponding basic
-    /// block index and the default branch. Faithful to
-    /// `Funcdata::switchOverJumpTables` (funcdata_block.cc:679-686).
+    /// block out-edge position (populating `JumpTable::block2addr`) and derive
+    /// the default branch. Faithful to
+    /// `Funcdata::switchOverJumpTables` (funcdata_block.cc:678-685), called at
+    /// the end of `followFlow` (funcdata_op.cc:777-778).
     ///
-    /// RUGRA-GAP: Ghidra delegates to `JumpTable::switchOver(flow)` which
-    /// consults `FlowInfo`'s address→op map. Rugra's `JumpTable` has no
-    /// `switch_over` yet; this stub iterates the tables so the call site is
-    /// preserved, and the per-table switchover is a no-op until FlowInfo
-    /// lands.
-    pub fn switch_over_jump_tables(&mut self) {
-        for jt in &self.jump_tables {
-            // RUGRA-GAP: jt->switchOver(flow);
-            let _ = jt;
+    /// RUGRA-GLUE: associated-function form taking the `Funcdata` by shared
+    /// reference — the only `&mut Funcdata` during flow following is owned by
+    /// the `FlowInfo`, so the oracle's member form cannot borrow both. Each
+    /// table is still mutated through its `Arc<RwLock<JumpTable>>`, exactly
+    /// like Ghidra mutates through its `jumpvec` pointers.
+    pub fn switch_over_jump_tables(
+        fd: &Funcdata, flow: &crate::flow::FlowInfo,
+    ) -> crate::error::Result<()> {
+        for jt in &fd.jump_tables {
+            jt.write()
+                .unwrap()
+                .switch_over(flow)
+                .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?;
         }
+        Ok(())
     }
 
     // =========================================================================
     // Group 3: Block structure maintenance (funcdata_block.cc:28-321)
     // =========================================================================
 
-    // Ghidra: funcdata_block.cc:28 Funcdata::printBlockTree
+    // Ghidra: funcdata_block.cc:27 Funcdata::printBlockTree
     /// Print the structure tree (composite blocks) to a string. Faithful to
     /// `Funcdata::printBlockTree` (funcdata_block.cc:28-33), which delegates
     /// to `BlockGraph::printTree(s, 0)`. Rugra's `BlockGraph` has no
@@ -9200,7 +10063,7 @@ impl Funcdata {
         out
     }
 
-    // Ghidra: funcdata_block.cc:35 Funcdata::clearBlocks
+    // Ghidra: funcdata_block.cc:34 Funcdata::clearBlocks
     /// Clear both the basic-block graph and the structure tree. Faithful to
     /// `Funcdata::clearBlocks` (funcdata_block.cc:35-40).
     pub fn clear_blocks(&mut self) {
@@ -9208,7 +10071,7 @@ impl Funcdata {
         self.sblocks.clear();
     }
 
-    // Ghidra: funcdata_block.cc:43 Funcdata::clearJumpTables
+    // Ghidra: funcdata_block.cc:42 Funcdata::clearJumpTables
     /// Clear all derived jump-table data, preserving any manually-overridden
     /// tables. Faithful to `Funcdata::clearJumpTables`
     /// (funcdata_block.cc:43-60): for an override the table object survives
@@ -9230,19 +10093,20 @@ impl Funcdata {
         self.jump_tables = remain;
     }
 
-    // Ghidra: funcdata_block.cc:85 Funcdata::pushMultiequals
+    // Ghidra: funcdata_block.cc:84 Funcdata::pushMultiequals
     /// Assuming `bb` is being removed, force any Varnode defined by a
     /// MULTIEQUAL in `bb` to be defined in the output block instead, patching
     /// up data-flow. Faithful to `Funcdata::pushMultiequals`
-    /// (funcdata_block.cc:85-172).
-    ///
-    /// RUGRA-GAP: the full algorithm constructs artificial MULTIEQUAL ops and
-    /// rewrites descend lists. Rugra's op/varnode mutation API is incomplete
-    /// (no `opSetAllInput`, no descend iteration that yields owned ops), so
-    /// this implementation handles the common single-output, no-replacement
-    /// case and warns otherwise. The structure and intent match Ghidra.
+    /// (funcdata_block.cc:84-171): per-MULTIEQUAL-in-bb descendant scan
+    /// (dead-edge detection + addrtied same-address `neednewunique`), then the
+    /// artificial MULTIEQUAL construction in the first out block (origvn on
+    /// the bb-edge slots, `replacevn` on every other slot), then the
+    /// descend rewrite that retargets all non-dead-edge reads of `origvn` to
+    /// `replacevn`.
     pub fn push_multiequals(&mut self, bb: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
-        let (size_out, out_block, outblock_ind) = {
+        // cc:93-95: no out edges -> nothing to push into; >1 out edges is
+        // unexpected for a do-nothing block but only warns, execution goes on.
+        let (outblock, outblock_ind) = {
             let bb_rg = bb.read().unwrap();
             if bb_rg.size_out() == 0 {
                 return;
@@ -9250,24 +10114,21 @@ impl Funcdata {
             if bb_rg.size_out() > 1 {
                 self.warning_header("push_multiequal on block with multiple outputs");
             }
+            // cc:96-98: take first output block (for a donothing block it is
+            // the only one) and the slot of bb in its in-list (dead-edge slot).
             let out = bb_rg.get_out(0).map(|e| e.point);
-            // get_out_rev_index is on BlockBasic only; downcast to reach it.
             let rev = if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
                 bb_basic.get_out_rev_index(0)
             } else {
                 -1
             };
-            (bb_rg.size_out(), out, rev)
-        };
-        let _ = size_out;
-        let outblock = match out_block {
-            Some(o) => o,
-            None => return,
+            match out {
+                Some(o) => (o, rev),
+                None => return,
+            }
         };
 
-        // Gather the MULTIEQUAL ops in bb that still have descendants.
-        // We snapshot the relevant ops first to avoid holding a borrow across
-        // the mutation below.
+        // cc:99: iterate bb's ops in block order.
         let bb_ops = {
             let bb_rg = bb.read().unwrap();
             if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
@@ -9278,9 +10139,8 @@ impl Funcdata {
         };
 
         for origop in bb_ops {
-            let is_multiequal = origop.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL;
-            if !is_multiequal {
-                continue;
+            if origop.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                continue; // cc:101
             }
             let origvn = origop.0.read().unwrap().get_out().cloned();
             let origvn = match origvn {
@@ -9288,29 +10148,169 @@ impl Funcdata {
                 None => continue,
             };
             if origvn.read().unwrap().has_no_descend() {
-                continue;
+                continue; // cc:103
             }
-            // Check whether any descendant is a MULTIEQUAL in outblock reading
-            // origvn via the dead edge (outblock_ind). If so, no replacement is
-            // needed for that read.
-            // RUGRA-GAP: full descend iteration + artificial MULTIEQUAL
-            // construction requires opSetAllInput/opSetOutput on new ops,
-            // which Rugra exposes but the descend-rewrite is involved. We
-            // implement the detection step and emit the warning Ghidra emits
-            // when a replacement would be required, leaving the rewrite for a
-            // follow-up once descend iteration is owned.
-            let _ = outblock_ind;
-            let _ = &outblock;
-            // The conservative warning matches Ghidra's
-            //   warningHeader("push_multiequal on block with multiple outputs")
-            // only for the multi-output case (already handled above). For the
-            // single-output case with active descendants we currently cannot
-            // rebuild the artificial MULTIEQUAL, so we warn.
-            self.warning_header("push_multiequal: descendant rewrite not yet implemented");
+            // cc:104-128: scan origvn's descendants (in descend order) for
+            // the first read that does NOT go through the dead edge.
+            let mut needreplace = false;
+            let mut neednewunique = false;
+            let descend_snapshot: Vec<_> = {
+                let orig_rg = origvn.read().unwrap();
+                orig_rg.descend_iter().collect()
+            };
+            for op in descend_snapshot {
+                let is_multi_in_outblock = {
+                    let o = op.read().unwrap();
+                    o.opcode == OpCode::CPUI_MULTIEQUAL
+                        && o.parent
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                            .is_some_and(|p| Arc::ptr_eq(&p, &outblock))
+                };
+                if is_multi_in_outblock {
+                    // cc:109-116: deadEdge = every reference to origvn in this
+                    // MULTIEQUAL goes through the dead edge (slot outblock_ind).
+                    let mut dead_edge = true;
+                    let num_input = op.read().unwrap().num_input();
+                    for i in 0..num_input {
+                        if i as i32 == outblock_ind {
+                            continue; // cc:111: not going thru dead edge
+                        }
+                        let reads_orig = {
+                            let o = op.read().unwrap();
+                            o.inrefs
+                                .get(i)
+                                .is_some_and(|v| Arc::ptr_eq(v, &origvn))
+                        };
+                        if reads_orig {
+                            dead_edge = false; // cc:113
+                            break;
+                        }
+                    }
+                    if dead_edge {
+                        // cc:118-122: if origvn is addrtied and feeds a
+                        // MULTIEQUAL at the same address in outblock, any use
+                        // beyond outblock propagated through another register,
+                        // so the new MULTIEQUAL must write a unique.
+                        // cc:118's Address::operator== (address.hh:356-358)
+                        // compares space AND offset — a register-space origvn
+                        // and a stack/ram MULTIEQUAL out at the same offset
+                        // are NOT the same storage; the spaceless offset-only
+                        // compare wrongly forced neednewunique for
+                        // cross-space matches (FAMILY-AUDIT-SPACELESS-SITES-0001).
+                        let same_addr_addrtied = {
+                            let (orig_addr, orig_space, orig_addrtied) = {
+                                let orig_rg = origvn.read().unwrap();
+                                (
+                                    *orig_rg.get_addr(),
+                                    orig_rg.address_space,
+                                    orig_rg.is_addr_tied(),
+                                )
+                            };
+                            let out_matches = {
+                                let o = op.read().unwrap();
+                                o.get_out().is_some_and(|v| {
+                                    let v_rg = v.read().unwrap();
+                                    v_rg.address_space == orig_space
+                                        && *v_rg.get_addr() == orig_addr
+                                })
+                            };
+                            out_matches && orig_addrtied
+                        };
+                        if same_addr_addrtied {
+                            neednewunique = true;
+                        }
+                        continue; // cc:123
+                    }
+                }
+                needreplace = true; // cc:126
+                break; // cc:127
+            }
+            if !needreplace {
+                continue; // cc:129
+            }
+            // cc:131-135: the replacement varnode.
+            let (orig_size, orig_addr, orig_space) = {
+                let orig_rg = origvn.read().unwrap();
+                (orig_rg.get_size(), *orig_rg.get_addr(), orig_rg.address_space)
+            };
+            let replacevn = if neednewunique {
+                self.new_unique(orig_size)
+            } else {
+                // cc:135: newVarnode(origvn->getSize(),origvn->getAddr()) —
+                // the full storage address (space + offset) of origvn. The
+                // spaceless new_varnode adapter defaults to RAM, which
+                // fabricated cross-space varnodes (RAM@register-offset) out
+                // of pushed register-space MULTIEQUALs — the
+                // HERITAGE-CROSSSPACE-MERGE-0001 garbage family.
+                self.new_varnode_in_space(orig_size, orig_space, orig_addr)
+            };
+            // cc:136-148: one branch per in-edge of outblock: origvn on the
+            // bb edge(s), replacevn on the (dominated) alternate edges.
+            let out_in_count = outblock.read().unwrap().size_in();
+            let mut branches: Vec<Arc<RwLock<crate::varnode::Varnode>>> =
+                Vec::with_capacity(out_in_count);
+            for i in 0..out_in_count {
+                let from_bb = {
+                    let out_rg = outblock.read().unwrap();
+                    out_rg
+                        .get_in(i)
+                        .is_some_and(|e| Arc::ptr_eq(&e.point, bb))
+                };
+                if from_bb {
+                    branches.push(origvn.clone());
+                } else {
+                    branches.push(replacevn.clone());
+                }
+            }
+            // cc:149-153: construct the artificial MULTIEQUAL at outblock's
+            // start and insert it at the head of its MULTIEQUAL group.
+            let out_start = outblock.read().unwrap().get_start_addr();
+            let replaceop = self.new_op(branches.len(), out_start);
+            self.op_set_opcode(&replaceop, OpCode::CPUI_MULTIEQUAL);
+            self.op_set_output(&replaceop, replacevn.clone());
+            self.op_set_all_input(&replaceop, &branches);
+            self.op_insert_begin(&replaceop, &outblock);
+
+            // cc:156-169: replace obsolete origvn reads with replacevn. The
+            // snapshot is taken AFTER the construction, matching Ghidra's
+            // `titer = origvn->descend.begin()` at cc:157 — the artificial
+            // MULTIEQUAL itself now trails the list and is skipped by the
+            // cc:163-165 dead-edge guard like any other dead-edge read.
+            let rewrite_snapshot: Vec<_> = {
+                let orig_rg = origvn.read().unwrap();
+                orig_rg.descend_iter().collect()
+            };
+            for op in rewrite_snapshot {
+                let num_input = op.read().unwrap().num_input();
+                for i in 0..num_input {
+                    let reads_orig = {
+                        let o = op.read().unwrap();
+                        o.inrefs.get(i).is_some_and(|v| Arc::ptr_eq(v, &origvn))
+                    };
+                    if !reads_orig {
+                        continue; // cc:161-162
+                    }
+                    let dead_edge_read = {
+                        let o = op.read().unwrap();
+                        (i as i32) == outblock_ind
+                            && o.parent
+                                .as_ref()
+                                .and_then(std::sync::Weak::upgrade)
+                                .is_some_and(|p| Arc::ptr_eq(&p, &outblock))
+                            && o.opcode == OpCode::CPUI_MULTIEQUAL
+                    };
+                    if dead_edge_read {
+                        continue; // cc:163-165
+                    }
+                    self.op_set_input(&crate::op::PcodeOpRef(op.clone()), replacevn.clone(), i);
+                    break; // cc:167
+                }
+            }
         }
     }
 
-    // Ghidra: funcdata_block.cc:178 Funcdata::opZeroMulti
+    // Ghidra: funcdata_block.cc:177 Funcdata::opZeroMulti
     /// If the MULTIEQUAL has no inputs, treat it as a COPY from a new input
     /// Varnode; if it has one input, transform it directly into a COPY.
     /// Faithful to `Funcdata::opZeroMulti` (funcdata_block.cc:178-188).
@@ -9319,18 +10319,26 @@ impl Funcdata {
         if num_input == 0 {
             // No branches left: insert a new input varnode at slot 0 and
             // convert to COPY.
-            let (size, addr) = {
+            let (size, addr, space) = {
                 let op_rg = op.0.read().unwrap();
                 let out = op_rg.get_out();
                 match out {
                     Some(o) => {
                         let o_rg = o.read().unwrap();
-                        (o_rg.get_size(), *o_rg.get_addr())
+                        (o_rg.get_size(), *o_rg.get_addr(), o_rg.address_space)
                     }
-                    None => (0, Address::new(0)),
+                    None => (0, Address::new(0), crate::space::AddressSpace::Ram),
                 }
             };
-            let newvn = self.new_varnode(size, addr);
+            // cc:181: newVarnode(op->getOut()->getSize(),op->getOut()->getAddr())
+            // — the FULL storage address (space + offset) of the out
+            // varnode; a zeroed MULTIEQUAL's out is commonly a register, so
+            // the input varnode lives in the register space. The spaceless
+            // new_varnode adapter defaults to RAM, which fabricated
+            // RAM@register-offset garbage instead — the
+            // HERITAGE-CROSSSPACE-MERGE family (same construction as the
+            // pushMultiequals fix at new_varnode_in_space cc:135).
+            let newvn = self.new_varnode_in_space(size, space, addr);
             self.op_insert_input(op, newvn.clone(), 0);
             // Ghidra: setInputVarnode(op->getIn(0)); promote slot 0 to input.
             self.set_input_varnode(newvn);
@@ -9340,7 +10348,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:196 Funcdata::branchRemoveInternal
+    // Ghidra: funcdata_block.cc:195 Funcdata::branchRemoveInternal
     /// Remove an outgoing branch of the given basic block, patching
     /// MULTIEQUAL p-code ops in the target block. Faithful to
     /// `Funcdata::branchRemoveInternal` (funcdata_block.cc:196-216).
@@ -9393,7 +10401,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:234 Funcdata::descendantsOutside
+    // Ghidra: funcdata_block.cc:233 Funcdata::descendantsOutside
     /// Assuming a basic block is marked dead, return `true` if any PcodeOp
     /// reading `vn` is outside the dead block (i.e. the varnode still has
     /// live readers). Faithful to `Funcdata::descendantsOutside`
@@ -9428,7 +10436,7 @@ impl Funcdata {
     }
 
 
-    // Ghidra: funcdata_block.cc:255 Funcdata::blockRemoveInternal
+    // Ghidra: funcdata_block.cc:254 Funcdata::blockRemoveInternal
     /// Remove an active basic block from the function: delete its PcodeOps,
     /// patch up data-flow and control-flow (mostly MULTIEQUALs). Faithful to
     /// `Funcdata::blockRemoveInternal` (funcdata_block.cc:255-321).
@@ -9798,8 +10806,9 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:494 Funcdata::adjustInputVarnodes
-    /// Collapse any input Varnodes contained in the range `[addr, addr+sz)`
-    /// into a single input, redefining the originals as SUBPIECEs of it.
+    /// Collapse any input Varnodes contained in the range
+    /// `[addr_offset, addr_offset+sz)` in the given space into a single
+    /// input, redefining the originals as SUBPIECEs of it.
     /// Faithful to `Funcdata::adjustInputVarnodes`
     /// (funcdata_varnode.cc:494-537):
     ///   endaddr = addr + (sz-1);
@@ -9819,24 +10828,33 @@ impl Funcdata {
     ///   invn->setWriteMask();
     ///   for each vn in inlist: opSetInput(vn->getDef(), invn, 0);
     /// RUGRA-GAP: `justifiedContain` is approximated by a direct byte offset;
-    /// Rugra scans loc_tree for inputs completely contained in the range.
+    /// Rugra scans loc_tree for inputs completely contained in the range —
+    /// now pinned to the container's space (Ghidra's beginDef/endDef iterate
+    /// the Address-ordered def subset, so the offset bounds never cross
+    /// spaces; the piece outputs and the new combined input keep the
+    /// container's space via new_varnode_out_full/new_varnode_in_space).
     pub fn adjust_input_varnodes(
         &mut self,
-        addr: crate::address::Address,
+        space: crate::space::AddressSpace,
+        addr_offset: u64,
         sz: usize,
     ) -> crate::error::Result<()> {
-        let end = addr.as_u64().saturating_add(sz.saturating_sub(1) as u64);
-        // cc:500-508: gather inputs completely contained in [addr, end].
+        let end = addr_offset.wrapping_add(sz.saturating_sub(1) as u64);
+        // cc:500-508 — beginDef(Varnode::input, addr)..endDef(Varnode::input,
+        // endaddr): the Address-ordered input-def subset — the space of
+        // `addr` pins the iteration and membership is by START offset in
+        // [addr, endaddr]. An input whose start is in range but extends
+        // past endaddr STAYS in the iteration: the cc:505-506
+        // LowlevelError below is the only exit for it, exactly as in Ghidra.
         let inlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
             .vbank
             .loc_tree
             .iter()
             .filter_map(|lr| {
                 let r = lr.0.read().unwrap();
-                if !r.is_input() { return None; }
+                if !r.is_input() || r.get_space() != space { return None; }
                 let start = r.loc.as_u64();
-                let vn_end = start.saturating_add(r.size as u64).saturating_sub(1);
-                if start < addr.as_u64() || vn_end > end { return None; }
+                if start < addr_offset || start > end { return None; }
                 Some(lr.0.clone())
             })
             .collect();
@@ -9844,18 +10862,35 @@ impl Funcdata {
         // combined input, then destroy the old input.
         let mut replaced: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn in inlist {
-            let (vn_addr, vn_size) = {
+            let (vn_addr, vn_size, vn_is_input) = {
                 let r = vn.read().unwrap();
-                (r.loc.as_u64(), r.size)
+                (r.loc.as_u64(), r.size, r.is_input())
             };
-            let sa = vn_addr.saturating_sub(addr.as_u64()) as usize;
-            if sz <= vn_size { continue; }
+            // cc:505-506 — extends past the container end: fatal, no silent
+            // skip.
+            if vn_addr.wrapping_add(vn_size as u64).wrapping_sub(1) > end {
+                return Err(crate::error::Error::Lowlevel(
+                    "Cannot properly adjust input varnodes".to_string(),
+                ));
+            }
+            // cc:512-514 — sa = addr.justifiedContain(sz, vn->getAddr(),
+            // vn->getSize(), false); (!isInput || sa < 0 || sz <= size) is
+            // fatal. The gather guarantees is_input and start >= addr, so
+            // sa >= 0; the size relation is the live check.
+            let sa = vn_addr.wrapping_sub(addr_offset) as usize;
+            if !vn_is_input || sz <= vn_size {
+                return Err(crate::error::Error::Lowlevel(
+                    "Bad adjustment to input varnode".to_string(),
+                ));
+            }
             let pc = self.baseaddr;
             let subop = self.new_op(2, pc);
             self.op_set_opcode(&subop, crate::opcodes::OpCode::CPUI_SUBPIECE);
             let sa_const = self.new_constant(4, sa as u64);
             self.op_set_input(&subop, sa_const, 1);
-            let newvn = self.new_varnode_out(vn_size, crate::address::Address::new(vn_addr), &subop);
+            // cc:518 — newVarnodeOut(vn->getSize(), vn->getAddr(), subop):
+            // the piece keeps the container's space.
+            let newvn = self.new_varnode_out_full(vn_size, space, crate::address::Address::new(vn_addr), &subop);
             // cc:520: opInsertBegin(subop, bblocks[0]).
             if let Some(bb0) = self.bblocks.get_block(0) {
                 self.op_insert_begin(&subop, &bb0);
@@ -9865,8 +10900,9 @@ impl Funcdata {
             replaced.push(newvn);
         }
         if replaced.is_empty() { return Ok(()); }
-        // cc:526-531: create the combined input and mark it writemask.
-        let invn = self.new_varnode(sz, addr);
+        // cc:526-531 — newVarnode(sz,addr) with the container's full storage
+        // address, then setInputVarnode + setWriteMask.
+        let invn = self.new_varnode_in_space(sz, space, crate::address::Address::new(addr_offset));
         let invn = self.set_input_varnode(invn);
         invn.write().unwrap().set_write_mask();
         // cc:533-536: each replacement SUBPIECE reads the new input at slot 0.
@@ -9979,12 +11015,22 @@ impl Funcdata {
     ///   maxdelay = funcp.getMaxOutputDelay();
     ///   if (maxdelay > 0) maxdelay = 3;
     ///   activeoutput->setMaxPass(maxdelay);
-    /// RUGRA-GAP: FuncProto::getMaxOutputDelay is not ported; we use the
-    /// Ghidra-default of 3 passes (matches the `maxdelay>0 ? 3` arm).
+    /// getMaxOutputDelay is ProtoModel::getMaxOutputDelay
+    /// (fspec.hh:1572) -> the output ParamListStandard's calcDelay maximum
+    /// (fspec.cc:1154-1162) over entry spaces' AddrSpace::getDelay(). Every
+    /// output entry of every model in the locked x86-64-gcc.cspec lives in
+    /// the register space, whose delay in the locked x86-64.sla is 0 —
+    /// proven by the pinned next_url oracle projection, where returnrecovery
+    /// finalizes on mainloop round 1 (RDX trimmed at stage ordinal 19),
+    /// which requires numpasses(1) > maxpass, i.e. maxpass == 0.
     pub fn init_active_output(&mut self) {
+        let mut maxdelay = self.funcp.get_max_output_delay();
+        if maxdelay > 0 {
+            // cc:590-592: clamp any positive delay to 3.
+            maxdelay = 3;
+        }
         let mut active = crate::fspec::ParamActive::new(false);
-        // cc:590-592: clamp any positive delay to 3.
-        active.set_max_pass(3);
+        active.set_max_pass(maxdelay);
         self.active_output = Some(active);
     }
 
@@ -10586,7 +11632,14 @@ impl Funcdata {
                         .unwrap_or(false);
                     if !added {
                         // Legacy no-channel fallback: the symbol_table proxy.
-                        self.symbol_table.insert(addr.as_u64(), symbolname);
+                        self.symbol_table.insert(addr.as_u64(), symbolname.clone());
+                        // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: Scope::addMap
+                        // records the mapping size (database.cc:1126-1151);
+                        // the proxy records it alongside the name so the
+                        // cc:1711 extension test below can compare against
+                        // the entry's true end on restart re-runs.
+                        self.symbol_table_sizes
+                            .insert(addr.as_u64(), ct_size as i32);
                     }
                 }
                 Some((Some(hit), _fl)) => {
@@ -10635,14 +11688,31 @@ impl Funcdata {
                             })
                             .unwrap_or_else(|| format!("{:?}{:016x}", base_space, addr.as_u64()));
                         self.symbol_table.insert(addr.as_u64(), name);
-                    } else if (addr.as_u64() + max_size as u64).saturating_sub(1)
+                        // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: the proxy
+                        // entry's recorded size — the addMap ct_size the
+                        // oracle's re-runs read back through queryProperties.
+                        self.symbol_table_sizes
+                            .insert(addr.as_u64(), ct_size as i32);
+                    } else if (addr.as_u64() + ct_size as u64).saturating_sub(1)
                         > self
-                            .symbol_table
+                            .symbol_table_sizes
                             .get(&addr.as_u64())
-                            .map(|_| addr.as_u64())
+                            .map(|sz| addr.as_u64() + *sz as u64)
+                            // Driver-seeded proxy entries (ELF function
+                            // names) carry no recorded size: keep the
+                            // historical size-0 entry-end form for them.
+                            .or_else(|| {
+                                self.symbol_table
+                                    .contains_key(&addr.as_u64())
+                                    .then_some(addr.as_u64())
+                            })
+                            // has_symbol came from a scope overlap only:
+                            // no proxy entry to extend past.
                             .unwrap_or(u64::MAX)
+                            .saturating_sub(1)
                     {
-                        // cc:1711-1715 proxy form.
+                        // cc:1711-1715 proxy form: the group's ct extends
+                        // past the recorded entry's end — inconsistent use.
                         inconsistent = true;
                         if !uncovered.is_empty() {
                             let entry_name = self
@@ -10854,8 +11924,9 @@ impl Funcdata {
         opmatch: &crate::op::PcodeOpRef,
         op: &crate::op::PcodeOpRef,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        _fl: u32,
-        trial_addr: crate::address::Address,
+        fl: u32,
+        trial: &crate::fspec::ParamTrial,
+        match_fc: Option<&crate::fspec::FuncCallSpecs>,
     ) -> bool {
         use crate::opcodes::OpCode as OC;
         // cc:1759: j = op->getSlot(vn); if (j<=0) return false.
@@ -10864,18 +11935,32 @@ impl Funcdata {
             return false;
         }
         // cc:1761-1762: resolve both specifications by exact PcodeOp identity.
-        let fc = self.get_call_specs_of_op(op);
-        let matchfc = self.get_call_specs_of_op(opmatch);
+        // matchfc comes in by reference: Ghidra dereferences plain pointers,
+        // but Rust callers may hold the exclusive guard on opmatch's spec
+        // (ActionActiveParam/checkInputTrialUse walk), so re-locking it here
+        // would deadlock. onlyOpUse also reaches this with op == opmatch
+        // (when the varnode sits at a different slot of the same call), in
+        // which case Ghidra's fc and matchfc are the same object — reuse
+        // the caller-supplied reference for both instead of re-locking.
+        let same_op = std::sync::Arc::ptr_eq(&op.0, &opmatch.0);
+        let fc_arc = if same_op { None } else { self.get_call_specs_of_op(op) };
+        let fc_guard = fc_arc.as_ref().map(|arc| arc.read().unwrap());
+        let fc: Option<&crate::fspec::FuncCallSpecs> = if same_op {
+            match_fc
+        } else {
+            fc_guard.as_deref()
+        };
+        let matchfc = match_fc;
         // cc:1763-1781: same-call double-use test.
         let op_code = op.0.read().unwrap().opcode;
         let match_code = opmatch.0.read().unwrap().opcode;
         if op_code == match_code {
             let is_direct = match_code == OC::CPUI_CALL;
-            let same_target = match (&fc, &matchfc) {
+            let same_target = match (fc, matchfc) {
                 (Some(fc), Some(mfc)) => {
                     if is_direct {
-                        let entry = fc.read().unwrap().entry_addr;
-                        let match_entry = mfc.read().unwrap().entry_addr;
+                        let entry = fc.entry_addr;
+                        let match_entry = mfc.entry_addr;
                         entry.is_some() && entry == match_entry
                     } else {
                         // CALLIND: compare the indirect-call varnode (in(0)).
@@ -10890,9 +11975,9 @@ impl Funcdata {
             if same_target {
                 // cc:1770-1778: same trial address + ordering test.
                 // Rugra: we approximate the per-slot trial-address lookup by
-                // checking that the candidate's address equals trial_addr.
+                // checking that the candidate's address equals the trial's.
                 let vn_addr = vn.read().unwrap().loc;
-                if vn_addr == trial_addr {
+                if vn_addr == trial.get_address() {
                     let op_parent = op.0.read()
                             .unwrap()
                             .parent
@@ -10923,8 +12008,8 @@ impl Funcdata {
             }
         }
         // cc:1783-1793: input-active path.
-        if let Some(fc) = fc {
-            let fc = fc.read().unwrap();
+        if let Some(fc_ref) = fc {
+            let fc = fc_ref;
             if fc.is_input_active() {
                 // cc:1784: curtrial = fc->getActiveInput()->getTrialForInputVarnode(j).
                 let trial = fc
@@ -10933,11 +12018,12 @@ impl Funcdata {
                 if trial.is_checked() {
                     // cc:1786-1787: checked & active → reject.
                     if trial.is_active() { return false; }
-                    return true; // checked & inactive → keep.
+                } else if is_alternate_path_valid(&vn, fl) {
+                    // cc:1789-1790: unchecked, but the alternate path looks
+                    // more valid than the main path → reject the trial.
+                    return false;
                 }
-                // cc:1789-1790: not yet checked → reject if alt path
-                // valid; RUGRA-GAP: TraverseNode::isAlternatePathValid
-                // not ported, so we conservatively keep the trial.
+                // cc:1791: otherwise the double use is legitimate.
                 return true;
             }
         }
@@ -10947,39 +12033,34 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
     /// Test if the given Varnode seems to only be used by a CALL/RETURN op.
     /// Faithful to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904).
-    /// This is the `impl Funcdata` method form of the existing free function
-    /// `only_op_use`; it supplies `has_active_output` from `self.active_output`
-    /// and delegates to the free function so existing call-sites stay intact.
+    /// This is the `impl Funcdata` method form of the free function
+    /// `only_op_use`; it supplies the Funcdata receiver that the free
+    /// function needs for checkCallDoubleUse and getActiveOutput.
     pub fn only_op_use(
         &self,
         invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         opmatch: &crate::op::PcodeOpRef,
-        trial_slot: i32,
+        trial: &crate::fspec::ParamTrial,
         main_flags: u32,
     ) -> bool {
-        let has_active_output = self.active_output.is_some();
-        only_op_use(has_active_output, invn, opmatch, trial_slot, main_flags)
+        only_op_use(self, invn, opmatch, trial, main_flags, None)
     }
 
     // Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
     /// Test if the given trial Varnode is likely only used for parameter
     /// passing, following flow from ancestors it was copied from. Faithful to
     /// `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994). This is the
-    /// `impl Funcdata` method form of the free function `ancestor_op_use`;
-    /// it supplies `has_active_output` from `self.active_output`.
+    /// `impl Funcdata` method form of the free function `ancestor_op_use`.
     pub fn ancestor_op_use(
         &self,
         maxlevel: i32,
         invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &crate::op::PcodeOpRef,
-        trial_slot: i32,
+        trial: &mut crate::fspec::ParamTrial,
         offset: i32,
         main_flags: u32,
     ) -> bool {
-        let has_active_output = self.active_output.is_some();
-        ancestor_op_use(
-            has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags,
-        )
+        ancestor_op_use(self, maxlevel, invn, op, trial, offset, main_flags, None)
     }
 
     // Ghidra: funcdata_op.cc:332 Funcdata::newOp(int4, const SeqNum &)
@@ -11151,7 +12232,7 @@ impl Funcdata {
             let cloned_model = table
                 .jmodel
                 .as_ref()
-                .map(|model| model.clone_model(cloned_table.clone()));
+                .map(|model| model.clone_model());
             drop(table);
             {
                 let mut cloned = cloned_table.write().unwrap();
@@ -11459,9 +12540,10 @@ impl Funcdata {
                 .collect()
         };
         for (op_ref, slot) in descend_pairs {
-            // cc:283: op->clearInput(op->getSlot(vn)).
-            // Rust has no clearInput; op_unset_input erases the descend link
-            // and leaves the slot stale (to be overwritten or removed).
+            // cc:283: op->clearInput(op->getSlot(vn)). op_unset_input
+            // erases the descend link and NULLs the slot in place (the
+            // shared null_slot_sentinel stands in for Ghidra's NULL), so
+            // the slot keeps its count until overwritten or removed.
             if slot >= 0 {
                 self.op_unset_input(&op_ref, slot as usize);
             }
@@ -11557,6 +12639,26 @@ mod tests {
     // multi-threaded test races when `cargo test` runs in parallel.
     lazy_static::lazy_static! {
         static ref FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    }
+
+    // RUGRA-GLUE: test-only poison-immune acquisition of FFI_TEST_LOCK
+    // (TESTLIB-STATE-CONTAMINATION-0001). Ghidra has no test-harness
+    // counterpart. Previously every holder acquired with `.lock().unwrap()`,
+    // so one genuine assertion panic inside a holder (the observed trigger:
+    // test_normalize_branches_break_in_while_loop, funcdata.rs:15063)
+    // poisoned the Mutex and cascaded `PoisonError` into every later
+    // CURRENT_PROGRAM user — 16 deterministic victims in serial mode and a
+    // scheduling-dependent 17↔27 failure-count drift in parallel mode.
+    // Recovering the guard via `into_inner` keeps the mutual exclusion (the
+    // OS mutex still serializes holders) while making each test's outcome
+    // independent of earlier failures: every holder re-initializes the
+    // shared fixture via `ffi::set_current_program(fd)` before any
+    // comparison read, so no IR state from the panicking test can leak
+    // into the next one.
+    fn ffi_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        FFI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]
@@ -11710,10 +12812,16 @@ mod tests {
             2,
             "CBRANCH must be born with 2 out-edges (no zombie decision block)"
         );
-        // Edge 0 must land on the synthetic target block.
+        // Ghidra edge order (flow.cc:960-967 FlowInfo::generateBlockEdges):
+        // out edge 0 = fall-through (false), out edge 1 = branch target
+        // (true). Edge 1 must land on the synthetic target block; edge 0 on
+        // the sequential fall-through block.
         let edge0 = cb_block.read().unwrap().get_out(0).map(|e| e.point);
         let edge0 = edge0.expect("CBRANCH edge 0 exists");
-        assert!(Arc::ptr_eq(&edge0, &synth));
+        let edge1 = cb_block.read().unwrap().get_out(1).map(|e| e.point);
+        let edge1 = edge1.expect("CBRANCH edge 1 exists");
+        assert!(Arc::ptr_eq(&edge1, &synth));
+        assert_eq!(edge0.read().unwrap().get_start_addr().as_u64(), 0x1007);
     }
 
     // Case 2: a target OUTSIDE the function range is external flow
@@ -11835,7 +12943,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg_reg_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x89, 0xc3]; // mov rbx, rax
         let start = Address::new(0x1000);
 
@@ -11885,7 +12993,7 @@ mod tests {
 
     #[test]
     fn test_add_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x83, 0xc0, 0x01]; // add rax, 1
         let start = Address::new(0x1000);
 
@@ -11997,7 +13105,7 @@ mod tests {
 
     #[test]
     fn test_sub_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x83, 0xe8, 0x08]; // sub rax, 8
         let start = Address::new(0x1000);
 
@@ -12091,7 +13199,7 @@ mod tests {
 
     #[test]
     fn test_and_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // and rax, 0xf  →  48 83 e0 0f
         let code = vec![0x48, 0x83, 0xe0, 0x0f];
         let start = Address::new(0x1000);
@@ -12179,7 +13287,7 @@ mod tests {
 
     #[test]
     fn test_or_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // or rax, 0x10  →  48 83 c8 10
         let code = vec![0x48, 0x83, 0xc8, 0x10];
         let start = Address::new(0x1000);
@@ -12261,7 +13369,7 @@ mod tests {
 
     #[test]
     fn test_xor_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // xor rax, 0x7  →  48 83 f0 07
         let code = vec![0x48, 0x83, 0xf0, 0x07];
         let start = Address::new(0x1000);
@@ -12319,7 +13427,7 @@ mod tests {
 
     #[test]
     fn test_shl_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // shl rax, 4  →  48 c1 e0 04
         let code = vec![0x48, 0xc1, 0xe0, 0x04];
         let start = Address::new(0x1000);
@@ -12333,9 +13441,31 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 (shl/sal shift flags ported
+        // from the locked x86-64.sla shlflags/shiftresultflags templates,
+        // all count forms): count&0x3f mask, saved pre-shift value, direct
+        // INT_LEFT to rax, then CF(bit count-1)/OF/SF/ZF/POPCOUNT-PF
+        // chains — 37 ops. The old 2-op (INT_LEFT+COPY) expectation was
+        // the pre-flag-pcode form, masked from failing by the
+        // FFI_TEST_LOCK poison cascade (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(raw_ops.len(), 37);
 
-        let raw_op = &raw_ops[0];
+        // Op 0: tmp:4 = count & 0x3f (sla masks the shift count)
+        let raw_mask = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_mask.get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
+        let mask_inputs = raw_mask.inputs();
+        assert_eq!(mask_inputs.len(), 2);
+        assert_eq!(mask_inputs[0].space, AddressSpace::Const);
+        assert_eq!(mask_inputs[0].offset, 0x04);
+        assert_eq!(mask_inputs[0].size, 4);
+        assert_eq!(mask_inputs[1].space, AddressSpace::Const);
+        assert_eq!(mask_inputs[1].offset, 0x3f);
+
+        // Op 2: RAX = INT_LEFT(RAX, tmp) — direct-dst shift
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_LEFT)
@@ -12343,26 +13473,45 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
         assert_eq!(op_inputs.len(), 2);
         assert_eq!(op_inputs[0].space, AddressSpace::Register);
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
-        assert_eq!(op_inputs[1].space, AddressSpace::Const);
-        assert_eq!(op_inputs[1].offset, 0x04);
+        assert_eq!(op_inputs[1].space, AddressSpace::Unique); // masked count
 
+        // Op 1: saved pre-shift RAX (CF extracts bit count-1 from it)
         let raw_copy = &raw_ops[1];
         assert_eq!(
             OpCode::from_i32(raw_copy.get_opcode()),
             Some(OpCode::CPUI_COPY)
         );
 
+        // Flag-register writers terminate the chains: CF(0x200) at #10,
+        // OF(0x20b) at #17, SF(0x207) at #23, ZF(0x206) at #28,
+        // PF(0x202) at #36 (INT_OR merge per sla resultflags pattern).
+        for (idx, flag_off) in [(10usize, 0x200u64), (17, 0x20b), (23, 0x207), (28, 0x206), (36, 0x202)] {
+            let writer = &raw_ops[idx];
+            assert_eq!(
+                OpCode::from_i32(writer.get_opcode()),
+                Some(OpCode::CPUI_INT_OR),
+                "flag writer at #{}",
+                idx
+            );
+            let out_binding = writer.output();
+            let out = out_binding.as_ref().unwrap();
+            assert_eq!(out.space, AddressSpace::Register);
+            assert_eq!(out.offset, flag_off);
+            assert_eq!(out.size, 1);
+        }
+
         let mut fd = Funcdata::new("shl_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 37);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12371,14 +13520,14 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("shl_rax_4_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("shl_rax_4_minimal", start, &rugra_ops, 37);
 
         assert!(matches!(result, VerifyResult::Match));
     }
 
     #[test]
     fn test_shr_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // shr rax, 4  →  48 c1 e8 04
         let code = vec![0x48, 0xc1, 0xe8, 0x04];
         let start = Address::new(0x1000);
@@ -12392,9 +13541,24 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 (shr shares the ported
+        // shlflags/shiftresultflags templates): count&0x3f mask, saved
+        // pre-shift value, direct INT_RIGHT to rax, then CF(bit count-1 of
+        // the ORIGINAL value, via a second INT_RIGHT + INT_AND&1)/OF/SF/ZF/
+        // POPCOUNT-PF chains — 37 ops. Old 2-op expectation was the
+        // pre-flag-pcode form, masked by the FFI_TEST_LOCK poison cascade
+        // (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(raw_ops.len(), 37);
 
-        let raw_op = &raw_ops[0];
+        // Op 0: tmp:4 = count & 0x3f
+        let raw_mask = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_mask.get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
+
+        // Op 2: RAX = INT_RIGHT(RAX, tmp) — direct-dst shift
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_RIGHT)
@@ -12402,26 +13566,35 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
         assert_eq!(op_inputs.len(), 2);
         assert_eq!(op_inputs[0].space, AddressSpace::Register);
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
-        assert_eq!(op_inputs[1].space, AddressSpace::Const);
-        assert_eq!(op_inputs[1].offset, 0x04);
+        assert_eq!(op_inputs[1].space, AddressSpace::Unique); // masked count
 
+        // Op 1: saved pre-shift RAX; Ops 5-6: CF = (orig >> (count-1)) & 1
         let raw_copy = &raw_ops[1];
         assert_eq!(
             OpCode::from_i32(raw_copy.get_opcode()),
             Some(OpCode::CPUI_COPY)
         );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[5].get_opcode()),
+            Some(OpCode::CPUI_INT_RIGHT)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[6].get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
 
         let mut fd = Funcdata::new("shr_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 37);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12430,14 +13603,14 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("shr_rax_4_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("shr_rax_4_minimal", start, &rugra_ops, 37);
 
         assert!(matches!(result, VerifyResult::Match));
     }
 
     #[test]
     fn test_cmp_rax_rbx_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // cmp rax, rbx  →  48 39 d8
         let code = vec![0x48, 0x39, 0xd8];
         let start = Address::new(0x1000);
@@ -12537,7 +13710,7 @@ mod tests {
     ///   2. CPUI_COPY(unique_tmp) -> reg(rax)
     #[test]
     fn test_load_mov_rax_mem_rbx_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x8b, 0x03]; // mov rax, [rbx]
         let start = Address::new(0x1000);
 
@@ -12621,7 +13794,7 @@ mod tests {
     ///   1. CPUI_STORE(const(ram_space_id), reg(rbx), reg(rax)) — no output
     #[test]
     fn test_store_mov_mem_rbx_rax_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x89, 0x03]; // mov [rbx], rax
         let start = Address::new(0x1000);
 
@@ -12691,7 +13864,7 @@ mod tests {
     ///   3. CPUI_COPY(tmp_val) -> rax
     #[test]
     fn test_load_mov_rax_mem_rbx_disp_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x8b, 0x43, 0x10]; // mov rax, [rbx+0x10]
         let start = Address::new(0x1000);
 
@@ -12787,7 +13960,7 @@ mod tests {
     ///   3. CPUI_STORE(ram_space_id, rbx, tmp_result)  (write back)
     #[test]
     fn test_add_mem_rbx_rax_rmw_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![0x48, 0x01, 0x03]; // add [rbx], rax
         let start = Address::new(0x1000);
 
@@ -12931,7 +14104,7 @@ mod tests {
     /// - Varnode def/use chains are established
     #[test]
     fn test_ssa_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Build raw ops for: mov rax, rdi; add rax, rsi; ret
         let mut op1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -13002,7 +14175,7 @@ mod tests {
     ///   COPY(rax ← rdi), INT_ADD(tmp), COPY(rax ← tmp), RETURN
     #[test]
     fn test_seq_mov_add_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // mov rax, rdi = 48 89 f8
         // add rax, rsi = 48 01 f0
         // ret          = c3
@@ -13034,8 +14207,9 @@ mod tests {
             all_raw_ops.extend(ops);
         }
         // X86LIFT-FLAG-PCODE-0001: mov→1(COPY) + add→9(CARRY/SCARRY/ADD
-        // direct-dst/SF/ZF/PF chain) + ret→1(RETURN) = 11
-        assert_eq!(all_raw_ops.len(), 11);
+        // direct-dst/SF/ZF/PF chain) + ret→3(RET-OP3-0001: LOAD RIP←
+        // ram[RSP]; INT_ADD RSP,8; RETURN [RIP] — locked .sla template) = 13
+        assert_eq!(all_raw_ops.len(), 13);
 
         // Verify op sequence
         assert_eq!(
@@ -13048,14 +14222,20 @@ mod tests {
             OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_ADD)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         // Phase 3: Inject into Funcdata
         let mut fd = Funcdata::new("seq_mov_add_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 11);
+        assert_eq!(fd.obank.alivelist.len(), 13);
         // RETURN terminates, all ops in one block
         assert_eq!(fd.bblocks.get_size(), 1);
 
@@ -13066,18 +14246,18 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 11);
+            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 13);
 
         assert!(matches!(result, VerifyResult::Match));
     }
 
     /// Test: `mov rax, rdi; and rax, 0xf; shl rax, 4; ret`
     /// Arithmetic chain: mask low nibble, shift left by 4. Returns (arg & 0xf) << 4.
-    /// Produces 6 P-code ops in a single basic block:
-    ///   COPY(rax←rdi), INT_AND(tmp1), COPY(rax←tmp1), INT_LEFT(tmp2), COPY(rax←tmp2), RETURN
+    /// Flag-pcode era op budget (X86LIFT-FLAG-PCODE-0001 + ea5010e9 +
+    /// RET-OP3-0001): mov→1, and→9, shl→37, ret→3 — 50 ops, 1 basic block.
     #[test]
     fn test_seq_mov_and_shl_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x89, 0xf8,       // mov rax, rdi
             0x48, 0x83, 0xe0, 0x0f, // and rax, 0xf
@@ -13099,9 +14279,14 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // X86LIFT-FLAG-PCODE-0001: mov→1 + and→9(logicalflags+AND direct-dst
-        // +SF/ZF/PF) + shl→2(INT_LEFT+COPY, flags 未实现=后续任务) + ret→1 = 13
-        assert_eq!(all_raw_ops.len(), 13);
+        // X86LIFT-FLAG-PCODE-0001 + ea5010e9 + RET-OP3-0001: mov→1 +
+        // and→9(logicalflags+AND direct-dst+SF/ZF/PF) + shl→37(count mask,
+        // saved value, direct INT_LEFT, CF/OF/SF/ZF/PF chains) + ret→3
+        // (RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP] per the
+        // locked sla :RET template) = 50. Old 13 assumed shl→2
+        // (flags 未实现) and ret→1 — both stale, masked by the
+        // FFI_TEST_LOCK poison cascade (TESTLIB-STATE-CONTAMINATION-0001).
+        assert_eq!(all_raw_ops.len(), 50);
 
         assert_eq!(
             OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
@@ -13112,20 +14297,33 @@ mod tests {
         assert_eq!(
             OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_AND)
         );
+        // shl block: flat[10]=count&0x3f mask, flat[11]=saved RAX,
+        // flat[12]=direct INT_LEFT result write
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_INT_AND)
         );
         assert_eq!(
             OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+        );
+        // ret block: flat[47]=LOAD return address, flat[48]=RSP bump,
+        // flat[49]=RETURN
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[47].get_opcode()), Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[48].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[49].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         let mut fd = Funcdata::new("seq_and_shl_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 13);
+        assert_eq!(fd.obank.alivelist.len(), 50);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -13134,7 +14332,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 13);
+            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 50);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -13149,13 +14347,14 @@ mod tests {
     /// 0x1010: ret              ; c3
     /// ```
     /// Tests: CBRANCH generation, basic block splitting, multi-block inject.
-    /// Block 0: cmp(3 ops) + je(CBRANCH) = 4 ops
-    /// Block 1: mov(COPY) + ret(RETURN) = 2 ops
-    /// Block 2: xor(INT_XOR+COPY) + ret(RETURN) = 3 ops
-    /// Total: 9 ops, 3 blocks
+    /// Flag-pcode era op budget (X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001):
+    /// Block 0: cmp(9 flag ops) + je(CBRANCH) = 10 ops
+    /// Block 1: mov(COPY) + ret(3-op :RET template) = 4 ops
+    /// Block 2: xor(9 flag ops) + ret(3-op :RET template) = 12 ops
+    /// Total: 26 ops, 3 blocks
     #[test]
     fn test_seq_cmp_je_multiblock_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x39, 0xf7,                         // cmp rdi, rsi
             0x74, 0x08,                                // je +8 → 0x100d
@@ -13191,15 +14390,17 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // X86LIFT-FLAG-PCODE-0001:
+        // X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001:
         // cmp→9(LESS/SBORROW/SUB→tmp/SF/ZF/PF)
         // je→1(CBRANCH)
         // mov→1(COPY)
-        // ret→1(RETURN)
+        // ret→3(RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP],
+        //        locked sla :RET template)
         // xor→9(logicalflags/XOR direct-dst/SF/ZF/PF)
-        // ret→1(RETURN)
-        // Total: 22
-        assert_eq!(all_raw_ops.len(), 22);
+        // ret→3(same :RET template)
+        // Total: 26 (old 22 assumed ret→1; masked stale by the
+        // FFI_TEST_LOCK poison cascade, TESTLIB-STATE-CONTAMINATION-0001)
+        assert_eq!(all_raw_ops.len(), 26);
 
         // Verify key opcodes
         assert_eq!(
@@ -13212,17 +14413,20 @@ mod tests {
             OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[13].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[14].get_opcode()), Some(OpCode::CPUI_INT_XOR)
+            OpCode::from_i32(all_raw_ops[14].get_opcode()), Some(OpCode::CPUI_COPY) // CF=0
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[16].get_opcode()), Some(OpCode::CPUI_INT_XOR)
         );
 
         // Phase 3: Inject and verify block structure
         let mut fd = Funcdata::new("seq_cmp_je_multi", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 22);
+        assert_eq!(fd.obank.alivelist.len(), 26);
         // CBRANCH terminates block 0, RETURN terminates block 1 and block 2 → 3 blocks
         assert_eq!(fd.bblocks.get_size(), 3);
 
@@ -13230,13 +14434,13 @@ mod tests {
         let block0 = fd.bblocks.get_block(0).unwrap();
         assert_eq!(block0.read().unwrap().get_ops().len(), 10);
 
-        // Verify block 1 has 2 ops (mov + ret)
+        // Verify block 1 has 4 ops (mov COPY + 3-op :RET template)
         let block1 = fd.bblocks.get_block(1).unwrap();
-        assert_eq!(block1.read().unwrap().get_ops().len(), 2);
+        assert_eq!(block1.read().unwrap().get_ops().len(), 4);
 
-        // Verify block 2 has 10 ops (xor: 9 ops + ret)
+        // Verify block 2 has 12 ops (xor: 9 flag ops + 3-op :RET template)
         let block2 = fd.bblocks.get_block(2).unwrap();
-        assert_eq!(block2.read().unwrap().get_ops().len(), 10);
+        assert_eq!(block2.read().unwrap().get_ops().len(), 12);
 
         // Phase 4: Verify via RuntimeVerifier
         let verifier = RuntimeVerifier::new();
@@ -13245,7 +14449,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 22);
+            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 26);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -13268,7 +14472,7 @@ mod tests {
     /// Block 3: MULTIEQUAL (Phi for rax) + add + ret
     #[test]
     fn test_ssa_dual_block_phi_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -13336,7 +14540,7 @@ mod tests {
     ///   - op1's input[0] should be Arc::ptr_eq to op0's output
     #[test]
     fn test_ssa_rename_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Build: op0: RAX = COPY(RDI)
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -13434,7 +14638,7 @@ mod tests {
     ///   - op `add rax, rsi` in Block 3 should use the Phi output as its RAX input
     #[test]
     fn test_ssa_rename_multi_block_phi_inputs() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -13567,7 +14771,7 @@ mod tests {
     ///   Block 3 (merge): ret   (Phi for RAX should be placed here)
     #[test]
     fn test_ssa_rename_diamond_pattern() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         let code = vec![
             // Block 0: cmp rdi, 0; je block2
@@ -13667,7 +14871,7 @@ mod tests {
     /// the INPUT varnode that heritage creates for uninitialized reads.
     #[test]
     fn test_ssa_rename_input_varnode_for_undefined_read() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // op0: RAX = INT_ADD(RAX, RSI)   — RAX is read before being defined
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
@@ -13743,7 +14947,7 @@ mod tests {
 
     #[test]
     fn test_cbranch_condition_def_wired_via_heritage_single_block() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // Reproduce the P-code x86_lift.rs emits for `cmp rdi,rsi` + `je`
         // (X86LIFT-FLAG-PCODE-0001 sla layout): cmp's resultflags writes
@@ -13810,7 +15014,7 @@ mod tests {
     /// curl produces.
     #[test]
     fn test_cbranch_condition_def_wired_multiblock_real_x86() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // 0x1000: cmp rdi, rsi      48 39 f7
         // 0x1003: je  0x100a        74 05     → branches over the next insn
@@ -13896,7 +15100,7 @@ mod tests {
     ///   blk[2] exit (ret)
     #[test]
     fn test_cbranch_condition_def_wired_loop_header_is_entry() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // --- blk[0] (header/entry): cmp; je exit; jmp back ---
         // cmp rdi, rsi  →  INT_EQUAL ZF = (RDI == RSI)
@@ -14121,7 +15325,7 @@ mod tests {
 
     #[test]
     fn test_normalize_branches_break_in_while_loop() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
 
         // while(rdi != rsi) { if (rax == 0x10) break; rax++; }
         //
@@ -14161,7 +15365,16 @@ mod tests {
             fd.bblocks.get_size()
         );
 
-        fd.bblocks.build_dom_tree();
+        // Ghidra contract (funcdata.cc:150-168 startProcessing): followFlow +
+        // structureReset run BEFORE any Action — structureReset calls
+        // bblocks.structureLoops (funcdata_block.cc:711), which labels the
+        // F_BACK_EDGE the structurer's orderLoopBodies consumes
+        // (blockaction.cc:1148). The previous hand-rolled `build_dom_tree`
+        // skipped the labeling entirely, so orderLoopBodies found 0 loops,
+        // no BlockWhileDo was structured, and ActionNormalizeBranches had no
+        // loop_info to tag the back-edge jmp CONTINUE
+        // (BLOCKACT-NORMALIZE-CONTINUE-TAG-0001).
+        fd.start_processing();
 
         use crate::action::Action;
         let mut structurer = crate::blockaction::ActionBlockStructure::new();
@@ -14923,6 +16136,29 @@ mod tests {
         use crate::action::ActionDatabase;
 
         let mut fd = Funcdata::new("nzm_wiring", Address::new(0x1000), 0x100);
+        // Oracle invariant (BRANAUDIT 2026-09-26 ruling): every Funcdata
+        // entering the action pipeline has its FuncProto model bound —
+        // the named-ctor tail funcdata.cc:69 `funcp.setScope(localmap,
+        // baseaddr+ -1)` runs fspec.cc:3883-3884 `if (model ==
+        // (ProtoModel *)0) setModel(s->getArch()->defaultfp)` inside
+        // `FuncProto::setScope` (fspec.cc:3879), and `FuncProto::
+        // effectBegin/effectEnd` (fspec.cc:4243-4259) unconditionally
+        // dereference that pointer when the prototype-local effect list is
+        // empty (no graceful path exists in the oracle). Rugra's canonical
+        // default Architecture is cspec-less (`defaultfp == None`), so the
+        // synthetic fixture must bind the stand-in `defaultfp` model itself
+        // — exactly what ActionRestrictLocal (coreaction.cc:1983-1985)
+        // reads through `data.getFuncProto().effectBegin()`. The stand-in
+        // is a default-constructed ProtoModelFull (fspec.cc:2339): empty
+        // effect list, so Loop 2's saved-register walk is a no-op and the
+        // observable under test stays the nzm wiring, not restrict-local.
+        let mut defaultfp = crate::fspec::ProtoModelFull::new(
+            Some(crate::space::AddressSpace::Stack),
+            8,
+        );
+        defaultfp.name = "default".to_string();
+        fd.funcp
+            .set_model(Some(std::sync::Arc::new(defaultfp)));
         let block = fd.create_new_block();
 
         // u1 = INT_AND(EDI, 0x3f0): EDI is an unwritten register read, so
@@ -15123,7 +16359,7 @@ mod tests {
     /// `return iVar1 ^ iVar1` defect in curl main_init.
     #[test]
     fn test_xor_eax_eax_input_identity() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = ffi_test_lock();
         // 31 c0 = xor eax,eax ; c3 = ret
         let code = vec![0x31, 0xc0, 0xc3];
         let start = Address::new(0x1000);
@@ -15133,10 +16369,14 @@ mod tests {
         let mut lifter = X86Lifter::new();
         let mut raw_ops = Vec::new();
         for inst in &instructions { raw_ops.extend(lifter.lift(inst)); }
-        // X86LIFT-FLAG-PCODE-0001: xor→10 (COPY CF=0, COPY OF=0, INT_XOR
-        // direct-dst, INT_ZEXT rax←eax, SF, ZF, PF chain), ret→1 — 11 ops.
+        // X86LIFT-FLAG-PCODE-0001 + RET-OP3-0001: xor→10 (COPY CF=0, COPY
+        // OF=0, INT_XOR direct-dst, INT_ZEXT rax←eax, SF, ZF, PF chain),
+        // ret→3 (RIP=LOAD(ram[RSP]); RSP=INT_ADD(RSP,8); RETURN[RIP] per
+        // the locked sla :RET template) — 13 ops. Old 11 assumed ret→1;
+        // masked stale by the FFI_TEST_LOCK poison cascade
+        // (TESTLIB-STATE-CONTAMINATION-0001).
         assert_eq!(
-            raw_ops.len(), 11, "expected 11 raw ops, got {}", raw_ops.len()
+            raw_ops.len(), 13, "expected 13 raw ops, got {}", raw_ops.len()
         );
         let mut fd = Funcdata::new("xor_eax_eax", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
@@ -16052,21 +17292,83 @@ mod traverse_flags {
     pub const CONCAT_HIGH: u32 = 0x10;
 }
 
+// Ghidra: expression.cc:28 TraverseNode::isAlternatePathValid
+/// Decide whether the alternate path (through a different RETURN/CALL) sees
+/// materially different data-flow than the main path. Faithful 1:1 port of
+/// `TraverseNode::isAlternatePathValid` (expression.cc:28-50):
+///   - main path traversed INDIRECT but alternate did not  -> true
+///   - alternate traversed INDIRECT but main did not       -> false
+///   - alternate traversed a solid action/non-incidental COPY -> true
+///   - no lone descendant                                   -> false
+///   - then skip incidental COPY chains (lone-descendant
+///     checked per hop) and return `!def->isMarker()`
+///     (MULTIEQUAL/INDIRECT indicate multiple values).
+fn is_alternate_path_valid(
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    flags: u32,
+) -> bool {
+    use crate::opcodes::OpCode as OC;
+    if (flags & (traverse_flags::INDIRECT | traverse_flags::INDIRECTALT))
+        == traverse_flags::INDIRECT
+    {
+        // If main path traversed an INDIRECT but the alternate did not
+        return true;
+    }
+    if (flags & (traverse_flags::INDIRECT | traverse_flags::INDIRECTALT))
+        == traverse_flags::INDIRECTALT
+    {
+        return false; // Alternate path traversed INDIRECT, main did not
+    }
+    if (flags & traverse_flags::ACTIONALT) != 0 {
+        return true; // Alternate path traversed a dedicated COPY
+    }
+    if vn.read().unwrap().lone_descend().is_none() {
+        return false;
+    }
+    let mut cur = vn.clone();
+    loop {
+        let def = cur.read().unwrap().get_def();
+        let op_arc = match def {
+            Some(o) => o,
+            None => return true, // cc:34: op == 0
+        };
+        let (incidental, code) = {
+            let o = op_arc.read().unwrap();
+            (o.is_incidental_copy(), o.opcode)
+        };
+        // cc:36-42: skip any incidental COPY chain.
+        if !(incidental && code == OC::CPUI_COPY) {
+            return !op_arc.read().unwrap().is_marker();
+        }
+        let next = op_arc.read().unwrap().get_in(0).cloned();
+        let Some(next) = next else { return true };
+        if next.read().unwrap().lone_descend().is_none() {
+            return false;
+        }
+        cur = next;
+    }
+}
+
 // Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
-/// Test if the given Varnode seems to only be used by a CALL/RETURN. Faithful
-/// to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904). Walks forward
-/// through descendants; if any descendent is a non-call use (BRANCH, LOAD,
-/// STORE, etc.) returns false. CALL/CALLIND descendants trigger
-/// checkCallDoubleUse (conservatively returns false — safe direction).
+/// Test if the given Varnode seems to only be used by a CALL or RETURN.
+/// Faithful 1:1 port of `Funcdata::onlyOpUse`
+/// (funcdata_varnode.cc:1805-1904): BFS over descendants with
+/// TraverseNode flags; BRANCH/LOAD/STORE are uses, CALL/CALLIND go through
+/// checkCallDoubleUse, a different RETURN is a use unless it holds the same
+/// slot varnode (or, outside return analysis, unless the alternate path is
+/// invalid), PIECE/SUBPIECE set concat/truncation flags, every other opcode
+/// sets actionalt, and every op's non-persist output joins the traversal.
 fn only_op_use(
-    has_active_output: bool,
+    fd: &Funcdata,
     invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     opmatch: &crate::op::PcodeOpRef,
-    trial_slot: i32,
+    trial: &crate::fspec::ParamTrial,
     main_flags: u32,
+    match_fc: Option<&crate::fspec::FuncCallSpecs>,
 ) -> bool {
     use crate::opcodes::OpCode as OC;
     use std::sync::{Arc, RwLock};
+    let trial_slot = trial.get_slot();
     struct TNode {
         vn: Arc<RwLock<crate::varnode::Varnode>>,
         flags: u32,
@@ -16076,15 +17378,13 @@ fn only_op_use(
         let mut vn = invn.write().unwrap();
         vn.set_mark();
     }
-    varlist.push(TNode { vn: invn.clone(), flags: main_flags ,
-    });
+    varlist.push(TNode { vn: invn.clone(), flags: main_flags });
     let mut idx = 0;
     let mut res = true;
     while idx < varlist.len() {
         let base_flags = varlist[idx].flags;
         let vn_arc = varlist[idx].vn.clone();
-        let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> =
-            vn_arc
+        let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> = vn_arc
             .read()
             .unwrap()
             .descend
@@ -16093,25 +17393,46 @@ fn only_op_use(
             .collect();
         for op_arc in descends {
             let op_rg = op_arc.read().unwrap();
+            // cc:1824-1826: op == opmatch is not a use when this vn is the
+            // trial slot's varnode (otherwise fall through to the switch).
             if Arc::ptr_eq(&op_arc, &opmatch.0) {
                 let trial_in = op_rg.get_in(trial_slot as usize);
                 if let Some(tiv) = trial_in {
-                    if Arc::ptr_eq(tiv, &vn_arc) { continue; }
+                    if Arc::ptr_eq(tiv, &vn_arc) {
+                        continue;
+                    }
                 }
             }
             let mut cur_flags = base_flags;
+            let opmatch_is_return = opmatch.0.read().unwrap().opcode == OC::CPUI_RETURN;
             match op_rg.opcode {
-                OC::CPUI_BRANCH | OC::CPUI_CBRANCH | OC::CPUI_BRANCHIND
-                | OC::CPUI_LOAD | OC::CPUI_STORE => {
+                // cc:1829-1835: These ops define a USE of a variable.
+                OC::CPUI_BRANCH
+                | OC::CPUI_CBRANCH
+                | OC::CPUI_BRANCHIND
+                | OC::CPUI_LOAD
+                | OC::CPUI_STORE => {
                     res = false;
                 }
+                // cc:1836-1840: possibly legitimate double use at a call.
                 OC::CPUI_CALL | OC::CPUI_CALLIND => {
-                    let _ = &mut cur_flags;
+                    if fd.check_call_double_use(
+                        opmatch,
+                        &crate::op::PcodeOpRef(op_arc.clone()),
+                        &vn_arc,
+                        cur_flags,
+                        trial,
+                        match_fc,
+                    ) {
+                        continue;
+                    }
                     res = false;
                 }
+                // cc:1841-1843.
                 OC::CPUI_INDIRECT => {
                     cur_flags |= traverse_flags::INDIRECTALT;
                 }
+                // cc:1844-1848.
                 OC::CPUI_COPY => {
                     let out_internal = op_rg
                         .get_out()
@@ -16123,34 +17444,86 @@ fn only_op_use(
                         cur_flags |= traverse_flags::ACTIONALT;
                     }
                 }
+                // cc:1849-1861.
                 OC::CPUI_RETURN => {
-                    let opmatch_code = opmatch.0.read().unwrap().opcode;
-                    if opmatch_code == OC::CPUI_RETURN {
+                    if opmatch_is_return {
+                        // Are we in a different return: not a use only when
+                        // it holds the same slot varnode (cc:1850-1853).
                         let r_in = op_rg.get_in(trial_slot as usize);
                         if let Some(riv) = r_in {
-                            if Arc::ptr_eq(riv, &vn_arc) { continue; }
+                            if Arc::ptr_eq(riv, &vn_arc) {
+                                continue;
+                            }
                         }
-                    } else if has_active_output {
-                        res = false;
-                    } else {
-                        res = false;
+                    } else if fd.active_output.is_some() {
+                        // cc:1854-1858: analyzing returns; unless the vn
+                        // holds the actual return value (slot 0), an
+                        // invalid alternate path is not a "use".
+                        let in0_is_vn = op_rg
+                            .get_in(0)
+                            .map(|v0| Arc::ptr_eq(v0, &vn_arc))
+                            .unwrap_or(false);
+                        if !in0_is_vn && !is_alternate_path_valid(&vn_arc, cur_flags) {
+                            continue;
+                        }
+                    }
+                    res = false;
+                }
+                // cc:1862-1866: transparent for this traversal.
+                OC::CPUI_MULTIEQUAL
+                | OC::CPUI_INT_SEXT
+                | OC::CPUI_INT_ZEXT
+                | OC::CPUI_CAST => {}
+                // cc:1867-1875.
+                OC::CPUI_PIECE => {
+                    let in0_is_vn = op_rg
+                        .get_in(0)
+                        .map(|v0| Arc::ptr_eq(v0, &vn_arc))
+                        .unwrap_or(false);
+                    if in0_is_vn {
+                        // Concatenated as most significant piece.
+                        if (cur_flags & traverse_flags::LSB_TRUNCATED) != 0 {
+                            // Original lsb has been truncated and replaced.
+                            continue; // No longer assume this is a possible use
+                        }
+                        cur_flags |= traverse_flags::CONCAT_HIGH;
                     }
                 }
-                _ => {}
-            }
-            if !res { break; }
-            if op_rg.opcode == OC::CPUI_INDIRECT || op_rg.opcode == OC::CPUI_COPY {
-                if let Some(out) = op_rg.get_out() {
-                    let out_clone = out.clone();
-                    if !out_clone.read().unwrap().is_mark() {
-                        out_clone.write().unwrap().set_mark();
-                        varlist.push(TNode { vn: out_clone, flags: cur_flags ,
-                        });
+                // cc:1876-1881.
+                OC::CPUI_SUBPIECE => {
+                    let in1_off = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset());
+                    if in1_off != Some(0) {
+                        // Throwing away least significant byte(s).
+                        if (cur_flags & traverse_flags::CONCAT_HIGH) == 0 {
+                            cur_flags |= traverse_flags::LSB_TRUNCATED;
+                        }
                     }
+                }
+                // cc:1882-1884.
+                _ => {
+                    cur_flags |= traverse_flags::ACTIONALT;
+                }
+            }
+            if !res {
+                break;
+            }
+            // cc:1887-1896: every op's output joins the BFS unless it is a
+            // persist varnode (which is a use).
+            if let Some(out) = op_rg.get_out() {
+                let out_clone = out.clone();
+                if out_clone.read().unwrap().is_persist() {
+                    res = false;
+                    break;
+                }
+                if !out_clone.read().unwrap().is_mark() {
+                    out_clone.write().unwrap().set_mark();
+                    varlist.push(TNode { vn: out_clone, flags: cur_flags });
                 }
             }
         }
-        if !res { break; }
+        if !res {
+            break;
+        }
         idx += 1;
     }
     for t in &varlist {
@@ -16160,16 +17533,29 @@ fn only_op_use(
 }
 
 // Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
-/// Test if the given trial Varnode is likely only used for parameter passing.
-/// Faithful to `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994).
+/// Test if the given trial Varnode is likely only used for parameter passing,
+/// following ancestors it was copied from. Faithful 1:1 port of
+/// `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994):
+///   - maxlevel 0 -> false; unwritten input needs typelock (onlyOpUse),
+///   - INDIRECT: indirect-creation stops (onlyOpUse); otherwise recurse
+///     in(0) with the indirect traverse flag,
+///   - MULTIEQUAL: try each input (mark-trimmed),
+///   - COPY: internal/incidental/same-address recurse in(0),
+///   - PIECE: recurse only into the piece matching the accumulated offset
+///     (least-sig at offset 0, most-sig at offset == in(1) size),
+///   - SUBPIECE: REM/SREM side-effect sets trial rem-formed; internal/
+///     incidental/overlapping recurse in(0) at offset+newOff,
+///   - CALL/CALLIND: false,
+///   - otherwise the varnode is the top ancestor -> onlyOpUse.
 pub fn ancestor_op_use(
-    has_active_output: bool,
+    fd: &Funcdata,
     maxlevel: i32,
     invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     op: &crate::op::PcodeOpRef,
-    trial_slot: i32,
+    trial: &mut crate::fspec::ParamTrial,
     offset: i32,
     main_flags: u32,
+    match_fc: Option<&crate::fspec::FuncCallSpecs>,
 ) -> bool {
     use crate::opcodes::OpCode as OC;
     if maxlevel == 0 { return false; }
@@ -16178,27 +17564,32 @@ pub fn ancestor_op_use(
         (vn.is_written(), vn.is_input(), vn.is_type_lock())
     };
     if !is_written {
+        // cc:1923-1928: if not written, an input varnode is as good as
+        // written when typelocked; anything else cannot carry a use.
         if !is_input { return false; }
         if !is_type_lock { return false; }
-        return only_op_use(has_active_output, invn, op, trial_slot, main_flags);
+        return only_op_use(fd, invn, op, trial, main_flags, match_fc);
     }
     let def_arc = { invn.read().unwrap().get_def() };
-    let def_arc = match def_arc { Some(d) => d, None => return false ,
-    };
+    let def_arc = match def_arc { Some(d) => d, None => return false };
     let opcode = def_arc.read().unwrap().opcode;
     match opcode {
         OC::CPUI_INDIRECT => {
+            // cc:1933-1938: an indirectCreation is an indication of an
+            // output trial, this should not count as an "only use".
             if def_arc.read().unwrap().is_indirect_creation() { return false; }
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
             match in0 {
                 Some(v) => ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v, op, trial_slot, offset,
-                    main_flags | traverse_flags::INDIRECT,
+                    fd, maxlevel - 1, &v, op, trial, offset,
+                    main_flags | traverse_flags::INDIRECT, match_fc,
                 ),
                 None => false,
             }
         }
         OC::CPUI_MULTIEQUAL => {
+            // cc:1939-1952: check if there is any ancestor whose only use
+            // is in this op (mark-trimmed recursion over all inputs).
             if def_arc.read().unwrap().is_mark() { return false; }
             def_arc.write().unwrap().set_mark();
             let num_input = def_arc.read().unwrap().num_input();
@@ -16206,9 +17597,7 @@ pub fn ancestor_op_use(
             for i in 0..num_input {
                 let in_vn = def_arc.read().unwrap().get_in(i).cloned();
                 if let Some(v) = in_vn {
-                    if ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
-                    ) {
+                    if ancestor_op_use(fd, maxlevel - 1, &v, op, trial, offset, main_flags, match_fc) {
                         result = true;
                         break;
                     }
@@ -16218,6 +17607,7 @@ pub fn ancestor_op_use(
             result
         }
         OC::CPUI_COPY => {
+            // cc:1953-1957.
             let out_internal = def_arc
                 .read()
                 .unwrap()
@@ -16232,40 +17622,66 @@ pub fn ancestor_op_use(
                 .unwrap_or(false);
             if out_internal || op_incidental || in0_incidental {
                 match in0 {
-                    Some(v) => ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
-                    ),
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, offset, main_flags, match_fc),
                     None => false,
                 }
             } else {
-                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+                only_op_use(fd, invn, op, trial, main_flags, match_fc)
             }
         }
         OC::CPUI_PIECE => {
-            let in0 = def_arc.read().unwrap().get_in(0).cloned();
-            let in1 = def_arc.read().unwrap().get_in(1).cloned();
-            let in1_size = in1
-                .as_ref()
+            // cc:1958-1964: concatenation tends to be artificial, so recurse
+            // only through the piece corresponding to a later SUBPIECE of
+            // the accumulated offset — never both.
+            let in1_size = def_arc
+                .read()
+                .unwrap()
+                .get_in(1)
                 .map(|v| v.read().unwrap().get_size() as i32)
                 .unwrap_or(0);
-            if let Some(v0) = in0 {
-                if ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v0, op, trial_slot, offset + in1_size,
-                    main_flags | traverse_flags::CONCAT_HIGH,
-                ) {
-                    return true;
+            if offset == 0 {
+                // Follow into least sig piece.
+                let in1 = def_arc.read().unwrap().get_in(1).cloned();
+                match in1 {
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, 0, main_flags, match_fc),
+                    None => false,
                 }
-            }
-            if let Some(v1) = in1 {
-                if ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v1, op, trial_slot, offset, main_flags,
-                ) {
-                    return true;
+            } else if offset == in1_size {
+                // Follow into most sig piece.
+                let in0 = def_arc.read().unwrap().get_in(0).cloned();
+                match in0 {
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, 0, main_flags, match_fc),
+                    None => false,
                 }
+            } else {
+                false
             }
-            false
         }
         OC::CPUI_SUBPIECE => {
+            // cc:1965-1985.
+            let in1_off = def_arc
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i32)
+                .unwrap_or(0);
+            if in1_off == 0 {
+                // Kludge around a DIV (or similar) causing the register that
+                // looks like the high precision piece of the return to be
+                // set with the remainder as a side effect.
+                let in0 = def_arc.read().unwrap().get_in(0).cloned();
+                if let Some(v) = in0 {
+                    if v.read().unwrap().is_written() {
+                        let remop = v.read().unwrap().get_def();
+                        if let Some(remop) = remop {
+                            let rem_code = remop.read().unwrap().opcode;
+                            if rem_code == OC::CPUI_INT_REM || rem_code == OC::CPUI_INT_SREM {
+                                trial.set_rem_formed();
+                            }
+                        }
+                    }
+                }
+            }
             let out_internal = def_arc
                 .read()
                 .unwrap()
@@ -16278,32 +17694,30 @@ pub fn ancestor_op_use(
                 .as_ref()
                 .map(|v| v.read().unwrap().is_incidental_copy())
                 .unwrap_or(false);
-            let in1_off = def_arc
-                .read()
-                .unwrap()
-                .get_in(1)
-                .map(|v| v.read().unwrap().get_offset() as i32)
-                .unwrap_or(0);
-            if (out_internal || op_incidental || in0_incidental) && (offset - in1_off) >= 0 {
+            let in0_overlap = match &in0 {
+                Some(i) => invn.read().unwrap().overlap(&i.read().unwrap()) == in1_off,
+                None => false,
+            };
+            if out_internal || op_incidental || in0_incidental || in0_overlap {
                 match in0 {
                     Some(v) => ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset - in1_off,
-                        main_flags | traverse_flags::LSB_TRUNCATED,
+                        fd, maxlevel - 1, &v, op, trial, offset + in1_off, main_flags, match_fc,
                     ),
                     None => false,
                 }
             } else {
-                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+                only_op_use(fd, invn, op, trial, main_flags, match_fc)
             }
         }
         OC::CPUI_CALL | OC::CPUI_CALLIND => false,
-        _ => only_op_use(has_active_output, invn, op, trial_slot, main_flags),
+        _ => only_op_use(fd, invn, op, trial, main_flags, match_fc),
     }
 }
 
-// Ghidra: funcdata_block.cc:962 CloneBlockOps
+// Ghidra: funcdata.hh:630 CloneBlockOps
 /// Clone p-code ops from one basic block into another (for nodeSplit).
-/// Faithful to Ghidra's `CloneBlockOps` class (funcdata_block.cc:962-1104).
+/// Faithful to Ghidra's `CloneBlockOps` class (funcdata.hh:630; methods in
+/// funcdata_block.cc:951-1104).
 struct CloneBlockOps {
     /// (clone_op, orig_op) pairs, in clone order.
     clone_list: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)>,
@@ -16320,7 +17734,7 @@ impl CloneBlockOps {
         }
     }
 
-    // Ghidra: funcdata_block.cc:962 CloneBlockOps::buildOpClone
+    // Ghidra: funcdata_block.cc:951 CloneBlockOps::buildOpClone
     /// Clone a PcodeOp (copy opcode + flags). Skip branches (return None).
     fn build_op_clone(
         &mut self, fd: &mut Funcdata, orig: &crate::op::PcodeOpRef,
@@ -16373,20 +17787,23 @@ impl CloneBlockOps {
         Some(dup)
     }
 
-    // Ghidra: funcdata_block.cc:992 CloneBlockOps::buildVarnodeOutput
-    /// Clone the output Varnode of an op into the clone op.
+    // Ghidra: funcdata_block.cc:981 CloneBlockOps::buildVarnodeOutput
+    /// Clone the output Varnode of an op into the clone op. The clone is
+    /// created at the original output's FULL storage address (space+offset),
+    /// per cc:988 `data.newVarnodeOut(opvn->getSize(),opvn->getAddr(),cloneOp)`
+    /// — Ghidra's `Address` carries the space, so a ram-space persist output
+    /// clones into ram, not Register. (FUNCDATA-NODESPLIT-SPACE-0001)
     fn build_varnode_output(
         &self, fd: &mut Funcdata, orig_op: &crate::op::PcodeOpRef, clone_op: &crate::op::PcodeOpRef,
     ) {
         let orig_out = orig_op.0.read().unwrap().output.clone();
         let Some(orig_vn) = orig_out else { return };
-        let (size, addr) = {
+        let (size, space, addr, orig_flags, orig_addlflags) = {
             let v = orig_vn.read().unwrap();
-            (v.size, v.loc)
+            (v.size, v.address_space, v.loc, v.flags, v.addlflags)
         };
-        let new_vn = fd.new_varnode_out(size, addr, clone_op);
-        // Copy varnode flag subset (funcdata_block.cc:1001-1004).
-        let orig_flags = orig_vn.read().unwrap().flags;
+        let new_vn = fd.new_varnode_out_full(size, space, addr, clone_op);
+        // Copy varnode flag subset (funcdata_block.cc:989-994).
         let vflag_mask = crate::varnode::varnode_flags::EXTERNREF
             | crate::varnode::varnode_flags::VOLATIL
             | crate::varnode::varnode_flags::INCIDENTAL_COPY
@@ -16401,9 +17818,15 @@ impl CloneBlockOps {
             | crate::varnode::varnode_flags::PRECISLO
             | crate::varnode::varnode_flags::PRECISHI;
         new_vn.write().unwrap().set_flags(orig_flags & vflag_mask);
+        // Copy addlflag subset (funcdata_block.cc:995-997):
+        //   aflags &= (writemask | ptrflow | stack_store); addlflags |= aflags.
+        let addl_mask = crate::varnode::addl_flags::WRITE_MASK
+            | crate::varnode::addl_flags::PTR_FLOW
+            | crate::varnode::addl_flags::STACK_STORE;
+        new_vn.write().unwrap().addlflags |= orig_addlflags & addl_mask;
     }
 
-    // Ghidra: funcdata_block.cc:1015 CloneBlockOps::cloneBlock
+    // Ghidra: funcdata_block.cc:1004 CloneBlockOps::cloneBlock
     /// Clone all ops from `b` into `bprime`, patching inputs.
     fn clone_block(
         &mut self,
@@ -16430,7 +17853,7 @@ impl CloneBlockOps {
         self.patch_inputs(fd, inedge);
     }
 
-    // Ghidra: funcdata_block.cc:1058 CloneBlockOps::patchInputs
+    // Ghidra: funcdata_block.cc:1047 CloneBlockOps::patchInputs
     /// Patch cloned op inputs: MULTIEQUAL → COPY; constants shared; written
     /// inputs mapped to clone outputs; others shared.
     fn patch_inputs(&self, fd: &mut Funcdata, inedge: usize) {
@@ -16612,4 +18035,157 @@ mod laned_access_tests {
         fd.clear_laned_access_map();
         assert!(fd.laned_map.is_empty());
     }
+}
+
+mod scope_query_tests {
+    use super::*;
+
+// FUNCDATA-SCOPELOCALOVERFLOW-0001: database.cc:2397 computes
+// addr.getOffset()+size-1 in the uint8 (uint64) modular domain, and
+// stack-space offsets near 2^64 (negative stack slots, e.g. a canary
+// at stack -8) legitimately wrap. The pre-fix `offset + size as u64`
+// trapped with `attempt to add with overflow` under the debug profile
+// (examples/stackfold_dbg, httpd corpus) while release wrapped
+// silently — masking the defect from the release E2E gates.
+#[test]
+fn test_scope_local_find_overlap_wraps_at_space_top() {
+    use crate::varmap::{LocalSymbol, ScopeLocal};
+    let mut scope = ScopeLocal::new();
+    scope
+        .symbols
+        .push(LocalSymbol::new("canary", 0xffff_ffff_ffff_fff8, 8, None, -1));
+
+    // Query the whole [stack -8, stack -1] record: last = -8 + 8 - 1
+    // wraps around 2^64 in both C++ and the fixed Rust.
+    let hit = scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_fff8,
+        8,
+    )
+    .expect("oracle findOverlap answers the top-of-space record");
+    assert_eq!(hit.name, "canary");
+
+    // Query exactly the final byte: offset + size wraps to 0 before
+    // the -1 restores 0xffffffffffffffff (modular last).
+    let hit_last_byte = scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_ffff,
+        1,
+    )
+    .expect("oracle findOverlap answers the last byte via modular last");
+    assert_eq!(hit_last_byte.name, "canary");
+
+    // One past the record end: no overlap in the oracle.
+    assert!(scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0x0000_0000_0000_0010,
+        8
+    )
+    .is_none());
+}
+
+// database.cc:2397 sign-extends a negative int4 size into the uint8
+// domain before the modular add/sub: last = offset + size - 1 (mod
+// 2^64). With end < point every rangemap unit fails `first <= end`
+// (rangemap.hh:421), so the oracle answers null — no panic allowed.
+#[test]
+fn test_scope_local_find_overlap_negative_size_modular() {
+    use crate::varmap::{LocalSymbol, ScopeLocal};
+    let mut scope = ScopeLocal::new();
+    scope
+        .symbols
+        .push(LocalSymbol::new("pre", 0x0f_00, 8, None, -1));
+    scope
+        .symbols
+        .push(LocalSymbol::new("at", 0x10_00, 8, None, -1));
+
+    // last = 0x1000 + (-8) - 1 = 0x0ff7 (modular): end < point → null.
+    assert!(scope_local_find_overlap(&scope, AddressSpace::Stack, 0x10_00, -8).is_none());
+    // Same modular arithmetic from an offset that does not underflow:
+    // last = 0x1000 - 1 = 0x0fff still < point 0x1000 → null.
+    assert!(scope_local_find_overlap(&scope, AddressSpace::Stack, 0x10_00, 0).is_none());
+}
+
+    // FUNCDATA-SETVARNODE-SCOPELOCAL-0001: Funcdata::setVarnodeProperties'
+    // ONE `localmap->queryProperties` (funcdata_varnode.cc:31) walks
+    // stackContainer starting AT the ScopeLocal (database.cc:1268) — the
+    // leg stack varnodes must take before any parent/global fallback. A
+    // stack varnode inside the scope's local window takes the
+    // database.cc:1273 fold mapped|addrtied; one covered by a local Symbol
+    // takes the entry's getAllFlags fold (database.cc:1270); one outside
+    // the window gets no local answer and — stack space not being the
+    // default-data space — no parent fold either (database.cc:1279 with an
+    // empty property lookup).
+    #[test]
+    fn test_set_varnode_properties_scope_local_leg() {
+        use crate::varmap::ScopeLocal;
+
+        let mut fd = Funcdata::new("scope_leg", Address::new(0x401000), 0x10);
+        // A ScopeLocal whose stack window covers [0x100, 0x200], with one
+        // addr-tied 1-byte whole-map symbol "spud" at stack 0x140.
+        let mut scope = ScopeLocal::new();
+        scope.local_range.push((0x100, 0x200));
+        scope.add_symbol(AddressSpace::Stack, "spud", None, 0x140, None);
+        fd.scope = Some(scope);
+
+        // (1) In-scope discovery (database.cc:957-958 → 1271-1277): stack
+        // varnode at 0x120 with no covering symbol → mapped|addrtied, no
+        // persist (ScopeLocal is not the global scope). ADDRTIED is
+        // asserted on the raw bit: `is_addr_tied()` (varnode.hh:250)
+        // additionally requires INSERT, which only op attachment grants —
+        // orthogonal to this property pass.
+        let vn_plain = fd.vbank.create_with_space(8, AddressSpace::Stack, 0x120);
+        fd.set_varnode_properties(&vn_plain);
+        assert!(vn_plain.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED != 0);
+        assert!(vn_plain.read().unwrap().is_mapped());
+        assert!(!vn_plain.read().unwrap().is_persist());
+
+        // (2) Symbol hit (database.cc:952 → 1269-1270): 1-byte stack
+        // varnode exactly on "spud"'s entry → the entry getAllFlags fold.
+        let vn_sym = fd.vbank.create_with_space(1, AddressSpace::Stack, 0x140);
+        fd.set_varnode_properties(&vn_sym);
+        assert!(vn_sym.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED != 0);
+        assert!(vn_sym.read().unwrap().is_mapped());
+
+        // (3) Outside the local window: no scope claims the range
+        // (database.cc:1278-1279) → no addrtied from the local leg, and the
+        // stack space never reaches the RAM-only parent channel.
+        let vn_out = fd.vbank.create_with_space(8, AddressSpace::Stack, 0x500);
+        fd.set_varnode_properties(&vn_out);
+        assert!(vn_out.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED == 0);
+        assert!(!vn_out.read().unwrap().is_mapped());
+    }
+
+// address.cc:484 (RangeList::inRange via database.hh:597 Scope::inScope)
+// evaluates the same addr.getOffset()+size-1 modular expression.
+#[test]
+fn test_scope_local_in_scope_wraps_at_space_top() {
+    use crate::varmap::ScopeLocal;
+    let mut scope = ScopeLocal::new();
+    scope
+        .local_range
+        .push((0xffff_ffff_ffff_ff_00, 0xffff_ffff_ffff_ffff));
+    // last = 0xfffffffffffffff8 + 8 - 1 wraps to 0xffffffffffffffff.
+    assert!(scope_local_in_scope(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_fff8,
+        8,
+        None
+    ));
+    // A query whose modular last wraps low still satisfies the C++
+    // comparison `range.last >= addr.getOffset()+size-1`: last wraps to 6
+    // and 0xffffffffffffffff >= 6 is true in the oracle's uint8 domain
+    // (address.cc:484) — pin the oracle's own answer, true.
+    assert!(scope_local_in_scope(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_ffff,
+        8,
+        None
+    ));
+}
 }

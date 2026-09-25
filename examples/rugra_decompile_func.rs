@@ -234,6 +234,87 @@ fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
     for (&addr, s) in &string_table {
         fd.add_string(addr, s.clone());
     }
+    // Ghidra: architecture.cc:1391-1414 Architecture::init builds the
+    // TypeFactory unconditionally (buildTypegrp at :1398); every Funcdata
+    // observes `data.getArch()->types` — Funcdata::spacebase
+    // (funcdata.cc:245-264) needs it to typelock the input stack pointer
+    // (TYPEPROP-NONSETTLING-HTTPD-0001; same note as the httpd/curl
+    // drivers). Minimal single-function wiring: bare Architecture + the
+    // locked cspec's data_organization (architecture.cc:1269) +
+    // setupSizes (:1350).
+    {
+        let mut arch = rugra::arch::Architecture::new();
+        // HTTPD-DRIVER-ARCH-INIT-0001 (single-function leg): install the
+        // Architecture::init items the curl worker builds
+        // (curl_decompile.rs:1877-1900) — archid, register_xref, commentdb —
+        // alongside the TypeFactory below. SLEIGH register catalog: same
+        // enumeration as the curl worker (B3-VARMAP-REGNAME-0001):
+        // getAllRegisters -> varnode_xref (sleighbase.cc:182-186), the table
+        // Architecture::get_register_name (sleighbase.cc:144-168) walks for
+        // ScopeLocal::buildVariableName's register queries.
+        let sleigh = rugra::sleigh_ffi::SleighCtx::new()
+            .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
+        let mut register_xref: Vec<(i32, u64, i32, String)> = Vec::new();
+        for index in 0..sleigh.num_registers() {
+            let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+                continue;
+            };
+            register_xref.push((space, offset, size, name.to_string()));
+        }
+        // SleighArchitecture::resolveArchitecture (sleigh_arch.cc:322-341)
+        // establishes archid from the target ("x86:LE:64:default" for the
+        // locked x86-64 corpus).
+        arch.archid = "x86:LE:64:default".to_string();
+        arch.set_register_xref(register_xref);
+        // Ghidra: sleigh_arch.cc:241-245 SleighArchitecture::buildCommentDB,
+        // called by Architecture::init at architecture.cc:1400 before any
+        // Funcdata exists (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①).
+        // Funcdata::warningHeader (funcdata.cc:135-145) then stores into
+        // this database instead of falling back to stderr, and
+        // PrintC::docFunction's setupFunctionList (printc.cc:2650) emits the
+        // stored header comments — the comment channel every oracle run
+        // uses.
+        arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::comment::CommentDatabaseInternal::new(),
+        )));
+        let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+            .map_err(|e| format!("unable to read compiler spec: {e}"))?;
+        let mut store = rugra::marshal::DocumentStorage::new();
+        let doc = store
+            .parse_document(&cspec_bytes)
+            .map_err(|e| format!("compiler spec parse failed: {e}"))?;
+        let root = doc
+            .root
+            .clone()
+            .ok_or_else(|| "compiler spec has no root element".to_string())?;
+        let data_org = root
+            .read()
+            .map_err(|_| "compiler spec element lock poisoned".to_string())?
+            .children
+            .iter()
+            .find(|child| {
+                child
+                    .read()
+                    .map(|element| element.name == "data_organization")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
+        let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::marshal::IdRegistry::new(),
+        ));
+        let mut decoder = rugra::marshal::TreeDecoder::new(data_org, registry);
+        types.decode_data_organization(&mut decoder);
+        types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(types)));
+        fd.set_arch(std::sync::Arc::new(arch));
+    }
     fd.inject_raw_ops(&raw_ops);
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
     fd_arc

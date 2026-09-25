@@ -1,5 +1,100 @@
 ﻿# x86_lift.rs API Reference
 
+
+### 2026-09-25：X86LIFT-AFINI-RIPFOLD-0001 — 通用内存臂 rip 相对 EA 折叠(wt/ripfold)
+
+**缺口**：`parse_operand`/`parse_dest_operand`/`compute_mem_addr` 三个通用内存臂对
+`base=rip` 的操作数走通用 base+index+disp 路径，产出
+`INT_ADD(Register@0x288:8, const abs)` ——而 Rugra 反汇编器（iced
+`memory_displacement64`）对 rip 相对操作数报告的 displacement **已是绝对目标**
+（next_rip + raw_disp；lea/push/comis 三臂 2026-09-23 起的既有约定），再叠 RIP
+寄存器等于双计。后果：AFINI 车道 httpd iced 路径 `in_RIP` 符号泄漏 23 refs/6 函数
+（main/suck_in_APR/ap_init_vhost_config/ap_fini_vhost_config/ap_update_vhost_given_ip/
+ap_pregcomp），双侧 golden 全 0；CURB2 的 DRIVER-RIPREL-CONSTFOLD-0001 曾在驱动侧
+折叠兑底。锁定 oracle 库 x86-64.sla 的 rip 相对构造器在指令语义期折绝对
+（AFINI probe 佐证），lifter 侧才是该折叠的正位。
+
+**修复**（三臂同一守卫 `segment.is_none() && base == "rip" && index.is_none()`，
+位移直取绝对 ram 址直连；段前缀与 rip 在长模式下不可组合，守卫段门控）：
+
+- `parse_operand`（源读）：返回**直接 ram 空间 varnode**
+  `Ram(abs, size)`——与 push/comis 折叠臂同约定。oracle .sla dump
+  （examples/ripfold_probe.rs 临时探针，已删）：`mov rax,[rip+0x1234]` =
+  `COPY RAX <- ram:0x223b:8`（无 LOAD、无地址 op）；`add rax,[rip+X]` 的
+  ram:abs 直接内联为 ALU 输入；`mov eax,[rip+X]`（32 位）= COPY+EAX + ZEXT，
+  iced 探针输出与 .sla **逐 op 恒等**。
+- `parse_dest_operand`（目的写）：返回 `(Ram(abs, size), None)` ——尺寸标记清空
+  后 mov 臂走普通 COPY 目的路径，产出 `COPY ram:abs <- src`，即 .sla 的
+  `mov [rip+X],rax` 形（**无 STORE**；dump：`[0] COPY out=3:0x225a:8
+  in=(4:0x0:8)`）。
+- `compute_mem_addr`（flag-pcode ALU 路径，约 12 调用点集中覆盖）：EA 折为
+  **裸 Const 空间常量**（同既有 abs-disp-only 形态约定）；下游
+  `LOAD/STORE(ram空间, const)` 由 RuleLoadVarnode/RuleStoreVarnode
+  （ruleaction.cc:4277/:4319，本 session 逐行读）重写为直接 ram varnode COPY，
+  收敛到 .sla 的 `add [rip+X],eax` = `INT_ADD out=ram:abs in=(ram:abs, EAX)` 形。
+
+**与驱动 fold 的幂等性**：`examples/httpd_decompile.rs` 的
+`fold_rip_relative_eas` 只匹配 `INT_ADD(Register@0x288:8, Const)` 模式——lifter
+折叠后该模式不复存在，驱动 fold 空转（实测：基线 stderr 记 25+1+3+9+1+… 处
+fold 日志，折叠构建后**零日志**=clean no-op）。驱动 fold 按任务边界保留，另行
+清理（见 LIFTER-RIPREL-MEMARMS-0001 残尾）。
+
+**门禁**（基线=本 worktree HEAD ac9e93e0，oracle e40ed130，fast-release 双构建
+A/B）：httpd canon **1123→1128/0/0**（defects/numbering 双零；main 550→548=−2
+CONCAT44(ap_conftree) 族消除；ap_init_vhost_config 11→18=+7：movq 8 字节零存
+储宽度修正（objdump 2cf02/2cf0d 实为 `movq`，基线 `(undefined4)` 强转 4 字节为
+错宽）+ return &DAT_001a0828 形（.sla 注入形/MIRROR 同款 `return 0xa0828;`，
+canon golden 的 void 为 headless 签名 DB 桥接残差，AFINI ①族同判））；
+curl **727/0/0 输出逐字节恒等**；MIRROR（RUGRA_MIRROR=1）输出**逐字节恒等**
+（sleigh_lift.rs 零改动）；投影 bank **391/391 MATCH**；cargo test --lib
+1712P/1F（唯一失败 test_nonzeromask_pipeline_wiring=VHOST 在案基线预存，
+HEAD 同败亲测）；gcc 审计 httpd 14/15、curl 104/20 与基线同数（预存比率）。
+
+### 2026-09-23：CONCATRAM-0001 — lea rip-rel 双计 rip 修复 + 32 位写 zext 补齐
+
+**① lea reg,[rip+disp] 地址双计**：`X86_64Disassembler` 对 rip 相对操作数的
+displacement 已是**绝对目标**（iced `memory_displacement64` = next_rip + raw_disp；
+probe：`48 8d 3d d5 e7 04 00` @0x2b9e7 报 0x7a1c3 = httpd "main.c" .rodata 地址），
+与 push（lift:1498-1514）和 comis（lift:3896-3907）两臂的既有约定一致。lea 臂
+却再叠 `next_rip + displacement` → Ram@0xa5bb1 = 目标+rip，全部字符串引用落到
+镜像外（>0x9a7e0），字符串/符号查表永不命中——链态 httpd `uRam`/CONCAT 族
+（EV delta_decomp ③ 族 ~107 行）的总根因。同时错误地址在 0xa5xxx-0xa6xxx 密集
+互相重叠触发别名拆分，物化 `CONCAT53/35/71/17(Ram…,Ram…)` 字节拼装。修复：
+displacement 直接作绝对地址，且结果取 **Const 空间**（地址值，SLEIGH rrip 导出
+`COPY const:8(abs)` 形态——curl 走 SleighLifter 的既有形态；Ram 空间位置 varnode
+会被 varmap ADDRTIED 臂符号化为 `uRam…` 名，阻断 printer Priority-0 的
+符号/字符串叶）。varnode 尺寸随目的寄存器宽度（4/8），`lea r32` 追加
+`INT_ZEXT(esi→rsi)`（ia.sinc check_*32_dest 同则）。
+
+**② mov 32 位寄存器写 zext**：`mov $0x280,%esi` 等此前只写 ESI 不 zext RSI，
+后续 64 位读物化 `CONCAT44(<garbage>, 0x280)`（extraout_var/uVar15 高半族）。
+oracle 语义：x86-64 任何 mod=3 32 位 GPR 写零扩父寄存器（ia.sinc
+check_Reg32_dest/check_Rmr32_dest；`emit_alu_tail` 的 ALU 路径已有同款
+parent64 zext，本臂补齐）。curl E2E 字节不变（主路径 SLEIGH）；httpd
+CONCAT 记号 51→2（余 2 为栈槽 CONCAT44(uStack,uStack)＝栈物化域）。
+
+**门禁**（基线=wt/chainfix f8ee7548，oracle e40ed130）：httpd canon
+2433→2250/0/0（−183）、direct 3000→2711（−289）、gcc 审计 6/23→7/22；
+curl 2507/0/0 字节恒等；三投影 stage_bisect --v1 MATCH×3；
+cargo test --lib 串行 1658P/18F 与 EY2 记录基线逐名同集。canon 微升 2 函数
+（ap_getword +3：`(long)(iVar4+1)` 拓宽形反而对齐 canon 语义，SEXT48 拼写噪音；
+ap_os_is_path_absolute +1：canary 现为 in_FS_OFFSET 形，int8/undefined8 拼写差）。
+
+2026-09-23（HTTPD-CALL-PUSH-0001，httpd main 归因车道 DL）: CALL 模板补全 push 序列。
+锁定 oracle `x86-64.sla` 模板实测（`/dev/shm/rugra-tests/sb-httpdmain/sleigh_probe`，
+SLEIGH `oneInstruction` dump）: `call rel32` 发射三 op —— `RSP = INT_SUB(RSP, 8)`;
+`STORE ram[RSP] = inst_next`(8 字节常量); `CALL ram:target`。`call rax` 发射四 op ——
+`COPY tmp <- RAX`（目标求值先于 RSP 调整）; `RSP = INT_SUB(RSP, 8)`; `STORE`; `CALLIND tmp`。
+`call [mem]` 同理 LOAD 先行。此前 lifter 只发射裸 CALL（2026-06-29 条目"CALL op 现在只挂
+目标地址"的论断是错的——那是简化，不是 oracle 模板）。效果: 返回地址 push 进入 IR，
+golden（`ghidra_httpd_1204.c` main 有 131 条 `local_d0 = 0x12b869;` 式 push 存储，
+98 条紧邻调用）中缺失的整类语句在 IR 层恢复。curl E2E 无变化（2689/0/0，
+curl 主路径走 SLEIGH lifter，本文件只影响其 prototype pre-pass 与 httpd iced 注入路径）。
+已知下游缺口（本修复的吸收链在 CALLSPEC-0001, 见 TODO board HTTPD-CALL-PUSH-0001）:
+无 Architecture cspec/extrapop 支撑时 push 存储以 uStack_168.. 形态整体保留,
+httpd E2E 2331→2667；配 HTTPD-CSPEC-ARCH-0001 后 2542。两项门禁(基线不升)在
+CALLSPEC-0001 落地前不满足——修复暂驻本 lane 分支，勿并入 master。
+
 2026-06-27: opcode 改名对齐 Ghidra 规范名 (INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE / BOOL_NOT->BOOL_NEGATE)，纯重命名，行为不变。
 
 2026-06-29: CALL op 建立 RAX 返回值 output（Register@0x0 size 8）。对齐 Ghidra `ActionFuncLink::funcLinkOutput`（coreaction.cc:1551 `newVarnodeOut`）：为未锁定 prototype 的 CALL 分配返回值寄存器作为 output，使返回值进入 SSA def 链。此前 CALL output 永远为 None，导致返回值"丢失"——下游使用（如 `__dest = strdup(buf)`）变成"声明却未赋值"。多寄存器/XMM 返回与 assumedOutputExtension 是后续工作。
@@ -159,3 +254,299 @@
   3. CAST 插入后 STORE 地址停在 unique(见 dbg 探针 surviving ops)。
   以上均为 coreaction/heritage/varmap 侧缺口,不在本 write-set,待主
   agent 派工;lifter 侧 33/33 op-for-op MATCH 无差异。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c1 — shl/sal 全形态 flag pcode(w-shifts)
+- `shl`/`sal` 离开旧的 "INT_LEFT→temp→COPY 无 flags" 形态,按锁定 oracle
+  `sleigh_specs/x86-64.sla`(12.0.4 语言)逐 op 提升,三种计数编码形态分派
+  (`shift_count_form`):
+  - **imm 形(C0/C1)**(38 op):`t0:4=INT_AND(imm:4, mask:4)`(mask=
+    0x1f,S==8 时 0x3f;imm 原始值,非执行值——eax,33 → 0x21:4 参与运算)
+    → `save=COPY(rm)` → 值 op `rm=INT_LEFT(rm,t0)`(reg 直写,无 temp
+    链)→ 32-bit GPR 的 INT_ZEXT(zext 在 flag 组**之前**)→ shlflags():
+    `CF = count==0 ? CF : SLESS(save<<(count-1),0)` mux、
+    `OF = count==1 ? CF^SLESS(rm,0) : OF` mux(rm 为 post-value 读)→
+    shiftresultflags():SF/ZF/PF 三组各自 `count!=0` gate mux(count==0
+    保留旧 flag),PF=popcount(rm&0xff) 偶校验链。
+  - **cl 形(D2/D3)**(同构):`t0:1=INT_AND(CL:1, mask:1)`,count 相关
+    const 全 1 字节(imm 形为 4 字节)。
+  - **by-one 形(D0/D1)**(短形态,无 count temp):`CF=SLESS(rm,0)` 在值
+    op **之前** → `rm=INT_LEFT(rm, const:0x1:4)` → `OF=XOR(CF,SLESS(rm,0))`
+    直接写 flag → zext(32-bit,在 OF **之后**)→ SF/ZF/PF 直写无 gate。
+  - **mem dst**:地址 op 先于 count-AND 绑定;一个共享 unique slot 被
+    每次 rm 重读复用(`t=LOAD; save=COPY(t); t=LOAD; t=shift(t,count);
+    STORE`;之后每个 flag 组前重 LOAD 同一 slot)。
+  - **形态判别**:CL 操作数 → D2/D3;imm≠1 → C0/C1;imm==1 用 by-one
+    规范编码长度精确算术判别(by-one 编码恒比 imm8 编码短 1 字节:
+    `shl eax,1` D1=2 字节,C1=3 字节)。**已知限制**(已披露):反汇编器
+    从不填充 `Instruction.bytes`(x86_64.rs:51),非规范 disp32 冗余编码
+    的 by-one 形态会回退 imm 形;根修 = 在 x86_64.rs 填充 bytes/iced
+    `code()`(不在本任务 write-set)。
+- 新 helper:`lift_shift`/`shift_count_form`/`shift_byone_len`/`gpr_id`/
+  `emit_load_slot`(slot 复用 LOAD)/`push_raw`、类型 `ShiftDir`/`ShiftCount`。
+- 双侧证据:examples/x86shift_probe 56 形态矩阵,SLEIGH 直通 dump vs iced
+  投影规范化逐 op 对比(uniq 临时 id 按首现序规范化)——29/29 shl 形态
+  MATCH(/tmp/w-shifts-dump-sleigh.out / w-shifts-compare-c1.out);
+  shr/sar 暂留旧臂至 c2/c3。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c2 — shr 全形态(w-shifts)
+- `shr` 路由到 lift_shift(ShiftDir::Right),同 shl 三计数形态分派:
+  - imm/cl 形:CF 位 = `INT_NOTEQUAL(INT_AND(save >> (count-1), 1), 0)`
+    (shl 是 INT_SLESS);**OF = count==1 ? SLESS(save,0) : OF 读保存的原始
+    值**(shl 读 post-value 新值);值 op INT_RIGHT。
+  - by-one 形:`t0=INT_AND(rm,1:S); CF=INT_NOTEQUAL(t0,0:S)` 直写;**8-bit
+    时 CF 由 INT_AND 直接输出**(dump `-- shr al,1` [0]、`-- shr byte
+    [rbx],1` [1]);`OF=COPY(0)` 在值 op **之前**;SF/ZF/PF 直写无 gate。
+- 双侧证据:14/14 shr 形态 MATCH(累计 43/58;14 个 sar 留旧臂;1 个
+  index-address 形态带 w-iced F5 地址 op 序残差——44 个 shift 语义 op
+  全 MATCH,仅 3-op 地址前缀异序,compute_mem_addr SIB 序,另行任务)。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c3 — sar 全形态 + 旧 shift 臂移除(w-shifts)
+- `sar` 路由到 lift_shift(ShiftDir::Arith),旧的内联 value-only shift
+  臂(临时 temp+COPY 无 flags,mem 操作数二次地址计算)整体删除。
+  - imm/cl 形:CF 位与 shr 同构(`INT_AND(save >>>(count-1),1)` + 
+    NOTEQUAL);**OF = OF & (count != 1)**——直接 `INT_AND` 输出到 OF
+    flag 寄存器(dump `-- sar al,3` [14]),无 mux 无 temp;值 op
+    INT_SRIGHT。
+  - by-one 形:与 shr 同构(CF=AND(rm,1)/NOTEQUAL 直写,OF=COPY(0) 在值
+    op 前,SF/ZF/PF 直写)。
+- 双侧证据:14/14 sar 形态 MATCH;最终 57/58(唯一 MISMATCH =
+  `shr dword [rbx+rcx*4+8],cl` 的 3-op 地址前缀序,w-iced F5 既有残差
+  的 SIB 分支,44 个 shift 语义 op 全同;修复路径已在 w-push88 的
+  compute_push_src_addr 双表序证实,建议另立 compute_mem_addr 任务)。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c1 — rol/ror 全形态 rotate flag pcode(w-x86flags)
+- `rol`/`ror` 此前走 `_ => {}` 零 op 臂(httpd 语料 77 处,全部丢弃);按锁定
+  oracle `sleigh_specs/x86-64.sla`(12.0.4 语言,sleigh_shim 直通 dump
+  /tmp/w-ext-rol.out + /tmp/w-ext-ror.out,26 形态)逐 op 补齐
+  (`lift_rotate`/`RotDir`):
+  - **imm 形(C0/C1)**:`t0:4=INT_AND(imm:4,(bits-1):4)`(mask=
+    7/15/0x1f/0x3f 按位宽;操作数序 (imm,mask))→ 值 `rm=INT_OR(rm<<c,
+  rm>>(bits-c))`(rol)或 `INT_OR(rm>>c, rm<<(bits-c))`(ror),`tsub=
+    INT_SUB(const bits:4, t0)` → **8/16-bit 形态在值段之后**再算
+    `cf1:1=INT_AND(imm:1,0x1f:1)` 作 flag count;32/64-bit 直接复用 t0:4。
+  - **cl 形(D2/D3)**:`t0:1=INT_AND(CL:1,(bits-1):1)`;8/16-bit **先**算
+    `cf1:1=INT_AND(CL:1,0x1f:1)`(在值段之前,与 imm 形态的时序相反);
+    32/64-bit 单 AND 复用。tsub 为 1 字节宽。
+  - **flag 组**:CF mux `count!=0 ? (rol: rm&1 / ror: rm s<0) : CF`;
+    OF mux `count==1 ? (rol: CF^SLESS(rm,0) / ror: SLESS(rm,0)^
+    SLESS(rm<<1,0)) : OF`(rm<<1 的 shift const 恒 1:4);AND/OR mux 结构
+    与 shift 组相同。
+  - **by-one 形(D0/D1)**:rol = `CF=SLESS(rm,0)`(值 op 前)→
+    `rm=(rm<<1)|CF`(8-bit CF 直连,更宽 zext(CF):W)→ `OF=XOR(CF,
+    SLESS(rm,0))`;ror = `CF=rm&1`(8-bit AND 直写 CF,更宽 AND:W+
+    NOTEQUAL)→ `rm=(rm>>1)|(CF<<(bits-1):4)`(8-bit CF 直连)→
+    `OF=XOR((rm&second-top)!=0, SLESS(rm,0))`(second-top mask =
+    0x40/0x4000/0x40000000/0x4000000000000000,按操作数宽度)。
+  - **mem dst**:一个共享 unique slot,每次 rm 读前重 LOAD(与 shift 组
+    同构);值 op OR 进 slot 后 STORE。
+  - 32-bit GPR dst 的 zext 在**所有 flag op 之后**(与 shift imm 形态
+    zext-before-flags 相反)。
+- 双侧证据:examples/x86ext_probe(EXTPROBE_FAMILY=rol|ror,
+  EXTPROBE_MODE=compare)22/22 rol + 15/15 ror 形态 MATCH
+  (reg/mem × 8/16/32/64 × imm/cl/by-one,ax/ah 高位形,ax,17 mask 边界,
+  rol eax,0 count==0 边界,REX.R r9w,SIB mem+cl)。
+- E2E:httpd 骨架 2274/0/0 与 master 基线(a31db12c)**字节级一致**
+  (77 处 rol 所在函数不在当前 29 函数对比窗口,零回归);curl sha256
+  ff6bef47 字节不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c2 — imul 全形态 CF/OF(w-x86flags)
+- `imul` 此前零 op(httpd 69 处:3-op imm 形为主,含 dst≠src;1-op;2-op);
+  按锁定 oracle dump(/tmp/w-ext-imul.out,20 形态)逐 op 补齐
+  (`lift_imul`/`lift_imul_two_op`/`lift_imul_three_op`/
+  `lift_imul_one_op`/`imul_bind_rm`/`imul_read_rm`):
+  - 统一 flag 链:双宽乘积 `p:D=INT_MULT(sext(op1):D, sext(op2):D)`
+    (D=2W)→ `CF=INT_NOTEQUAL(sext(result):D, p)` → `OF=COPY(CF)`;
+    SF/ZF/PF 不动。
+  - **2-op(0F AF)**:s0=sext(dst) 先,rm 后读;W==8 值 op =
+    `INT_MULT(dst, rm 重读)` 直写,W<8 值 op = `SUBPIECE(p,0)`;每形态
+    带一个 dead `SUBPIECE(p,W):W`;W==4 末尾 parent zext。
+  - **3-op(69/6B)**:iced 把 dst==src 折叠成 2 操作数 → 以 (dst,imm)
+    识别;src 先读;**6B 编码(iced imm size 1)的 imm 常量在操作数宽度
+    W(64-bit 即 const:8),69 编码在编码宽度(:4/:2)**;W==8 值 op =
+    `INT_MULT(src 重读, ext)`,ext = 6B ? const:8 : sext(const):8;
+    W<8 = SUBPIECE(p,0)。
+  - **1-op(F6/F7 /5)**:AX 族累加器;W==1 特例 `INT_MULT(s0,s1)` 直写
+    AX:2 且 `CF=sext(AL):2 != AX`(无 SUBPIECE);W==8 =
+    `acc=INT_MULT(acc,rm)` + `RDX=SUBPIECE(p,8)`;W==4 高半先
+    (`EDX=SUBPIECE(p,4);RDX=zext;EAX=SUBPIECE(p,0);RAX=zext`);
+    W==2 = `DX=SUBPIECE(p,2);AX=SUBPIECE(p,0)`。
+  - mem rm:一个共享 unique slot,每次读重 LOAD(dump `imul rbx,[rax]`
+    [1][4] 全落 unique#1)。
+- 双侧证据:examples/x86ext_probe imul 20/20 MATCH(1/2/3-op ×
+  8/16/32/64 × reg/mem × imm8/imm32/imm16,REX.R r8)。
+- E2E:httpd 2274/0/0 与 master 基线字节级一致(imul 站点在对比窗口
+  外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c3 — bt/bts/btr/btc 位测试 CF(w-x86flags)
+- `bt` 家族此前零 op(httpd 20 处:15 reg,reg bt + 2 btc imm64 + 3 其他);
+  按锁定 oracle dump(/tmp/w-ext-{bt,bts,btr,btc}.out,26 形态)逐 op 补齐
+  (`lift_bt`/`BtKind`):
+  - **reg dst, reg/imm idx**:`c = idx & (bits-1)`(reg 形态在操作数宽度,
+    imm 形态双 const 恒 :4,mask=bits-1)→ `sh=rm>>c; b=sh&1` →
+    **CF 位置按宽度**:W==8 modify(OR/AND~XOR 1<<c)之后,W<8 之前;
+    32-bit GPR modify 形态末尾 parent zext;plain bt 仅 CF 无写回。
+  - **mem dst, imm idx**:`c:4 = imm & (bits-1)`;共享 slot 全宽 LOAD;
+    W<8 CF 在 modify 前(t=1:W<<c;btr 先 NEGATE 再重 LOAD 再 AND),
+    W==8 在 modify 后。
+  - **mem dst, reg idx**(位串字节寻址):`s:8=sext(idx)` →
+    `sar=s>>3(const:4)` → `addr=base+sar` → `c=idx&7` → 字节 LOAD →
+    `(byte>>c)&1`;modify 重 LOAD 新字节 temp 与 `1:1<<c` 组合后 STORE,
+    CF 在 STORE 后。**plain bt 的 LOAD/AND(idx,7) 次序与 modify 形态相反**
+    (bt [rax],edx [3]=LOAD[4]=AND vs bts [3]=AND[4]=LOAD)。
+- 双侧证据:examples/x86ext_probe 8 bt + 7 bts + 5 btr + 6 btc 形态全
+  MATCH(reg/mem × imm/reg × 32/64,mask 边界 3Fh,btr 的 NEGATE-重LOAD 序)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(bt 站点在
+  对比窗口外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c4 — comiss/ucomiss/comisd/ucomisd(w-x86flags)
+- FP 比较家族此前零 op(httpd 37 处,含 25 处 rip-relative);按锁定
+  oracle dump(/tmp/w-ext-comis.out,8 形态)逐 op 补齐(`lift_comis` +
+  `flag_af` + get_register 的 xmm0-15 表):
+  - COMISS 与 UCOMIS 的 pcode **完全相同**(两侧都做 FLOAT_NAN):
+    `PF=BOOL_OR(NAN(lhs),NAN(rhs))`(0x202)、
+    `ZF=INT_OR(PF,FLOAT_EQUAL(lhs,rhs))`(0x206,INT_OR 非 BOOL_OR)、
+    `CF=INT_OR(PF,FLOAT_LESS(lhs,rhs))`(0x200)、
+    `OF/AF/SF=COPY(0)`(0x20b/0x204/0x207)。
+  - 操作数宽度来自助记符后缀(*ss=4,*sd=8)——iced 报 16 字节向量宽,
+    oracle 按操作宽度读 XMM 寄存器(register:0x1200+0x40*N,
+    xmm8=0x1400 已 dump 验证)。
+  - mem rhs:位移形态地址 op 先绑定,共享 slot 每个 float op 前重
+    LOAD;**常量地址(rip-relative/纯 displacement)折叠为直接
+    ram 空间 varnode 输入,无 LOAD 无地址 op**(dump `comiss
+    xmm0,[rip+0]`:FLOAT_NAN in=(ram:0x1c:4))。
+- 双侧证据:examples/x86ext_probe comis 8/8 MATCH(reg/mem/xmm8/
+  rip-fold/disp-mem/d 形态)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(comis
+  站点在对比窗口外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c5 — mul/div/idiv + bswap(w-x86flags)
+- 按锁定 oracle dump(/tmp/w-ext-{mul,div,idiv,bswap}.out,20 形态)逐 op
+  补齐四个家族(`lift_mul`/`lift_div`/`lift_bswap`):
+  - **mul(F6/F7 /4)**:无符号双宽乘积;CF=OF=高半!=0,**写回顺序按宽度
+    不同**:W1 = `AX:2=INT_MULT(zext(AL),zext(rm))` 直写 + `CF=AH!=0`;
+    W2/W8 = 高 SUBPIECE、低 SUBPIECE、CF、OF;W4 = 高、RDX zext、CF、
+    OF、低、RAX zext(与 W2/W8 顺序不同!);mem rm 先 zext 累加器再 LOAD。
+  - **div/idiv(F7 /6,/7, W>=2)**:无 flags;divisor = div ZEXT / idiv
+    SEXT(mem 形态 LOAD 最先);dividend = `(zext(HI)<<(8W:4)) | zext(LO)`
+    (**idiv 的高半也是 ZEXT**,dump `idiv ecx` [1]);q=INT_DIV/SDIV →
+    LO=SUBPIECE(q,0),W4 紧跟 parent zext;r=INT_REM/SREM → HI=
+    SUBPIECE(r,0)[+zext]。
+  - **bswap(0F C8, W=4/8)**:无 flags 的 mask/shift OR 链——字节从顶向
+    下,`t=reg&(0xff<<8i)`,上半 RIGHT/下半 LEFT by 8|i-j|(const :4);
+    首个移位结果即累加器,后续 OR 进累加器,**最后一个 OR 直写寄存器**;
+    W4 末尾 parent zext。
+- 双侧证据:examples/x86ext_probe mul 7/7 + div 4/4 + idiv 4/4 + bswap
+  5/5 MATCH;全 probe 111/116 MATCH(5 个 MISMATCH 均为登记未实现的
+  rep-string/SSE doc 形态)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致;curl
+  sha256 ff6bef47 不变;cargo test --lib 基线 1644/17 失败 → 本分支
+  1645/16(多过 1 个,零回归;16 个 funcdata 失败为既有 master 状态)。
+
+### 2026-09-23:RET-OP3-0001 — RET 模板三 op 化(wt/rettemplate)
+- `lift()` 的 `'ret'` 臂离开旧的裸 `RETURN <- const:0` 单 op 形态,按锁定
+  oracle `sleigh_specs/x86-64.sla` 模板 dump(lane DU 探针
+  `/dev/shm/rugra-tests/sb-rettemplate/sleigh_probe`,`SleighCtx` +
+  `oneInstruction`,同 lane DL CALL 探针方法)逐 op 提升:
+  - `ret`(C3)= 三 op:
+    `LOAD reg:0x288(RIP):8 <- const:0x3:8(ram spaceid), reg:0x20(RSP):8` →
+    `INT_ADD RSP:8 <- RSP:8, const 8:8` → `RETURN <- RIP:8`
+    (返回地址弹入 RIP,RSP 越过它,再 RETURN)。
+  - `ret imm16`(C2 iw)= 四 op:同 LOAD + `INT_ADD +8` + **独立的**
+    `INT_ADD +zext(imm16)`(探针 `ret 0x8000` dump `const 0x8000:8`
+    = 零扩展,非符号扩展)+ RETURN。
+- 旧裸 RETURN 的 inline 注释声称对齐 ia.sinc,与 DL 车道对 CALL 模板的
+  发现同族——.sla 实测推翻(HTTPD_MAIN_ATTRIBUTION_2026-09-23.md §2 RC1)。
+  SLEIGH 路径(curl 主解码)本就把该模板原样送进管线
+  (sleigh_lift.rs convert 直通),curl golden 一致性证明下游对三 op RET
+  的处理已在位。
+- RETURN input(0)(返回地址)永不进入文本输出:printc.cc:754
+  `PrintC::opReturn` 只在 `numInput()>1` 时打印 input(1)(返回值);
+  Rugra printc.rs CPUI_RETURN 臂(printc.cc:754 注释)同构。RIP LOAD 与
+  尾部 RSP bump 在管线内消亡/隐藏的路径与 SLEIGH 路径完全相同。
+- 逐 op 双侧证据(fixture=lift_fixture,oracle=sla_probe,同字节同上下文):
+  `ret`/`ret 0x8`/`ret 0x8000` 三形态 op 序列(opcode/输出 varnode/
+  输入 varnode/顺序)逐 op **MATCH**(/dev/shm/rugra-tests/sb-rettemplate/
+  {sla_probe_out.txt,lift_fixture_out.txt})。
+- `retf`(CB/CA 远返回)仍走 `_ => {}` 未实现臂(既有状态,非本项回归)。
+
+### 2026-09-23:LIFT-FS-CANARY-FORM-0001 — FS/GS 段相对寻址段基化(wt/fscanary)
+- 根因:`mov %fs:0x28,%rax`(stack-protector canary 装载)此前丢失段前缀
+  ——`Operand::Memory` 无 segment 字段,lift 为 `LOAD ram, const 0x28`,
+  下游 directify 成 `uRam0000000000000028` persist 全局输入;oracle
+  golden 同位为 `*(long *)(in_FS_OFFSET + 0x28)` 解引用形(golden 全语料
+  620 处 FS_OFFSET 引用,httpd E2E 侧 2 行,即 EK 后 httpd 残 +2)。
+- 修复面(逐 op 双侧证据,oracle=sleigh_specs/x86-64.sla 经
+  `examples/x86fs_probe.rs` dump,`SleighCtx::one_instruction`,与
+  X86LIFT-PUSH88-0001 探针同法):
+  - 寄存器目录:.sla `getAllRegisters` 给 **FS_OFFSET=register:0x110:8、
+    GS_OFFSET=register:0x118:8**(区别于 2 字节选择器 FS=0x108:2/GS=0x10a:2);
+    `get_register` 表新增 `"fs_offset"`/`"gs_offset"`。
+  - oracle 段寻址模板(逐 op dump,`mov rax,[fs:0x28]` 为
+    `INT_ADD tmp = FS_OFFSET, const 0x28` → `LOAD(3, tmp)` → `COPY rax`;
+    段基为**第一输入**,纯绝对位移也不折叠成直接 ram varnode;
+    `[fs:rbx+rcx*4+0x10]` 段基 INT_ADD 最外层):
+    - 新增 `segment_base`/`apply_segment` helper;
+    - `compute_mem_addr` 增加 `segment` 首参,尾部按
+      `Some(EA)+seg → INT_ADD(SEG_OFFSET, EA)`、`None+seg → 裸 SEG_OFFSET`
+      (d==0 折叠,同 compute_push_src_addr 约定)处理,12 处调用点随迁;
+    - `parse_operand`/`parse_dest_operand` Memory 臂同样段包装;
+    - `push_source_val` 的 rip/绝对位移直连 ram COPY 捷径加
+      `segment.is_none()` 门(oracle `push [fs:0x28]` = INT_ADD+LOAD+COPY+RSP-8+STORE);
+    - `lift_comis` 的常量地址直连 ram 折叠同样段门控。
+  - `src/disasm/mod.rs`:`Operand::Memory` 新增 `segment: Option<String>`;
+    `x86_64.rs` 从 iced `segment_prefix()` 提取(仅 fs/gs;CS/DS/ES/SS
+    长模式无效)。
+- 逐 op MATCH(唯一空间 tmp 序号归一):`mov rax,[fs:0x28]`、
+  `mov [fs:0x28],rax`(STORE 直接 src 形,非本项回归)、`mov rax,[fs:rbx]`、
+  gs 变体、`cmp rax,[fs:0x28]`、`push [fs:0x28]` 全部与 .sla dump 一致
+  (probe 输出 /dev/shm/rugra-tests/sb-fscanary/fs_probe{,_fixed}.out)。
+  已知非 FS 回归性形差(登记不修,FS 前非本项引入):32 位
+  `mov eax,[fs:0x28]` 缺 oracle 尾部 INT_ZEXT;无段前缀绝对位移
+  `mov rax,[0x28]` iced 路径为 LOAD(3,const) 而 oracle 直连 ram COPY
+  (downstream directify 收敛,pre-existing)。
+- E2E(wt/fscanary,fast-release):
+  - httpd **2335→2310/0/0**(超 ≤2333 目标 25;canary 行
+    `uStack_40 = uRam…28;` 消失,代之以 FS 解引用形);
+  - curl **2516/0/0 持平**(curl 主解码走 SleighLifter,本就有
+    `in_FS_OFFSET` 形;唯一字节差 2 处 `} while ( true)` → `} while( true)`
+    空白异形,normalize 骨架不可见,gcc 审计不可见);
+  - gcc 审计 A/B 逐函数恒等:curl 82OK/25FAIL,httpd 6OK/23FAIL;
+  - 三投影(RUGRA_MIRROR=1 全家)next_url/match_url/parseconfig
+    stage_bisect --v1 全 **MATCH**(335/96457、340/80385、335/130099);
+  - cargo test --lib 失败集与 EK 基线逐字相同(18 个既有),新增
+    `disasm::x86_lift::tests` 6 测试钉 oracle 形(load/store/push/gs/
+    无段不变式/segment 提取)。
+- 残余移交(域外,已登记):httpd 无 DWARF 原型锁的函数中,FS_OFFSET
+  输入寄存器被默认参数发现并入原型(`void main(long,long,long,long)`),
+  解引用打印成 `*(param_2 + 0x28)` 形且符号命名走 printc 兜底
+  `in_register_00000110`(curl 侧有原型锁,同链路渲染正确
+  `in_FS_OFFSET`);根因在 fspec 原型输入表/varmap 输入符号安装域,
+  见 TODO BOARD 移交行。
+
+### 2026-09-24:HTTPD-FULLEMPTY-ELSE-0001 — 直接分支目标 1 字节 code-ref 形(wt/elsefix)
+- 改动:三处直接分支目标 `jmp rel` / `jCC rel` / cmovcc 内部
+  `if(!cc) goto inst_next` 的目标输入从 `VarnodeRaw(Ram, target, 8)` 改为
+  `(Ram, target, 1)`——Ghidra `Funcdata::newCodeRef`(funcdata_varnode.cc:
+  222-233)的 code-ref 形:1 字节 ram 注记(oracle 直跑探针实证
+  `[target-space=ram size=1]`,fspec CALL 目标另属 fspec 空间,本就不动)。
+- 根因链(空 else defect):8 字节目标 varnode 使相邻分支目标互相重叠 →
+  Heritage 范围细化(refineRead/refineWrite,heritage.cc:390-414/474-494)
+  把它们拆分再用 PIECE 链重组(`concat` 残骸)→ 死 PIECE 落进仅含 jmp 的
+  基本块(如 ap_parse_uri 的 0x34335)→ `BlockBasic::isDoNothing` 的
+  hasOnlyMarkers(block.cc:2578)不过 → 块不被 ActionDoNothing 移除 →
+  ruleBlockIfElse(blockaction.cc:1416)合法地把幸存块包成 else 臂 →
+  打印层按 printc.cc:2926-2944 发射 `else {`+空体 → `else {}` 缺陷。
+  oracle 侧同输入无 PIECE(1 字节目标不重叠,read-only range 走
+  renameRecurse 输入晋升即止),jmp-only 块被 donothing 移除后
+  ruleBlockProperIf 产出无 else 的 if。
+- E2E(wt/elsefix,fast-release,基=亲父 a57da535 亲测):
+  - httpd 全量 L2 vs direct-runner **37867/0/0**(基 37939/2/0;defects
+    2→0,ap_parse_uri L16/ap_invoke_handler L57 空 else 均消失,skeleton
+    −72 只降不升,双跑逐字节恒等);
+  - httpd 门禁面 29 fns canonical **2148/0/0**(基 2225/0/0,−77);
+  - curl **逐字节恒等于基线**(curl 主解码走 SleighLifter,iced 仅
+    __libc_csu_init/fini);
+  - 三投影(RUGRA_MIRROR=1)next_url/match_url/parseconfig.constprop.0
+    stage_bisect --v1 全 **MATCH×3**;
+  - cargo test --lib 串行 1677 通过/18 失败 == 基线逐字同集(并行跑的
+    失败集为共享状态串扰 flake,基线同现)。

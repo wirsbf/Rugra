@@ -293,6 +293,15 @@ binary bytes
 - 地址引用
 - 其他架构相关操作数字段
 
+### `Memory` 变体的 `segment` 字段(2026-09-23,LIFT-FS-CANARY-FORM-0001)
+
+`Operand::Memory` 新增 `segment: Option<String>`,承载 fs/gs 段前缀
+(`"fs"`/`"gs"`);无前缀或 CS/DS/ES/SS 前缀(长模式架构性无效)为 `None`。
+该字段驱动 lifter 的 FS_OFFSET/GS_OFFSET 段基 INT_ADD
+(oracle `sleigh_specs/x86-64.sla` 段寻址构造器,见
+`docs/api/disasm/x86_lift.md` 2026-09-23 节)。`Display` 以 `fs:[...]`
+形式渲染段前缀。
+
 ### 文档边界
 `Operand` 的存在说明 `disasm` 层已经有“操作数级表示”需求，  
 但 API 文档不应替代实际源码去宣称：

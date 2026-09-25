@@ -427,8 +427,16 @@ impl TransformVar {
                 let addr = Address::new(vn_offset + byte_pos as u64);
                 // renormal(byteSize) is a no-op for Rugra's Address (no sub-byte
                 // alignment tracking); the address is already byte-aligned.
+                // transform.cc:202-207: the piece address stays in the ORIGINAL
+                // varnode's space (`Address addr = vn->getAddr() + bytePos`
+                // keeps vn's space; both newVarnode/newVarnodeOut take the full
+                // space-qualified Address) — unique-space temporaries and
+                // stack/ram pieces must not be pinned to the register space
+                // (FAMILY-AUDIT-SPACELESS-SITES-0001).
                 if let Some(def) = def_op {
-                    self.replacement = Some(fd.new_varnode_out(self.byte_size as usize, addr, def));
+                    self.replacement = Some(
+                        fd.new_varnode_out_full(self.byte_size as usize, vn_space, addr, def),
+                    );
                 } else {
                     // Create a free varnode at the piece address.
                     self.replacement = Some(
@@ -649,18 +657,18 @@ pub struct TransformManager {
     pub preserve_address_override: Option<fn(&Varnode, i32, i32) -> bool>,
 }
 
-// RUGRA-GLUE: detached, never-bank-resident size-0 Varnode modelling Ghidra's
-// NULL input slot. Ghidra's `PcodeOp` ctor (op.cc:71) pre-sizes `inrefs` to
+// RUGRA-GLUE: Ghidra's NULL input-slot pointer, shared process-wide via
+// crate::op::null_slot_sentinel (one instance keeps `Arc::ptr_eq` between two
+// NULL slots `true`, matching Ghidra's pointer equality inrefs[i] == vn,
+// op.hh:166 getSlot). Ghidra's `PcodeOp` ctor (op.cc:71) pre-sizes `inrefs` to
 // `inputs` NULL slots, and `TransformOp::createReplacement` (transform.cc:236)
 // inserts further NULL slots via `opInsertInput(op, (Varnode*)0, ...)`; the
 // NULLs persist until `placeInputs` (transform.cc:750) overwrites every slot.
-// Rugra's `inrefs` is a `Vec<Arc<RwLock<Varnode>>>` and cannot hold NULL, so
-// this sentinel stands in: it is never created through `VarnodeBank` (no
-// create-index or bank count side effects), carries no descendants (the
-// `opSetInput` early-return on a fresh NULL slot, funcdata_op.cc:107, becomes
-// a no-op on it), and observation projections treat size 0 as the NULL slot.
+// The sentinel is never created through `VarnodeBank` (no create-index or bank
+// count side effects), carries no descendants, and observation projections
+// render it as the NULL slot ("-"). (SB-ORD159-NULLSLOT-0001)
 fn null_slot_sentinel() -> std::sync::Arc<RwLock<Varnode>> {
-    std::sync::Arc::new(RwLock::new(Varnode::new(0, Address::new(0))))
+    crate::op::null_slot_sentinel()
 }
 
 // SAFETY: `*mut Funcdata` is only dereferenced within `&mut self` methods while
@@ -1094,13 +1102,12 @@ impl TransformManager {
                 fd.op_remove_input(&op, cur - 1);
             }
             // cc:233-234: opUnsetInput(op, i) for every remaining slot — the
-            // Varnode loses this descendant and the slot becomes NULL; the
-            // detached sentinel models that NULL (Rugra's inrefs are
-            // non-optional).
+            // Varnode loses this descendant and the slot is nulled in place
+            // (the shared sentinel models Ghidra's NULL; op_unset_input now
+            // performs the clearInput write itself).
             let cur = op.0.read().unwrap().inrefs.len();
             for i in 0..cur {
                 fd.op_unset_input(&op, i);
-                op.0.write().unwrap().inrefs[i] = null_slot_sentinel();
             }
             // cc:235-236: while (op->numInput() < input.size())
             //   fd->opInsertInput(op, (Varnode *)0, op->numInput()-1);

@@ -1,0 +1,183 @@
+{
+ "schema_version": 2,
+ "fixture_id": "MERGE-TRIM-LANE-0001",
+ "status_note": "The phi(X,f(X)) lane-trim chain projections (lazy Varnode cover rebuild via setHighLevel, the X x f(X) interval intersection in the cond block, trimOpInput COPY placement at each MULTIEQUAL lane's incoming-block end, trimOpOutput, phi lane rewiring, and markInternalCopies non-printing flags) are byte-identical MATCH over both cases. Residual: the final forced-merge convergence (Ghidra throws LowlevelError on this synthetic input; Rugra skips the failed merge) is a known deliberate non-projection; and the full-pipeline ActionConditionalExe stage is covered by the curl corpus gates, not by this fixture.",
+ "decisive_semantics": {
+  "reference_output_parameters": "HighVariable::updateInternalCover (variable.cc:324-335) reads inst[i]->getCover() which lazily rebuilds (varnode.hh:202 -> varnode.cc:233 updateCover -> cover->rebuild). Merge::mergeOp (merge.cc:719-772) mutates the MULTIEQUAL's inputs via trimOpInput; trimOpInput (merge.cc:692-712) returns void, creating a COPY op (allocateCopyTrim, merge.cc:411-434) whose output replaces the lane input (opSetInput) and which is inserted at opInsertEnd(copyop, op->getParent()->getIn(slot)) for MULTIEQUAL.",
+  "loop_bounds_traversal_order": "updateInternalCover iterates instances in insertion order gated on inst[0]->hasCover() (variable.cc:329). mergeOp phase 1 walks inputs i=0..max checking mergeTestRequired against high_out and against every earlier input j<i (merge.cc:730-741); phase 2 walks inputs left-to-right and breaks at the first cover-test failure (merge.cc:744-745); the trim loop starts nexttrim=0 and increments only while the retest still fails (merge.cc:748-758).",
+  "counter_accumulator_lifecycle": "No counters; the Varnode COVERDIRTY flag is set by calcCover and cleared by updateCover's rebuild (varnode.cc:233-241); copyTrims accumulates one entry per allocateCopyTrim (merge.cc:432) and is consumed by processCopyTrims (merge.cc:1425-1444).",
+  "sorting_comparison_keys": "CoverBlock::intersect (cover.cc) compares uindex ranges of both endpoints: 0 no intersection, 1 boundary touch, 2 interval; mergeTest/HighIntersectTest count only >1 (variable.cc:1152/973). MULTIEQUAL ops order at the very block beginning (getUIndex maps markers to 0)."
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/merge.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/merge.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/variable.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/cover.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/coreaction.hh"
+  ]
+ },
+ "rugra_source": {
+  "base_commit": "b1c73088a9ec045d5e7af428d45cea134f1369f1",
+  "base_tree": "6f3b84eede4ee50edd6885c075ec9abbc25b2cf3",
+  "base_src_tree": "a7b9070d7a5c492c7afbfbec198ebf98b74a0f0e",
+  "base_merge_blob": "7be3b18e0f721d952de26f77c70fb4865997877a",
+  "cargo_toml_blob": "bb22dd03e7519b9465d046f8bb0cdd86a7a54a6f",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": [
+   {
+    "path": "src/merge.rs",
+    "policy": "primary file under test; hash-verify before replacing the pinned base copy"
+   }
+  ],
+  "archive_policy": "Immutable explicit dependency closure plus one hash-verified source overlay; unrelated worktree files are excluded"
+ },
+ "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
+ "compiler_spec": {
+  "id": "none (FixtureArchitecture built-in prototype model)"
+ },
+ "analysis_options": {
+  "apis": [
+   "Funcdata::setHighLevel",
+   "Funcdata::newOp",
+   "Funcdata::newVarnodeOut",
+   "Funcdata::newVarnode",
+   "Funcdata::newConstant",
+   "Funcdata::opSetOpcode",
+   "Funcdata::opSetInput",
+   "Funcdata::opInsertEnd",
+   "Funcdata::opInsertBegin",
+   "Merge::mergeAddrTied",
+   "Merge::mergeMarker",
+   "Merge::markInternalCopies",
+   "Varnode::getCover",
+   "Cover::intersectByBlock"
+  ],
+  "funcdata": "One synthetic Funcdata per case (T1 CMOV shape with f(X) in the cond block; T2 control with f(X) in the then block); 5-block CFG b0..b4; no followFlow; ActionAssignHigh + ActionMergeRequired + ActionCopyMarker driven directly",
+  "case_matrix": "T1: phi(X,fX) with INT_RIGHT in cond block b1 (X live through b1, fX defined mid-b1) - interval intersection forces trimOpInput COPYs at end of b1 (reads X) and end of b2 (reads fX) plus trimOpOutput COPY at b3; T2: same shape with INT_RIGHT moved into then block b2",
+  "random_seed": "none",
+  "error_injection": "none (Ghidra LowlevelError from the synthetic final forced merge is caught and not part of the projection; Rugra's mergeOp phase-3 skip-on-failure yields the same observable IR)",
+  "normalization": "Block creation ordinals (bN) and fixture varnode names (X/fX/phiout/y) replace raw pointers; trim-COPY lanes print copy@<block>(<reads>)"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
+  "sha256": "0eb4468596e6a7e8ecd8c38a3faf826cb1b2b9b274eec5383fa31810de0ddae0",
+  "cases": [
+   {
+    "id": "T1",
+    "family": "cmov_trim"
+   },
+   {
+    "id": "T2",
+    "family": "cmov_trim"
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "fixed-order pipe-delimited UTF-8 records (covers, intersect chars, per-block op lists, phi lanes, per-COPY non-printing flags) with final newline",
+  "record_order": [
+   "cover X/fX/phiout",
+   "intersect X_fX / X_phiout / fX_phiout",
+   "ops b0..b4",
+   "phi lane0/lane1",
+   "np per COPY"
+  ],
+  "cover_projection": "nonempty=1 for every named varnode pins the lazy rebuild (a Rugra build that reads inst.cover without update_cover_locked emits nonempty=0 and diverges)",
+  "intersect_projection": "char=2 for X_fX (interval in the cond block) and char=1 for X_phiout/fX_phiout (boundary tip at the join) reproduce CoverBlock::intersect 0/1/2 semantics",
+  "preserved": "No block ordinal, op order, opcode name, or boolean is normalized; only raw pointers are replaced by creation ordinals and fixture names"
+ },
+ "build": {
+  "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+  "supplemental_source_units": [
+   "libdecomp.cc",
+   "sleigh_arch.cc",
+   "inject_sleigh.cc"
+  ],
+  "cxx_flags": [
+   "-std=c++11",
+   "-O2"
+  ],
+  "access_leverage": "public API only (setHighLevel/getMerge/mergeAddrTied/mergeMarker/markInternalCopies/getCover); the #define private public / #define class struct header-include block follows tests/oracle/condexe_pullback_1204.cc precedent",
+  "rust_build": "Cargo --locked --offline in isolated target, then rustc with the built librugra rlib"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "8dceb49da3082fc4f0b9c1296875148b772a26c6efba34edb9d7c2c546748fc0",
+  "rust_fixture_sha256": "87ed917166b4154211060701c854e868a33399da64d178250d58a189cdb601c5",
+  "merge_overlay_sha256": "983e714973016a3f941e57770860c895c0ba88313c22b77f627c9e5bb1c7f179",
+  "runner_sha256": "2817aa5f1c941af13c93103ca16f9d43f7fcca4e7766c49560e180e4b2032d41"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "46892c561a1de54702924b0455f05133ad4ce7d31cdbd67002bb607994085091",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "46892c561a1de54702924b0455f05133ad4ce7d31cdbd67002bb607994085091",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "lazy_cover_rebuild": {
+   "status": "MATCH",
+   "covers": "cover|nonempty=1 for X/fX/phiout after setHighLevel (funcdata_varnode.cc:595 -> assignHigh -> getCover chain); pins RULE-PROPCOPY-ADDRTIED-0001's root cause (Rugra pre-fix emitted nonempty=0)",
+   "residual_todo_ids": []
+  },
+  "lane_intersect_character": {
+   "status": "MATCH",
+   "covers": "intersect char: X_fX=2 (interval, cond block), X_phiout=1 / fX_phiout=1 (boundary tip at the join) — CoverBlock::intersect 0/1/2 (cover.cc) and the getUIndex MULTIEQUAL-at-begin ordering",
+   "residual_todo_ids": []
+  },
+  "trim_copy_placement": {
+   "status": "MATCH",
+   "covers": "ops b1 gains COPY(X) before the CBRANCH, b2 gains COPY(fX) at block end (the branch-local instantiation), b3 gains the trimOpOutput COPY(phiout); phi lanes rewire to copy@b1(X) / copy@b2(fX) (merge.cc:692-712 + 656-682)",
+   "residual_todo_ids": []
+  },
+  "internal_copy_marking": {
+   "status": "MATCH",
+   "covers": "np flags of every COPY after markInternalCopies (merge.cc:1449-1532): all print 0 here because the synthetic final forced merge throws before the highs unify — the flag channel itself is compared byte-for-byte",
+   "residual_todo_ids": []
+  },
+  "forced_merge_convergence": {
+   "status": "UNTESTED",
+   "covers": "On this synthetic input Ghidra's mergeOp throws LowlevelError at the final forced merge while Rugra's phase 3 skips the failed merge; both leave the same observable IR, but the exception channel difference is deliberately not projected (changing Rugra's merge_op phase-3 to abort would alter pipeline-visible behavior and needs its own task)",
+   "residual_todo_ids": [
+    "MERGE-FORCEFAIL-CHANNEL-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "residual_todo_ids": [
+  "MERGE-FORCEFAIL-CHANNEL-0001"
+ ],
+ "residual_union": {
+  "todo_id": "MERGE-FORCEFAIL-CHANNEL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "forced_merge_convergence",
+    "status": "UNTESTED",
+    "detail": "Ghidra mergeOp throws LowlevelError 'Unable to force merge' (merge.cc:767-769) aborting the whole decompile; Rugra's merge_op phase 3 skips failed merges and continues (src/merge.rs merge_op). Aligning the abort channel (or proving the corpus never reaches it) needs a dedicated task with pipeline-level differential evidence."
+   }
+  ]
+ },
+ "overall_status": "MATCH"
+}

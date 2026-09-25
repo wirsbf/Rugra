@@ -1,5 +1,41 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-09-24：DataOrg core-type 表改为 Java headless `<coretypes>` 精确投影（Lane GH）
+
+`init_data_org_core_types` 的整数命名不再用 `int{N}`/`uint{N}` 约定式拼写，改为
+正典 golden 背后的 Java 客户端 `PcodeDataTypeManager.generateCoreTypes`
+（PcodeDataTypeManager.java:1154-1228）在 x86-64 gcc data organization
+（short=2/int=4/long=8/longlong=8）下的精确注册表：
+
+- signed: `sbyte(1) short(2) int3(3) int(4) int5(5) int6(6) int7(7) long(8) int16(16)`
+  （AbstractIntegerDataType.java:544-566 的 longSize 覆写使 `longlong` 槽位被
+  `long` 取代，表中无 `longlong`）
+- unsigned: `byte(1) ushort(2) uint3(3) uint(4) uint5(5) uint6(6) uint7(7) ulong(8) uint16(16)`
+- `undefined1..8`（Undefined.java:31-38，无 10/16）、`float(4) double(8) longdouble(16)`、
+  `code`、`char(1,int,ASCII)`、`wchar_t(4,int,UTF)`、`bool`、`void`
+
+语义影响链：类型名直接进 printC 拼写（`int8`→`long`、`uint8`→`ulong`、
+`int2`→`short`、`uint1`→`byte`），并经 `Datatype::printNameBase`（type.hh:273，
+取 name 首字符）改变默认变量名前缀（`iVar`↔`lVar/sVar`、`uVar`↔`bVar`）。
+canon golden（headless Java 桥）全量使用该表拼写；direct-runner golden（纯 C++
+库，SLEIGH standalone 表 `int8/uint8`）不受影响——两 golden 契约差异已在
+GOLDEN-CONTRACT-PUSHABSORB-0001/FI 判例框架内登记。E2E：curl 1910→1847、
+httpd 1960→1782（defects/numbering 双零保持，逐函数零回退）；五投影
+（next_url/match_url/parseconfig/getparameter/myprogress，RUGRA_MIRROR=1 正典
+bundle）MATCH 保持——投影快照不含核心类型名。新单测
+`test_data_org_core_inventory_matches_java_coretypes` 固定表与 cache 槽位
+（`get_base(8,Int)==long`、`get_base(2,Int)==short`、`get_base(1,Uint)==byte`、
+`get_base(8,Float)==double`）。
+
+## 2026-09-22：`intern_imported` — DWARF 导入边界的工厂注册（HERITAGE-PROMOTE-SYMBOLTAIL-0001 配套）
+
+新 `pub(crate) fn intern_imported(candidate)`：`find_add(candidate, true)` 的公共包装，
+对应 type.cc:3390 `TypeFactory::findAdd` 的 DWARF/type-manager 导入通道（Ghidra
+的 DWARF analyzer 把每个导入类型注册进 Architecture 的唯一工厂，跨引用恒等由此
+成立）。调用方为 `debugproto.rs` 的 `intern_named` 软驻留（见 docs/api/debugproto.md
+同日条目）；对齐计算走生产 find_add 路径，导入类型携带 DWARF byte size。
+
+
 ## 2026-08-28：三种 core-type bootstrap
 
 `CoreTypeFlavor` 现区分 compiler-supplied DataOrg、
@@ -49,9 +85,65 @@ Create a new TypeFactory and initialize core types
 # Arguments
 * `ptr_size` - Default pointer size for the target architecture (e.g., 4 or 8)
 
+**2026-09-25（GENSMOKE-T1，wt/vshfix）**: `new` 现按进程档位选择核心类型表
+（flavor）。oracle 有两个 harness 档：`SleighArchitecture::buildCoreTypes`
+（sleigh_arch.cc:204-238）在架构描述无 `<coretypes>` 元素时装**控制台/独立**
+表（`xunknownN`/`int4`/`uint1`/`code`）= direct-runner 契约；
+`ArchitectureGhidra` 接收 Java 客户端 `<coretypes>` 流
+（PcodeDataTypeManager.encodeCoreTypes）拼 `undefinedN`/`int`/`long` =
+canon headless 门。Rugra 驱动以环境变量选契约（curl/httpd =
+`RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`，泛化驱动 = `RUGRA_GEN_MIRROR`，
+MIRROR-ENVS-CANONICAL-0001），故 `new` 在这些进程中构造 Standalone 表，
+默认进程保持 DataOrg（canon 脸不变）。探测函数为
+[`direct_runner_tier_active`](#pub-fn-direct_runner_tier_active---bool)。
+显式 `new_flavor` 调用方（oracle fixtures）不受影响。
+
+### `pub fn direct_runner_tier_active() -> bool`
+
+进程级档位探针（RUGRA-GLUE，Ghidra 以架构子类选择 buildCoreTypes 而非
+环境）：`RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`/`RUGRA_GEN_MIRROR` 任一在进程
+环境中即本进程运行 direct-runner（独立 SLEIGH）oracle 契约。当前消费方 =
+`TypeFactory::new` 的表档位选择。（printc.rs 的 typedef 前言**不**消费此
+探针——curl 驱动的 worker 协议要求每个 worker 文档以 TYPEDEF_PREAMBLE
+开头（examples/curl_decompile.rs:5974-5990），档位化会在那里破裂；
+typedef 行被 compare_ghidra.py:109/141 从所有差分面归一化掉。）
+
+### `pub fn get_type_array(num_elements: usize, array_of: Arc<Datatype>) -> Arc<Datatype>`
+
+`TypeFactory::getTypeArray(as,ao)`（type.cc:3902-3909）的移植：先对元素做
+一次虚 `getStripped`（:3905-3906），再按 `TypeArray(int4 n, Datatype *ao)`
+内联构造子（type.hh:937-946）铸**匿名**壳——3 参 `Datatype(size,
+alignment, TYPE_ARRAY)` 基构造（type.hh:215）给出空名/空显示名、
+`size = n × ao->getAlignSize()`、`alignSize = size`、`alignment =
+ao->getAlignment()`、`submeta = base2sub[TYPE_ARRAY]`、零 flag——随后
+`findAdd`（type.cc:3412）findNoName 结构树去重；`n == 1` 时置
+`needs_resolution`（type.hh:944-945）。匿名名对打印承重：buildTypeStack
+（printc.cc:148-151）钻过无名 ARRAY 层，声明拼 `T name [N]`
+（array_expr postsurround，printc.cc:76）。首个消费方 =
+`varmap.rs` `create_entry`（varmap.cc:625，TYPE-WIRING-0001 收口，
+GENSMOKE-T5）。
+
 ### `pub fn find_by_name(&self, name: &str) -> Option<Arc<Datatype>>`
 
 Find a type by name
+
+### `pub fn dwarf_conventional_bool(&self, name: &str) -> Option<Arc<Datatype>>`
+
+Resolve a DWARF typedef whose NAME is a conventional boolean spelling
+(`bool`/`_Bool`) to this factory's registered core boolean type
+(`setCoreType("bool",1,TYPE_BOOL,false)` shape — sleigh_arch.cc:204,
+type.cc:3178-3195). Returns `None` for any other name, or when the
+factory's `bool` entry is not the exact core shape (metatype BOOL, size 1),
+in which case callers fall back to their alias materialization.
+
+**2026-09-24（PRINTC-BOOLLITERAL-0001）**: the DWARF import boundary
+(`debugproto.rs` resolve_type 的 typedef 分支,1-byte underlying 门控) consults
+this helper so a `typedef bool -> char` (curl.h line 394) lands as the core
+TYPE_BOOL instead of a renamed char clone — the type identity that drives
+`ActionSetCasts::castInput`'s constant absorption (coreaction.cc:2687-2691)
+and `PrintC::pushConstant`'s TYPE_BOOL arm (printc.cc:1769-1771), printing
+`true`/`false` for the canonical golden's typedef-bool fields
+(`::config.showerror = true;`).
 
 ### `pub fn get_base(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
 
@@ -61,6 +153,15 @@ Core names are never inferred. The byte-faithful port — including the
 `size > max_basetype_size` array conversion (type.cc:3652-3657) and the
 "TypeFactory alignment map not initialized" LowlevelError of the raw
 constructor state — is `get_base_result`.
+
+**2026-09-23（VARGROUP-ABSORB-0001 §4-4）**: 本 twin 补齐 type.cc:3652-3657 的
+超尺寸转换——`size > max_base_type_size` 的请求一律变成 `size` 字节 1-byte
+unknown 数组（与请求的 metatype 无关，`xunknown1 [280]` 即此来源）。数组经
+`oversize_unknown_array`（&self 镜像 of get_array_result）在 `base_type_tree`
+里以 `find_add` 同款结构键取/放，与 &mut 路径共享同一 `Arc` 身份。此前 twin 对
+任意尺寸构造标量 TypeBase，280B 输入影子被定型为标量 INT（`unkint280`），
+`is_piece_structured`（TYPE_ARRAY 家族）不命中 → RuleSubRight 的特殊打印标记
+（ruleaction.cc:7256）不触发 → 字段件退化成 INT_RIGHT 移位梯。
 
 TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 (2026-08-23): every in-lease caller
 (cpool.rs, merge.rs, grammar.rs, typefactory internals incl. the partial-type
@@ -232,6 +333,9 @@ included (`type.cc:2671`).
 component 深拷贝成结构相等但 identity 不同的新 Arc。fixture 的普通 Struct 字段
 恰好存储 canonical core Arc，因此后续 `get_type_pointer` 在该窄路径使用与 oracle
 相同的 dependency identity；这不证明任意 component 都由 factory 拥有。
+（2026-09-22 起该性质推广：`Datatype::get_sub_type` 本身返回 canonical Arc
+——`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 签名变更——`get_ptr_to_from_parent`
+等所有 walk 位点不再出现 `Arc::new(s.clone())` 深拷贝。）
 
 `ptrsub_output_token_1204` direct projection 的 exact0/exact8/exact24 验证了
 component pointee identity、pointer token identity 和重复调用 identity；这里只
@@ -961,15 +1065,40 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
 
 ## 2026-08-25：spacebase 类型携带 scope 快照（B3-COREACTION-CONSTANTPTR-0001 段(b)）
 
-- `TypeFactory::symboltab: Option<Arc<RwLock<Database>>>`（新字段，两构造器
+- `TypeFactory::symboltab: Option<Arc<RwLock<Database>>>`（两构造器
   初始化 None）+ `set_spacebase_scope_source(db)`：Ghidra 的
   `TypeSpacebase::getMap` 每次 `glb->symboltab->getGlobalScope()` 动态解析
   （type.cc:2935-2945）；Rugra 类型不携带 Architecture，改为构造时快照
   （符号图在反编译前安装、期间稳定，与 oracle 可观察答案一致）。
+- `TypeFactory::live_local_scopes: BTreeMap<u64, Arc<RwLock<ScopeLocal>>>`
+  （2026-09-24 VARMAP-STACKBOUNDARY-0001 新字段，两构造器初始化空表）+
+  `get_type_spacebase` 构造期立即挂接（`frame.is_null()` 判定 local frame；
+  registry `entry().or_insert_with()` 保证缓存类型**自诞生即带句柄**，
+  后续发布只替换句柄内容）；`Funcdata::publish_scope_to_spacebase` 在每趟
+  `ActionRestructureVarnode` 后把重构 ScopeLocal 发布进句柄——这是 Ghidra
+  getMap local 臂（type.cc:2938-2944 `fd->getScopeLocal()` 动态解析）的
+  Rust 所有权镜像：spacebase 子类型查询由此读到**活跃**局部图。
 - `get_type_spacebase` 在句柄存在时把 global scope 克隆进新 spacebase 产品
   的 `scope` 字段——`TypeSpacebase::get_sub_type`（RulePtrsubUndo 的
-  isPtrsubMatching 守卫）由此获得 subtype 答案。去重键不变
+  isPtrsubMatching 守卫）由此获得 global-frame 的 subtype 答案。去重键不变
   （`__spacebase_{ws}_{frame}`），首次构造定格快照。
+
+## 2026-09-23：spacebase 类型名清空（SPACEBASE-SYMNAME-0001）
+
+`get_type_spacebase` 此前把合成去重键 `__spacebase_{ws}_{frame}` 同时当作
+TypeSpacebase 的**类型名**，8 个挂载函数的 SP 输入声明泄漏为
+`__spacebase_1_<frame> *in_RSP`。核实 oracle：`TypeSpacebase(AddrSpace*,
+const Address&, Architecture*)`（type.hh:735-736）基类构造
+`Datatype(0,1,TYPE_SPACEBASE)`（type.hh:214）**name 为空**——匿名类型；
+`PrintC::buildTypeStack`（printc.cc:143-163）在匿名非 PTR/ARRAY/CODE 类型处
+终止，`pushTypeStart` 匿名分支（printc.cc:280-285）经 `genericTypeName`
+（printc.cc:3373）拼出 **`BADSPACEBASE`**（cc:3387-3389，无 size 后缀）。
+现 Rugra 侧 `TypeBase::new(String::new(), ...)` 与 oracle 同为空名，
+printc 的 `push_type_start_opt` 匿名分支 → `generic_type_name` →
+`BADSPACEBASE *in_RSP`。合成键仅存续为 name-keyed BTreeMap 的去重槽位
+（Ghidra 经 findAdd 的 compare 树去重，type.cc:3996/3045-3055）。curl E2E
+前后差分 = 仅 8 行声明行改名，defects=0/numbering=0、skeleton 2993==基线；
+httpd 2339==基线；glob_set/glob_range/glob_url 与 next_url 输出零行变化。
 
 ## 2026-08-28：PrototypePieces 借用适配
 
@@ -999,3 +1128,43 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
 - 附带发现（不在本修复范围）：ap_strcasecmp_match 在 collapse restart
   循环不收敛（`orderLoopBodies`→`finalize_structure: 3 -> 1` 无限重复），
   属 blockaction/collapse 模块缺陷，需独立 TODO 跟踪。
+
+## 2026-09-24：spacebase scope 快照角色收窄为 getMap 全局腿（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+`get_type_spacebase` 构造期克隆的全局 scope 现在只充当 `TypeSpacebase::getMap`
+（type.cc:2935-2945）的**全局腿**（全局 spacebase 或 queryFunction miss）；
+localframe 有效的查询不得读它——管线的 restructureVarnode 会持续改写
+ScopeLocal，RulePtrArith 查询路径（ruleaction.rs `AddTreeState::spacebase_map`）
+改为查询点从被反编译 Funcdata 解析活跃 ScopeLocal
+（`SpacebaseMap::Local`）后传入 datatype.rs 的 `*_in_map` 查询族。
+快照克隆对 localframe 查询的可见缺陷（oppool2 时点全部栈偏移查询 miss，
+extra 恒 0）就此消灭；构造签名与去重键不变。
+
+## 2026-09-25（Lane MIRROR2）：canonical_unknown_base_1 —— 1 字节 TYPE_UNKNOWN 的工厂命名通道（MIRROR2-UNKBYTE-0001）
+
+- **根因（镜面残差族=unkbyte 拼写）**：oracle 的 spacebase/符号查询 miss 臂
+  一律返回 `glb->types->getBase(1,TYPE_UNKNOWN)`（type.cc:2965-2967；
+  database.cc:629/681/731）——经工厂解析为**命名**核心类型
+  （standalone 档 `xunknown1`、DataOrg 档 `undefined1`）。Rugra 的
+  datatype.rs 六处 miss/untyped 臂构造**裸匿名** `TypeBase::new("",1,
+  Unknown)` → `PrintC::genericTypeName`（printc.cc:3383）拼成 `unkbyte1`
+  （curl 镜 5 处、httpd 镜 1 处 `(unkbyte1 *)` cast 实证）。
+- **修法**：`TypeFactory::canonical_unknown_base_1()`（typefactory.rs）+
+  datatype.rs 六处改调。**锁安全**（eu-stack 亲证死锁根因）：主调用链
+  `TypeFactory::down_chain_pointer`（持工厂**写**租约）→
+  `TypeSpacebase::get_sub_type` → 查询，helper 若重入 `shared_default`
+  的 RwLock 即自死锁（canon main/_start >10s 超时的根因；w1 假象 671
+  实为 3 函数死锁丢弃）。因此缓存 `CANONICAL_UNKNOWN_BASE_1`（OnceLock）
+  在 `shared_default` 构造闭包内**无租约**急切填充——任何租约存在必在
+  构造完成后 → 快路径恒已武装，查询零锁。工厂身份保留（与 typecache
+  同一 Arc），身份敏感下游（类型传播 ptr-eq、char-print 旗标读取）在
+  规范对象上决策。
+- **效果**：curl 镜/httpd 镜 unkbyte 0 残留；canon 466 不回退、零超时；
+  vsh 镜（gen 驱动）维持全函数健康。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

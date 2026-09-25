@@ -288,6 +288,27 @@ impl IopSpace {
     }
 }
 
+// RUGRA-GLUE: process-wide stand-in for Ghidra's NULL input-slot pointer.
+// Ghidra's `PcodeOp` (op.cc:70-84, `inrefs(s)` vector-of-pointers ctor) and
+// `PcodeOp::setNumInputs` (op.cc:290-296, resize + null every slot) represent
+// an unlinked-but-still-counted slot as `(Varnode *)0`; `Funcdata::opUnsetInput`
+// (funcdata_op.cc:91-98) leaves exactly that state behind, so a dead op keeps
+// its `numInput()` slots as NULLs (observable in the oracle's debug/projection
+// stream as one '-' per slot, op.cc:376 printDebug harness rendering). Rugra's
+// `inrefs: Vec<Arc<RwLock<Varnode>>>` cannot hold NULL, so this detached,
+// never-bank-resident size-0 Varnode stands in for the NULL pointer. ONE
+// shared instance per process keeps `Arc::ptr_eq` between two NULL slots
+// `true`, matching Ghidra's pointer-equality `inrefs[i] == vn` semantics
+// (op.hh:166 getSlot). It carries no descendants, no create-index, and no
+// bank side effects, so the `opSetInput` early-return on a fresh NULL slot
+// (funcdata_op.cc:107) stays a no-op on it. (SB-ORD159-NULLSLOT-0001)
+pub fn null_slot_sentinel() -> Arc<RwLock<Varnode>> {
+    static SENTINEL: std::sync::OnceLock<Arc<RwLock<Varnode>>> = std::sync::OnceLock::new();
+    SENTINEL
+        .get_or_init(|| Arc::new(RwLock::new(Varnode::new(0, Address::new(0)))))
+        .clone()
+}
+
 /// Represents a single P-code operation in the data flow graph
 ///
 /// Corresponds to Ghidra's `PcodeOp` class in `op.hh`
@@ -1052,17 +1073,14 @@ impl PcodeOp {
     }
 
     // Ghidra: op.cc:290 PcodeOp::setNumInputs
-    /// Set the number of input slots. All slots are cleared (set to a sentinel).
-    /// Faithful to `setNumInputs` (op.cc:290-296). Note: Rugra's inrefs Vec
-    /// cannot hold null; we use a synthetic placeholder varnode via the caller
-    /// (Funcdata layer fills slots immediately after). At the PcodeOp level,
-    /// we resize and leave existing entries; callers must overwrite.
+    /// Set the number of input slots. All slots, regardless of the total
+    /// being increased or decreased, are set to \e null.
+    /// Faithful to `setNumInputs` (op.cc:290-296): `inrefs.resize(num)` then
+    /// every slot null. The null slot is the shared `null_slot_sentinel`
+    /// (Ghidra's `(Varnode *)0`), preserving slot count for unlinked ops.
     pub fn set_num_inputs(&mut self, num: usize) {
-        self.inrefs.resize(num, self.inrefs.get(0).cloned().unwrap_or_else(|| {
-            // Cannot create a null varnode; panic is consistent with Ghidra's
-            // contract that setNumInputs is followed by setInput on every slot.
-            panic!("PcodeOp::set_num_inputs to {} requires caller to fill all slots", num);
-        }));
+        self.inrefs.clear();
+        self.inrefs.resize(num, null_slot_sentinel());
     }
 
     // Ghidra: op.cc:301 PcodeOp::removeInput
@@ -1552,6 +1570,20 @@ pub struct PcodeOpBank {
     pub alivelist: Vec<PcodeOpRef>,
     /// List of operations considered "dead" (Ghidra deadlist).
     pub deadlist: Vec<PcodeOpRef>,
+    /// List of retired PcodeOps (Ghidra deadandgone, op.hh:297).
+    /// PcodeOpBank::destroy removes the op from every index but KEEPS its
+    /// allocation alive here until clear() — Ghidra's op.cc:984-999 comment:
+    /// "The memory is not reclaimed until the whole container is destroyed,
+    /// in case pointer references still exist. These will all still be
+    /// marked as dead." The dangling references are the iop-space constants
+    /// that encode `Arc::as_ptr` (Funcdata::get_op_from_const decodes them
+    /// back into handles); without the retention, the freed chunk's tcache
+    /// metadata overwrites the Arc counts/inrefs and a later fabricated
+    /// handle double-drops garbage (HTTPD-FULL-SEGV: ap_content_length_filter
+    /// SIGSEGV inside RuleIndirectCollapse's indop drop at the dead-indop
+    /// totalReplace path).
+    pub deadandgone: Vec<PcodeOpRef>,
+
     /// Lists of ops by specific opcode (Ghidra op.hh:293-296).
     /// Used for fast iteration over STORE/LOAD/RETURN/CALLOTHER ops.
     pub storelist: Vec<PcodeOpRef>,
@@ -1570,6 +1602,7 @@ impl PcodeOpBank {
             optree: BTreeSet::new(),
             alivelist: Vec::new(),
             deadlist: Vec::new(),
+            deadandgone: Vec::new(),
             storelist: Vec::new(),
             loadlist: Vec::new(),
             returnlist: Vec::new(),
@@ -1596,6 +1629,23 @@ impl PcodeOpBank {
 
         let op_ref = PcodeOpRef(Arc::new(RwLock::new(op)));
         self.optree.insert(op_ref.clone());
+        // Ghidra cc:941-948 PcodeOpBank::create allocates WITHOUT an
+        // opcode; every op's opcode is later assigned via
+        // Funcdata::opSetOpcode -> changeOpcode (op.cc:1005-1012), whose
+        // addToCodeList (op.cc:881-900) registers STORE/LOAD/RETURN/
+        // CALLOTHER ops into their opcode-specific lists exactly once, in
+        // assignment order. Rugra's create() takes the opcode directly, so
+        // the same registration must happen HERE to preserve Ghidra's
+        // invariant that a code-list-worthy op is in its list from the
+        // moment its opcode exists — otherwise ops born through this path
+        // (e.g. inject_raw_ops) are invisible to begin_op(RETURN/LOAD/
+        // STORE/CALLOTHER) consumers: ActionReturnRecovery's RETURN walk
+        // (coreaction.cc:1919-1921) found zero RETURNs and every unlocked
+        // return value in the httpd corpus collapsed to `return;` with a
+        // void signature. change_opcode (op.cc:1005) still removes from the
+        // old list before re-adding, so a later op_set_opcode on the same
+        // op cannot double-register.
+        self.add_to_code_list(&op_ref);
         // Ghidra cc:946-947: setFlag(dead) + insert into deadlist.
         // Rugra historically inserts into alivelist (treats create as alive).
         // Changing this to deadlist would break many callers that assume
@@ -1682,10 +1732,18 @@ impl PcodeOpBank {
 
     // Ghidra: op.hh:311 PcodeOpBank::destroyDead
     pub fn destroy_dead(&mut self) {
-        for op in &self.deadlist {
+        // cc:977-981: iterate the deadlist, destroy each op. cc:980 destroy()
+        // erases it from optree/deadlist and RETIRES it into deadandgone —
+        // the allocation stays valid until clear() so iop-encoded pointers
+        // remain readable. Taking the list first keeps the per-op work O(log n)
+        // (Ghidra's O(1) stored-iterator erase equivalent) instead of a
+        // retain-scan per destroyed op.
+        let dead = std::mem::take(&mut self.deadlist);
+        for op in &dead {
             self.optree.remove(op);
+            self.remove_from_code_list(op);
         }
-        self.deadlist.clear();
+        self.deadandgone.extend(dead);
     }
 
     // Ghidra: op.hh:310 PcodeOpBank::destroy
@@ -1705,6 +1763,8 @@ impl PcodeOpBank {
                 .retain(|x| Arc::as_ptr(&x.0) != ptr);
         }
         self.remove_from_code_list(&op);
+        // cc:998: deadandgone.push_back(op) — retire, never free mid-run.
+        self.deadandgone.push(op);
     }
 
     // Ghidra: op.hh:320 PcodeOpBank::findOp
@@ -1723,6 +1783,9 @@ impl PcodeOpBank {
         self.optree.clear();
         self.alivelist.clear();
         self.deadlist.clear();
+        // cc:1203-1204/1209: delete + clear the retired ops — the end of the
+        // retention window; dropping the handles reclaims the allocations.
+        self.deadandgone.clear();
         self.clear_code_lists();
         self.uniqid = 0;
     }

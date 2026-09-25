@@ -1,0 +1,617 @@
+{
+  "analysis_options": {
+    "analyzer_layers": "none (BfdArchitecture + readLoaderSymbols; no Java analyzers)",
+    "mode": "one (per-function hermetic process)",
+    "parallel_workers": 12,
+    "per_function_timeout_seconds": 600
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "direct_runner": {
+    "function_count": 71,
+    "golden_path": "tests/golden/ghidra_vsh_1204.direct-runner.c",
+    "golden_sha256": "88a0c28baafa75327766cfdec2de26c58ad81ccad17ae0760bab2bad04264661",
+    "ok_count": 71,
+    "runner": {
+      "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "bfd_include": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "bfd_library": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+      "build_command": "g++ -std=c++11 -O2 -I<bfd-include> -I<locked-cpp> golden_dump_1204.cc libdecomp.cc sleigh_arch.cc inject_sleigh.cc bfd_arch.cc loadimage_bfd.cc libdecomp.a <libbfd> -lz",
+      "fixture_sha256": "c82028e4d7375b2ca0055aa5deb0fa17536cceaf437ccb45e5d25622823be93d",
+      "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+    },
+    "spec_root": "sleigh_specs (locked x86-64.sla/pspec/cspec)"
+  },
+  "equivalence_risks": [
+    "canonical golden produced by a real analyzeHeadless distribution built from the locked oracle commit with tools/build_ghidra_1204_headless.sh",
+    "postScript decompilation timeout is 30s per function (tools/ghidra_decompile_all.py); functions exceeding it are recorded as FAILED blocks, not omitted",
+    "addresses use the headless image base 0x100000 for PIE binaries"
+  ],
+  "fixture_id": "gensmoke_vsh_direct_runner_1204",
+  "functions": [
+    {
+      "line_count": 10,
+      "name": "virReportErrorHelper",
+      "offset": 9200,
+      "sha256": "8ae6ea0dea91c04a421ee0cc63d3b4bbe1016bf4dac2b704f9cc5ffdfcdd9ca7",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_new",
+      "offset": 9216,
+      "sha256": "cc244ac96a6b8585e46df33a497bc5e3b11f73a788d184e4aee8eae6e5db1cd2",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_print",
+      "offset": 9232,
+      "sha256": "d37ab1ab59b4127af0213a8c7fbbb66acb5a05c7192e6bfb5d3e05bd43c218ec",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virLogSetFromEnv",
+      "offset": 9248,
+      "sha256": "19ea3063032da6c2a11f2759f33b17b0750249c3000e54a44732ebec3064561d",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_malloc0",
+      "offset": 9264,
+      "sha256": "1fe37324649f1194127b81d08dad852a6fb0ec883be750d8aebd571d72238446",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "memmove",
+      "offset": 9280,
+      "sha256": "6634b974b61fd07603a1631f350f39fc3cc9263530a60b64ab980490af95e7d7",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_strdup_printf",
+      "offset": 9296,
+      "sha256": "f40cd8cd4a4b60f0c3bf7d4c01e2bffbf997da7ca54f6aa98ea8c65e8dd41413",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virLogMessage",
+      "offset": 9312,
+      "sha256": "debfe770ed3f744a8ce5a39fb47e7487aad2c12ab63b1a72b7da051f9654c92f",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketAddIOCallback",
+      "offset": 9328,
+      "sha256": "12f350f1f808f2000488d0224ea4e75e3a3069dda1817eb7ff3a7edee8faadd6",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_free",
+      "offset": 9344,
+      "sha256": "c641567dcdcb59303d5095d9669d69dc8de66e4e0eda574f658905d60fb11644",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketClose",
+      "offset": 9360,
+      "sha256": "5675b1279f049d9176f2a3dfcb0a7b7f6954ab07871c8975de4d6c546a46b47e",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_free",
+      "offset": 9376,
+      "sha256": "8f5db596e12ddd861f55347c036a08d2d19912edffa073719f1d2b1c655c0807",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "strncmp",
+      "offset": 9392,
+      "sha256": "dda321dd4b27dcc502d7d6af32482b410a09920d98bdefad891bbe480f1117e7",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_parse",
+      "offset": 9408,
+      "sha256": "3bdf1be29a05d9690d5186ce91d871d870135bde71e6c8c2d344fa224507c179",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virObjectUnref",
+      "offset": 9424,
+      "sha256": "1f951feb818bae62d4180884e37b2d66e1aff08535dbece077e99c80b5bbb996",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virSetErrorLogPriorityFunc",
+      "offset": 9440,
+      "sha256": "965777c56c8570dc3ed191b8fef787a728252902a6bc7a7b3c0d19c9262b6796",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "geteuid",
+      "offset": 9456,
+      "sha256": "719d47ee6773e3e473e93f8b2a240398631d8783e21de077fd730ba46fecf60b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "__stack_chk_fail",
+      "offset": 9472,
+      "sha256": "e3d0aab436e327994cd130c47e9a12ee77f4e0ae0a1ff92a62607e6ee1d9264e",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_get_help",
+      "offset": 9488,
+      "sha256": "79e49f33bc7434f94277758848391e23af26d63606bd50ee85be13e3c8aabdc8",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_strndup",
+      "offset": 9504,
+      "sha256": "96635cb1b6f80df60c02258922b3584845e1ed77ce576a2a3ba59556cc4f7875",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virURIParse",
+      "offset": 9520,
+      "sha256": "cfbd0a5b1b36c7d11ab0097e47e04e6f56626aca4677a16171d58d9eadba7bb7",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_add_main_entries",
+      "offset": 9536,
+      "sha256": "a95d9180dcbfd342ae436c94b0b73c785c219029abfd3b7acfd544803357ab25",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEnumFromString",
+      "offset": 9552,
+      "sha256": "3b98983896e930de32d6cea908b88f82d7102178df8654afd115a5817af1a437",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "strchr",
+      "offset": 9568,
+      "sha256": "913fd695b1812d91f9bb83e19710ef2a9f7d9d9d84e6c72ccb1a0066bb6e5b18",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEnumToString",
+      "offset": 9584,
+      "sha256": "f7053d6ea80191623226dc14459bc5346c4682e5581ea61fed7d7259a835cbb4",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketNewConnectUNIX",
+      "offset": 9600,
+      "sha256": "be3dec15344915a3d61570872e4f281395295b430ef04056633086613054d350",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketRead",
+      "offset": 9616,
+      "sha256": "792c7410f0387b88fb809816912d95d8dcbcef509c5ff98c70fb5bc9e39fac35",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketRemoveIOCallback",
+      "offset": 9632,
+      "sha256": "75f9c50a28ec1e0847e88f71ee6921cd4608e0cdf80c53d685dd4bb20250aec0",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virFileExists",
+      "offset": 9648,
+      "sha256": "e5cc04515c904e5657ebbd1f879b41e2ede144e0a39147da0f7741a37f6c9e58",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virFileFindResourceFull",
+      "offset": 9664,
+      "sha256": "a675d8af29304ceea2dc7c1dfc633b9d4e6c5ef9eb9d6b6ce29f439f0439c3cc",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketUpdateIOCallback",
+      "offset": 9680,
+      "sha256": "4ca7dc1476750e7bdf5c33e83071d4560fecad82bd137748bebee704a5d81283",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "_Unwind_Resume",
+      "offset": 9696,
+      "sha256": "dcaceed95673a23333f0da7412a6b022ae470f6f0b54b523c2acb1c703e102d5",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "exit",
+      "offset": 9712,
+      "sha256": "a1e8cb89c61c833d5bb019be747436de92053536c5955bdba1ba3b5840f0f40e",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virReportSystemErrorFull",
+      "offset": 9728,
+      "sha256": "ad59acdf8e2aba566babab472135e5caf9705b4ddbf18abca6b23c01e9a41bf2",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "dcgettext",
+      "offset": 9744,
+      "sha256": "0a0a26bc606a35734ffe262cdabcb2724f5fd50af4344bbe8bfcf2e0a74e1803",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virFileActivateDirOverrideForProg",
+      "offset": 9760,
+      "sha256": "0206af5a42cad687e322182fbf7bb05f75a4a1e81dec987b98e81376dcc4c169",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_ascii_tolower",
+      "offset": 9776,
+      "sha256": "821ef0858c091df2b648ee4c84888b21808ce7533797d896b4927f9534d0c7b1",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "getenv",
+      "offset": 9792,
+      "sha256": "ec2ddf06734e6e668b2670ce1dd59144c067ce96f0ae76874e074fd9a11ed143",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "read",
+      "offset": 9808,
+      "sha256": "00ac1bce4b93bc8b7d36c0e29253026c95d2a7fdfe8f204f06b1cdff5d0800d0",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEventUpdateHandle",
+      "offset": 9824,
+      "sha256": "a526ec26c62504acc72db1dc5d090bff8f3db8bcd9fd79431be25893cfc81364",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virURIFree",
+      "offset": 9840,
+      "sha256": "ed02c4b2bce0423a7d1a056a9e27b4ac4d9c1b20529af7b33ed75982924a570d",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virGetLastErrorCode",
+      "offset": 9856,
+      "sha256": "3c190c2c6a44e245e9f444e3373a3c47eed166eeabb6ac7e5242a26cd15dbf23",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virFileFindResource",
+      "offset": 9872,
+      "sha256": "604c5568b9facb024d0be076658c6b37c2b9fbbd6d460dec213438cbeb5963bf",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "strcmp",
+      "offset": 9888,
+      "sha256": "228cc06f6e77b9fb5fc1554264be8553c95d0cad68964115b4dbac48056f2520",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virErrorInitialize",
+      "offset": 9904,
+      "sha256": "e1173c9a454af1d57cf80f9db0971d8e4835b7d0585cbb2abd86811381ed0518",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_option_context_set_summary",
+      "offset": 9920,
+      "sha256": "820ff0739d64e538edc8cc353b6e3f620134355df6d5c21acaf0266acab3f39e",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEventRegisterDefaultImpl",
+      "offset": 9936,
+      "sha256": "7a9555845a2796995a19d192e7da42821d8d59a5a7a9fa86accd9337f4b95515",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_printerr",
+      "offset": 9952,
+      "sha256": "f5206f6cf21eb236b98db0d6bdd92420ebdcb6d29eaddc1bebb85c8bda145d1c",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "__errno_location",
+      "offset": 9968,
+      "sha256": "4d0d6d9bf1b7e860613ae2a603a31cc7403b8b0910fcd393fd3835f1b6cdc697",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "write",
+      "offset": 9984,
+      "sha256": "b0ad81933c27f73495c2e8e00dac9fe80d16a5fd296cdd72952021f341b1fa5a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virGettextInitialize",
+      "offset": 10000,
+      "sha256": "95be15f0c6e8a7e654fd06aab85e2014c72ffe003807065a5e27d0274ffd19b2",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEventRemoveHandle",
+      "offset": 10016,
+      "sha256": "538e689d90a1c8f8f3a8e57c368bd9ee15921f0deef1fa33dec718308bdfd7b8",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virGetLastErrorMessage",
+      "offset": 10032,
+      "sha256": "23ec29758c7a7dcb64db1c1d5e84fa9d396e85ab6877e066c183fdc3f72fef8a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virSetErrorFunc",
+      "offset": 10048,
+      "sha256": "9db2f7a6c80a41e978adb659603aef23a1d9283b057efdec98d22b56a115a34f",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "g_strdup",
+      "offset": 10064,
+      "sha256": "6e96776c831384bf34d9ba6975d5de9fac7690a9f6422ca2eb983ff65377b870",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virNetSocketWrite",
+      "offset": 10080,
+      "sha256": "b9a14d9afe02b0122c05b5f50bf76ce158cb90ac645e8205d8173027b953b923",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEventAddHandle",
+      "offset": 10096,
+      "sha256": "9cf44ca0b4d9c81de4208210ec890647cdf019d075b1fc37432df2a866d6c36a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virEventRunDefaultImpl",
+      "offset": 10112,
+      "sha256": "ec775fe7445364a34e8c6d1fe492e6bb6d768ddbeef587f10339dcb8132b7091",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "virGetUserRuntimeDirectory",
+      "offset": 10128,
+      "sha256": "2552db9886bce684bda2f2b910358236f58a9e40abbb634a1a53d1b45533b125",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 201,
+      "name": "main",
+      "offset": 10544,
+      "sha256": "64cb70f054b113dc41d7b52f22746e24d9d3933d06e8bbbb6425ec2fe7c0a5a7",
+      "size": 1471,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "_start",
+      "offset": 12448,
+      "sha256": "5b0b72da8ef8509fd801dd6c44889c19da2947ba205104de1f4fa5de8fa9ecd3",
+      "size": 38,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "remoteDriverTransportTypeToString",
+      "offset": 14672,
+      "sha256": "893b39aedc6cd3574278d8018d2a51c3e915fc00f6615e3f06fae5f63c675abd",
+      "size": 5111,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "remoteDriverTransportTypeFromString",
+      "offset": 14704,
+      "sha256": "2d34d29edb432bf8cf13f4cb1360bbcebf7e13f34274eeca14343cc407aea412",
+      "size": 5176,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "remoteDriverModeTypeToString",
+      "offset": 14736,
+      "sha256": "7163ebe22cf8d50b54007ddf3c3a0cc4303a13bd7771edce0fc498231b10841f",
+      "size": 5175,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "remoteDriverModeTypeFromString",
+      "offset": 14768,
+      "sha256": "dd27737b6f953c6eff265fc7eb40e0252580c3fb66ce0caaa01351c886e9c90e",
+      "size": 5240,
+      "status": "OK"
+    },
+    {
+      "line_count": 64,
+      "name": "remoteSplitURIScheme",
+      "offset": 14800,
+      "sha256": "0659e11b435d701d457c70dae33c6b754dc340a3b5bdb5c2191f98a28a94b107",
+      "size": 502,
+      "status": "OK"
+    },
+    {
+      "line_count": 61,
+      "name": "remoteProbeSessionDriverFromBinary",
+      "offset": 15328,
+      "sha256": "0b69fb08d323c3698f7003e3e40691c15283b0fa3007e7720396585f020ef68f",
+      "size": 5707,
+      "status": "OK"
+    },
+    {
+      "line_count": 57,
+      "name": "remoteProbeSystemDriverFromSocket",
+      "offset": 15952,
+      "sha256": "c123305bc54e97222c2e71853e55765e2d4169c165b7c4bb87cb1799d3086cb2",
+      "size": 6163,
+      "status": "OK"
+    },
+    {
+      "line_count": 52,
+      "name": "remoteProbeSessionDriverFromSocket",
+      "offset": 16416,
+      "sha256": "f7cd3b802200e32ec0b1a7889cefcdfefcb334aa5df858d600fd0c44650b985b",
+      "size": 6602,
+      "status": "OK"
+    },
+    {
+      "line_count": 112,
+      "name": "remoteGetUNIXSocket",
+      "offset": 16880,
+      "sha256": "213591a0dd854921878e81602c4577fbf624c76d76786d45707836ac5504ee5c",
+      "size": 1015,
+      "status": "OK"
+    },
+    {
+      "line_count": 42,
+      "name": "remoteGetURIDaemonInfo",
+      "offset": 18144,
+      "sha256": "34a2d92d75586dcf5f779bc284763d7659d6afbe3c4b9645346c72814e96d317",
+      "size": 475,
+      "status": "OK"
+    }
+  ],
+  "generated_utc": "2026-09-25T05:15:53Z",
+  "generator": "GENSMOKE lane capture script (tools/regen_ghidra_golden.py library reuse)",
+  "input": {
+    "defined_dynsym_func": 12,
+    "format": "ELF64 x86-64 PIE, dynamically linked, stripped, no DWARF",
+    "jump_slot_stubs": 59,
+    "package": "libvirt-daemon (Ubuntu)",
+    "path": "/usr/bin/virt-ssh-helper",
+    "selection_note": "never-seen third binary for generalization smoke; 71 decompilable units in [10,100] target band",
+    "sha256": "268106935a24da559b2b23029c0255999dbe111e632a4ddd9644339acfc99cd2"
+  },
+  "lane": "GENSMOKE-0001 third-binary generalization smoke",
+  "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "oracle_tag": "Ghidra_12.0.4_build",
+  "tier": "direct-runner only (canonical 12.0.4 headless dist absent on host 2026-09-25; rebuild via tools/build_ghidra_1204_headless.sh to add the canon tier)"
+}

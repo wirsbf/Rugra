@@ -45,5 +45,52 @@ jobs:
       - name: Verify all Ghidra references against 12.0.4
         run: python3 tools/check_ghidra_refs.py --all --strict
 
+      - name: Verify zero corpus markers in library production code
+        run: python3 tools/check_corpus_markers.py --all
+
       - name: Verify strict four-category evidence parsing
         run: python3 tools/check_alignment_evidence.py --self-test
+
+  # MIRROR3-GATE4-BASELINE-0001: the fourth gate (mirror three-corpus faces vs
+  # the locked direct-runner goldens). Phase-1 form = frozen baseline +
+  # drift alarm (tools/mirror_gate_baselines.tsv); defects/numbering are
+  # hard-zero asserts, skeleton ceilings are one-way ratchets. The vsh face
+  # SKIPs when its host-specific corpus binary (/usr/bin/virt-ssh-helper) is
+  # absent; curl/httpd faces run unconditionally.
+  mirror-gate:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out Rugra
+        uses: actions/checkout@v4
+
+      # build.rs:29 hard-requires the locked SLEIGH C++ tree; without this
+      # step the mirror-gate job dies before the first gate line runs.
+      - name: Check out locked Ghidra oracle
+        uses: actions/checkout@v4
+        with:
+          repository: NationalSecurityAgency/ghidra
+          ref: e40ed13014025f82488b1f8f7bca566894ac376b
+          path: ghidra
+          sparse-checkout: |
+            Ghidra/Features/Decompiler/src/decompile/cpp
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ./target
+          key: mirror-gate-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build example drivers (fast-release)
+        run: cargo build --profile fast-release --example curl_decompile --example httpd_decompile --example gen_decompile
+
+      - name: Run the mirror gate (fourth gate)
+        run: tools/verify_mirror_gate.sh --bin-dir target/fast-release/examples
+
+      - name: Mirror gate self-test
+        run: tools/verify_mirror_gate.sh --self-test

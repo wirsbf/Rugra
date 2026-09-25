@@ -87,6 +87,17 @@ impl X86_64Disassembler {
                     Some(Operand::Immediate { value, size })
                 }
                 OpKind::Memory => {
+                    // CM3 merge note (CONCATRAM-0001 × LIFT-FS-CANARY-FORM-0001):
+                    // segment-absolute addressing (mov rax,fs:[0x28]) rides the
+                    // dedicated `segment` field below — the EP-lane wrap
+                    // (x86_lift.rs parse_operand/compute_mem_addr apply_segment,
+                    // INT_ADD(FS_OFFSET, EA) base-first, d==0 folding to the
+                    // bare base) — and NOT a synthesized base register here:
+                    // with both mechanisms the fs_offset base would be wrapped
+                    // a second time (INT_ADD(FS_OFFSET, INT_ADD(fs_offset,d))).
+                    // The single wrap prints the same golden form
+                    // `*(undefined8 *)(in_FS_OFFSET + 0x28)` and additionally
+                    // covers [fs:reg+idx*scale+disp] shapes.
                     let base = if inst.memory_base() != Register::None {
                         Some(format!("{:?}", inst.memory_base()).to_lowercase())
                     } else {
@@ -99,12 +110,22 @@ impl X86_64Disassembler {
                         None
                     };
 
+                    // Segment override: only FS/GS are meaningful in long
+                    // mode; legacy CS/DS/ES/SS prefixes are ignored by the
+                    // architecture (and never reach the oracle lift).
+                    let segment = match inst.segment_prefix() {
+                        Register::FS => Some("fs".to_string()),
+                        Register::GS => Some("gs".to_string()),
+                        _ => None,
+                    };
+
                     Some(Operand::Memory {
                         base,
                         index,
                         scale: inst.memory_index_scale() as i32,
                         displacement: inst.memory_displacement64() as i64,
                         size: inst.memory_size().size(),
+                        segment,
                     })
                 }
                 OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {

@@ -70,6 +70,82 @@
 
 ---
 
+## 0.9 类/算法层映射增量（2026-09-26，基=master `efc28f4a`；在飞车道另计）
+
+> 本节为 W-2026-09-26 波次的类/算法层增量账。以下各项均以锁定 oracle
+> （Ghidra 12.0.4 `e40ed130`）行为为对照源；证据=车道终报
+> （/dev/shm/rugra-reports/LANE_*_2026-09-2[56].md）+差分门禁数字。历史节（src/align/ 时代）
+> 的 Level A/B 框架仍适用，但其具体清单已严重滞后，以本节与本仓库近期账本为准。
+
+### 1. varmap：NameRecommend 存储与恢复链（F7NAME，已在 master）
+
+- **三载荷结构**落地：`NameRecommend`（varmap.hh:36）/`DynamicRecommend`（:56）/`TypeRecommend`（:74），
+  ScopeLocal 三列表（varmap.hh:214-216）；`LocalSymbol` 增 `symbol_id`/`this_ptr` 字段。
+- **四方法**：`collect_name_recs`（varmap.cc:357-381，nametree 序降级+移除+this 指针臂类型保留；
+  Rust 索引 seam=快照序重放+移除数校正，终态与 oracle 单循环逐项等价）、`add_recommend_name`
+  （cc:1600-1618）、`recover_name_recommendations_for_symbols`（cc:1507-1570，无效/有效 usepoint
+  双臂+DynamicHash 动态尾）、`apply_type_recommendations`（cc:1574-1584）。
+- **三接线**：ActionNameVars::apply（coreaction.cc:2984）/ActionRestructureVarnode scope 构造尾
+  （varmap.cc:476 ScopeLocal::decode 镜像）/ActionInferTypes（coreaction.cc:5398）。
+- **CR 三修**（f3d4f32d）：entry-keyed first-use 地址（database.cc:122-127 语义，空 uselimit=
+  invalid Address→addr-tied 扫描臂）、remap 传 post-rename 最终唯一名、锚点 varmap.hh:264；
+  新增真 vbank 双侧 fixture 2 件（修前 UNTESTED 分支钉死）。
+- **残项**：TypeRecommend 第二生产者 `checkParamTypeRecommendations`（funcdata_varnode.cc:1725-1742）
+  未移植——VARMAP-PARAMTYPERECOMM-0001（P4，当前语料不可达）。
+- 行为面：httpd canon 590→439（`__s1/__n/__s/__dest` 名族与 golden 逐字复现，含 oracle 判别行为）。
+
+### 2. coreaction：ActionPreferComplement BFS 下降（F5IF，已在 master）
+
+- 根因=structure_children 对 BlockGoto/BlockMultiGoto 返回空表；oracle BFS 经
+  `BlockGraph::getSize()/getBlock(i)`（blockaction.cc:2154-2160）对两者下降（单组件 wrapped，
+  block.hh:547/573）。修复=两臂各返回 `[wrapped]`。
+- 仪器化对照（git-archive 锁定树+F5T patch）：oracle main 6 个 if/else 节点中 2c109 唯一翻转
+  （opFlipInPlaceTest 对 INT_NOTEQUAL 返 0→翻条件+swapBlocks）；Rugra 修前访问 0 节点、
+  修后同集合同测试值、第二趟翻转粘性同 oracle。
+- 行为面：httpd canon 590→436（main 232→78），其余 33 函数字节恒等。
+
+### 3. unionresolve：消费者分包 D+G（PKGD/PKGG，已在 master）
+
+- **包 D（ruleaction，14 站点）**：全部换 fd-aware 孪生（`vn_type_read_facing`/`vn_type_def_facing`，
+  varnode.cc:626-672 needsResolution 门+findResolve 键；type.cc:586/1192/1298/1944/2137/2517 虚分派，
+  含 Array→element/Struct→field[0]/PartialUnion→stripped 的 map-miss 臂）。slot 键逐一对照
+  `op->getSlot(this)`；RuleExpandLoad defOp/op 两键分派；buildDegenerate wordsize 改读 ctor 缓存 ct。
+  探针实证活语料 0 次 consult 差异；canon 双语料字节恒等。
+- **包 G（with_field interning）**：指针臂改 `typegrp.get_type_pointer(...)`（type.cc:3867 findAdd
+  规范化+pointee 一步 getStripped），resolve Arc 工厂规范——`Arc::ptr_eq` 恒等族与 castStandard
+  （cast.cc:303）指针恒等短路对 with_field 铸造的指针可达；datatype.rs 无 fd 缓存的退化孪生两枚删除。
+  单元断言钉死二次 mint 与 resolve `Arc::ptr_eq` 恒等。
+- **消费面普查账**：UNIONRESOLVE-CONSUMER-SCOPE-0001 仍开（printc/coreaction/ruleaction/typeop/
+  subflow/cast 退化形残余 ~70 处分批清；PK-C printc 29 站点快照在飞 PRINTCS 已交付）。
+
+### 4. double_precis：descend 簿记胶水（SQNULLT，在飞 wt/sqnullt 待并）
+
+- `set_opcode_and_inputs` 裸 `inrefs.clear()` 绕过既有忠实件 `op_set_all_input`
+  （funcdata_op.cc:267-284，:276-278 逐槽 opUnsetInput=descend 表唯一合法摘除点）→旧输入 varnode
+  残留 stale descend 条目→`buildLocaltypes` 的 `(!isWritten)&&(hasNoDescend)` 跳过失效→
+  `getLocalType` throw。修复=1 行委托。连带消除 merge 路径 "Forced merge caused intersection"
+  两 panic（同 stale descend 污染 cover 相交判定，SQMERGE 车道独立收敛同判）。
+- 行为面：sq panic 4→2（ok 808/810）；curl/httpd/vsh 六面字节恒等（双精度恢复路径在这些语料休眠）。
+
+### 5. printc：六票清扫（PRINTCS，在飞 wt/printcs 待并）
+
+| 票 | 交付 | oracle 依据 |
+|---|---|---|
+| MSTRUCT-WHILEDO-LABEL-PRINTC-0001 | DONE：四循环构造入口补 emit_any_label_statement（glob_word 悬空 goto 清零） | printc.cc:3014/3076/3104/2965 构造器入口必经 |
+| STRNCPY-PRINT-CALLOTHER-0001 | printc 侧全交付：dispatch_op_rpn 补 CPUI_CALLOTHER 臂+四 display 臂+STRINGDATA 读回链 | printc.cc:673-715；剩余归 COREACTION-CALLOTHER-OUTTOKEN-0001（TypeOpCallother→InternalStringOp 输出 token 三级链，typeop.cc:866-872/userop.cc:361-364） |
+| HTTPDMAIN-F3-DOUBLECAST-0001 | DONE：legacy LOAD 臂 CAST 包装省略+嵌套规则补 | printc.cc:448/printlanguage.cc:277 |
+| MIRATTR-F-ARRCAST-0001 | DONE：cast_type_string 链 run 语义（`(t (*) [N])` 形） | pushType cc:1472-1478 EMPTY 原子+printlanguage.cc:286/291-293 |
+| UNIONRESOLVE-PKG-C-0001 | DONE（语料中性）：find_resolve_snap+4 helper，29 站点全换 | consult 键=ResolveEdge(parent,op-time,slot) |
+| MIRATTR-F-CODENAME-0001 | 判定交付（零 src）：真径=ActionConstantPtr CALL 参数臂→queryContainer→spacebaseConstant 符号替换；移交 GENDRIVER-SYMTAB-DB-0001（gen 驱动符号 DB 通道） | coreaction.cc:1086-1101/1151/1166-1170 |
+
+### 6. 工具层：引用门禁升级（REFSDEF，已在 master）
+
+`check_ghidra_refs.py` 在行存在性之上新增**定义起始行验证**（解析 114 个 .cc 得 5549 defs；
+强制分隔符/裸 ctor/析构/operator 形/模板前缀/调用行与 doc 行排除）。全树 288 处漂移全修
+（白名单 86+非白名单 193，两处 overload 手判）；`.hh` 引用维持行存在性+unresolved 豁免惯例。
+
+---
+
 ## 1. 当前结论摘要
 
 ### 已确认
@@ -737,7 +813,7 @@ ra 语义对齐”
 - `GAP_ANALYSIS.md`
 - `docs/VERIFICATION_GUIDE.md`
 - `docs/PROJECT_STRUCTURE.md`
-- `docs/AgentLog/`
+- `docs/archive/agentlog/`
 
 避免再次出现：
 - 框架存在就写成“已完成”

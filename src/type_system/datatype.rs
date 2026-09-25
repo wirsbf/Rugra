@@ -8,10 +8,9 @@ use crate::fspec::FuncProto;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use crate::AddressSpace;
 
-/// Stubs for related modules
-pub mod stubs {
-    #[derive(Debug)] pub struct Funcdata;
-}
+// (The former `pub mod stubs { pub struct Funcdata; }` placeholder lived
+// here; its only consumer was TypeSpacebase's unused `fd` field, which now
+// carries the live ScopeLocal channel — VARMAP-STACKBOUNDARY-0001.)
 
 // ---------------------------------------------------------------------------
 // XML marshaling element/attribute constants (type.cc references ELEM_*/ATTRIB_*)
@@ -395,7 +394,7 @@ impl TypeBase {
         base
     }
 
-    // Ghidra: type.cc:861 TypeUnicode::TypeUnicode
+    // Ghidra: type.cc:862 TypeUnicode::TypeUnicode
     /// Construct a Unicode base type, preserving the Unicode sub-metatype even
     /// for the 1-byte form whose only display flag is `chartype`.
     pub fn new_unicode(name: String, size: usize, metatype: TypeMetatype) -> Self {
@@ -834,8 +833,12 @@ impl Datatype {
     /// the offset within that component. Otherwise `None` is returned and
     /// `newoff` is set to `off` unchanged (type.cc:174 base behaviour).
     ///
-    /// Returns `(Some(component), newoff)` or `(None, off)`.
-    pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64) {
+    /// Returns `(Some(component), newoff)` or `(None, off)`. The component is
+    /// returned as the canonical factory/scope-owned `Arc<Datatype>`, which is
+    /// Rust's ownership mirror of Ghidra's `Datatype*` virtual return: the
+    /// TypeSpacebase override (type.cc:2947) resolves through the indexed
+    /// symbol table, so its result lives in the Scope, not in this object.
+    pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
         match self {
             Datatype::Struct(s) => struct_get_sub_type(s, off),
             // TypeUnion deliberately has no getSubType override
@@ -852,15 +855,21 @@ impl Datatype {
                 // Ghidra. Do not invoke Rugra's legacy-constructor fallback.
                 let elem_align = a.array_of.base_record().align_size as i64;
                 let newoff = off % elem_align;
-                (Some(a.array_of.as_ref()), newoff)
+                (Some(a.array_of.clone()), newoff)
             }
             // Pointer: Ghidra has a `truncate` field we do not model, so it
             // falls through to the base behaviour (type.cc:920).
             // PartialEnum/PartialUnion fall through to base (no sub-type walk);
             // PartialStruct has its own override on the variant struct.
             Datatype::Pointer(_) | Datatype::Void(_) | Datatype::Base(_)
-            | Datatype::Enum(_) | Datatype::Code(_) | Datatype::Spacebase(_)
+            | Datatype::Enum(_) | Datatype::Code(_)
             | Datatype::PartialEnum(_) | Datatype::PartialUnion(_) => (None, off),
+            // TypeSpacebase override (type.cc:2947): query the indexed symbol
+            // table (getMap → queryContainer) instead of the base behaviour.
+            // This mirrors the C++ virtual dispatch that `RulePtrsubUndo`
+            // (ruleaction.cc:7138) and `ActionSetCasts` (coreaction.cc:2748)
+            // observe through `TypePointer::isPtrsubMatching` (type.cc:1129).
+            Datatype::Spacebase(spacebase) => spacebase.get_sub_type(off),
             // TypePartialStruct override (type.cc:2363): walk down the container
             // until the component no longer overruns the partial's size.
             Datatype::PartialStruct(ps) => partial_struct_get_sub_type(ps, off),
@@ -869,64 +878,18 @@ impl Datatype {
 
     // RUGRA-GLUE: Arc-preserving Rust ownership twin of the virtual
     // Datatype::getSubType dispatch rooted at type.cc:174.
-    /// Arc-preserving virtual `getSubType` dispatch. For the covered Struct,
-    /// Array, and PartialStruct arms, this has the same return/new-offset
-    /// behaviour as [`Self::get_sub_type`] while retaining the canonical
-    /// factory-owned component `Arc`. The Spacebase arm instead uses Rugra's
-    /// scope-owned Arc lookup, which the borrowed API cannot expose; it remains
-    /// a documented whole-dispatch mismatch. `TypeFactory::getExactPiece`
-    /// relies on the covered identity while walking nested containers and
-    /// interning partial results.
+    /// Arc-preserving virtual `getSubType` dispatch. Since
+    /// [`Self::get_sub_type`] itself returns the canonical factory/scope-owned
+    /// component `Arc` (the ownership mirror of Ghidra's virtual `Datatype*`
+    /// return, including the TypeSpacebase override at type.cc:2947), this is
+    /// a thin delegating wrapper kept for existing call sites
+    /// (`TypeFactory::getExactPiece` and the nested-container walks) that
+    /// already hold an `Arc<Datatype>`.
     pub fn get_sub_type_arc(
         datatype: &Arc<Datatype>,
         off: i64,
     ) -> (Option<Arc<Datatype>>, i64) {
-        match datatype.as_ref() {
-            Datatype::Struct(structure) => match struct_get_field_iter(structure, off) {
-                Some(index) => {
-                    let field = &structure.fields[index];
-                    (Some(field.type_ptr.clone()), off - field.offset as i64)
-                }
-                None => (None, off),
-            },
-            Datatype::Array(array) => {
-                if off >= array.base.size as i64 {
-                    return (None, off);
-                }
-                let stride = array.array_of.base_record().align_size as i64;
-                (Some(array.array_of.clone()), off % stride)
-            }
-            Datatype::PartialStruct(partial) => {
-                let size_left = partial.base.size as i128 - off as i128;
-                let mut cur_off = off + partial.offset;
-                let mut current = partial.container.clone();
-                loop {
-                    let (subtype, newoff) = Self::get_sub_type_arc(&current, cur_off);
-                    let Some(subtype) = subtype else {
-                        return (None, newoff);
-                    };
-                    current = subtype;
-                    cur_off = newoff;
-                    if current.get_size() as i128 - cur_off as i128 <= size_left {
-                        return (Some(current), cur_off);
-                    }
-                }
-            }
-            // TypeSpacebase is the one base-looking class with a modeled
-            // virtual override; its symbol-table result is already an Arc.
-            Datatype::Spacebase(spacebase) => spacebase.get_sub_type(off),
-            // TypeUnion has no override. TypePointer's optional `truncate`
-            // component and TypeCode's factory attachment are not represented
-            // in Rugra yet; every other class uses Datatype's null base arm.
-            Datatype::Void(_)
-            | Datatype::Base(_)
-            | Datatype::Pointer(_)
-            | Datatype::Enum(_)
-            | Datatype::Union(_)
-            | Datatype::Code(_)
-            | Datatype::PartialEnum(_)
-            | Datatype::PartialUnion(_) => (None, off),
-        }
+        Self::get_sub_type(datatype.as_ref(), off)
     }
 
     // Ghidra: type.cc:160 Datatype::findTruncation
@@ -1780,12 +1743,56 @@ impl Datatype {
     }
 
     // Ghidra: type.cc:501 Datatype::isPrimitiveWhole
-    /// Check if this type occupies a whole primitive value.
-    /// Faithful to Datatype::isPrimitiveWhole (type.cc:501).
+    /// If \b this has no component data-types, return \b true (every
+    /// non-piece-structured metatype: Pointer/PtrRel/Code/Float/Bool/
+    /// Uint/Int/Unknown/Spacebase/Void). If \b this has only a single
+    /// primitive component filling the whole data-type, also return
+    /// \b true (degenerate `T[1]` arrays and single-full-size-field
+    /// structs recurse into the component).
+    /// Faithful to `Datatype::isPrimitiveWhole` (type.cc:501-513):
+    ///   1. `!isPieceStructured()` → true (type.hh:929
+    ///      `metatype <= TYPE_ARRAY(7)`).
+    ///   2. Array/Struct with `numDepend() > 0` whose first component
+    ///      size equals the whole size → recursive component check
+    ///      (TypeArray::getDepend type.hh:455-456; TypeStruct::getDepend
+    ///      type.hh:526-527).
+    ///   3. Otherwise false (Union/PartialUnion/PartialStruct and
+    ///      non-degenerate Array/Struct).
+    /// Enum reporting口径 (CR-PJOINS M1 核实注记): the oracle's TypeEnum
+    /// constructors normalize the stored metatype to TYPE_INT/TYPE_UINT
+    /// (type.hh:489-490 ternary, TypePartialEnum included via
+    /// type.cc:2255-2256), so an oracle enum instance is never
+    /// piece-structured and isPrimitiveWhole returns true. Rugra's enum
+    /// instances may store the collapsed `TypeMetatype::Enum` variant —
+    /// a reporting divergence outside this predicate's observable set,
+    /// because `is_piece_structured` excludes both the Enum and the
+    /// Int/Uint forms, so both predicates agree with the oracle on
+    /// enums either way.
     pub fn is_primitive_whole(&self) -> bool {
-        matches!(self.get_metatype(),
-            TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool
-            | TypeMetatype::Float)
+        // cc:504: if (!isPieceStructured()) return true;
+        if !self.is_piece_structured() {
+            return true;
+        }
+        // cc:505: if (metatype == TYPE_ARRAY || metatype == TYPE_STRUCT)
+        if matches!(
+            self.get_metatype(),
+            TypeMetatype::Array | TypeMetatype::Struct
+        ) {
+            // cc:506-507: if (numDepend() > 0) component = getDepend(0);
+            let component: Option<&Arc<Datatype>> = match self {
+                Datatype::Array(a) => Some(&a.array_of),
+                Datatype::Struct(s) => s.fields.first().map(|f| &f.type_ptr),
+                _ => None,
+            };
+            // cc:508-509: component->getSize() == getSize() → recurse.
+            if let Some(component) = component {
+                if component.get_size() == self.get_size() {
+                    return component.is_primitive_whole();
+                }
+            }
+        }
+        // cc:512: return false;
+        false
     }
 
     // Ghidra: type.cc:139 Datatype::printRaw
@@ -2178,11 +2185,12 @@ pub fn pointer_rel_is_ptrsub_matching(
 /// has a stripped form (type.cc:2677-2678). Faithful to the metatype
 /// dispatch of `TypePointer::isPtrsubMatching` (type.cc:1123-1175).
 ///
-/// Rugra gaps: the `TYPE_SPACEBASE` branch needs a `Scope` to resolve
-/// sub-types, and the `TYPE_STRUCT` branch recurses into
-/// `testForArraySlack`; both are reproduced as faithfully as the available
-/// data allows. When `ptrto` has no arrayed component at the offset, the
-/// routine returns `false` (matching Ghidra's null-subType fallback).
+/// The `TYPE_SPACEBASE` branch's `ptrto->getSubType(newoff,&newoff)`
+/// (type.cc:1129) is a virtual dispatch that reaches
+/// `TypeSpacebase::getSubType` (type.cc:2947): the generic
+/// [`Datatype::get_sub_type`] routes there, querying the indexed scope.
+/// The `TYPE_STRUCT` branch recurses into `testForArraySlack` when the
+/// sub-type lookup misses or `extra` is out of bounds (type.cc:1152-1165).
 pub fn pointer_is_ptrsub_matching(
     ptrto: &Datatype,
     wordsize: usize,
@@ -2205,7 +2213,7 @@ pub fn pointer_is_ptrsub_matching(
         if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
             // testForArraySlack fallback: an arrayed component at the offset
             // still matches (type.cc:1134).
-            if !test_for_array_slack(sub_type, extra_b) {
+            if !test_for_array_slack(sub_type.as_ref(), extra_b) {
                 return false;
             }
         }
@@ -2237,7 +2245,7 @@ pub fn pointer_is_ptrsub_matching(
             }
         };
         if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
-            if !test_for_array_slack(sub_type, extra_b) {
+            if !test_for_array_slack(sub_type.as_ref(), extra_b) {
                 return false;
             }
         }
@@ -2371,12 +2379,13 @@ fn struct_get_lower_bound_field(s: &TypeStruct, off: i64) -> Option<usize> {
 
 // Ghidra: type.cc:1640 TypeStruct::getSubType
 /// Struct subtype lookup. Corresponds to `TypeStruct::getSubType`
-/// (type.cc:1640).
-fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
+/// (type.cc:1640). Returns the canonical field `Arc` (Ghidra returns the
+/// factory-owned `curfield.type` pointer).
+fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<Arc<Datatype>>, i64) {
     match struct_get_field_iter(s, off) {
         Some(i) => {
             let f = &s.fields[i];
-            (Some(f.type_ptr.as_ref()), off - f.offset as i64)
+            (Some(f.type_ptr.clone()), off - f.offset as i64)
         }
         None => (None, off),
     }
@@ -2408,23 +2417,23 @@ fn struct_get_hole_size(s: &TypeStruct, off: i64) -> i64 {
 /// Walk the container's sub-types, advancing the offset by `offset`, until the
 /// returned component no longer overruns this partial's size. Faithful to
 /// `TypePartialStruct::getSubType` (type.cc:2363-2377).
-fn partial_struct_get_sub_type(ps: &TypePartialStruct, off: i64) -> (Option<&Datatype>, i64) {
+fn partial_struct_get_sub_type(ps: &TypePartialStruct, off: i64) -> (Option<Arc<Datatype>>, i64) {
     let size_left = ps.base.size as i128 - off as i128;
     let mut cur_off = off + ps.offset;
-    let mut ct: &Datatype = ps.container.as_ref();
+    let mut current = ps.container.clone();
     loop {
-        let (sub, no) = ct.get_sub_type(cur_off);
+        let (sub, no) = Datatype::get_sub_type(current.as_ref(), cur_off);
         match sub {
             // The C++ loop assigns `ct = ct->getSubType(...)`; a failed
             // lookup therefore returns null even after an earlier descent.
             None => return (None, no),
             Some(s) => {
-                ct = s;
+                current = s;
                 cur_off = no;
                 // Component can extend beyond range of this partial, in which
                 // case we go down another level (type.cc:2375).
-                if ct.get_size() as i128 - cur_off as i128 <= size_left {
-                    return (Some(ct), cur_off);
+                if current.get_size() as i128 - cur_off as i128 <= size_left {
+                    return (Some(current), cur_off);
                 }
             }
         }
@@ -2963,10 +2972,12 @@ impl TypeStruct {
     /// Returns 0 (component) or -1 (whole structure).
     pub fn score_single_component(
         parent: &Datatype,
-        op: &crate::op::PcodeOp,
+        fd: &crate::funcdata::Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
         slot: i32,
     ) -> i32 {
         use crate::opcodes::OpCode;
+        let op = op_ref.0.read().unwrap();
         let code = op.opcode;
         if code == OpCode::CPUI_COPY || code == OpCode::CPUI_INDIRECT {
             // Look at the "other" end of the op: if slot==0 the output drives
@@ -2999,7 +3010,15 @@ impl TypeStruct {
             if let Some(vn) = op.get_in(1) {
                 let vn_rg = vn.read().unwrap();
                 if vn_rg.is_type_lock() {
-                    if let Some(ct) = vn_rg.get_type_read_facing_op(op, 1) {
+                    // cc:1908: ct = vn->getTypeReadFacing(op) — the fd-aware
+                    // consult keyed on slot 1 (the address input's real slot),
+                    // so a union-ptr address resolved to a field pointer
+                    // compares the FIELD's pointee against `parent`
+                    // (UNIONRESOLVE-PKG-A-0001; this arm feeds
+                    // resolve_in_flow's Array/Struct field selection).
+                    if let Some(ct) =
+                        crate::unionresolve::vn_type_read_facing(fd, vn, op_ref, 1)
+                    {
                         if ct.get_metatype() == TypeMetatype::Pointer {
                         if let Datatype::Pointer(p) = ct.as_ref() {
                             // Ghidra: `((TypePointer*)ct)->getPtrTo() == parent`
@@ -3977,8 +3996,285 @@ impl TypeCode {
     }
 }
 
+/// Resolved map view for [`TypeSpacebase::get_map`] — the Rust shape of
+/// Ghidra's getMap, which returns one live `Scope*` flavor; Rugra's
+/// global and function-local scopes are different types, so the two arms
+/// materialize separately. The local arm holds the `RwLockReadGuard` so the
+/// borrowed `ScopeLocal` outlives the query that reads it.
+/// (Renamed `LiveSpacebaseMap` in the 9458a61b×26ffb3c2 merge: FM's
+/// Option-shaped `SpacebaseMap` — the `*_in_map` walk projection threaded
+/// from ruleaction.rs — keeps the original name.)
+#[derive(Debug)]
+pub enum LiveSpacebaseMap<'a> {
+    /// `fd->getScopeLocal()` of the function at `localframe`
+    /// (type.cc:2940-2944) — the live, restructured local map.
+    Local(std::sync::RwLockReadGuard<'a, crate::varmap::ScopeLocal>),
+    /// The global scope snapshot (type.cc:2936).
+    Global(&'a crate::database::Scope),
+}
+
 /// Type representing a spacebase (e.g. stack frame, register bank)
 ///
+/// Result of the `nearestArrayedComponentForward/Backward` walks
+/// (type.cc:188/201 base, type.cc:1698/1669 struct override, type.cc:2971/3020
+/// spacebase override): the found component data-type (`None` = the walk's
+/// null return), the `newoff` difference between the component's start and
+/// the query offset (positive = component starts before the offset), and the
+/// `elSize` array base element size (only set on a hit; Ghidra leaves the
+/// out-param untouched on null, mirrored by `0`).
+#[derive(Clone, Debug)]
+pub struct ArrayedComponent {
+    pub dtype: Option<Arc<Datatype>>,
+    pub newoff: i64,
+    pub elsize: i64,
+}
+
+impl ArrayedComponent {
+    // RUGRA-GLUE: null-walk answer object; Ghidra returns a null Datatype*
+    // and leaves the out-params untouched.
+    fn miss() -> Self {
+        Self { dtype: None, newoff: 0, elsize: 0 }
+    }
+}
+
+/// The live symbol-map view a TypeSpacebase query resolves against — the
+/// dynamic `getMap()` projection (type.cc:2935-2945). Ghidra re-resolves the
+/// map on EVERY query: `res = glb->symboltab->getGlobalScope()`, and — when
+/// `localframe` is valid — `res->queryFunction(localframe)` finds the owning
+/// function whose `getScopeLocal()` becomes the map. Rugra's
+/// construction-time `TypeSpacebase::scope` snapshot (typefactory.rs) cannot
+/// see the per-function ScopeLocal (built and restructured during the
+/// pipeline), so the live query path (`AddTreeState::calcSubtype`,
+/// ruleaction.cc:6290/6304 via `hasMatchingSubType`) resolves this view from
+/// the decompiling Funcdata at query time and threads it into the
+/// `*_in_map` methods below.
+pub enum SpacebaseMap<'a> {
+    /// `localframe` valid AND `queryFunction(localframe)` resolved the owning
+    /// function: `fd->getScopeLocal()`. `None` = the function's ScopeLocal is
+    /// not materialized yet — Ghidra's ScopeLocal object exists (empty) from
+    /// the moment the function is registered in the symbol table, so every
+    /// container query misses.
+    Local(Option<&'a crate::varmap::ScopeLocal>),
+    /// The global scope: global spacebase (`localframe` invalid) or
+    /// `queryFunction` miss. The construction-time global-scope view stands
+    /// in (globals are installed before decompilation and stable during it).
+    Global(Option<&'a Arc<crate::database::Scope>>),
+}
+
+/// One `queryContainer` answer for the ScopeLocal leg: the symbol's type plus
+/// the `SymbolEntry` placement facts the walks read (`getAddr`, `getOffset`,
+/// `getSize`, `getSymbol()->getType()`).
+// RUGRA-GLUE: value bundle of Ghidra's SymbolEntry* answer fields the
+// TypeSpacebase walks consume.
+struct MapContainerHit {
+    dtype: Arc<Datatype>,
+    addr: u64,
+    offset: i32,
+    size: i32,
+}
+
+// Ghidra: database.cc:2250 ScopeInternal::findContainer
+/// Smallest in-use entry of the ScopeLocal static map log containing the
+/// 1-byte range at address `addr` in `space`. Faithful to
+/// `ScopeInternal::findContainer` (database.cc:2250-2282) restricted to the
+/// null-usepoint form every TypeSpacebase walk queries with
+/// (`queryContainer(addr, 1, Address())`, type.cc:2961/2981/3002/3006):
+/// candidates are the entries starting at or before `addr` that reach the
+/// range end, the SMALLEST size wins (strict `<` keeps the first-encountered
+/// on ties; the descending-start scan visits later insertions first, the same
+/// order Ghidra's (last,subsort)-ordered multiset backward iteration yields
+/// for equal keys), the exact-size match breaks early, and the invalid
+/// usepoint admits only address-tied symbols (`SymbolEntry::inUse`,
+/// database.cc:117-118). Ghidra's parent-scope walk (database.cc:1246
+/// `queryContainer` → `stackContainer`) continues into the global scope on a
+/// local miss, but the global scope's maptable for the STACK space index is
+/// empty — stack addresses miss there too, so querying the local log alone is
+/// observably equivalent.
+fn spacebase_local_query_container(
+    sl: &crate::varmap::ScopeLocal,
+    space: crate::space::AddressSpace,
+    addr: u64,
+) -> Option<MapContainerHit> {
+    // database.cc:2266 — end = addr + size - 1 (size == 1 here).
+    let end = addr;
+    // Candidates ordered for the descending-start scan.
+    let mut candidates: Vec<usize> = (0..sl.mapentry_log.len())
+        .filter(|&i| sl.mapentry_log[i].space == space)
+        .collect();
+    candidates.sort_by_key(|&i| (sl.mapentry_log[i].start, i));
+    let mut best: Option<usize> = None;
+    let mut oldsize: i64 = -1;
+    for &i in candidates.iter().rev() {
+        let entry = &sl.mapentry_log[i];
+        // Containment of the start point: entry.first() <= addr.
+        if entry.start > addr {
+            continue;
+        }
+        // cc:2270 — entry->getLast() >= end: we contain the range.
+        // (RangeRecord::last = start + size - 1.)
+        let entry_last = entry
+            .start
+            .wrapping_add(entry.size.max(0) as u64)
+            .wrapping_sub(1);
+        if entry_last < end {
+            continue;
+        }
+        // cc:2271 — strictly smaller than the running best, or first.
+        if (entry.size as i64) < oldsize || oldsize == -1 {
+            // cc:2272 — inUse(usepoint): null usepoint admits only
+            // address-tied symbols (database.cc:117-118).
+            if sl.symbols[entry.sym].addrtied {
+                best = Some(i);
+                oldsize = entry.size as i64;
+                // cc:2274 — exact size match: nothing smaller can contain.
+                if entry.size == 1 {
+                    break;
+                }
+            }
+        }
+    }
+    let i = best?;
+    let entry = &sl.mapentry_log[i];
+    let dtype = sl.symbols[entry.sym].dtype.clone().unwrap_or_else(|| {
+        // Ghidra Symbol::getType() never returns null: untyped varmap
+        // symbols correspond to the factory-mediated 1-byte TYPE_UNKNOWN
+        // base (database.cc:629/681/731 `types->getBase(1,TYPE_UNKNOWN)`) —
+        // the named core entry (xunknown1/undefined1 per tier), not a raw
+        // anonymous TypeBase that would print `unkbyte1`.
+        crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()
+    });
+    Some(MapContainerHit { dtype, addr: entry.start, offset: entry.offset, size: entry.size })
+}
+
+// Ghidra: type.cc:1604 TypeStruct::getLowerBoundField
+/// Reused by the nearestArrayedComponent walks via the existing
+/// [`struct_get_lower_bound_field`] (index form; `None` = Ghidra's -1
+/// sentinel): index of the field with the greatest offset <= `off`.
+fn nearest_lower_bound(s: &TypeStruct, off: i64) -> i64 {
+    struct_get_lower_bound_field(s, off).map(|x| x as i64).unwrap_or(-1)
+}
+
+/// Array base element size of an `Array` data-type:
+/// `((TypeArray *)t)->getBase()->getAlignSize()`.
+// RUGRA-GLUE: shared accessor for the TypeArray base alignment the three
+// nearestArrayedComponent overrides read.
+fn arrayed_element_size(dt: &Datatype) -> i64 {
+    if let Datatype::Array(a) = dt {
+        a.array_of.get_align_size() as i64
+    } else {
+        0
+    }
+}
+
+// Ghidra: type.cc:188 Datatype::nearestArrayedComponentForward
+/// Virtual `nearestArrayedComponentForward` dispatch: the base override
+/// (type.cc:188-192) returns null; only `TypeStruct` walks its fields
+/// (type.cc:1698-1740). Full-precision form passing back `newoff`/`elSize`
+/// (the boolean-only `RulePtrsubUndo::test_for_array_slack` twins in
+/// ruleaction.rs predate this). The `TYPE_SPACEBASE` override
+/// (type.cc:2971) needs the live map and lives on
+/// `TypeSpacebase::nearest_arrayed_component_forward_in_map`.
+pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
+    if let Datatype::Struct(s) = dt.as_ref() {
+        // type.cc:1701-1714.
+        let mut i = nearest_lower_bound(s, off);
+        let mut remain: i64;
+        if i < 0 {
+            // No component starting before off: start at first after.
+            i += 1;
+            remain = 0;
+        } else {
+            let subfield = &s.fields[i as usize];
+            remain = off - subfield.offset as i64;
+            if remain != 0
+                && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
+                    || remain >= subfield.type_ptr.get_size() as i64)
+            {
+                // Middle of a non-structure we must go forward from: skip it.
+                i += 1;
+                remain = 0;
+            }
+        }
+        // type.cc:1715-1738.
+        while (i as usize) < s.fields.len() {
+            let subfield = &s.fields[i as usize];
+            let diff = subfield.offset as i64 - off; // may be negative (first field)
+            if diff > 128 {
+                break;
+            }
+            let subtype = &subfield.type_ptr;
+            if subtype.get_metatype() == TypeMetatype::Array {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: -diff,
+                    elsize: arrayed_element_size(subtype),
+                };
+            }
+            let res = nearest_arrayed_component_forward(subtype, remain);
+            if res.dtype.is_some() {
+                // type.cc:1729 — subdiff = diff + remain - suboff.
+                let subdiff = diff + remain - res.newoff;
+                if subdiff > 128 {
+                    break;
+                }
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: -diff,
+                    elsize: res.elsize,
+                };
+            }
+            i += 1;
+            remain = 0;
+        }
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:201 Datatype::nearestArrayedComponentBackward
+/// Virtual `nearestArrayedComponentBackward` dispatch: the base override
+/// (type.cc:201-205) returns null; only `TypeStruct` walks its fields
+/// (type.cc:1669-1696). See [`nearest_arrayed_component_forward`] for the
+/// spacebase/precision notes.
+pub fn nearest_arrayed_component_backward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
+    if let Datatype::Struct(s) = dt.as_ref() {
+        // type.cc:1672-1694.
+        let first_index = nearest_lower_bound(s, off);
+        let mut i = first_index;
+        while i >= 0 {
+            let idx = i as usize;
+            let subfield = &s.fields[idx];
+            let diff = off - subfield.offset as i64;
+            if diff > 128 {
+                break;
+            }
+            let subtype = &subfield.type_ptr;
+            if subtype.get_metatype() == TypeMetatype::Array {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: diff,
+                    elsize: arrayed_element_size(subtype),
+                };
+            }
+            // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
+            let remain = if idx == first_index as usize {
+                diff
+            } else {
+                subtype.get_size() as i64 - 1
+            };
+            let res = nearest_arrayed_component_backward(subtype, remain);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: diff,
+                    elsize: res.elsize,
+                };
+            }
+            i -= 1;
+        }
+    }
+    ArrayedComponent::miss()
+}
+
 /// Corresponds to Ghidra's `TypeSpacebase` class in `type.hh:721-746`.
 /// A spacebase treats an `AddrSpace` as a "structure" indexed into by pointer
 /// offsets, facilitating type propagation from local symbols into the stack
@@ -3987,8 +4283,18 @@ impl TypeCode {
 pub struct TypeSpacebase {
     pub base: TypeBase,
     pub address: Address,
-    /// Associated function data (if this spacebase is a stack frame)
-    pub fd: Option<Weak<stubs::Funcdata>>,
+    /// Live function-local scope channel for local-frame spacebases.
+    /// Ghidra's `TypeSpacebase::getMap` (type.cc:2935-2945) resolves
+    /// `queryFunction(localframe)->getScopeLocal()` dynamically on EVERY
+    /// query, so subtype lookups observe the restructured map of the
+    /// function being decompiled. Rugra's ownership seam: the Funcdata owns
+    /// the `ScopeLocal`, the factory-cached spacebase type holds this
+    /// shared handle (created eagerly at spacebase construction, an empty
+    /// `ScopeLocal` mirroring the oracle's pre-restructure observable);
+    /// `ActionRestructureVarnode` publishes each restructured scope into
+    /// it. `None` on global spacebases. (The field formerly held an
+    /// unused `stubs::Funcdata` placeholder.)
+    pub fd: Option<std::sync::Arc<std::sync::RwLock<crate::varmap::ScopeLocal>>>,
     /// The address space we are treating as a structure. Ghidra field
     /// `spaceid` (type.hh:723). Rugra stores an `Option` because the decode
     /// path (type.cc:3090) may leave it unset when no `Architecture` is wired
@@ -4036,13 +4342,34 @@ impl TypeSpacebase {
 
     // Ghidra: type.cc:2935 TypeSpacebase::getMap
     /// Get the symbol table indexed by this spacebase. Faithful to
-    /// `TypeSpacebase::getMap` (type.cc:2935-2945): Ghidra returns the global
-    /// scope, or — if `localframe` is valid — the function-local scope of the
-    /// function at `localframe`. Rugra does not yet wire a global symbol table
-    /// into every spacebase, so the stored `scope` reference is returned
-    /// directly. `None` mirrors the "no architecture / no global scope" case.
-    pub fn get_map(&self) -> Option<&Arc<crate::database::Scope>> {
-        self.scope.as_ref()
+    /// `TypeSpacebase::getMap` (type.cc:2935-2945): the global scope, or —
+    /// if `localframe` is valid — the function-local scope of the function
+    /// at `localframe`, resolved dynamically on every call in the oracle
+    /// (`res->queryFunction(localframe)` → `fd->getScopeLocal()`). Rugra's
+    /// ownership seam: the function's `ScopeLocal` is published into the
+    /// `fd` live handle by the Funcdata pipeline (see
+    /// `Funcdata::publish_scope_to_spacebase`), so the dynamic resolution
+    /// becomes a read of that handle; a valid local frame with no handle
+    /// content is impossible (the factory creates the handle eagerly at
+    /// spacebase construction), while a missing/failed read falls to `None`,
+    /// which `get_sub_type` answers with the oracle's empty-ScopeLocal
+    /// observable. `None` for global spacebases without an attached scope
+    /// mirrors the "no global scope" case.
+    pub fn get_map(&self) -> Option<LiveSpacebaseMap<'_>> {
+        // Local-frame test: Rugra's legacy `Address::new(frame)` form is
+        // SPACELESS, so `is_invalid()` is true for real function entries
+        // too; the factory's global spacebases always carry frame 0, so a
+        // NONZERO localframe offset is the local-frame predicate (see
+        // TypeFactory::get_type_spacebase).
+        if !self.localframe.is_null() {
+            // type.cc:2938-2944: local frame → fd->getScopeLocal(). The
+            // oracle's Funcdata always exists for a decompiled local frame,
+            // so this never falls back to the global scope.
+            let handle = self.fd.as_ref()?;
+            handle.read().ok().map(LiveSpacebaseMap::Local)
+        } else {
+            self.scope.as_ref().map(|scope| LiveSpacebaseMap::Global(scope.as_ref()))
+        }
     }
 
     // Ghidra: type.cc:3063 TypeSpacebase::getAddress
@@ -4063,31 +4390,277 @@ impl TypeSpacebase {
     /// querying the indexed symbol table. Faithful to
     /// `TypeSpacebase::getSubType` (type.cc:2947-2969): converts `off` to an
     /// address unit, looks up the smallest containing `SymbolEntry`, and
-    /// returns its symbol's type with the renormalized offset. With no scope
-    /// attached (the common Rugra case today), returns `(None, off)` matching
-    /// Ghidra's "no container ⇒ base behaviour".
+    /// returns its symbol's type with the renormalized offset. The miss path
+    /// (type.cc:2964-2966) NEVER answers a nonzero `newoff`: with no
+    /// containing entry it returns the 1-byte TYPE_UNKNOWN base with
+    /// `newoff = 0`, which callers like `AddTreeState::calc_subtype`'s
+    /// TYPE_SPACEBASE arm (via `hasMatchingSubType`) consume as `extra = 0`.
+    /// A containing entry whose symbol has NO type yields `None` (Ghidra's
+    /// null `getSymbol()->getType()`), which `hasMatchingSubType`'s
+    /// arrayHint==0 arm treats as "no match".
+    ///
+    /// Local frames query the LIVE ScopeLocal (type.cc:2938-2944 via
+    /// getMap): the container lookup is `queryContainer(addr, 1,
+    /// nullPoint)` — address-tied entries only — and
+    /// `ScopeLocal::find_container_entry(space, off, 1, None)` is that
+    /// exact port. The global arm keeps the snapshot-scope lookup (the
+    /// global map is stable during decompilation).
     pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
-        let scope = match self.get_map() {
-            Some(s) => s.clone(),
-            None => return (None, off),
-        };
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
-        // AddrSpace::byteToAddress(off, wordsize) (space.hh).
-        let addr_off = off.wrapping_mul(wordsize) as u64;
-        let addr = Address::new(addr_off);
-        // type.cc:2962-2963 — "Assume symbol being referenced is address
-        // tied so we use a null point of context": queryContainer(addr, 1,
-        // nullPoint); Rugra's null usepoint is Address::new(0).
-        match scope.find_container(addr, 1, Address::new(0)) {
-            Some(entry_idx) => {
-                let entry = &scope.entries[entry_idx];
-                // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
-                let newoff = (addr.as_u64().wrapping_sub(entry.addr.as_u64()) as i64)
-                    + entry.offset as i64;
-                (entry.symbol.read().unwrap().get_type(), newoff)
+        // AddrSpace::byteToAddress(off, wordsize) (space.hh:523) = off / ws
+        // (FM direction fix: mul→div; ws=1 makes both identity here).
+        // Unsigned uintb division: negative stack offsets divide on the
+        // two's-complement bit pattern like the oracle, not as i64.
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
+        match self.get_map() {
+            None => (
+                // type.cc:2964-2966 miss arm: `glb->types->getBase(1,
+                // TYPE_UNKNOWN)` — factory-mediated named core entry.
+                Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
+                0,
+            ),
+            Some(LiveSpacebaseMap::Local(local)) => {
+                let space = self.spaceid.unwrap_or(crate::space::AddressSpace::Stack);
+                match local.find_container_entry(space, addr_off, 1, None) {
+                    Some(entry) => {
+                        let symbol = &local.symbols[entry.sym];
+                        // newoff = (addr - smallest->getAddr()) +
+                        // smallest->getOffset() (type.cc:2967).
+                        let newoff = (addr_off.wrapping_sub(entry.start) as i64)
+                            + entry.offset as i64;
+                        (symbol.dtype.clone(), newoff)
+                    }
+                    None => (
+                        // type.cc:2964-2966 miss arm: factory-mediated
+                        // 1-byte unknown base (glb->types->getBase).
+                        Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
+                        0,
+                    ),
+                }
             }
-            None => (None, 0),
+            Some(LiveSpacebaseMap::Global(scope)) => {
+                // type.cc:2962-2963 — queryContainer(addr, 1, nullPoint):
+                // Rugra's null usepoint is Address::new(0).
+                let addr = Address::new(addr_off);
+                match scope.find_container(addr, 1, Address::new(0)) {
+                    Some(entry_idx) => {
+                        let entry = &scope.entries[entry_idx];
+                        // newoff = (addr - entry.addr) + entry.offset
+                        // (type.cc:2967).
+                        let newoff = (addr.as_u64().wrapping_sub(entry.addr.as_u64()) as i64)
+                            + entry.offset as i64;
+                        (entry.symbol.read().unwrap().get_type(), newoff)
+                    }
+                    // type.cc:2964-2966 — no container: `*newoff = 0; return
+                    // glb->types->getBase(1,TYPE_UNKNOWN);` — the
+                    // factory-mediated named core entry (xunknown1 /
+                    // undefined1 per tier), never a raw anonymous TypeBase
+                    // (whose genericTypeName spelling is `unkbyte1`).
+                    None => (
+                        Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
+                        0,
+                    ),
+                }
+            }
         }
+    }
+
+    // Ghidra: type.cc:2947 TypeSpacebase::getSubType (queryContainer leg)
+    /// `scope->queryContainer(addr, 1, nullPoint)` against the resolved
+    /// [`SpacebaseMap`] (the live getMap projection). The Global leg queries
+    /// the construction-time global-scope view; the Local leg queries the
+    /// ScopeLocal static entry log ([`spacebase_local_query_container`]).
+    fn query_container_in_map(&self, map: &SpacebaseMap<'_>, addr: u64) -> Option<MapContainerHit> {
+        match map {
+            SpacebaseMap::Local(Some(sl)) => {
+                let space = self.spaceid?;
+                spacebase_local_query_container(sl, space, addr)
+            }
+            // An empty (not yet materialized) ScopeLocal, or a spacebase
+            // without a spaceid: every query misses.
+            SpacebaseMap::Local(None) => None,
+            SpacebaseMap::Global(scope) => {
+                let scope = (*scope)?.clone();
+                let entry_idx = scope.find_container(Address::new(addr), 1, Address::new(0))?;
+                let entry = &scope.entries[entry_idx];
+                let dtype = entry.symbol.read().unwrap().get_type().unwrap_or_else(|| {
+                    // Ghidra Symbol::getType() never returns null: an untyped
+                    // symbol corresponds to the factory-mediated 1-byte
+                    // TYPE_UNKNOWN base (database.cc:629/681/731).
+                    crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()
+                });
+                Some(MapContainerHit {
+                    dtype,
+                    addr: entry.addr.as_u64(),
+                    offset: entry.offset,
+                    size: entry.size,
+                })
+            }
+        }
+    }
+
+    // Ghidra: type.cc:2947 TypeSpacebase::getSubType
+    /// Live-map form of [`Self::get_sub_type`]: the TypeSpacebase override
+    /// re-resolves the symbol table through `getMap()` on every query, so the
+    /// local-frame map must be the decompiling function's CURRENT ScopeLocal
+    /// (restructured during the pipeline), not the construction-time snapshot.
+    /// Callers resolve [`SpacebaseMap`] and pass it in; the miss path answers
+    /// the 1-byte TYPE_UNKNOWN base with `newoff = 0` (never null), exactly
+    /// like the snapshot form.
+    pub fn get_sub_type_in_map(&self, map: &SpacebaseMap<'_>, off: i64) -> (Option<Arc<Datatype>>, i64) {
+        let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
+        // AddrSpace::byteToAddress(off, wordsize) = off / ws (space.hh:523),
+        // unsigned uintb division on the bit pattern (negative offsets keep
+        // the oracle's huge-positive quotient at ws > 1; ws = 1 identity).
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
+        match self.query_container_in_map(map, addr_off) {
+            Some(hit) => {
+                // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
+                let newoff = (addr_off.wrapping_sub(hit.addr) as i64) + hit.offset as i64;
+                (Some(hit.dtype), newoff)
+            }
+            // type.cc:2964-2966 miss arm: factory-mediated
+            // glb->types->getBase(1,TYPE_UNKNOWN) — named core entry.
+            None => (
+                Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
+                0,
+            ),
+        }
+    }
+
+    // Ghidra: type.cc:2971 TypeSpacebase::nearestArrayedComponentForward
+    /// Live-map form of the forward arrayed-component walk. Faithful to
+    /// `TypeSpacebase::nearestArrayedComponentForward` (type.cc:2971-3018):
+    /// query the container at the resolved offset; on a miss (or a partial
+    /// piece with `getOffset() != 0`) probe 32 units ahead, on a struct
+    /// symbol first try the struct's own forward walk, else jump to the
+    /// container's end; the wrap check guards both jumps; the second
+    /// container query must again be a whole symbol (`getOffset() == 0`)
+    /// whose type is (or forward-contains) an array.
+    pub fn nearest_arrayed_component_forward_in_map(
+        &self,
+        map: &SpacebaseMap<'_>,
+        off: i64,
+    ) -> ArrayedComponent {
+        let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
+        // byteToAddress(off, ws) = off / ws (space.hh:523); resolveConstant
+        // is modelled as the identity mapping into the space. Unsigned
+        // uintb division (see get_sub_type_in_map).
+        let addr = (off as u64).wrapping_div(wordsize as u64);
+        // type.cc:2984-2985 — no container, or a partial piece
+        // (getOffset() != 0): probe 32 address units ahead.
+        let first = match self.query_container_in_map(map, addr) {
+            Some(hit) if hit.offset == 0 => hit,
+            _ => {
+                let next_addr = addr.wrapping_add(32);
+                // type.cc:3000-3001 — don't let the address wrap.
+                if next_addr < addr {
+                    return ArrayedComponent::miss();
+                }
+                return self.forward_second_query(map, addr, next_addr);
+            }
+        };
+        if first.dtype.get_metatype() == TypeMetatype::Struct {
+            // type.cc:2989-2995 — structOff = addr - entry.addr; the
+            // struct's own forward walk answers through elSize.
+            let struct_off = addr.wrapping_sub(first.addr) as i64;
+            let res = nearest_arrayed_component_forward(&first.dtype, struct_off);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(first.dtype.clone()),
+                    newoff: struct_off,
+                    elsize: res.elsize,
+                };
+            }
+        }
+        // type.cc:2997-2998 — sz = byteToAddressInt(size, ws) = size / ws;
+        // nextAddr = the container's end.
+        let sz = (first.size.max(0) as i64).wrapping_div(wordsize);
+        let next_addr = first.addr.wrapping_add(sz as u64);
+        // type.cc:3000-3001 — don't let the address wrap.
+        if next_addr < addr {
+            return ArrayedComponent::miss();
+        }
+        self.forward_second_query(map, addr, next_addr)
+    }
+
+    // Ghidra: type.cc:2971 TypeSpacebase::nearestArrayedComponentForward
+    /// The shared tail of the forward walk (type.cc:3002-3017): the second
+    /// `queryContainer(nextAddr, 1, null)` must hit a whole symbol
+    /// (`getOffset() == 0`) whose type is an array, or a struct whose own
+    /// forward walk (from offset 0) finds an array.
+    fn forward_second_query(
+        &self,
+        map: &SpacebaseMap<'_>,
+        addr: u64,
+        next_addr: u64,
+    ) -> ArrayedComponent {
+        // type.cc:3003-3004 — the second query must be a whole symbol.
+        let second = match self.query_container_in_map(map, next_addr) {
+            Some(hit) if hit.offset == 0 => hit,
+            _ => return ArrayedComponent::miss(),
+        };
+        let symbol_type = second.dtype.clone();
+        // type.cc:3006 — newoff = addr - entry.addr (positive = before).
+        let newoff = addr.wrapping_sub(second.addr) as i64;
+        if symbol_type.get_metatype() == TypeMetatype::Array {
+            // type.cc:3007-3010 — elSize = array base's align size.
+            let elsize = arrayed_element_size(&symbol_type);
+            return ArrayedComponent {
+                dtype: Some(symbol_type),
+                newoff,
+                elsize,
+            };
+        }
+        if symbol_type.get_metatype() == TypeMetatype::Struct {
+            // type.cc:3011-3016 — the struct's forward walk from offset 0.
+            let res = nearest_arrayed_component_forward(&symbol_type, 0);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(symbol_type),
+                    newoff,
+                    elsize: res.elsize,
+                };
+            }
+        }
+        ArrayedComponent::miss()
+    }
+
+    // Ghidra: type.cc:3020 TypeSpacebase::nearestArrayedComponentBackward
+    /// Live-map form of the backward arrayed-component walk. Faithful to
+    /// `TypeSpacebase::nearestArrayedComponentBackward` (type.cc:3020-3037):
+    /// the `getSubType` answer's symbol type is the component — an array
+    /// answers directly (elSize = base align size), a struct recurses into
+    /// its own backward walk at the renormalized offset, everything else
+    /// misses. `newoff` carries `getSubType`'s renormalized offset either way.
+    pub fn nearest_arrayed_component_backward_in_map(
+        &self,
+        map: &SpacebaseMap<'_>,
+        off: i64,
+    ) -> ArrayedComponent {
+        let (sub_type, newoff) = self.get_sub_type_in_map(map, off);
+        let sub_type = match sub_type {
+            Some(t) => t,
+            // type.cc:3024-3025 — getSubType null: miss (unreachable for a
+            // spacebase, whose miss path answers TYPE_UNKNOWN, not null).
+            None => return ArrayedComponent::miss(),
+        };
+        if sub_type.get_metatype() == TypeMetatype::Array {
+            let elsize = arrayed_element_size(&sub_type);
+            return ArrayedComponent {
+                dtype: Some(sub_type),
+                newoff,
+                elsize,
+            };
+        }
+        if sub_type.get_metatype() == TypeMetatype::Struct {
+            // type.cc:3030-3035 — recurse at getSubType's newoff.
+            let res = nearest_arrayed_component_backward(&sub_type, newoff);
+            if res.dtype.is_some() {
+                return ArrayedComponent { dtype: Some(sub_type), newoff, elsize: res.elsize };
+            }
+        }
+        ArrayedComponent::miss()
     }
 
     // Ghidra: type.cc:3039 TypeSpacebase::compare
@@ -4579,80 +5152,15 @@ impl TypePartialUnion {
         other.base.size as i32 - self.base.size as i32
     }
 
-    // Ghidra: type.cc:2498 TypePartialUnion::resolveInFlow
-    /// Walk down the container union (and any nested composites) until a
-    /// data-type of this partial's size is reached, then return it; otherwise
-    /// return the stripped data-type. Faithful to `resolveInFlow`
-    /// (type.cc:2498-2515).
-    ///
-    /// NOTE: Ghidra's full implementation consults the Funcdata's
-    /// `unionField` cache (via `resolveTruncation`) to pick a specific union
-    /// field based on the reading PcodeOp. Rugra does not yet thread that
-    /// cache through, so this port walks the structural sub-types only and
-    /// returns the first matching-size component, falling back to `stripped`
-    /// when no match is found. `op`/`slot` are accepted for API alignment.
-    pub fn resolve_in_flow(
-        &self,
-        _op: Option<&crate::op::PcodeOp>,
-        _slot: i32,
-    ) -> Option<Arc<Datatype>> {
-        let mut cur_type: &Datatype = self.container.as_ref();
-        let mut cur_off = self.offset;
-        let target_size = self.base.size;
-        while cur_type.get_size() > target_size {
-            if cur_type.get_metatype() == TypeMetatype::Union {
-                // Ghidra calls resolveTruncation here; without the Funcdata
-                // union-field cache we cannot pick a field, so stop walking.
-                break;
-            } else {
-                let (sub, no) = cur_type.get_sub_type(cur_off);
-                match sub {
-                    None => break,
-                    Some(s) => {
-                        cur_type = s;
-                        cur_off = no;
-                    }
-                }
-            }
-        }
-        if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.clone()))
-        } else {
-            self.stripped.clone()
-        }
-    }
-
-    // Ghidra: type.cc:2517 TypePartialUnion::findResolve
-    /// The constant version of `resolve_in_flow`. Faithful to `findResolve`
-    /// (type.cc:2517-2534): walks the container like `resolve_in_flow`, but
-    /// for unions consults the cached `findResolve` result instead of
-    /// `resolveTruncation`. As with `resolve_in_flow`, Rugra lacks the
-    /// Funcdata union cache, so the union branch stops walking and we fall
-    /// back to `stripped`.
-    pub fn find_resolve(&self, _op: Option<&crate::op::PcodeOp>, _slot: i32) -> Option<Arc<Datatype>> {
-        let mut cur_type: &Datatype = self.container.as_ref();
-        let mut cur_off = self.offset;
-        let target_size = self.base.size;
-        while cur_type.get_size() > target_size {
-            if cur_type.get_metatype() == TypeMetatype::Union {
-                break;
-            } else {
-                let (sub, no) = cur_type.get_sub_type(cur_off);
-                match sub {
-                    None => break,
-                    Some(s) => {
-                        cur_type = s;
-                        cur_off = no;
-                    }
-                }
-            }
-        }
-        if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.clone()))
-        } else {
-            self.stripped.clone()
-        }
-    }
+    // NOTE (UNIONRESOLVE-PKG-G-0001, 2026-09-26): the degenerate method-form
+    // twins `TypePartialUnion::resolve_in_flow` / `TypePartialUnion::find_resolve`
+    // (former mirrors of type.cc:2498 / type.cc:2517) were deleted here. They
+    // had no production or test callers, walked the container structurally
+    // WITHOUT the Funcdata union-field cache the oracle consults
+    // (type.cc:2505 resolveTruncation / type.cc:2524 findResolve), and
+    // shared names with the faithful fd-aware free functions in
+    // unionresolve.rs (`resolve_in_flow` / `find_resolve` +
+    // `union_resolve_truncation`) — a misuse trap. Use those free functions.
 
     // Ghidra: type.cc:2536 TypePartialUnion::findCompatibleResolve
     /// Delegate to the container union's `findCompatibleResolve`. Faithful to
@@ -4853,9 +5361,9 @@ mod tests {
         }));
         let (borrowed, borrowed_off) = raw_array.get_sub_type(3);
         assert_eq!(borrowed_off, 0);
-        assert!(std::ptr::eq(
-            borrowed.expect("raw array element"),
-            raw3.as_ref(),
+        assert!(Arc::ptr_eq(
+            &borrowed.expect("raw array element"),
+            &raw3,
         ));
         let (owned, owned_off) = Datatype::get_sub_type_arc(&raw_array, 3);
         assert_eq!(owned_off, 0);
@@ -5232,11 +5740,91 @@ mod tests {
 
     #[test]
     fn test_spacebase_get_sub_type_no_scope_returns_identity() {
-        // type.cc:2947 — with no scope (Rugra default), returns (None, off).
+        // type.cc:2947/2964-2966 — with no scope wired, Ghidra's getMap
+        // still yields a scope whose queryContainer misses, landing on the
+        // getBase(1,TYPE_UNKNOWN) fallback with newoff = 0 (verified against
+        // the locked-oracle fixture tests/oracle/type_spacebase_subtype_1204:
+        // ghidra stdout == rugra stdout, 10/10 MATCH after
+        // TYPE-SPACEBASE-MISSFALLBACK-0001).
         let sb = TypeSpacebase::new_global(Address::new(0));
         let (sub, newoff) = sb.get_sub_type(42);
-        assert!(sub.is_none());
-        assert_eq!(newoff, 42);
+        let sub = sub.expect("undefined1 fallback sub-type");
+        assert_eq!(sub.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(sub.get_size(), 1);
+        assert_eq!(newoff, 0);
+    }
+
+    #[test]
+    fn test_spacebase_generic_dispatch_routes_to_override() {
+        // type.cc:174/2947 — Datatype::getSubType is virtual; a
+        // TypeSpacebase reached through the GENERIC dispatch must query the
+        // indexed scope, exactly as the SPACEBASE arm of
+        // TypePointer::isPtrsubMatching (type.cc:1129) observes in Ghidra.
+        use crate::address::RangeList;
+        use crate::database::{Scope, Symbol, SymbolEntry};
+        use std::sync::RwLock;
+
+        let config_t = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Configurable".into(), 16, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let mut sym = Symbol::new(1, "config", "Configurable");
+        sym.dtype = Some(config_t.clone());
+        // Address-tied (symbol_flags::ADDRTIED): in-use at the null usepoint
+        // (database.cc:117), matching how driver-seeded globals are queried.
+        sym.flags |= crate::database::symbol_flags::ADDRTIED;
+        let sym = Arc::new(RwLock::new(sym));
+        let mut scope = Scope::new(1, "global", 0);
+        scope.entries.push(SymbolEntry::new_static(
+            sym,
+            0,
+            Address::new(0x1000),
+            0,
+            16,
+            RangeList::new(),
+        ));
+        let sb = Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new(String::new(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: None,
+            localframe: Address::new(0),
+            scope: Some(Arc::new(scope)),
+        });
+        // Symbol hit at the container start → the symbol's canonical type,
+        // renormalized offset 0 (type.cc:2967).
+        let (sub, newoff) = sb.get_sub_type(0x1000);
+        assert!(Arc::ptr_eq(&sub.expect("symbol sub-type"), &config_t));
+        assert_eq!(newoff, 0);
+        // Mid-symbol hit → same container type with the interior offset.
+        let (sub, newoff) = sb.get_sub_type(0x1008);
+        assert!(Arc::ptr_eq(&sub.expect("symbol sub-type"), &config_t));
+        assert_eq!(newoff, 8);
+        // No container at the offset → the override's miss fallback
+        // (type.cc:2964-2966): getBase(1,TYPE_UNKNOWN) with newoff = 0,
+        // never None — the oracle-pinned answer of fixture
+        // type_spacebase_subtype_1204 (subtype.miss_gap == unknown:1:0).
+        let (sub, newoff) = sb.get_sub_type(0x5000);
+        let sub = sub.expect("undefined1 fallback sub-type");
+        assert_eq!(sub.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(sub.get_size(), 1);
+        assert_eq!(newoff, 0);
+
+        // The PTRSUB gate consumes the same virtual dispatch
+        // (type.cc:1127-1137): the base offset must hit the symbol start
+        // (renormalized newoff == 0) and `extra` must land within the
+        // symbol's type; a mid-symbol base offset or extra beyond the
+        // type does not match. An UNMAPPED base offset with extra == 0
+        // DOES match: the getSubType miss answers the 1-byte UNKNOWN
+        // fallback (type.cc:2964-2966), which admits extra == 0 — the
+        // oracle-pinned gate.miss_extra0 == 1 record of fixture
+        // tests/oracle/type_spacebase_subtype_1204.
+        let ptr = TypePointer::new(8, Arc::new(sb), 1);
+        assert!(pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 0, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1008, 8, 0));
+        assert!(pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 0, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 8, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 16, 0));
     }
 
     #[test]
@@ -5886,5 +6474,296 @@ mod tests {
             ram_base.compare_dependency(&register_base).signum(),
             -register_base.compare_dependency(&ram_base).signum(),
         );
+    }
+
+    #[test]
+    fn test_spacebase_nearest_arrayed_walks_live_map() {
+        // The RULEARITH-SPACEBASE-ARRAYSNAP-0001 oracle map shape (FG
+        // report: getparameter oppool2, ScopeLocal after restructureVarnode):
+        // [8B single-element array@-0x4f8][8B scalar@-0x4f0][array@-0x4e8].
+        let arr8 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("arr8".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 1,
+        }));
+        let arr32 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("arr32".into(), 32, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 4,
+        }));
+        let scalar8 = Arc::new(Datatype::Base(TypeBase::new(
+            "letter".into(),
+            8,
+            TypeMetatype::Unknown,
+        )));
+        let mut sl = crate::varmap::ScopeLocal::new();
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "lname",
+            Some(arr8.clone()),
+            (-0x4f8i64) as u64,
+            None,
+        );
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "letter",
+            Some(scalar8.clone()),
+            (-0x4f0i64) as u64,
+            None,
+        );
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "extraparam",
+            Some(arr32.clone()),
+            (-0x4e8i64) as u64,
+            None,
+        );
+        let sb = TypeSpacebase {
+            base: TypeBase::new(String::new(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0x419d40),
+            fd: None,
+            spaceid: Some(crate::space::AddressSpace::Stack),
+            localframe: Address::new(0x419d40),
+            scope: None,
+        };
+        let map = SpacebaseMap::Local(Some(&sl));
+
+        // Backward @-0x4f8 (lname site): the containing symbol IS the array
+        // → hit with newoff 0 (the oracle's backward array hit, extra=0).
+        let b = sb.nearest_arrayed_component_backward_in_map(&map, -0x4f8);
+        assert!(b.dtype.is_some());
+        assert_eq!(b.newoff, 0);
+        assert_eq!(b.elsize, 8);
+
+        // Backward @-0x4f0 (letter site): the containing symbol is the 8B
+        // scalar → miss (neither array nor struct).
+        let b2 = sb.nearest_arrayed_component_backward_in_map(&map, -0x4f0);
+        assert!(b2.dtype.is_none());
+
+        // Forward @-0x4f0: container = scalar (offset 0, not struct) →
+        // nextAddr = container end (-0x4e8) → the array hit exactly at its
+        // start: newoff -8, elsize 8 — the oracle's forward adsorption
+        // (extra=-8 → PTRSUB -0x4e8 + INT_ADD #0x4e8).
+        let f = sb.nearest_arrayed_component_forward_in_map(&map, -0x4f0);
+        assert!(f.dtype.is_some());
+        assert_eq!(f.newoff, -8);
+        assert_eq!(f.elsize, 8);
+
+        // Forward @-0x4e8 (extraparam site): container = array, offset 0,
+        // nextAddr = container end (-0x4c8) → no further symbol → miss.
+        let f2 = sb.nearest_arrayed_component_forward_in_map(&map, -0x4e8);
+        assert!(f2.dtype.is_none());
+
+        // Far miss: getSubType answers the 1-byte unknown with newoff 0
+        // (type.cc:2964-2966, never null) and both walks miss.
+        let (t, e) = sb.get_sub_type_in_map(&map, -0x300);
+        assert!(t.is_some());
+        assert_eq!(t.unwrap().get_size(), 1);
+        assert_eq!(e, 0);
+        assert!(sb
+            .nearest_arrayed_component_forward_in_map(&map, -0x300)
+            .dtype
+            .is_none());
+        assert!(sb
+            .nearest_arrayed_component_backward_in_map(&map, -0x300)
+            .dtype
+            .is_none());
+
+        // An empty (not yet materialized) ScopeLocal misses everything.
+        let empty = SpacebaseMap::Local(None);
+        let (t, e) = sb.get_sub_type_in_map(&empty, -0x4f0);
+        assert!(t.is_some());
+        assert_eq!(e, 0);
+        assert!(sb
+            .nearest_arrayed_component_forward_in_map(&empty, -0x4f0)
+            .dtype
+            .is_none());
+    }
+
+    #[test]
+    fn test_struct_nearest_arrayed_component_walks() {
+        // Struct field walk precision (type.cc:1669-1696 / 1698-1740):
+        // struct { arr[2]@0 (8B elements); scalar@16; arr2[3]@24 (4B) }.
+        let arr16 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a16".into(), 16, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 2,
+        }));
+        let arr12 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a12".into(), 12, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "int".into(),
+                4,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 3,
+        }));
+        let scalar8 = Arc::new(Datatype::Base(TypeBase::new(
+            "s".into(),
+            8,
+            TypeMetatype::Unknown,
+        )));
+        let s = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 36, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: arr16 },
+                TypeField { name: "s".into(), offset: 16, type_ptr: scalar8.clone() },
+                TypeField { name: "b".into(), offset: 24, type_ptr: arr12 },
+            ],
+        }));
+        // Backward at 18 (inside the scalar): the scalar is not arrayed, the
+        // previous field's array answers with newoff 18 (into a@0).
+        let b = nearest_arrayed_component_backward(&s, 18);
+        assert!(b.dtype.is_some());
+        assert_eq!(b.newoff, 18);
+        assert_eq!(b.elsize, 8);
+        // Forward at 18 (middle of the non-struct scalar → skip): the next
+        // arrayed field is b@24 → newoff -6, elsize 4.
+        let f = nearest_arrayed_component_forward(&s, 18);
+        assert!(f.dtype.is_some());
+        assert_eq!(f.newoff, -6);
+        assert_eq!(f.elsize, 4);
+        // Backward at 30 (inside b): array component answers newoff 6.
+        let b2 = nearest_arrayed_component_backward(&s, 30);
+        assert!(b2.dtype.is_some());
+        assert_eq!(b2.newoff, 6);
+        assert_eq!(b2.elsize, 4);
+        // Non-struct base: the base null walks (type.cc:188/201).
+        assert!(nearest_arrayed_component_forward(&scalar8, 0).dtype.is_none());
+        assert!(nearest_arrayed_component_backward(&scalar8, 0).dtype.is_none());
+    }
+
+    // ---- is_primitive_whole (type.cc:501-513, CR-PJOINS M1) ----
+
+    #[test]
+    fn test_is_primitive_whole_non_piece_structured_metatypes() {
+        // cc:504: !isPieceStructured() -> true. The old whitelist missed
+        // every non-base metatype.
+        let cases: Vec<Datatype> = vec![
+            Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)),
+            Datatype::Base(TypeBase::new("uint".into(), 4, TypeMetatype::Uint)),
+            Datatype::Base(TypeBase::new("bool".into(), 1, TypeMetatype::Bool)),
+            Datatype::Base(TypeBase::new("double".into(), 8, TypeMetatype::Float)),
+            Datatype::Base(TypeBase::new("undefined8".into(), 8, TypeMetatype::Unknown)),
+            Datatype::Void(TypeBase::new("void".into(), 0, TypeMetatype::Void)),
+            Datatype::Code(TypeCode {
+                base: TypeBase::new("code".into(), 1, TypeMetatype::Code),
+                proto: None,
+            }),
+            Datatype::Spacebase(TypeSpacebase {
+                base: TypeBase::new("spacebase".into(), 8, TypeMetatype::Spacebase),
+                address: crate::address::Address::new(0),
+                fd: None,
+                spaceid: None,
+                localframe: crate::address::Address::new(0),
+                scope: None,
+            }),
+            Datatype::Pointer(TypePointer {
+                base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+                ptr_to: Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+                wordsize: 1,
+            }),
+            // Enums: the oracle normalizes the stored metatype to
+            // Int/Uint (type.hh:489-490), so enums are never
+            // piece-structured; Rugra's collapsed Enum variant is
+            // likewise excluded by is_piece_structured.
+            Datatype::Enum(TypeEnum {
+                base: TypeBase::new("color".into(), 4, TypeMetatype::Enum),
+                values: std::collections::BTreeMap::new(),
+            }),
+            Datatype::Enum(TypeEnum {
+                base: TypeBase::new("flags".into(), 4, TypeMetatype::Uint),
+                values: std::collections::BTreeMap::new(),
+            }),
+        ];
+        for dt in &cases {
+            assert!(dt.is_primitive_whole(), "expected true: {:?}", dt.get_metatype());
+        }
+    }
+
+    #[test]
+    fn test_is_primitive_whole_piece_structured_families() {
+        // cc:512: Union/PartialUnion/PartialStruct and non-degenerate
+        // Array/Struct -> false.
+        let int4 = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let int4b = int4.clone();
+        let two_field_struct = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("pair".into(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: int4 },
+                TypeField { name: "b".into(), offset: 4, type_ptr: int4b },
+            ],
+        });
+        let array_of_two = Datatype::Array(TypeArray {
+            base: TypeBase::new("int[2]".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+            num_elements: 2,
+        });
+        let union_dt = Datatype::Union(TypeUnion {
+            base: TypeBase::new("u".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        });
+        let partial_struct = Datatype::PartialStruct(TypePartialStruct {
+            base: TypeBase::new("part".into(), 4, TypeMetatype::PartialStruct),
+            container: Arc::new(two_field_struct.clone()),
+            offset: 0,
+            stripped: None,
+        });
+        assert!(!two_field_struct.is_primitive_whole());
+        assert!(!array_of_two.is_primitive_whole());
+        assert!(!union_dt.is_primitive_whole());
+        assert!(partial_struct.get_metatype() == TypeMetatype::PartialStruct);
+        assert!(!partial_struct.is_primitive_whole());
+    }
+
+    #[test]
+    fn test_is_primitive_whole_degenerate_single_component_wrappers() {
+        // cc:505-511: Array/Struct whose FIRST component fills the whole
+        // size recurse into the component.
+        let long8 = Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int)));
+        // T[1] with element size == array size.
+        let array_of_one = Datatype::Array(TypeArray {
+            base: TypeBase::new("long[1]".into(), 8, TypeMetatype::Array),
+            array_of: long8.clone(),
+            num_elements: 1,
+        });
+        assert!(array_of_one.is_primitive_whole());
+        // struct { long x; } — single full-size field.
+        let single_field_struct = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("s".into(), 8, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "x".into(), offset: 0, type_ptr: long8 }],
+        });
+        assert!(single_field_struct.is_primitive_whole());
+        // Nested degenerate: long[1] of struct { long x; }.
+        let nested = Datatype::Array(TypeArray {
+            base: TypeBase::new("s[1]".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(single_field_struct),
+            num_elements: 1,
+        });
+        assert!(nested.is_primitive_whole());
+        // Degenerate array of a UNION-sized component: the component is
+        // piece-structured and not a primitive whole -> false.
+        let union8 = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("u8".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        }));
+        let array_of_union = Datatype::Array(TypeArray {
+            base: TypeBase::new("u8[1]".into(), 8, TypeMetatype::Array),
+            array_of: union8,
+            num_elements: 1,
+        });
+        assert!(!array_of_union.is_primitive_whole());
     }
 }

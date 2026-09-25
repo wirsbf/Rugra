@@ -1,0 +1,23 @@
+== stage_bisect v1.2: first divergence ==
+left:  /dev/shm/rugra-tests/sb-oracle/curl.main.oracle.projection (stages=299, ops=2414145)
+right: /dev/shm/rugra-tests/sb-evmanifest/gates/main.projection (stages=299, ops=2413571)
+warning: META producer differs (left='f6cb61d14fd3df7be2e65a74381c303326c3e0dc', right='rugra-tree-dc7a0d0ad5ba94cebb9488549ff17db3a0a0c0ca,callspec_link=on')
+warning: META unique_base differs (left='0x364200', right='10000000')
+warning: META unique_base differs; strict op offsets remain observable
+kind: V1_OP_LINE_DIVERGENCE
+round: oracle=0 rugra=0
+stage ordinal: oracle=5 rugra=5
+tree-path: oracle=universal:extrapopsetup rugra=universal:extrapopsetup
+op-line index: 1792
+--- oracle op-lines
++++ rugra op-lines
+@@ -1,7 +1,7 @@
+ 2d04:6bd INT_SUB d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+ 2d04:6be STORE d=0 out=- in=s:ram,n:register:20:8,c:2d09:8
+ 2d04:6bf CALL d=0 out=- in=f:2d04:6bf
+-2d04:c15 INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
++2d04:c0e INT_ADD d=0 out=n:register:20:8 in=n:register:20:8,c:8:8
+ 2d09:6c0 COPY d=0 out=n:register:200:1 in=c:0:1
+ 2d09:6c1 COPY d=0 out=n:register:20b:1 in=c:0:1
+ 2d09:6c2 INT_XOR d=0 out=n:register:0:4 in=n:register:0:4,n:register:0:4
+attribution: snapshot operation line differs

@@ -1,5 +1,82 @@
 # `merge.rs` API Reference
 
+## 2026-09-26：StackAffectingOps 通道落地 + intersection 补 addrtied-vs-untied 分支（MIRATTR-F-RESIDE-0001）
+
+`MergeTypeIntersectCache` 补齐 `HighIntersectTest::intersection` 的第二判定臂
+（variable.cc:1186-1197）：cover 块交集为空且恰一侧 addrtied 时，经
+`testUntiedCallIntersection`（variable.cc:1072-1083）判定 untied 变量是否跨过
+可能影响 tied 存储的 CALL/受控 STORE。配套落地 `StackAffectingOps`
+（merge.cc:63-89：populate=CALL 全集+有效 STORE guard；affectsTest=STORE 无
+guard 即真/有 guard 按 isGuarded 地址段）与 `PcodeOpSet` 基座（cover.hh:36-70、
+cover.cc:627-652：按 (块索引, SeqNum order) 排序 + blockStart + is_pop 惰性
+populate）及 `Cover::intersect(const PcodeOpSet&, Varnode*)` 合并步进
+（cover.cc:342-382，Rust 侧为 `cover_intersects_op_set` 自由函数——Cover 是
+值类型且步进需缓存侧 op-set 状态）。通道字段（op_list/block_start/is_populated）
+随整个 cache 经 attach/detach 往返持久挂载，等价 C++ 的 by-reference 成员
+生命周期（merge.hh:85 + variable.hh:258）。`Merge::clear`/`MergePersistentState::clear`
+按 merge.cc:1582 + cover.hh:63 清空；clear-lifecycle fixture 的
+`channel_sizes_extended`/`fixture_deposit_channels` 改为委托 cache 字段（对外
+签名不变）。`intersection` 及其上游（merge_required_result/merge_speculative/
+merge_speculative_by_vn/merge_type_pair/merge_test_with_list/merge_range_must/
+merge_linear）新增 `fd: &Funcdata` 参数以支撑惰性 populate 与 affectsTest 的
+store-guard 查询。行为效应：curl 镜 my_get_line 38→6（F-RESIDE 族清零；余 6 行
+=FORSPLIT+SEXT48 既有族），canon 双语料 301/862 零回退。
+
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
+## 2026-09-22：process_copy_trims 遍历序确定性（DETERM-COPYTRIM-0001 / DETERM-DOMINANTCOPY-0001）
+
+AX 16 跑 9:7 双版本实证 + AZ 三函数 drill 同点（universal:dominantcopy
+工作集逐进程漂移）：`process_copy_trims` 原实现用 ptr-keyed
+`HashMap<usize,(Arc<HighVariable>,u32)>::into_iter()` 驱动 dominant COPY
+的 `process_high_dominant_copy` 处理序——HashMap 迭代序为每 worker 进程
+随机（RandomState 重播种），两个不同 HighVariable 的 dominant COPY 落同一
+dom 块时插入序（SeqNum 相对顺序）逐进程随机，穿透到最终 C 输出语句序
+（getparameter_constprop_0 的 `uVar32 = uVar27;` / `uVar27 = uVar25;`
+A/B 互换，双 sha256 bimodal）。
+
+修复（只改遍历确定性，不改语义）：镜像 `Merge::processCopyTrims`
+（merge.cc:1418-1435）的首见序——遍历 `copy_trims` **列表序**，HighVariable
+首次出现即 push 进 `first_seen` Vec（对应 cc:1423 `multiCopy.push_back` +
+cc:1424 `setCopyIn1`），后续出现仅累加计数（cc:1427 `setCopyIn2`）；
+`copy_trims.clear()` 移到两个循环之间（cc:1429 原位）；`first_seen` 序中
+计数 ≥2 的 high 依次处理（cc:1430-1435 `hasCopyIn2()`）。HashMap 仅作
+keyed 计数查找，不参与迭代（纪律同 merge.rs:2197-2209 SymbolNameTree 排序
+模式）。Ghidra 侧 `ActionDominantCopy::apply`（coreaction.hh:1008）即
+`data.getMerge().processCopyTrims()`，故 dominantcopy 域漂移与 AX locus
+同源，一并消除。
+
+验证：fast-release `curl_decompile` 12 连跑 stdout sha256 单值
+（此前 9:7 双值）；差分门禁 defects=numbering=0 保持。
+
+**状态**: 已核对（当前有效）  
+**源代码路径**: `src/merge.rs`
+
+## 2026-09-22：`gather_partial_pieces` 补 `PieceNode::isLeaf` 递归界(MERGE-GATHERPIECES-ISLEAF-0001)
+
+Ghidra `PieceNode::gatherPieces`(op.cc:865-876)对每个 PIECE 输入先算
+`isLeaf(rootVn,vn,offset-rootOffset)`(op.cc:801-817),只有非叶节点才递归。
+isLeaf 的五项判定:(a) `vn->isMapped() && rootVn->getSymbolEntry() !=
+vn->getSymbolEntry()`;(b) `!vn->isWritten()`;(c) `def->code() != CPUI_PIECE`;
+(d) `vn->loneDescend() == null`;(e) addr-tied 时地址与 root+relOffset 对齐。
+Rugra 移植只保留了 (c),非树形 PIECE 图(输入由读取它的同一 PIECE 定义)会
+无限递归 —— FUNCDATA-OPSTACKLOAD-CONTAIN-0001 解锁 RuleLoadVarnode 后
+curl `main` 在 ActionMergeRequired(groupPartials)确定性复现 256MB worker
+栈溢出(worker-failure,main 从输出消失)。
+
+修复:`piece_is_leaf`(op.cc:801 忠实移植,五项判定全补,符号项用
+`Arc::ptr_eq` 对应指针相等;地址项同时比较空间与偏移)作为递归门;
+`gather_partial_pieces` 增加 `root_offset` 参数并在非叶时才递归;
+`group_partials` 候选来自 `MergePersistentState::proto_partial` 注册表(RulePieceStructure cc:7697-7698 与 SplitDatatype::buildOutConcats cc:2601-2602 经`register_proto_partial_root` 注册; merge.cc:967-976 按 `isDead`/`isPartialRoot` 过滤后逐 root 调 `groupPartialRoot`)。`group_partials` 按 `groupPartialRoot`(merge.cc:1381-1387)从 root 的
+symbol entry 取 `base_offset`(无符号为 0),groupWith 偏移改为
+`offset - base_offset`(cc:1404)。验证:main 恢复反编译(76/124,0
+worker-failure),curl 全语料 defects=0/numbering=0。
+
 **状态**: 已核对（当前有效）  
 **源代码路径**: `src/merge.rs`
 
@@ -69,10 +146,21 @@ Perform the full merging + naming pipeline. Phase order:
    PcodeOpTree order into offset-aware `VariableGroup`s (merge.cc:967-976,
    1374-1407), allowing
    structured pointer expressions to use the root HighVariable.
-5. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
-   range, NOT propagated through CFG successors — that over-approximation
-   broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
-   now `#[allow(dead_code)]` disabled)
+5. `compute_varnode_covers` → materialize per-Varnode liveness covers as the
+   exact product of the oracle's lazy machinery: allocate via `calc_cover`
+   (varnode.cc:254-263, the `Funcdata::setVarnodeProperties`/`assignHigh`
+   call sites), force `COVERDIRTY`, then rebuild through
+   `Varnode::update_cover_locked` → `Cover::rebuild` (cover.cc:477-496) —
+   the backward fill from every read through CFG predecessors
+   (`addRefPoint`/`addRefRecurse`, cover.cc:524-612) with MULTIEQUAL
+   per-slot precision. Ghidra has no eager Merge pass here (covers rebuild
+   lazily on first `getCover()`); eager materialization at this one pipeline
+   point yields the identical state because `Cover::rebuild` is a pure
+   function of def/descendants/CFG. The self-invented successor
+   `[0,MAX]` propagator (`propagate_cover_through_cfg`) and its events-based
+   predecessor (def/read blocks only, index-order live-out heuristic) are
+   both removed; shape regression pinned by
+   `test_compute_varnode_covers_backfills_intermediate_blocks`.
 
 `protoPartial` ordering evidence: Ghidra registers roots from the ordered
 `ActionPool::processOp` traversal (`action.cc:822`), and `groupPartials`
@@ -92,13 +180,54 @@ The regression test
 6. `update_high_covers` → sync each HighVariable.cover from members
 7. `assign_names` → Ghidra-style auto-naming
 
-### `fn update_high_covers(&mut self, fd: &mut Funcdata)` (private, 2026-06-29)
+### `fn update_high_covers(&mut self, fd: &mut Funcdata)` (private, 2026-06-29; 2026-09-23 EM3 改走 updateCover 链)
 
-Re-derive every HighVariable's internal cover by calling
-`high.update_internal_cover()`. Collects distinct HighVariables reachable
-from loc_tree varnodes (deduped by Arc pointer). Must run after
-merge_by_cover finalizes instance sets so high.cover reflects all members.
-ActionMarkImplied (later in pipeline) consults high.cover.
+Re-derive every HighVariable's cover by calling `update_high_cover(&ha)`
+（variable.cc:338 `HighVariable::updateCover` 链：成员惰性重建 + piece 感知 +
+内部 cover 重建），不再是裸 `update_internal_cover()`。Collects distinct
+HighVariables reachable from loc_tree varnodes (deduped by Arc pointer). Must
+run after all speculative merges finalize instance sets so high.cover reflects
+all members. ActionMarkImplied (later in pipeline) consults high.cover.
+（oracle 无此整体 pass——它经 `HighIntersectTest::updateHigh`
+variable.cc:1148 与 `Varnode::getCover` varnode.hh:202 惰性维护;Rugra 因下游
+直读存储 cover 而物化,达到同一不变量点。）
+
+### `MergeTypeIntersectCache::update_high`（variable.cc:1148 HighIntersectTest::updateHigh,2026-09-23 EM3 终态）
+
+脏判定从「仅 high 自身 coverdirty 标志」扩为「自身标志 OR 任一成员 Varnode 仍带
+COVERDIRTY」——oracle 的 `Varnode::setFlags/clearFlags`（varnode.cc:352-374）在
+写成员 coverdirty 时同步 `high->coverDirty()`，Rugra 的 varnode.rs 旗标写不传播，
+此扫描在测试门补齐同一可观测状态（oracle 中两者同时置位，扫描命中的恰是 oracle
+亦判脏的状态）。命中时经 `mark_high_cover_dirty` 补传播,再走
+`update_high_cover`（成员惰性重建 + updateInternalCover 乘积）,最后
+**无条件 `purge_high`**（variable.cc:1153-1154 逐字;EM2 曾实验「重建后内部
+cover 逐位不变则跳过 purge」,但 blockIntersection 的判定是实例级 copy-shadow
+对,不同实例分解可在同一 union cover 下给出不同判定,该门放行的陈旧缓存判定
+产生错误合并(uStack_248/in_RDI 噪声),已移除）。piece 持有 high 保持仅标志判
+（其新鲜度协议在 piece 机件 INTERSECTDIRTY/EXTENDCOVERDIRTY——`is_cover_dirty`
+已含 extendcoverdirty;扫描+updateCover 路径在 EM2 实测不收敛,残余记
+`MERGE-COPYNOISE-SPILLRESTORE-0001-R2`）。
+
+### `fn gather_block_varnodes` / `test_block_intersection` 惰性读取 + 借用优化（2026-09-23 EM3）
+
+两侧的 Varnode cover 读取前置 `Varnode::update_cover_locked`（oracle 的
+`vn->getCover()` 惰性重建读,variable.cc:951/975/984 → varnode.hh:202）——
+成员 pass 中途被标 COVERDIRTY 后不再喂陈旧 cover 给块级判定;piece-intersection
+high（`interPiece->getHigh()`）不经 updateHigh 刷新,靠此重建对齐 oracle。
+`block_intersection` 的 a/b cover 由 `intersection()` 一次物化并以引用下传
+（原来每块重取 `high_cover` 深拷贝）；`test_block_intersection` 的成对判定借用
+双方读锁（原 `cover.clone()` 每 (vn,other,block) 深拷贝 BTreeMap）。纯性能等价变换。
+
+### `fn mark_high_cover_dirty(high)`（variable.hh:275 HighVariable::coverDirty,2026-09-23 EM3 新增）
+
+`HighVariable::cover_dirty` 方法在持外层写锁调用时,其内部
+`piece->markExtendCoverDirty` 的自腿（variable.cc:136 写回 own high）构成
+**同线程同锁写重入死锁**——EM2 记录的「post-restart mergerequired 圈零进展锁
+等待」的真因（gdb 显示线程 running 而非 blocked,与自旋/不收敛表象一致,实际是
+写锁自等待）。本 helper 将「置 COVERDIRTY 标志」与「piece 走
+mark_extend_cover_dirty_read」拆成两段独立锁窗口,可观测旗标状态与 oracle 内联
+逐位相同。merge.rs 内所有补传播点（update_high / mark_implied /
+compute_varnode_covers materialize 腿）一律走本 helper。
 
 ### `fn update_high_cover(high)` 调用点修复（2026-08-15，`COVER-REBUILD-SELFLOCK-0001`）
 
@@ -112,12 +241,24 @@ slot 与 root 同一 Arc 的图（parseconfig 真实输入）即永久自锁；�
 `tests/oracle/cover_rebuild_1204.*` 行为门禁覆盖；`ActionMergeType`
 caller 闭包与 cleanup 后动作顺序仍归 `PIPE-MERGETYPE-ORDER-0001`。
 
-### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29)
+**2026-09-23（MERGE-COPYNOISE-SPILLRESTORE-0001 EM3）**：EM2 曾移除本函数的
+逐成员 `update_cover_locked` 重建（当时归因于锁等待;真因见
+`mark_high_cover_dirty`——嵌套写死锁,与成员重建无关),已恢复亲代全形
+（own instances 重建 → 无 piece 则 `update_internal_cover`,否则 piece
+updateIntersections + 相交 high 实例重建 + update_cover_read）。成员重建
+腿即 oracle `updateInternalCover` 的 `inst[i]->getCover()` 惰性链
+（variable.cc:331→varnode.hh:202）,Rugra 因 `update_internal_cover`
+（variable.rs）直读 `cover` 字段而在此显式完成。
 
-Faithful to Merge::markImplied (merge.cc:1595). Sets the IMPLIED flag on a
-varnode. Ghidra also marks coverdirty on the def op's inputs; Rugra
-recomputes covers wholesale per merge_all so only the flag is set. Called
-by ActionMarkImplied when checkImpliedCover passes.
+### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29; 2026-09-23 EM3 补全)
+
+Faithful to Merge::markImplied (merge.cc:1594-1605). Sets the IMPLIED flag,
+then marks the **def op's inputs** `COVERDIRTY`（gated on `hasCover`,
+merge.cc:1602-1603——它们的 cover 穿过现已 implied 的 root,任何后续读取前
+必须重建）并经 `mark_high_cover_dirty` 补传播到各成员 high
+（varnode.cc:358-359 setFlags 的传播半）。此前版本只置 IMPLIED 旗标、
+靠 merge 周期整体重建兜底——pass 中途的 markimplied 判定因此吃到陈旧
+成员 cover。Called by ActionMarkImplied when checkImpliedCover passes.
 
 ### `pub fn inflate_test(a: &Arc<RwLock<Varnode>>, high: &HighVariable) -> bool` (2026-06-29)
 
@@ -126,6 +267,90 @@ Faithful to Merge::inflateTest (merge.cc:1616). Tests if inflating varnode
 of a's own HighVariable (excluding `a` itself / its copy-shadow). Returns
 true if there IS an intersection (varnode CANNOT be implied). The
 authoritative check in ActionMarkImplied::checkImpliedCover.
+**2026-09-23（VARGROUP-ABSORB-0001 §4-4）**: 全量对齐 merge.cc:1616-1646 三段——
+①实例循环以 `Varnode::copyShadow`（COPY 链追踪，varnode.cc）放行同值影子、以
+`intersect_char(...) == 2`（仅整区间相交；边界相触 == 1 放行）拒绝——原先的
+`intersects()`（任意重叠含边界）把每个 SUBPIECE 字段件的 def 点（=输入影子的读点）
+判成相交，是 30d6 域件无法 implied、以显式语句打印的直接原因；②补 `VariablePiece`
+交集遍历（piece->updateIntersections + 逐相交件 `partialCopyShadow(a, off)` 放行
+SUBPIECE/PIECE 派生影子）；③借用重构：实例快照先drop `ahigh` 读锁再进
+update_intersections（其取 owning high 写锁——同线程读后写即死锁，曾致 markimplied
+管线挂起）。
+
+**2026-09-23（MERGE-COPYNOISE-SPILLRESTORE-0001 EM2/R2,EM3 终态）**: merge.cc:1621-1622 的
+`testCache.updateHigh(high); const Cover &highCover(high->internalCover)` 落地为
+「脏扫描（自身标志 OR 成员 COVERDIRTY）→ 命中才物化新乘积（成员
+`update_cover_locked` 重建 + inst[0]->hasCover 门控合并），否则直读存储 cover」。
+传播侧不可写：调用方（coreaction checkImpliedCover）全程持有该 high 的读锁，
+成员重建的 clearFlags→high->coverDirty() 传播（varnode.cc:365-374）无法落锁,
+靠 merge 周期起点的 `compute_varnode_covers` 全量重脏兜底（缓存门都在 merge 期内,
+不会吃到跨周期陈旧 cover）。
+
+**2026-09-25（CR 补丁）**: 陈旧前提清理——原注释「every intersection()/
+update_high gate runs inside the merge passes, which start from
+compute_varnode_covers' wholesale re-dirty」在 Action 序列管线中不成立
+（compute_varnode_covers 仅遗留 merge_all 调用）；`high_cover()` 原始读取
+helper 加警示头；update_high_covers 处对 checkImpliedCover 的依赖描述更正
+（读 varnode cover + inflate 内现聚合）。剩余原始聚合读者可服陈旧 → 登记
+`MERGE-HIGHCOVER-PROPAGATION-0001`（缺 varnode.cc:352-360 setFlags→
+high->coverDirty 传播不变量的完整补齐）。
+
+**2026-09-25（CANARY-EXPLICIT 级联）**: 上一段的「否则直读存储 cover」分支删除，
+改为无条件从惰性重建的成员 cover 现聚合——Rugra 的变体路径没有完整维护
+Ghidra 的「成员 cover 变脏必传播 high dirty」不变量（varnode.cc:352-360
+setFlags → high->coverDirty，由 addDescend/eraseDescend/calcCover 触发），
+重建后的成员 cover 留下「干净但陈旧」的高聚合：for-header 迭代临时件
+（PTRADD/PTRSUB out）自身 cover 正确止于唯一 COPY 读点，陈旧聚合却到块底，
+inflateTest 把边界相触（oracle 判 1 放行、保持 implied、canon 内联
+`ppuVar12 = ppuVar12 + 1`）误判整区间相交（==2 拒绝）→ 循环体临时件显式化。
+无条件现聚合=oracle 不变量下的恒等乘积，只比陈旧存储新。
+
+## 2026-09-25：MERGE-HIGHCOVER-PROPAGATION-0001 收口（Lane HIGHCOV）
+
+传播不变量的**突变半边**从读者侧补偿移回 oracle 位点：varnode.rs
+`set_flags`/`clear_flags` 的 coverdirty 掩码臂、`add_descend`（cc:339）、
+`erase_descend`（cc:325）、`calc_cover`（cc:261）现携带 varnode.cc:358-359/
+371-372 的 `high->coverDirty()` 传播（实现=varnode.rs
+`propagate_cover_dirty_to_high`，merge.rs `mark_high_cover_dirty` 委托同一函数，
+单一实现）。传播体按 merge.rs 既有锁纪律序列化（high 写锁置位 → 释放 →
+piece walk 的 own-high 末腿），全部调用点为语句级 vn 写守卫（无一跨 high
+守卫存活，逐点核验 2026-09-25）。
+
+**锁不可达的 clear 侧**（`update_cover_locked`/`get_cover` 的
+clearFlags→coverDirty，varnode.cc:371-372——承载「attach 前已脏成员」角落）
+维持不传播：调用方（checkImpliedCover 借用 `&HighVariable`、
+`aggregate_high_cover_from`）持 high 读守卫，传播需同 high 写锁=重入死锁。
+该缺口由三层防御吸收：①`HighVariable::new` 按 variable.cc:224 初始置脏
+（新 high 首门必重建）；②`update_high` 的实例扫描保留（对 clear 侧缺口
+精准检测：成员旗仍在扫描时可见）；③inflate_test/aggregate_high_cover_from
+无条件现聚合。`high_cover()` 裸读者纪律不变：仅 intersection（update_high
+后读=variable.cc:1170-1181 序）与 compare_high_by_block（merge_linear 排序前
+逐 high 刷新=merge.cc:280-282 序）两个门内位点。
+
+**hide_shadows 残余读者修复**：merge.cc:1087/1092 的
+`vn->getCover()->containVarnodeDef` 是惰性重建读（varnode.hh:202）；Rugra
+原裸读 `.cover`，同双循环内先行的 `op_set_input`（add_descend 置脏 vn2）后
+即可服陈旧——现前置 `update_cover_locked`（与 gather_block_varnodes 同纪律）。
+
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:varnode.rs
+set_flags/clear_flags 现携带 varnode.cc:357/:370 的无条件 flagsDirty()
+臂（variable.hh:164→FLAGSDIRTY|NAMEREPDIRTY，updateFlags 通道——存活读者=
+merge_test_required/namevars/varmap/is_name_lock）；propagate helper 拆双臂
+共享一次写锁；implied/explicit/addrforce/precis*/unaffected 访问器家族
+（varnode.hh 经 setFlags 路由者）改走 set_flags/clear_flags；
+mark_implied/compute_varnode_covers 的内联传播半边简化为字面 setFlags 调用
+（merge.cc:1598/:1603 镜像）。锁纪律重验（261+32+4 处机械扫描零生产
+共存面）；双语料 cmp 恒等重跑（见下）。
+
+**验证**：curl/httpd 默认脸对亲父 a9475ecc **cmp 逐字节恒等**（577/0/0 ==
+基线全指标）；httpd 双跑恒等；panic 0/timeout 3==基线（httpd）与 0/0（curl）；
+cargo test --lib 1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs
+--strict 绿；gcc 审计 104OK/20FAIL fail 名集==亲父。恒等判读：主路径此前的
+读者侧补偿已覆盖全部活语料位点，本改动把不变量从逐读者补偿提升为结构化
+维护（位点位点不再是唯一防线）。机制 C：merge 白名单——Cross-Review:
+PENDING（CR-R2-GETPARAM 的登记先例与本收口同链；二轮窄域重审范围=
+varnode.rs set_flags/clear_flags 及文档）。
+
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
@@ -382,7 +607,7 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 
 ### 2026-07-04（续）：移植 snip/trim 子系统（copyTrims 填充链路）
 移植 Ghidra merge.cc 的 forced-merge + snip 数据流改写子系统：
-- `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。
+- `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。**2026-09-24（PM-F2S）**：基础类型通道补齐——cc:416 `ct = inVn->getType()` → cc:429 `newUnique(inVn->getSize(),ct)` 无条件传递（不属于 union 省略范围）；trim COPY 输出现在经 `Funcdata::new_unique_typed` 携带输入 varnode 的数据类型。
 - `snip_reads`（merge.cc:443）：截断一组读取到临时变量。INPUT 分支新 COPY 的
   SeqNum pc 取 block-0 `getStart()`（cc:456，2026-08-30 修正——原先传
   `Address::new(0)`，仅新 COPY 的 SeqNum 地址错，cover order 域不受影响）。
@@ -464,12 +689,18 @@ curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处
 ### 2026-07-04（续 5）：移植 mergeOp per-op forced-merge 路径
 移植 Ghidra mergeMarker 的 per-op forced-merge 子系统（merge.cc:656-902）：
 - `trim_op_input`（merge.cc:692）：在 op 前插入 COPY trim（经 allocateCopyTrim → 填 copy_trims），替换 slot 输入。MULTIEQUAL 时 pc 取入边块的 getStop，插入到入边块末尾。
-- `trim_op_output`（merge.cc:656）：把 op 输出移到 stubby unique，COPY 还原原输出。用原始 newOp（不填 copyTrims）。
+- `trim_op_output`（merge.cc:656）：把 op 输出移到 stubby unique，COPY 还原原输出。用原始 newOp（不填 copyTrims）。**2026-09-24（PM-F2S）**：cc:668/677 的 `ct = vn->getType()`（改线前读取）→ `newUnique(vn->getSize(),ct)` 类型通道补齐，stubby unique 携带原输出类型。
 - `merge_op`（merge.cc:719）：三阶段 forced merge — 非cover限制 trim → cover 限制迭代 trim（trimOpInput/trimOpOutput）→ 真正 merge。
 - `collect_inputs`（merge.cc:783）+ `snip_output_interference`（merge.cc:811）：INDIRECT 输出干扰检测 + snip。
 - `merge_indirect`（merge.cc:846）：snipOutputInterference + mergeOp。
-- `merge_test_with_list`（merge.cc:1657）：HighIntersectTest 替代（用 aggregate_high_cover + intersect_char）。
+- `merge_test_with_list`（merge.cc:1657）：经 `type_test_cache.intersection`（HighIntersectTest port：intersectList(…,2) 候选块 + gather_block_varnodes/test_block_intersection 时间戳级判定 + 缓存/moveIntersectTests 生命周期）判定,与 Ghidra `testCache.intersection(a,high)` 同路径。曾用 aggregate_high_cover + intersect_char 粗近似（把同块字符重叠一律判相交,导致 mergeOp Phase 2 对时间戳不相交的 marker op 误入 trim 循环——sb-impliedfold lane 实测 main +8804 trim COPY vs oracle +45）,2026-09-22 sb-impliedfold 移除。
 - `merge_marker` 从 merge_force 改为委托 merge_op/merge_indirect（对齐 merge.cc:889-902）。
+
+### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：markInternalCopies 补 PIECE/SUBPIECE 两臂
+移植 merge.cc:1478-1528（此前 "Omitted — no VariablePiece infrastructure"）：
+- **PIECE 臂**（cc:1478-1506）：out/in0/in1 三个 high 都带 VariablePiece 且同组、偏移与拼接几何一致（LE：p3.off==p1.off 且 p2.off==p1.off+v3.size）→ `opMarkNonPrinting` + 双输入 `clearImplied+setExplicit`（内部重组 PIECE 隐藏，件以自身语句打印）。
+- **SUBPIECE 臂**（cc:1508-1528）：out/in0 同组且 `p2.off + suboff == p1.off`（LE）→ 同样 nonprinting + in0 explicit。
+main 的 0x30d6 梯：嵌套 4+4+16 重组 `CONCAT164/CONCAT204` 语句（43 处中间态的残余）经此隐藏，调用实参直接读 join。
 
 ### 2026-07-04（续 6）：移植 redundant-copy 标记子系统
 移植 Ghidra markInternalCopies 的冗余 COPY 标记路径（merge.cc:1112-1367）：
@@ -762,3 +993,115 @@ MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
 oracle 侧等价探针（插桩 decomp_opt 的 `[ORE-UNIFY]`/`[ORE-MARK]`/
 `[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/`[GLOBALTRACE]`）见
 /tmp/w-nonconverge2-ore/cpp-dbg（非版本化，重建方式见对拍手册）。
+
+### 2026-08-30：aggregate_high_cover_from 接入惰性 cover 重建（RULE-PROPCOPY-ADDRTIED-0001）
+`aggregate_high_cover_from`（Ghidra variable.cc:324 HighVariable::updateInternalCover 的聚合腿）
+此前直接读 `inst.cover` 字段 —— 但 Rugra 的 Varnode cover 是惰性的：`calc_cover()` 只置空
+Cover+COVERDIRTY，真正的重建在 `Varnode::update_cover_locked`（varnode.cc:233
+Varnode::updateCover → cover->rebuild）。跳过它导致聚合 cover 恒为空，所有 cover 门禁
+（`merge_test_with_list`/mergeOp 的 trimOpInput lane 裁剪、speculative merge 等）静默放行。
+修复：聚合前对每个实例调用 `Varnode::update_cover_locked`（= Ghidra `inst[i]->getCover()`
+语义），并忠实 variable.cc:329 的 `inst[0]->hasCover()` 门。效果：ActionMergeRequired 的
+`Merge::mergeOp → trimOpInput`（merge.cc:692）恢复对 phi(X,f(X)) 的 lane 裁剪 —— 在 phi
+每个入边块尾插 COPY（CMOVcc 惯用法的分支内实例化，curl main/my_get_line/file2string 共
+6 处空 if 全部恢复 if 体）。双侧 oracle fixture：tests/oracle/merge_trim_lane_1204.*。
+
+### 2026-09-22：MERGE-COPYNOISE-DIFFHIGH-0001 — compute_varnode_covers 换轨为 oracle 惰性机之积极物化
+`compute_varnode_covers` 的 events 式近似实现（def 块 + 读块直算、`max_bi > bi`
+索引序 live-out 启发式、无中间块回填、无 MULTIEQUAL 槽位精度）整体删除，
+改为物化 oracle 惰性机的产物：`has_cover()` 门 + 缺失时 `calc_cover()`
+（varnode.cc:254-263，funcdata_varnode.cc:38-41/52-53 调用位）→ 置
+COVERDIRTY → `Varnode::update_cover_locked`（varnode.cc:233 →
+cover.cc:477 `Cover::rebuild` 前驱回填）。死代码
+`propagate_cover_through_cfg`（自创 successor [0,MAX] 填充，先前已禁用）
+与 `op_block_order`（仅近似实现使用）一并移除；`merge.hh:83
+Merge::computeVarnodeCovers` 错注更正为 `varnode.cc:233
+Varnode::updateCover`。形状回归测试
+`test_compute_varnode_covers_backfills_intermediate_blocks` 钉住
+def 块 [def,end] / 中间块全块 / 读块 [begin,read] 的 oracle 形状
+（旧近似下中间块永无 cover，该测试必败）。
+
+**实证边界（B2 状态如实）**：`merge_all`/`compute_varnode_covers` 在生产
+管线零调用（coreaction.rs 走逐 Action 细粒度路径，与 oracle 同构）——
+本改动 E2E byte-identical（curl+httpd，defects=0/numbering=0），生产行为
+零变化；函数级 NO_ORACLE（无真实 oracle 对拍，仅单测形状断言 +
+E2E 不变性证据）。COPY 噪声真根因不在 cover 范围层：探针（/dev/shm/
+rugra-tests/sb-copynoise/）测得 CopyMarker 时 1957 个 diff-high 幸存 COPY
+中 1531 个的一侧为 implied（mergeTestBasic 正确拒绝），仅 ~312 ok/ok 对
+未被合并 —— 主杠杆移至 MarkImplied×打印折叠（printc lane）与 ok/ok 对
+的 req/inter/重分裂排查，已在 TODO_BOARD 重新登记。
+
+### 2026-09-22：MERGE-COPYNOISE-IMPLIEDFOLD — merge_test_with_list 接入精确 HighIntersectTest（真根因修复）
+
+**CA 判决修正**：copynoise lane 的"折叠责任在打印侧"推断被双侧实证推翻。
+锁定 oracle 直连探针（/dev/shm/rugra-tests/sb-impliedfold/oracle_copyprobe，
+git archive e40ed130 + BfdArchitecture）对 main 逐阶段 census：
+oracle 进入 merge 组时仅 **190 个存活 COPY**（管线入口 726 ≈ 原始 mov 数
+668），MarkImplied 只 imply 22 个 COPY 相关 varnode，mergerequired 全程
+仅 +45 op；而 Rugra 在 pre-assignhigh 时与 oracle 几乎一致（8907 vs
+8904 ops），**ActionMergeRequired 处爆增 +8809 op**（main +8804）。打印侧
+一刀切折叠 in-implied COPY 是错的——oracle 自己打印 20 个合法 in-implied
+COPY（RHS 内联 CAST 表达式）。
+
+**根因**：`merge_test_with_list`（Merge::mergeTest port,merge.cc:1657）
+绕过了 testCache,用 `aggregate_high_cover`+`intersect_char>0` 粗近似
+（任何同块字符重叠 ⇒ 相交）。oracle 的 `testCache.intersection(a,high)`
+（variable.cc:1166）= `intersectList(…,2)` 候选块 + `blockIntersection`
+（gatherBlockVarnodes + testBlockIntersection,variable.cc:998）做
+**实例 def/read 时间戳级**判定——字符重叠但时间戳不交错的 high 对
+判"不相交"。粗近似使 mergeOp Phase 2（merge.cc:743-761）对大量时间戳
+不相交的 MULTIEQUAL/INDIRECT 误判失败 → trim 循环把每个输入都
+trimOpInput → 每 phi 产 2-3 个 COPY trim,main +8804。这些 trim COPY
+随后被 MarkImplied 标 implied（单实例 high 的 inflateTest 平凡通过）,
+mergeTestBasic 拒绝合并,最终以 `uVarX = uVarX` 自赋值与 spill/restore
+乒乓形态泄漏到打印。
+
+**修复**：merge_test_with_list 改走 `self.type_test_cache.intersection`
+（Rugra 已有的 HighIntersectTest 忠实 port,mergeType/mergeAddrTied 已在
+用）,与 oracle merge.cc:1664 `testCache.intersection(a,high)` 字面一致。
+
+**门禁**：merge_marker trim 全语料 +13870 → **+368**（main +8804→远低
+于 oracle +45 量级）；main 存活 COPY 9050→**327**（oracle 234）；curl
+全文件自赋值 **907→2**（golden 0；余 2 个在 match_url,绑定既有
+PRINTC-CONDBLOCK-JUNKOPS-0001 族）；curl E2E skeleton **3654→3018**,
+defects=0/numbering=0；httpd skeleton 2459→2406,defects=0/numbering=0；
+--func main 1199→819；glob_set 97→105（重排非缺陷,defects=0,如实报告）；
+merge:: 8/8 + coreaction:: 57/57 测试绿；全量 --lib 18 失败为主仓同基
+预存在（/home/ls/Rugra d3fbe924 复跑同集合）。改动函数 B2=NO_ORACLE
+（无逐函数双侧 oracle fixture;证据=oracle 逐阶段 census 探针 + 双语料
+E2E 差分门禁）。
+
+### 2026-09-24（GE / MERGE-LIVEREAD-ORD351-0001）：merge_op Phase 1 输入改活读
+`merge_op`（merge.cc:719）Phase 1 的两处输入读取由**循环前快照**改为
+**逐迭代活读** `op.0.read().unwrap().inrefs`，逐字镜像 cc:731
+`op->getIn(i)->getHigh()` 与 cc:737 `op->getIn(j)->getHigh()`（C++ 每次经
+op 解引用取当前 slot 的 Varnode/HighVariable）。原实现把 inrefs 克隆成
+`inputs` vec 后在 i/j 两层循环里复用，导致**早先 slot 的 trim 不可见**：
+`trim_op_input(op, 0)` 已把 slot 0 换成 trim COPY 输出（allocateCopyTrim
+经 wire_unique_high 给全新 HighVariable，无 input/addrtied 旗标），而 j 层
+仍拿旧快照里 slot 0 的原 Varnode（如 RSI 函数参数，`is_input=true` 且非
+addr-tied）去测后续 slot——`merge_test_required`（cc:125-127
+`high_out->isInput() && high_in->isAddrTied() && !high_out->isAddrTied()`）
+误判冲突，把本应与 phi 输出同 high 直接合并的 addr-tied 栈读也 trim 成
+unique 临时。
+
+**可观测修复**（gp 投影 ord351，getparameter.constprop.0，
+universal:mergerequired 阶段）：phi@3f80:189a
+`out=n:stack:…fa48 in=[RSI(i), n:stack:…fa48(4030:1892)]`——oracle 仅
+trim slot 0（u:10000645=RSI），slot 1（回边栈读）从 SNAP 351 到终态
+SNAP 371 保持原栈读直接合并；Rugra 旧代码额外产出
+`u:1000064d = s:stack:…fa48(4030:1892)`（trim COPY@4043:1c91）。修复后
+gp 投影与锁定 oracle **全 371 阶段逐 snapshot 零差异**（ops 913395→
+913373==oracle，MATCH），ord351 首分歧消除；next_url/match_url/
+parseconfig 三投影 MATCH 保持，myprogress ord399（setcasts，FV2 域）
+不动。curl/httpd E2E 输出与亲父 b25bce7a **cmp 逐字节相同**（1995/0/0、
+2072/0/0，corpus-neutral：该 trim COPY 在下游本会被清掉，差异仅在
+B2 投影可观测维度）；单测 1687/18 == 亲父同 flaky 集。快照 `inputs` vec
+随之删除（唯一消费方即 Phase 1）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

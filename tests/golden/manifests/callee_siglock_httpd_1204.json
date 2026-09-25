@@ -1,0 +1,982 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "httpd",
+ "source": "callee-siglock",
+ "golden_sha256": "6b4c4f315c545a96ac323509fccc61fc3eb3767c39a48d8c596e77976a237d08",
+ "harvest_rule": "canon call-site form harvest over the target functions: per callee, arity = printed argument count (conflict = varargs drop), param slot types from bare-local/element/addr-of/deref/literal/cast-target evidence with conflict-sensitivity, input lock only on full KNOWN_BASES evidence, return lock only on cast-free agreeing consumers, no param names; call-site forms are authoritative over the callee's own golden header (Parameter ID iteration drift)",
+ "targets": [
+  "ap_fini_vhost_config",
+  "ap_vhost_iterate_given_conn",
+  "main"
+ ],
+ "callees": {
+  "0x12c520": {
+   "name": "FUN_0012c520",
+   "sites": 9,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12c550": {
+   "name": "FUN_0012c550",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12c8e0": {
+   "name": "FUN_0012c8e0",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "undefined8 *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12cbd0": {
+   "name": "FUN_0012cbd0",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    },
+    {
+     "type": "undefined8 *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12cda0": {
+   "name": "FUN_0012cda0",
+   "sites": 2,
+   "arity": 5,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  },
+  "0x12b590": {
+   "name": "__fprintf_chk",
+   "sites": 1,
+   "arity": 7,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "undefined1 *",
+     "locked": true
+    },
+    {
+     "type": "int",
+     "locked": true
+    },
+    {
+     "type": "undefined8",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a980": {
+   "name": "__stack_chk_fail",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x13a8c0": {
+   "name": "ap_exists_config_define",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12d020": {
+   "name": "ap_fini_vhost_config",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x143340": {
+   "name": "ap_fixup_virtual_hosts",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x130a70": {
+   "name": "ap_get_local_host",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x12c510": {
+   "name": "ap_get_server_built",
+   "sites": 2,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x13aca0": {
+   "name": "ap_get_server_description",
+   "sites": 2,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x16fe50": {
+   "name": "ap_mpm_query",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x16ff30": {
+   "name": "ap_mpm_run",
+   "sites": 1,
+   "arity": 3,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x1442b0": {
+   "name": "ap_open_stderr_log",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x142d90": {
+   "name": "ap_process_config_tree",
+   "sites": 2,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x143470": {
+   "name": "ap_read_config",
+   "sites": 2,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "long"
+  },
+  "0x141430": {
+   "name": "ap_register_hooks",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined *",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1443f0": {
+   "name": "ap_replace_stderr_log",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x140b60": {
+   "name": "ap_run_open_logs",
+   "sites": 2,
+   "arity": 4,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x1410a0": {
+   "name": "ap_run_optional_fn_retrieve",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x140750": {
+   "name": "ap_run_pre_config",
+   "sites": 2,
+   "arity": 3,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x143890": {
+   "name": "ap_run_rewrite_args",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1408b0": {
+   "name": "ap_run_test_config",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1416b0": {
+   "name": "ap_setup_prelinked_modules",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    }
+   ],
+   "return": "long"
+  },
+  "0x1438d0": {
+   "name": "ap_show_directives",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x143bc0": {
+   "name": "ap_show_modules",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x143c30": {
+   "name": "ap_show_mpm",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x12a6d0": {
+   "name": "apr_app_initialize",
+   "sites": 1,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "undefined4 *",
+     "locked": true
+    },
+    {
+     "type": "undefined8 * *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  },
+  "0x12a4d0": {
+   "name": "apr_array_make",
+   "sites": 3,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12b190": {
+   "name": "apr_array_push",
+   "sites": 5,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a620": {
+   "name": "apr_ctime",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined1 *",
+     "locked": true
+    },
+    {
+     "type": "undefined8",
+     "locked": true
+    }
+   ],
+   "return": "undefined8"
+  },
+  "0x12b070": {
+   "name": "apr_dynamic_fn_retrieve",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a420": {
+   "name": "apr_file_open_stdout",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined8 *",
+     "locked": true
+    },
+    {
+     "type": "undefined8",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12b6c0": {
+   "name": "apr_file_printf",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a8e0": {
+   "name": "apr_filepath_name_get",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "undefined8",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12ac80": {
+   "name": "apr_getnameinfo",
+   "sites": 1,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "undefined8 *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  },
+  "0x12b6e0": {
+   "name": "apr_getopt",
+   "sites": 1,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": "long *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12a450": {
+   "name": "apr_getopt_init",
+   "sites": 1,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long *",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12ab70": {
+   "name": "apr_hook_deregister_all",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x12aa50": {
+   "name": "apr_hook_sort_all",
+   "sites": 4,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x12abc0": {
+   "name": "apr_palloc",
+   "sites": 4,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12a820": {
+   "name": "apr_pool_clear",
+   "sites": 3,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a7c0": {
+   "name": "apr_pool_create_ex",
+   "sites": 6,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  },
+  "0x12b1a0": {
+   "name": "apr_pool_destroy",
+   "sites": 2,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a6a0": {
+   "name": "apr_pool_tag",
+   "sites": 6,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12aee0": {
+   "name": "apr_pstrdup",
+   "sites": 6,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12b430": {
+   "name": "apr_sockaddr_equal",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12aa10": {
+   "name": "apr_sockaddr_ip_get",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "undefined8 *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12a580": {
+   "name": "apr_terminate",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x12a640": {
+   "name": "apr_time_now",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x12a730": {
+   "name": "apr_version_string",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "undefined8"
+  },
+  "0x12a690": {
+   "name": "apu_version_string",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "long"
+  },
+  "0x12b530": {
+   "name": "exit",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x12acb0": {
+   "name": "memcmp",
+   "sites": 2,
+   "arity": 3,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "void *",
+     "locked": true
+    },
+    {
+     "type": "undefined1 *",
+     "locked": true
+    },
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12a710": {
+   "name": "puts",
+   "sites": 23,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x12a540": {
+   "name": "strcasecmp",
+   "sites": 6,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12ad70": {
+   "name": "strcmp",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x12afd0": {
+   "name": "strncasecmp",
+   "sites": 2,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  }
+ },
+ "harvest_drops": [
+  {
+   "callee": "__printf_chk",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "ap_log_error",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "ap_run_post_config",
+   "reason": "arity conflict across sites (varargs/derived)"
+  }
+ ]
+}

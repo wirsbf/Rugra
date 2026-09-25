@@ -47,7 +47,7 @@ fn compare_address_spaces(a: AddressSpace, b: AddressSpace) -> std::cmp::Orderin
 // oracle's single Architecture. Bank-local `xunknown{size}` minting (the
 // former adapter) is gone — unknown types now carry the canonical
 // `undefined{size}` spelling and per-factory identity.
-fn default_unknown_type(
+pub(crate) fn default_unknown_type(
     factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     size: usize,
 ) -> Arc<Datatype> {
@@ -317,6 +317,7 @@ pub fn op_input_type_local(
     slot: usize,
     type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
+    fd_output_type: Option<&Arc<Datatype>>,
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     // Size of the queried input varnode, shared by every base/meta lookup.
@@ -379,6 +380,25 @@ pub fn op_input_type_local(
                 // cc:862: null -> TypeOp::getInputLocal base default
                 // `getBase(in(slot).size, TYPE_UNKNOWN)` (typeop.cc:271-275).
                 None => local_base(type_factory, input_size, TypeMetatype::Unknown),
+            }
+        }
+        // typeop.cc:901-920 TypeOpReturn::getInputLocal — a RETURN input
+        // (slot >= 1) reads its local type from the enclosing function's
+        // return-value parameter (fp->getOutputType(), cc:918), kept only
+        // when not void and size-matched; this bare-&PcodeOp table has no
+        // parent Funcdata chain, so the fd-less form mirrors Ghidra's bb==0
+        // fallback (base undefined) and the fd-carrying dispatch in
+        // ActionInferTypes::build_localtypes routes through
+        // TypeOpReturn::get_input_local_in_fd instead.
+        (OpCode::CPUI_RETURN, slot @ 1..) => {
+            match fd_output_type {
+                Some(ct)
+                    if !matches!(ct.as_ref(), Datatype::Void(_))
+                        && ct.get_size() == input_size =>
+                {
+                    Some(ct.clone())
+                }
+                _ => local_base(type_factory, input_size, TypeMetatype::Unknown),
             }
         }
         // typeop.cc:687-718 — delegate to the reviewed D1 port.
@@ -520,6 +540,46 @@ pub struct Varnode {
     pub nzm: u64,
 }
 
+// RUGRA-GLUE: borrow-safety helper materializing BOTH notification arms of
+// Varnode::setFlags (varnode.cc:356-360) and Varnode::clearFlags
+// (varnode.cc:369-373) — as a free function taking the Arc, so `&mut self`
+// Varnode mutation methods can fire them:
+//   ARM 1 (unconditional, cc:357/:370): high->flagsDirty() —
+//        variable.hh:164 `highflags |= flagsdirty | namerepdirty`.
+//        NOT mask-gated in the oracle (unlike coverDirty): every attached
+//        setFlags/clearFlags notification re-dirties the derived-flag
+//        channel consumed by HighVariable::updateFlags (variable.cc:352,
+//        live Rust callers: merge_test_required, coreaction namevars /
+//        param-name gates, varmap, is_name_lock).
+//   ARM 2 (mask-gated, cc:358/:371): high->coverDirty() when the mask
+//        contains coverdirty — variable.hh:275-281 `highflags |= coverdirty;
+//        if (piece) piece->markExtendCoverDirty();` — the
+//        MERGE-HIGHCOVER-PROPAGATION-0001 invariant.
+// The two arms share one write-guard acquisition; the piece walk is
+// sequenced AFTER the guard is dropped because markExtendCoverDirty's final
+// self leg (variable.cc:136) writes the OWN high again — re-entering the
+// same RwLock for write would deadlock (single-threaded reentrancy).
+// Observable flag state is identical to the oracle's inline calls.
+pub(crate) fn propagate_flag_change_to_high(high: &Arc<RwLock<HighVariable>>, fl: u32) {
+    let coverdirty = (fl & varnode_flags::COVERDIRTY) != 0;
+    let piece_arc = {
+        let mut h = high.write().unwrap();
+        // ARM 1: flagsDirty — unconditional (varnode.cc:357/:370).
+        h.highflags |= crate::variable::high_internal_flags::FLAGSDIRTY
+            | crate::variable::high_internal_flags::NAMEREPDIRTY;
+        if coverdirty {
+            // ARM 2: coverDirty — mask-gated (varnode.cc:358/:371).
+            h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
+        }
+        h.piece.clone()
+    };
+    if coverdirty {
+        if let Some(piece_arc) = piece_arc {
+            crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
+        }
+    }
+}
+
 impl Varnode {
     // Ghidra: varnode.cc:578 Varnode::Varnode
     /// Create a new RAM-space varnode.
@@ -580,7 +640,7 @@ impl Varnode {
         self.call_spec.as_ref().and_then(Weak::upgrade)
     }
 
-    // Ghidra: varnode.cc:578 Varnode::getAddr
+    // Ghidra: varnode.hh:181 Varnode::getAddr
     pub fn get_addr(&self) -> &Address {
         &self.loc
     }
@@ -977,13 +1037,46 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:352 Varnode::setFlags
+    /// Set boolean attributes. Faithful to `Varnode::setFlags`
+    /// (varnode.cc:352-361): the flag bits are set, then the owning high is
+    /// notified via `propagate_flag_change_to_high` —
+    ///   - `flagsDirty()` UNCONDITIONALLY (cc:357; variable.hh:164, no mask
+    ///     gate — unlike coverDirty), re-dirtying the derived-flag channel
+    ///     consumed by `HighVariable::updateFlags` (variable.cc:352);
+    ///   - `coverDirty()` when the mask contains coverdirty (cc:358-359),
+    ///     the MERGE-HIGHCOVER-PROPAGATION-0001 invariant that keeps the
+    ///     stored high cover aggregate invalidatable at mutation time so
+    ///     every raw `HighVariable::getCover` reader (variable.hh:294
+    ///     returns internalCover with NO lazy update) sees a current
+    ///     aggregate whenever the high is not dirty.
+    /// LOCK DISCIPLINE: the notification takes a write guard on the high
+    /// while the caller still holds this Varnode's write guard — a
+    /// different lock, no reentrancy. Every in-tree call site acquires its
+    /// Varnode guard inline (statement-level), never across a live high
+    /// guard; verified by a scope-aware mechanical scan of all 261
+    /// set_flags/clear_flags call sites plus the 32 oracle-setFlags-routed
+    /// accessor call sites (2026-09-25, HIGHCOV lane; sole co-occurrence
+    /// candidate = test_copy_symbol_arc_high_branch, guard dropped before
+    /// the call and the varnode has no high).
     pub fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+        if let Some(high) = self.high.clone() {
+            propagate_flag_change_to_high(&high, f);
+        }
     }
 
     // Ghidra: varnode.cc:365 Varnode::clearFlags
+    /// Clear boolean attributes. Faithful to `Varnode::clearFlags`
+    /// (varnode.cc:365-374): the same two notifications as `set_flags` —
+    /// `flagsDirty()` unconditionally (cc:370), `coverDirty()` when the
+    /// cleared mask contains coverdirty (cc:371-372; e.g. a member that was
+    /// dirty before its high was attached re-dirties the high at its first
+    /// rebuild).
     pub fn clear_flags(&mut self, f: u32) {
         self.flags &= !f;
+        if let Some(high) = self.high.clone() {
+            propagate_flag_change_to_high(&high, f);
+        }
     }
 
     // --- Ghidra-faithful varnode flag accessors (varnode.hh:235-330) ---
@@ -1034,6 +1127,25 @@ impl Varnode {
     /// rebuilt while the root write guard remains held, then the same Box is
     /// reattached and the dirty flag is cleared. Rebuild uses the Arc only as
     /// a stable identity token and never attempts to lock the root again.
+    ///
+    /// NOTE (MERGE-HIGHCOVER-PROPAGATION-0001): the oracle's updateCover
+    /// ends with clearFlags(coverdirty) (varnode.cc:239), which fires BOTH
+    /// notification arms — flagsDirty unconditionally (cc:370) and coverDirty
+    /// (cc:371-372; the load-bearing case is a member that was dirty BEFORE
+    /// its high was attached). Rugra CANNOT fire either arm here: callers
+    /// hold READ guards on the member's high across this call (merge.rs
+    /// inflate_test via coreaction check_implied_cover's borrowed
+    /// &HighVariable; aggregate_high_cover_from), and the notifications need
+    /// a write guard on that same high — same-lock reentrancy deadlock. The
+    /// reader-side compensations absorb both gaps. For coverDirty:
+    /// MergeTypeIntersectCache::update_high's instance scan marks the high
+    /// dirty from the member flag BEFORE any rebuild can clear it, and
+    /// inflate_test/aggregate_high_cover_from aggregate fresh from the
+    /// rebuilt members unconditionally. For flagsDirty: a cover rebuild
+    /// mutates no member flags, so the derived-flag VALUE is unaffected by
+    /// the missing re-fire, and every in-tree attach path seeds FLAGSDIRTY
+    /// independently (HighVariable::new mirrors variable.cc:224's initial
+    /// dirty word; mergeInternal sets it at entry, variable.cc:631).
     pub fn update_cover_locked(root: &Arc<RwLock<Varnode>>) {
         let mut value = root.write().unwrap();
         if (value.flags & varnode_flags::COVERDIRTY) == 0 {
@@ -1097,11 +1209,13 @@ impl Varnode {
 
     // Ghidra: varnode.cc:254 Varnode::calcCover
     /// Initialize a new Cover and set dirty bit. Faithful to `calcCover`
-    /// (varnode.cc:254-263).
+    /// (varnode.cc:254-263). The cc:261 setFlags(coverdirty) call now goes
+    /// through `set_flags`, carrying the high propagation half
+    /// (varnode.cc:358-359) — MERGE-HIGHCOVER-PROPAGATION-0001.
     pub fn calc_cover(&mut self) {
         if self.has_cover() {
             self.cover = Some(Box::new(Cover::new()));
-            self.flags |= varnode_flags::COVERDIRTY;
+            self.set_flags(varnode_flags::COVERDIRTY);
         }
     }
 
@@ -1112,13 +1226,16 @@ impl Varnode {
     }
     // Ghidra: varnode.cc:578 Varnode::setImplied
     /// Mark this as an implied variable in the final C source. (varnode.hh:309)
+    /// varnode.hh routes setImplied through setFlags — the high notification
+    /// (flagsDirty unconditional, no coverdirty in the mask) fires with it
+    /// (HIGHCOV lane 2026-09-25).
     pub fn set_implied(&mut self) {
-        self.flags |= varnode_flags::IMPLIED;
+        self.set_flags(varnode_flags::IMPLIED);
     }
     // Ghidra: varnode.cc:578 Varnode::clearImplied
-    /// Clear the implied mark. (varnode.hh:310)
+    /// Clear the implied mark. (varnode.hh:310; routed via clearFlags.)
     pub fn clear_implied(&mut self) {
-        self.flags &= !varnode_flags::IMPLIED;
+        self.clear_flags(varnode_flags::IMPLIED);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isExplicit
@@ -1171,14 +1288,15 @@ impl Varnode {
         self.addlflags &= !addl_flags::LIS_CONSUME;
     }
     // Ghidra: varnode.cc:578 Varnode::setExplicit
-    /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
+    /// Mark this as an explicit variable in the final C source. (varnode.hh:311;
+    /// routed via setFlags — the high flagsDirty notification fires with it.)
     pub fn set_explicit(&mut self) {
-        self.flags |= varnode_flags::EXPLICIT;
+        self.set_flags(varnode_flags::EXPLICIT);
     }
     // Ghidra: varnode.cc:578 Varnode::clearExplicit
-    /// Clear the explicit mark. (varnode.hh:312)
+    /// Clear the explicit mark. (varnode.hh:312; routed via clearFlags.)
     pub fn clear_explicit(&mut self) {
-        self.flags &= !varnode_flags::EXPLICIT;
+        self.clear_flags(varnode_flags::EXPLICIT);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isDirectWrite
@@ -1223,14 +1341,15 @@ impl Varnode {
         (self.flags & varnode_flags::ADDRFORCE) != 0
     }
     // Ghidra: varnode.cc:578 Varnode::setAddrForce
-    /// Mark as address-forced. (varnode.hh:307)
+    /// Mark as address-forced. (varnode.hh:307; routed via setFlags — the
+    /// high flagsDirty notification fires with it.)
     pub fn set_addr_force(&mut self) {
-        self.flags |= varnode_flags::ADDRFORCE;
+        self.set_flags(varnode_flags::ADDRFORCE);
     }
     // Ghidra: varnode.cc:578 Varnode::clearAddrForce
-    /// Clear address-forced. (varnode.hh:308)
+    /// Clear address-forced. (varnode.hh:308; routed via clearFlags.)
     pub fn clear_addr_force(&mut self) {
-        self.flags &= !varnode_flags::ADDRFORCE;
+        self.clear_flags(varnode_flags::ADDRFORCE);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isTypeLock
@@ -1292,24 +1411,25 @@ impl Varnode {
         (self.flags & varnode_flags::PRECISHI) != 0
     }
     // Ghidra: varnode.cc:578 Varnode::setPrecisLo
-    /// Mark as precise low half. (varnode.hh:321)
+    /// Mark as precise low half. (varnode.hh:321; routed via setFlags — the
+    /// high flagsDirty notification fires with it.)
     pub fn set_precis_lo(&mut self) {
-        self.flags |= varnode_flags::PRECISLO;
+        self.set_flags(varnode_flags::PRECISLO);
     }
     // Ghidra: varnode.cc:578 Varnode::setPrecisHi
-    /// Mark as precise high half. (varnode.hh:322)
+    /// Mark as precise high half. (varnode.hh:322; routed via setFlags.)
     pub fn set_precis_hi(&mut self) {
-        self.flags |= varnode_flags::PRECISHI;
+        self.set_flags(varnode_flags::PRECISHI);
     }
     // Ghidra: varnode.cc:578 Varnode::clearPrecisLo
-    /// Clear precise low half. (varnode.hh:323)
+    /// Clear precise low half. (varnode.hh:323; routed via clearFlags.)
     pub fn clear_precis_lo(&mut self) {
-        self.flags &= !varnode_flags::PRECISLO;
+        self.clear_flags(varnode_flags::PRECISLO);
     }
     // Ghidra: varnode.cc:578 Varnode::clearPrecisHi
-    /// Clear precise high half. (varnode.hh:324)
+    /// Clear precise high half. (varnode.hh:324; routed via clearFlags.)
     pub fn clear_precis_hi(&mut self) {
-        self.flags &= !varnode_flags::PRECISHI;
+        self.clear_flags(varnode_flags::PRECISHI);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isProtoPartial
@@ -1369,7 +1489,15 @@ impl Varnode {
             return false;
         }
         self.v_type = Some(ct);
-        // typeDirty on high — no-op until HighVariable tracks dirtiness.
+        // cc:461-463: `if (high != (HighVariable *)0) high->typeDirty();` —
+        // the instance-type write must invalidate the HighVariable's cached
+        // type so the next HighVariable::getType (variable.hh:174 →
+        // variable.cc:400-415) re-derives from the type representative.
+        // HighVariable now tracks TYPEDIRTY, so the former "no-op until
+        // HighVariable tracks dirtiness" placeholder is retired.
+        if let Some(high) = &self.high {
+            high.write().unwrap().type_dirty();
+        }
         true
     }
 
@@ -1399,69 +1527,103 @@ impl Varnode {
             self.set_flags(varnode_flags::TYPELOCK);
         }
         self.v_type = Some(ct);
+        // cc:500-501: same high typeDirty as updateType — the locked write
+        // also invalidates the HighVariable's cached type.
+        if let Some(high) = &self.high {
+            high.write().unwrap().type_dirty();
+        }
         true
     }
 
     // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
-    /// Get the type as seen by a reading op. Faithful to
-    /// `Varnode::getTypeReadFacing` (varnode.cc:639-645). For union types this
-    /// resolves the field; Rugra has no union varnodes in Rule paths, so this
-    /// is the degenerate form returning v_type directly.
+    /// Get the type as seen by a reading op. The zero-op convenience form:
+    /// for a type that does not need resolution this equals the oracle's
+    /// `getTypeReadFacing` (varnode.cc:639-645), which returns `type`
+    /// unchanged. A resolving (union) type would need the
+    /// `findResolve(op, slot)` consult, which requires a Funcdata channel —
+    /// consumers holding the fd use
+    /// [`crate::unionresolve::vn_type_read_facing`]; this form returns the
+    /// v_type Arc as-is (the findResolve map-miss arm), never a clone.
     pub fn get_type_read_facing(&self) -> Option<Arc<Datatype>> {
         self.v_type.clone()
     }
 
     // Ghidra: varnode.cc:626 Varnode::getTypeDefFacing
     /// Return the resolved data-type for this Varnode based on its def op.
-    /// Faithful to `getTypeDefFacing` (varnode.cc:626-632). If the type
-    /// needs resolution (union), resolves via findResolve(def, -1).
+    /// Faithful to `getTypeDefFacing` (varnode.cc:626-632): a type that does
+    /// not need resolution is returned as-is; a union/pointer-to-union type
+    /// resolves via `type->findResolve(def, -1)` (type.cc:586/1192). The
+    /// method form has no Funcdata channel, so the consult reduces to
+    /// findResolve's map-miss arm — `return this` — sharing the SAME Arc
+    /// instead of cloning. Arc identity is load-bearing here: the oracle's
+    /// TypeFactory interning makes every findResolve result pointer-stable,
+    /// and `Varnode::updateType`'s `type == ct` settle test (varnode.cc:481,
+    /// Rust `Arc::ptr_eq`) would churn on per-call fresh clones — the
+    /// `localcount >= 7` "not settling" family (coreaction.cc:5390-5392).
+    /// The fd-aware consult twin (reads `Funcdata::union_map`) is
+    /// [`crate::unionresolve::vn_type_def_facing`].
     pub fn get_type_def_facing(&self) -> Option<Arc<Datatype>> {
         let ct = self.v_type.clone()?;
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        // cc:631: type->findResolve(def, -1)
-        // Rugra's findResolve is currently identity (returns self).
-        // Full union resolution TODO (needs unionresolve.cc).
-        Some(Arc::new((*ct).clone()))
+        // cc:631: type->findResolve(def, -1) — without a Funcdata channel
+        // the consult is exactly the map-miss arm `return this` (type.cc:589).
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
     /// Return the resolved data-type for this Varnode when read by `op`
-    /// at the given slot. Faithful to `getTypeReadFacing` (varnode.cc:639-645).
+    /// at the given slot. Faithful to `getTypeReadFacing` (varnode.cc:639-645):
+    /// a type that does not need resolution is returned as-is; a resolving
+    /// type consults `type->findResolve(op, op->getSlot(this))` — here the
+    /// no-Funcdata map-miss arm `return this` (type.cc:589), sharing the
+    /// SAME Arc (Arc identity is the settle contract, see
+    /// [`Self::get_type_def_facing`]). The fd-aware consult twin is
+    /// [`crate::unionresolve::vn_type_read_facing`].
     pub fn get_type_read_facing_op(&self, _op: &PcodeOp, slot: i32) -> Option<Arc<Datatype>> {
         let ct = self.v_type.clone()?;
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        // cc:644: type->findResolve(op, op->getSlot(this))
-        // Rugra's findResolve is currently identity.
+        // cc:644: type->findResolve(op, op->getSlot(this)) — map-miss arm.
         let _ = slot;
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing
     /// Return the resolved HighVariable type for this Varnode based on def.
-    /// Faithful to `getHighTypeDefFacing` (varnode.cc:651-658).
+    /// Faithful to `getHighTypeDefFacing` (varnode.cc:651-658): the high
+    /// type that does not need resolution is returned as-is; a resolving
+    /// high type consults `ct->findResolve(def, -1)` — here the no-Funcdata
+    /// map-miss arm `return this`, sharing the SAME Arc (settle contract,
+    /// [`Self::get_type_def_facing`]). The fd-aware consult twin is
+    /// [`crate::unionresolve::vn_high_type_def_facing`].
     pub fn get_high_type_def_facing(&self) -> Option<Arc<Datatype>> {
         let high = self.high.as_ref()?;
         let ct = high.read().unwrap().get_type();
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing
     /// Return the resolved HighVariable type when read by `op`.
-    /// Faithful to `getHighTypeReadFacing` (varnode.cc:665-672).
+    /// Faithful to `getHighTypeReadFacing` (varnode.cc:665-672): the high
+    /// type that does not need resolution is returned as-is; a resolving
+    /// high type consults `ct->findResolve(op, op->getSlot(this))` — here
+    /// the no-Funcdata map-miss arm `return this`, sharing the SAME Arc
+    /// (settle contract, [`Self::get_type_def_facing`]). The fd-aware
+    /// consult twin is
+    /// [`crate::unionresolve::vn_high_type_read_facing`].
     pub fn get_high_type_read_facing(&self, _op: &PcodeOp, _slot: i32) -> Option<Arc<Datatype>> {
         let high = self.high.as_ref()?;
         let ct = high.read().unwrap().get_type();
         if !ct.needs_resolution() {
             return Some(ct);
         }
-        Some(Arc::new((*ct).clone()))
+        Some(ct)
     }
 
     // Ghidra: varnode.cc:493 Varnode::copySymbol
@@ -1968,6 +2130,7 @@ impl Varnode {
         block_up: &mut bool,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
         userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
+        fd_output_type: Option<&Arc<Datatype>>,
     ) -> Result<Option<Arc<Datatype>>> {
         // cc:906-907: Our type is locked, don't change. Not a partial lock,
         // return the locked type (no blockup touch, no def/descend consult).
@@ -2021,7 +2184,7 @@ impl Varnode {
             let Some(slot) = slot else { continue };
             let newct = {
                 let op = descend_op.read().unwrap();
-                op_input_type_local(&op, slot, type_factory, userops)
+                op_input_type_local(&op, slot, type_factory, userops, fd_output_type)
             };
             match (&ct, newct) {
                 // cc:926-927: first non-null candidate wins unconditionally.
@@ -2162,9 +2325,10 @@ impl Varnode {
         self.flags &= !varnode_flags::NOLOCALALIAS;
     }
     // Ghidra: varnode.cc:578 Varnode::setUnaffected
-    /// Mark Varnode as unaffected. (varnode.hh:167)
+    /// Mark Varnode as unaffected. (varnode.hh:167; routed via setFlags —
+    /// the high flagsDirty notification fires with it.)
     pub fn set_unaffected(&mut self) {
-        self.flags |= varnode_flags::UNAFFECTED;
+        self.set_flags(varnode_flags::UNAFFECTED);
     }
 
     /// Is this an abnormal input to the function? (varnode.hh:240)
@@ -2553,8 +2717,11 @@ impl Varnode {
             }
         }
         self.descend.push(std::sync::Arc::downgrade(op));
-        // Ghidra cc:339: setFlags(Varnode::coverdirty)
-        self.flags |= varnode_flags::COVERDIRTY;
+        // Ghidra cc:339: setFlags(Varnode::coverdirty) — propagates
+        // coverDirty to the owning high (varnode.cc:358-359) so the stored
+        // aggregate is invalidated at mutation time (HIGHCOV lane 2026-09-25;
+        // previously set inline without the propagation half).
+        self.set_flags(varnode_flags::COVERDIRTY);
     }
 
     // Ghidra: varnode.cc:316 Varnode::eraseDescend
@@ -2565,7 +2732,8 @@ impl Varnode {
     /// matching occurrence. This is load-bearing when one op reads the same
     /// Varnode in multiple slots: Ghidra removes one list node per
     /// `opUnsetInput` call.
-    /// Also sets coverdirty (Ghidra cc:325); omitted (see add_descend note).
+    /// Also sets coverdirty (Ghidra cc:325), now with the high propagation
+    /// half (varnode.cc:358-359) — see set_flags.
     pub fn erase_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         let position = self.descend.iter().position(|weak| {
             weak.upgrade()
@@ -2579,8 +2747,10 @@ impl Varnode {
                 std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64()
             );
         }
-        // Ghidra cc:325: setFlags(Varnode::coverdirty)
-        self.flags |= varnode_flags::COVERDIRTY;
+        // Ghidra cc:325: setFlags(Varnode::coverdirty) — propagates
+        // coverDirty to the owning high (varnode.cc:358-359), same as
+        // add_descend (HIGHCOV lane 2026-09-25).
+        self.set_flags(varnode_flags::COVERDIRTY);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isBoolOutputDef
@@ -3122,6 +3292,23 @@ impl VarnodeBank {
     }
 
     // Ghidra: varnode.cc:1265 VarnodeBank::createUnique
+    /// Create a new unique varnode with an explicit data-type (the ct
+    /// parameter of `createUnique(int4 s,Datatype *ct)`; Ghidra requires it
+    /// non-null — Funcdata::newUnique defaults null to the factory unknown
+    /// base before calling in).
+    pub fn create_unique_typed(
+        &mut self,
+        size: usize,
+        ct: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> Arc<RwLock<Varnode>> {
+        let offset = self.uniqid;
+        self.uniqid += size as u64;
+        let vn = self.insert_free(Varnode::new_with_space(size, self.uniq_space, offset));
+        vn.write().unwrap().v_type = Some(ct);
+        vn
+    }
+
+    // Ghidra: varnode.cc:1265 VarnodeBank::createUnique
     /// Create a new unique varnode
     pub fn create_unique(&mut self, size: usize) -> Arc<RwLock<Varnode>> {
         let offset = self.uniqid;
@@ -3555,14 +3742,27 @@ impl VarnodeBank {
 
     // Ghidra: varnode.cc:1465 VarnodeBank::findInput
     /// Find an input varnode at the given size and location. Faithful to
-    /// `VarnodeBank::findInput` (varnode.hh). Used by ActionRestrictLocal
-    /// and AncestorRealistic to find specific register inputs.
-    pub fn find_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+    /// `VarnodeBank::findInput` (varnode.cc:1465-1478): the lookup key is
+    /// the FULL Address — `beginLoc(s,loc,Varnode::input)` searches the
+    /// (size, space, offset) tree keys and the found varnode must satisfy
+    /// `vn->getAddr()==loc`, which compares space AND offset. Rugra keeps
+    /// space and offset split (ADDRESS-0001), so the space is an explicit
+    /// parameter. Used by ActionRestrictLocal and AncestorRealistic to
+    /// find specific register inputs. (BANK-FINDINPUT-SPACE-0001)
+    pub fn find_input(
+        &self,
+        size: usize,
+        space: AddressSpace,
+        loc: Address,
+    ) -> Option<Arc<RwLock<Varnode>>> {
         self.loc_tree
             .iter()
             .find(|v| {
                 let g = v.0.read().unwrap();
-                g.is_input() && g.get_size() == size && g.get_offset() == loc.as_u64()
+                g.is_input()
+                    && g.get_size() == size
+                    && g.address_space == space
+                    && g.get_offset() == loc.as_u64()
             })
             .map(|v| v.0.clone())
     }

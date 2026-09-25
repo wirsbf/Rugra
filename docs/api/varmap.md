@@ -1,5 +1,89 @@
 # `varmap.rs` API Reference
 
+## 2026-09-25：create_entry 数组壳改走 TypeFactory::get_type_array（GENSMOKE-T5，wt/vshfix）
+
+`create_entry`（varmap.cc:617-628）num>1 分支不再本地铸造**带名**数组壳
+（旧实现 `format!("{}[{}]", elem, num)`，TYPE-WIRING-0001 residual），改调
+`TypeFactory::get_type_array(num, ct)`（type.cc:3902-3909 的移植，见
+docs/api/type_system/typefactory.md）。oracle `glb->types->getTypeArray`
+经 `TypeArray(n,ao) : Datatype(n*ao->getAlignSize(), ao->getAlignment(),
+TYPE_ARRAY)`（type.hh:937）铸造**匿名**壳并 findAdd 去重；匿名名对打印是
+承重的——`buildTypeStack`（printc.cc:148-151）的 named-break 只对具名类型
+停钻，数组层被钻过时声明走 array_expr postsurround 形（printc.cc:76/
+294-295）：`char acStack_138 [8]`，括号永不烤进类型名（旧拼写
+`char[8] acStack_138`）。行为验证：vsh 镜脸 skeleton 549→55（T5 族 17 行
+归零）；curl canon 脸唯一文本变化 `undefined1[8] auStack_8;` →
+`undefined1 auStack_8 [8];`（==canon golden 1043 行逐字节），
+487→481/0/0。壳尺寸语义（num × 元素 alignSize、余数留洞，
+VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001）由 get_type_array 的 ctor 逐行镜像
+保持不变。
+
+## 2026-09-24：数组壳尺寸 = num × 元素 alignSize（VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001，wt/p3batch）
+
+`create_entry`（varmap.cc:617-628）的 num>1 数组壳尺寸修正：Ghidra
+`glb->types->getTypeArray(num,ct)` 构造 `TypeArray(n,ao) : Datatype(n*ao->getAlignSize(),…)`
+（type.hh:937）——数组壳尺寸 = **num × 元素 getAlignSize()**，即
+`floor(hint.size/align) × align ≤ hint.size`。非整扩展余数（open hint 被 varmap.cc:1315
+扩过界，如 14B/4B 元素 → num=3、壳 12B）尾部**留洞**，不进符号映射。Rugra 原以
+`hint.size` 整段作壳尺寸，把余数也映射进数组壳。本语料（curl/httpd）hint 全为整倍数
+=latent 零行为差；判据由 varmap 既有单测族 + 三门禁恒等锁定。与上一节
+（VARMAP-SPALIAS-RETYPE-0001：addSymbol 尺寸取自类型而非 hint.size）同域收口。
+
+## 2026-09-24：create_entry 符号尺寸改由数据类型决定（VARMAP-SPALIAS-RETYPE-0001，wt/spalias2）
+
+**结论先行（车道裁决）**：GK 移交的两个症状——①SP-alias 栈符号陷入
+`undefined1[32]` 自举固定点（canon golden `long local_c8[4]`）；②pass2+ 丢失
+-0xd0/-0xd8 alias——**均非 varmap 移植缺陷，而是 canon golden 的 headless 全程序
+分析环境差异**。证据=锁定 oracle（e40ed130）单函数 drill（stage_drill 变体，
+`-DOPACTION_DEBUG` + `Scope::turnOnDebug` 打开 `MapState::addRange` 的
+`Add Range: <st>:<sz> <type>` 流与 `ScopeLocal::restructure`/`adjustFit` 埋点，
+httpd main @0x2b820）：
+
+- **逐 pass hint 流双侧等价**：pass0=16 个别名、open hint 全 unknown1；
+  pass1=fixed undefined8@-0xd0（标记 store 转 COPY 后的直写 varnode）+
+  {-0xa8,-0x9c,-0x40} fixed；pass2+ **oracle 同样丢掉 -0xd0 fixed hint**、
+  open 集恒为 {-0xc8,-0x9c,-0xa8}（晚期元素类型 undefined8/undefined4）——
+  与 Rugra maplist 探针逐项相同。
+- **oracle 终态符号表与 Rugra 修复前仅差一处**：oracle
+  {axStack_c8[32]@-0xc8, xStack_a8 **8B**@-0xa8, axStack_9c 92B@-0x9c,
+  xStack_40 8B@-0x40}；Rugra 修复前 uStack_a8 为 **12B**。
+- `long`/`local_d0`/`local_d8` 在单函数 oracle 核心的 hint 流里**从未出现**
+  （无任何 TYPE_INT 元素 open hint）；direct-runner 产物（真 Ghidra 核心+
+  合成工厂）同样收敛到 `axStack_c8[32]`/无 d0/d8。canon golden 的 long 族
+  由 analyzeHeadless 整程序分析层（锁定类型/已提交签名，含 decompiler
+  parameter ID 循环）播种，golden 自身的已提交原型全是 undefined8*/int（如
+  `FUN_0012c520(undefined8*,int)`、`ap_setup_prelinked_modules(undefined8*)`），
+  说明种子经由更深的分析侧通道，非反编译器核心行为。
+
+**本提交修复（唯一真缺陷）**：`ScopeLocal::create_entry` 原来在 `add_symbol`
+之后用 `symbols[idx].size = hint.size` 覆写符号尺寸。Ghidra
+`ScopeLocal::createEntry`（varmap.cc:617-628）只把（可能数组包裹的）concrete
+类型交给 `addSymbol("",ct,addr,usepoint)`，符号/映射条目尺寸取自数据类型；
+open hint 在 `restructure` 里被 `cur.size = next->sstart-cur.sstart`
+（varmap.cc:1315）扩到下一个符号起点时经常非整（如 12B/undefined8 元素），
+createEntry 按 `num = a.size/align`（varmap.cc:623）向下取整到整元素数，尾部
+字节留空不映射（oracle drill 实测：-0xa8 hint 扩到 12、adjustFit longestFit=
+120 不缩，8B 符号完全来自类型尺寸，[-0xa0,-0x9c) 保持无符号洞）。修复=删除
+该覆写（`add_symbol` 已按 final_dt 定尺寸），Rugra 终态表与 oracle drill 逐项
+一致。E2E 输出恒等（两语料都不触及该洞）：curl 1438/0/0、httpd 1447/0/0 与
+亲父 cd071239 字节一致；五投影 MATCH×5；varmap 单测 45/45。
+
+**B2 证据（可复用方法）**：drill 变体源码+产物归档
+`/dev/shm/rugra-reports/sb-spalias2/`（stage_drill_scope_1204.cc：在
+stage_drill_1204.cc 基础上加 scope `turnOnDebug` 与终态符号表 dump；埋点版
+varmap.cc 仅存在于车道私有 /dev/shm 构建树，共享 sb-drill 树未触碰）。
+
+**登记移交（不属 varmap 域）**：SP-cast 印刷形（`(int *)x - 8` vs oracle
+direct 的 `(int8)x + -8` vs canon 的 `plVar12[-1]`）=cast/printc 域元素尺度
+发射差；long 族种子 = headless 分析环境（driver/fspec 域）。
+
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
 **状态**: 骨架已实现（L2），集成待完成
 **源代码路径**: `src/varmap.rs`
 
@@ -27,12 +111,14 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 - `is_const_absorbable(&self, b)` — `RangeHint::isConstAbsorbable` (varmap.cc:30)
 - `reconcile(&self, b)` — `RangeHint::reconcile` (varmap.cc:62)，含 `get_sub_type` 对齐遍历
+  （2026-09-22 起 chain 持 canonical component Arc，与 Ghidra factory-owned
+  `Datatype*` 镜像一致；见 `docs/api/type_system/datatype.md`）
 - `contain(&self, b)` — `RangeHint::contain` (varmap.cc:109)
 - `preferred(&self, b, reconcile)` — `RangeHint::preferred` (varmap.cc:126)
 - `absorb(&mut self, b)` — `RangeHint::absorb` (varmap.cc:217)
 - `merge_with(&mut self, b, types)` — `RangeHint::merge` (varmap.cc:259)，三态 resType（0/1/2）；`types` 对应 Ghidra 签名的 `TypeFactory *typeFactory` 参数（varmap.hh:124），resType==2 时经 `getBase(size,TYPE_UNKNOWN)` 取未知类型（varmap.cc:309）（2026-08-16，`TYPE-WIRING-0001`）
 - `compare(a, b)` — `RangeHint::compare` (varmap.cc:321)，排序：offset→size小优先→rangeType→flags→highind
-- `attempt_join(&mut self, b)` — `RangeHint::attemptJoin` (varmap.cc:170)，数组元素吸收
+- `attempt_join(&mut self, b)` — `RangeHint::attemptJoin` (varmap.cc:170)，数组元素吸收。**2026-09-26 提交时序修复**（GENSMOKE-S2-TYPEINFER-METATYPE-0001 毒环入口）：oracle 的 `settype = b->type`（varmap.cc:192）只改局部替身，`type = settype` 的提交发生在 `diffsz > highind` 越界拒绝检查**之后**（varmap.cc:208）；旧实现把 `self.dtype = Some(b_dt)` 写在 keep_b 臂（检查之前），被拒绝的吸收（probeSys 的 -0x40 int8 canary 提示，`diffsz=4 > highind=3`）仍把 int8 泄进 open range，随后调用方的 `cur.size = next->sstart - cur.sstart` + createEntry 把 `int8[4]` 写进符号层，喂出整个 int8 反哺环（符号 int8 → downChain `ptr→int8` → INT_EQUAL/φ 横传 → gatherOpen int8 → 下轮 restructure）。修复后局部 `settype` 贯穿检查链，diffsz 的模/除用（可能已替换的）settype 对齐尺寸（varmap.cc:205 语义），仅在全部通过后提交
 
 ### `pub struct AliasChecker`
 栈指针别名分析器。对应 Ghidra AliasChecker。
@@ -67,16 +153,20 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
   分析窗口（scope 并集树减 paramrange，由 `ScopeLocal::build_map_state` 按 varmap.cc:1260 组装）
 - `analysis_range()` / `hints()` — RUGRA-GLUE 只读观察口（锁定 fixture 的观察面；C++ 侧经
   `#define private public` 直读 `range`/`maplist`）
-- `add_range(start, dtype, flags, rt, high_ind)` — `MapState::addRange` (varmap.cc:896)：size<=0 或
+- `add_range(start, dtype, flags, rt, high_ind)` — `MapState::addRange` (varmap.cc:896)：**2026-09-25
+  RANGEHINT-CR-F2** `ct==NULL || ct->getSize()==0` 一律代换 `defaultType` 后**继续**（varmap.cc:899-900；
+  此前 `Some(零尺寸)` 走 `size<=0` 早退被直接丢弃=欠收 hint，与 oracle 的"代换后继续"相悖——零尺寸
+  Some 现进 default 类型与尺寸；default-less 测试构造器保持匿名 size-1 形继续，不再丢弃；单测
+  `test_mapstate_add_range_zero_size_substitutes_default` / `..._bare_constructor_keeps_flow` 钉死）；
   完整 extent `[st, st+size-1]`（uintb 回绕）不在分析窗口单一 range 内则丢弃（`range.inRange(addr,sz)`，
-  varmap.cc:902 / address.cc:468-487，`window_in_range`）；无类型回退默认类型；`sst` 为
+  varmap.cc:902 / address.cc:468-487，`window_in_range`）；`sst` 为
   byteToAddress+sign_extend+addressToByte（varmap.cc:904-906，1-word-size 8 字节栈上即
   `start as i64`——负偏移保持负值供 `RangeHint::compare` 有符号排序）
 - `add_fixed_type(start, dtype, flags)` — `MapState::addFixedType` (varmap.cc:926)
 - `gather_varnodes(fd)` — `MapState::gatherVarnodes` (varmap.cc:1124)，逐 op-code 分支（INDIRECT/MULTIEQUAL/PIECE/SUBPIECE/COPY/默认），含 same-storage 去重与 `is_read_active`。PIECE 视为两个 COPY（little-endian slot=1，addr+=inFirst.size）；SUBPIECE 用 little-endian `trunc = in1.offset`，`addr = in0.off + trunc` 后与 vn 地址比较
 - `gather_open(fd, types)` — `MapState::gatherOpen` (varmap.cc:1211-1249)：先跑内嵌 checker 的 `gather(fd, grows, false)`（varmap.cc:1214，含 deriveBoundaries），对每个 AddBase 根：指针→pointee，**数组层全下钻**（varmap.cc:1226-1227 `while`——此前单层是缺陷），index 在则 minItems=3；非指针传 `None`（Ghidra 传 NULL，"Do unknown array"，varmap.cc:1230），由 `add_range` 回退默认类型（varmap.cc:896）；随后遍历 `fd.heritage.load_guard`/`store_guard` 走 `add_guard`（varmap.cc:1241-1248）。**checker 现为 MapState 成员**（varmap.hh MapState `AliasChecker checker`），`sort_alias`/`get_alias` 是 restructureVarnode 的消费口（varmap.cc:1279-1284）
 - `set_stack_grows_negative(grows)` — RUGRA-GLUE：Ghidra 由 space 成员的增长位（varmap.cc:700）供 checker.gather 取向；Rugra AddressSpace 无该位，装 scope 的原型派生值
-- `add_guard(guard, opc, types)` — **2026-08-25 VARMAP-GATHEROPEN-GUARD-0001** `MapState::addGuard` (varmap.cc:1003-1039)：`isValid`（op 活且 opcode 匹配，heritage.hh:169）→ step==0 拒 → 地址输入类型指针下钻数组层 → outSize 匹配/整除 step（整除时假装 outSize 数组）→ 对齐不匹配且 step<=8 时工厂 `getBase(step,TYPE_UNKNOWN)` 重型 → range-locked（`analysis_state==2`）`minItems=(max-min+1)/step-1` 否则 3 → open hint。**R23 followup 5.1 已闭合（2026-08-25 VARMAP-UNIONFACING-READFACING-0001）**：地址输入类型改取 op 版 `get_type_read_facing_op(&op, 1)`（= `getTypeReadFacing(op)`，varnode.cc:639-645，getIn(1) 恒 slot 1），union 指针经 `TypePointer::findResolve`（type.cc:1192-1202，needs_resolution 由 calcSubmeta type.cc:1051-1052 传播）；Rugra 侧 findResolve 目前 identity（varnode.rs `get_type_read_facing_op`），两版同值休眠——双侧 fixture 复跑 sha `3b5e1b65…` 三方同一（编辑后 Rust == R23 pin == oracle 重跑）
+- `add_guard(guard, opc, types)` — **2026-08-25 VARMAP-GATHEROPEN-GUARD-0001** `MapState::addGuard` (varmap.cc:1003-1039)：`isValid`（op 活且 opcode 匹配，heritage.hh:169）→ step==0 拒 → 地址输入类型指针下钻数组层 → outSize 匹配/整除 step（整除时假装 outSize 数组）→ 对齐不匹配且 step<=8 时工厂 `getBase(step,TYPE_UNKNOWN)` 重型 → range-locked（`analysis_state==2`）`minItems=(max-min+1)/step-1` 否则 3 → open hint。**R23 followup 5.1 已闭合（2026-08-25 VARMAP-UNIONFACING-READFACING-0001）**：地址输入类型改取 op 版 `get_type_read_facing_op(&op, 1)`（= `getTypeReadFacing(op)`，varnode.cc:639-645，getIn(1) 恒 slot 1），union 指针经 `TypePointer::findResolve`（type.cc:1192-1202，needs_resolution 由 calcSubmeta type.cc:1051-1052 传播）；Rugra 侧 findResolve 目前 identity（varnode.rs `get_type_read_facing_op`），两版同值休眠——双侧 fixture 复跑 sha `3b5e1b65…` 三方同一（编辑后 Rust == R23 pin == oracle 重跑）。**2026-09-25 RANGEHINT 补齐（VARMAP-RANGEHINT-ARRAYELEM-0001）**：oracle 的 Varnode 恒带类型（`newVarnodeOut`/`newUniqueOut`/`newVarnode` 一律装 `getBase(s,TYPE_UNKNOWN)`，funcdata_varnode.cc:107/132/153-154；`getTypeReadFacing` 非联合直接返回 `type`，varnode.cc:639-645），故 varmap.cc:1009-1038 的 `ct` 永不为 null、无 null 早退；Rugra 以 `v_type=None` 建模未定型 varnode，此前 None 直接 `return` 丢 guard hint——现 None 臂代以工厂 `undefined<addr_vn_size>`（正是 oracle 侧 `getIn(1)->getTypeReadFacing` 的返回值），非指针 ct 继续走 outSize/step/对齐检查（与 Ghidra 单流一致）。curl/httpd E2E 逐字节恒等（None 路径在双语料不触发，行为中性）
 - `gather_symbols(scope)` — **2026-08-25** `MapState::gatherSymbols` (varmap.cc:1044-1059)：按 space 的 maptable 列表序回灌每个映射符号（entry 起始偏移、符号类型、typelock→hint 旗标）为 fixed hint——restructureVarnode varmap.cc:1269 的 typelocked 符号回灌
 - `sort_alias()` / `get_alias()` — varmap.cc:1279/1281-1284 的 `state.sortAlias()`/`state.getAlias()`
 - `is_read_active(vn)` — `MapState::isReadActive` (varmap.cc:1088)，过滤纯 same-storage INDIRECT/MULTIEQUAL
@@ -117,12 +207,13 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 局部变量作用域。对应 Ghidra ScopeLocal。`#[derive(Debug, Clone)]`（2026-06-26：
 Clone 用于 printc 从 `fd.scope` 复用）。
 **2026-06-26 完整对齐**（类型面 2026-08-16 `TYPE-WIRING-0001` 统一到 TypeFactory 单轨：`restructure_varnode` 解析工厂句柄——`fd.arch.types` 优先，无 Architecture 生产路径回退 `TypeFactory::shared_default()`（DataOrg flavor，模拟 headless 单 Architecture 进程）——并贯穿 `gather_spacebase`/`restructure`/`merge_with`/`create_entry`/`fake_input_symbols`；Ghidra 对应 `glb->types` 于 varmap.cc:1261/1309、`fd.getArch()->types` 于 varmap.cc:1129/1438）：
-- `restructure_varnode(fd)` — 主入口（**fd 取 `&mut`**：annotateRawStackPtr 插 PTRSUB op，varmap.cc:405-406）：`ScopeLocal::restructureVarnode` (varmap.cc:1256-1286) 完整编排：clearUnlockedCategory(-1) 存活逻辑→reset_local_window→build_map_state→gather_varnodes→gather_spacebase→gather_open（内嵌 checker.gather + addGuard）→**gather_symbols 回灌（:1269）**→restructure→**clear_unlocked_category(function_parameter) + clear_category(fake_input)（:1275-1276）**→fake_input_symbols→**sort_alias（:1279）→mark_unaliased→check_unaliased_return（:1280-1282）→alias[0]==0 时 annotate_raw_stack_ptr（:1284-1285）**；默认类型 = 工厂 `getBase(1,TYPE_UNKNOWN)`（varmap.cc:1261）。fakeInputSymbols 先于 markUnaliased（Ghidra varmap.cc:1272-1277 的注释："define fake symbols so that mark_unaliased will work"——此前 Rugra 顺序颠倒）；aliasyes 门未穿透（coreaction.rs:877-880 TODO，Rugra 恒 true）
+- `restructure_varnode(fd, aliasyes)` — 主入口（**fd 取 `&mut`**：annotateRawStackPtr 插 PTRSUB op，varmap.cc:405-406）：`ScopeLocal::restructureVarnode` (varmap.cc:1256-1286) 完整编排：clearUnlockedCategory(-1) 存活逻辑→build_map_state→gather_varnodes→gather_spacebase→gather_open（内嵌 checker.gather + addGuard）→**gather_symbols 回灌（:1269）**→restructure→**clear_unlocked_category(function_parameter) + clear_category(fake_input)（:1275-1276）**→fake_input_symbols→**sort_alias（:1279）→`if (aliasyes)` mark_unaliased→check_unaliased_return（:1280-1282，2026-09-23 SB-MATCHURL-ORD70-0001 穿透 aliasyes=（numpass!=0），coreaction.cc:2279）→alias[0]==0 时 annotate_raw_stack_ptr（:1284-1285，不受 aliasyes 门）**；默认类型 = 工厂 `getBase(1,TYPE_UNKNOWN)`（varmap.cc:1261）。fakeInputSymbols 先于 markUnaliased（Ghidra varmap.cc:1272-1277 的注释："define fake symbols so that mark_unaliased will work"——此前 Rugra 顺序颠倒）。reset_local_window 不在本函数（见下——生命周期移至 scope 构造）
 - `clear_unlocked_category(cat)` — `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) 的 cat>=0 分支（varmap.cc:1275 对 function_parameter 调用）：typelock 存活（未 namelock 的已定义名重置 $$undef，database.cc:2080-2082）；`resetSizeLockType`（:2085-2086）无 Rugra 路径（LocalSymbol 无 sizelock 概念，不可达）；其余 removeSymbol
 - `clear_category(cat)` — `ScopeInternal::clearCategory` (database.cc:2022-2029) 的 cat>=0 分支（varmap.cc:1276 对 fake_input 调用）
 - `check_unaliased_return(fd, alias)` — **2026-08-25** `ScopeLocal::checkUnaliasedReturn` (varmap.cc:414-428)：首个 RETURN 的值输入在栈空间且无别名（有序表的 lower_bound）触达 `[off, off+size-1]` 时 `mark_not_mapped(off, size, false)`（删重叠符号 + 并集树去范围）
 - `annotate_raw_stack_ptr(fd)` — **2026-08-25** `ScopeLocal::annotateRawStackPtr` (varmap.cc:386-408)：type recovery 已开始时，栈指针的非加法读者（跳过 eval-special 非调用与 INT_ADD/PTRSUB/PTRADD）改为消费占位 `PTRSUB(sp,#0)`（newOpBefore + opSetInput 到 getSlot 槽位）
-- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437；**等价性仅限第 1 趟/经 clear 的边界**——Ghidra 只在构造/`Funcdata::clear`/decode 调 resetLocalWindow（funcdata.cc:70/96/836），RULE_REPEATAPPLY 重启不 clear（action.cc:539-570），第 2+ 趟保持 markNotMapped 窄化窗口与跨趟累积 min/max；Rugra 每趟 fresh scope 全量重装——登记 `VARMAP-CROSSPASS-PERSISTENCE-0001`），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
+- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437；**2026-09-23 SB-MATCHURL-ORD70-0001 起等价性完整**：Ghidra 只在构造/`Funcdata::clear`/decode 调 resetLocalWindow（funcdata.cc:70/96/836），RULE_REPEATAPPLY 重启不 clear（action.cc:539-570）；Rugra 现在 scope 跨趟持久（coreaction.rs ActionRestructureVarnode 构造时创建+reset_local_window，之后每趟复用），markNotMapped 窄化窗口与跨趟累积 min/max 与 oracle 一致——`VARMAP-CROSSPASS-PERSISTENCE-0001` 就此关闭），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
+- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437。**2026-09-23 VARMAP-CROSSPASS-PERSISTENCE-0001 已修**（VARGROUP-ABSORB-0001 §4-4）：`restructure_varnode` 不再每趟调用本函数，`ActionRestructureVarnode` 复用 `fd.scope` 持久 ScopeLocal（Ghidra localmap 是 Funcdata 生命周期单一对象，resetLocalWindow 仅在 funcdata.cc:70/96/836 生命周期点运行）；窗口只在首趟构造时安装一次，ActionRestrictLocal 的 markNotMapped 窄化跨趟存活——此前每趟全量重装把 30d6 出参影子区复活回局部窗口，字段件全部 addr-tied、`Stack_388` 符号复活，吸收链整体失效。`is_first_pass_construct` 标志门住首趟的平台参数符号 seed + 窗口安装），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
 - `build_map_state(fd, types)` — varmap.cc:1260-1261 的 MapState 组装：分析窗口 = 并集树逐条减 paramrange（varmap.cc:870-875 "Clear possible input symbols"）+ `getBase(1,TYPE_UNKNOWN)` 默认类型
 - `restructure(state, types)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with(工厂句柄)，不相交→attempt_join/adjust_fit/create_entry
 - `adjust_fit(a)` — `ScopeLocal::adjustFit` (varmap.cc:587)，typelock/size0 拒绝 + 符号重叠收缩
@@ -150,7 +241,7 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `assign_default_names(base)` — **`ScopeInternal::assignDefaultNames`** (database.cc:2850)：nametree 顺序、共享 `int4 base` 计数器、二次运行幂等
 - `set_category(idx, cat, ind)` / `get_category_symbol(cat, ind)` / `get_category_size(cat)` — `ScopeInternal::setCategory`/`getCategorySymbol`/`getCategorySize` (database.cc:2824/2814/2806)
 - `symbols_in_nametree_order()` — RUGRA-GLUE：锁定 fixture 的 nametree 顺序只读观察口
-- `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332)，含 0xffff 距离启发式（alias_block_level 待接入）
+- `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332-1391) 忠实状态机：按 maptable 条目序（per-space rangemap `(first,size,subsort)` 升序）遍历；**跨条目 sticky 状态**（`aliason` 初 false、alias 游标 `i` 单调推进、rangeIter 不回退）；别名消费循环 `alias[i] <= curoff`（:1358-1361）；**range-tree 走查**（:1363-1375，"别名不穿过 unmapped 区域"：范围 `first > curalias && curoff >= first` 或被越过的范围 `last > curalias` 关闭 aliason，`last >= curoff` 时 break 且游标停在当前范围）；0xffff 距离启发式（:1378，**可变更 aliason 对后续条目生效**）；`setAttribute(nolocalalias)` **只置位不清位**（database.cc:2200-2207 |= 语义）；locked-type 阻断（:1381-1390，`glb->alias_block_level` 默认 2=struct+array 阻断，arch_lookup 接入，fixture 无 arch 回退 0）。2026-09-24 PM-HF 车道 oracle 探针实证（helpf：entry -0xf8 与 alias -0x228..-0x220 相距 <0xffff，仅 range-gap 规则可判 unaliased——旧实现按符号独立重算且无 range 走查，判 aliased 致 RuleIndirectCollapse 拒折 6 个 free-阻 INDIRECT，oppool1 count 118 vs 110）
 - `find_symbol(offset)` — 按偏移查找重构后的符号
 
 **命名状态字段**（database.hh:809/805, varmap.cc:345-348）：`nametree: BTreeMap<(String,u32),usize>`、
@@ -364,3 +455,83 @@ ScopeLocal::queryProperties，创建期 mapped 位与 oracle 不同）。
 ## 引用行号勘误（2026-08-24，root，getstr 复核必改项）
 
 survivor-clear 注释引用 varmap.cc:1273 修正为 1259（`clearUnlockedCategory(-1)` 实际位置；1275 是 function_parameter 的另一调用）。
+
+## RESIDMAP-NEGRIDX-PRINTFAMILY-0001（2026-09-24，wt/idxemit，基 3925922a）
+
+A 族 varmap 侧前提补全：`resolve_rsp_offset_signed`（RSP 派生地址的常量偏移回解，
+服务 gather_spacebase 的固定 RangeHint 合成）新增两个臂，语义对齐
+AliasChecker::gatherOffset（varmap.cc:817-855）：
+
+- **PTRSUB 臂（cc:830-834，与 INT_ADD 同构）**：`base_off + 常量字节偏移`。此前所有
+  PTRSUB 寻址的栈访问（`lea` 形 load/store 的规则产物）对 hint 合成不可见。
+- **PTRADD 臂（cc:839-849）**：常量索引贡献 `index * stride`；非常量索引仅当
+  stride==1 时继续跟进（oracle 注释原文 "We only follow getIn(1) if the PTRADD
+  multiply is by 1"），其余形态（变索引×非 1 步长）不可解为固定栈偏移。
+
+与 gatherOffset 的差异（有意，注释在案）：oracle gatherOffset 是宽松部分和（叶节点
+贡献 0 继续累加），本解析器严格（任一项不可解即 None）——调用方合成的是**固定**
+RangeHint，oracle 中固定 hint 只来自常量地址 varnode（MapState::gatherVarnodes
+varmap.cc:1124），变索引（open）引用走 gather_open 通道。
+
+实证：httpd main 正向下标族（`puVar10[0xb]` 等）经此臂获得符号化前提后由 printc
+下标发射消费，E2E httpd −160；包装偏移合计 wrapping_add/wrapping_mul 与 oracle
+uintb 模 2^64 算术一致。机制 C：本改动落在 varmap AliasChecker 域，commit 已请求
+独立 Cross-Review。
+
+## 2026-09-26（F7NAME lane）：NameRecommend 存储与恢复链（HTTPDMAIN-F7-NAMERECOMMEND-0001 机制半）
+
+`ScopeLocal` 补齐 varmap.cc 的名字推荐存储+恢复链（此前 coreaction.rs
+ActionNameVars::apply 的 cc:2984 调用点是 RUGRA-GAP 明文"no name-recommendation
+store is ported yet"）：
+
+- **`NameRecommend` / `DynamicRecommend` / `TypeRecommend`**（varmap.hh:36/56/74）
+  — 三个推荐载荷结构：静态（空间+偏移+usepoint+尺寸+名+symbolId）、动态
+  （usepoint+hash+名+id）、类型（空间+偏移+Datatype）。`ScopeLocal` 新增
+  `name_recommend` / `dyn_recommend` / `type_recommend` 三列表（varmap.hh:
+  214-216）。
+- **`collect_name_recs()`**（varmap.cc:357-381）— 把 name-locked 但非
+  type-locked 的符号降级为名字推荐并移除（category<0 者），nametree 序遍历；
+  "this"指针臂（指向 struct 的指针类型）在降级前经 `add_type_recommendation`
+  保留数据类型（cc:367-377）。Rust 索引稳定 seam：快照 nametree 序后按序重放
+  `add_recommend_name`（即时移除），每个快照索引按低于它的先前移除数校正——
+  追加序/移除时机/终态与 oracle 单循环一致。调用点=ActionRestructureVarnode
+  scope 构造块尾（localdb decode 边界，varmap.cc:476 `ScopeLocal::decode` 尾调
+  语义）。
+- **`add_recommend_name(sym_idx)`**（varmap.cc:1600-1618）— 静态映射入
+  name_recommend（addr+usepoint+size+name+id），动态映射入 dyn_recommend；
+  category<0 移除符号。LocalSymbol 新增 `symbol_id`（database.hh:184）与
+  `this_ptr`（database.hh:208 dispflags 位）两字段承载恢复契约。
+- **`recover_name_recommendations_for_symbols(fd)`**（varmap.cc:1507-1570）—
+  ActionNameVars::apply 在 lookForFuncParamNames 之前调用（coreaction.cc:2984，
+  RUGRA-GAP 关闭）：无效 usepoint 臂=findOverlap+地址相等+符号 addrtied+
+  findLinkedVarnode（**无尺寸门**，cc:1518-1527）；有效 usepoint 臂=
+  param_usepoint（fd 地址−1）走 findVarnodeInput、否则 findVarnodeWritten
+  （vbank.find_vn），符号非 addrtied+首整映射尺寸相等（cc:1540）；命中后
+  renameSymbol(makeNameUnique)+setSymbolId+namelock+remapVarnode。动态尾=
+  DynamicHash::findVarnode 逐条同链（cc:1553-1569）。
+- **`apply_type_recommendations(fd)`**（varmap.cc:1574-1584）— ActionInferTypes::
+  apply 头部调用（coreaction.cc:5398 位置）：输入 varnode 命中推荐地址即
+  `updateType(dt, true, false)`（锁入不覆写）。当前唯一生产者=collect_name_recs
+  的 this 指针臂；funcdata_varnode.cc:1725-1742 的第二生产者
+  （checkParamTypeRecommendations）属参数分析域未移植——登记
+  **VARMAP-PARAMTYPERECOMM-0001**（has_type_recommendations 访问器已备）。
+  **CR-F7NAME 复审修**（同 commit）：恢复链 invalid-usepoint 臂的 vn 解析按
+  entry 自身 uselimit 取 first-use 地址（database.cc:122-127：空 uselimit=invalid
+  Address → findLinkedVarnode 的 addr-tied 扫描臂 funcdata_varnode.cc:1233-1241；
+  有限 uselimit=首 range 首地址 → usepoint-in-range 扫描臂 :1242-1249——修前误传
+  存储偏移，恒走扫描臂）；remap 传参改用 rename 后的最终唯一名（oracle 传 Symbol
+  本体 funcdata_varnode.cc:1104-1126，修前传 pre-unique 推荐名，碰撞去重时
+  symbol_table 记录名≠符号名）；新增真 vbank 双侧 fixture（addr-tied 正/负 +
+  uselimit 有限正/负）覆盖修前 UNTESTED 分支。
+
+可观测性：TYPESEED committed locals 全部 name+type-locked、平台参数符号
+name+type-locked，故当前所有语料下三存储恒空、恢复链恒 no-op（与 oracle
+httpd canon 的空 localdb 推荐态一致——`__s1` 类局部名来自
+lookForFuncParamNames 的锁定原型参数名通道，非本存储）。9 个单元测试覆盖
+降级/移除/nametree 序/参数类目存活/恢复重命名/地址不匹配跳过/无效 usepoint
+臂无尺寸门（oracle 语义文档化）/类型推荐存储/this 指针臂。机制 C：varmap
+核心算法白名单——CR 已请求（见车道终报）。
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+- 本模块 4 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

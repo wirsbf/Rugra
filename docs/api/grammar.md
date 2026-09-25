@@ -158,3 +158,10 @@ does not change parser behavior or alignment status.
 `FunctionModifier::modType` 把同一返回类型句柄交给模型分配，而不再深拷贝
 Datatype。这里仅是跨模块 carrier identity 修正；没有新增 grammar 双侧
 fixture，递归下降/bison 与 Architecture 残差不变，整体仍为 L2/MISMATCH。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

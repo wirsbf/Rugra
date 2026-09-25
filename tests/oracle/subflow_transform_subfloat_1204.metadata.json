@@ -1,0 +1,17 @@
+{
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64 fixture translate (const/other/unique/ram/register/stack/join/iop spaces at oracle indices 0-7); Translate floatformats registered as IEEE754 single(4)/double(8), matching Translate::getFloatFormat's NULL-for-unregistered behaviour (translate.cc:979-989)",
+ "compiler_spec": "N/A: minimal fixture ProtoModel (<prototype name=fixture extrapop=0><input/><output/>), no ProtoModel or storage assignment consulted by RuleSubfloatConvert/SubfloatFlow",
+ "analysis_options": "direct IR construction per scenario: fd->newOp + opSetOpcode + newUniqueOut + opSetInput + opInsertEnd into one BlockBasic, then RuleSubfloatConvert(\"probe\").applyOp(trigger, fd) — the real Rule entry (subflow.cc:3489-3507)",
+ "input": "9 hand-built IR scenarios (widen/narrow/constNarrow/constWidenNoTerm/constWiden/exceedBlock/arithPass/compareGuard/repeatSlot) over const, COPY-, FLOAT_INT2FLOAT- and FLOAT_FLOAT2FLOAT-defined float varnodes",
+ "cpp_fixture_sha256": "9414413af4532d591bb901257ab7fdbfbf4d148dfeb86d8b2977deda18795fd4",
+ "rust_fixture_sha256": "99891432f0884c9c72ea2035d46ff41dadf9a1d588dad837c1749c85d7e253e8",
+ "expected_stdout_sha256": "6f0f2630b885d4b7815c29254cb08f85c8c3a964973ab2a0ed9256c7a81dd9f0",
+ "covered": "RuleSubfloatConvert::applyOp root/precision selection both directions; SubfloatFlow::setReplacement guards (mark reuse via getPiece, constant re-encoding via convertEncoding, free abort, addrforce/typelock/input size guards, newPiece+worklist vs newPreexistingVarnode); traceBackward pass-through def reuse (getDef()!=0), INT2FLOAT and FLOAT_FLOAT2FLOAT source replacement with constant verbatim/convert split; traceForward outvn-mark skip, binary exceedsPrecision gate (blocking via COPY-chain maxPrecision 8, passing via FLOAT2FLOAT-def maxPrecision 4), FLOAT2FLOAT downstream COPY/FLOAT2FLOAT terminator, comparison preexistingGuard slot-0 accept + slot-1 piece reject, getRepeatSlot count==1/count==2 mapping (op.cc:93-111), TRUNC/NAN unary terminator; doTrace terminatorCount>=1 gate; TransformManager::apply createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs mutation set (new ops inserted before originals, originals destroyed with their outputs, preexisting terminators retargeted in place)",
+ "notes": "SUBFLOAT-TRANSFORM-RESIDUAL-0001. Observation is a full-IR GraphProjection (ops in block order with opcode/addr/seqnum/dead/parent/out/inputs + varnodes with create-index/size/space/constant/free/input/written/def/descendants + bank counters) plus per-original-op dead flags, before and after the rule. Discovered during fixture bring-up: src/op.rs PcodeOp::get_repeat_slot lacks the count==1 early return of op.cc:101 — registered as OPS-GETREPEATSLOT-COUNT1-0001; the subflow call site now carries the full iterator-overload semantics inline (subfloat_get_repeat_slot) so this fixture does not depend on the op.rs defect.",
+ "overall_status": "MATCH: all 9 scenarios produce byte-identical stdout on the locked oracle (diff empty, stderr empty)",
+ "fixture_id": "SUBFLOAT-TRANSFORM-1204"
+}

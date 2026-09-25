@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use crate::address::Address;
-use crate::space::{AddressSpace, SpaceType};
+use crate::space::{AddrSpace, AddressSpace, SpaceType};
 use crate::type_system::datatype::Datatype;
 
 /// Effect type for a memory range across a call. Faithful to
@@ -410,6 +410,31 @@ impl FuncProto {
             .has_effect(addr_space, addr_offset, size)
     }
 
+    // RUGRA-GLUE: non-panicking form of FuncProto::hasEffect for input
+    /// registration (Funcdata::setInputVarnode tail, funcdata_varnode.cc:365).
+    /// A FuncProto with neither a prototype-local effect list nor a bound
+    /// model has no Ghidra counterpart — Ghidra's model pointer is always
+    /// live once a proto is configured, so `None` (skip the effect flag
+    /// writes) is only reachable from bare test FuncProtos.
+    pub fn try_has_effect(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> Option<EffectType> {
+        if !self.effects.is_empty() {
+            return Some(ProtoModelFull::lookup_effect(
+                &self.effects,
+                addr_space,
+                addr_offset,
+                size,
+            ));
+        }
+        self.model
+            .as_ref()
+            .map(|model| model.has_effect(addr_space, addr_offset, size))
+    }
+
     // Ghidra: fspec.hh:1564 FuncProto::getMaxInputDelay
     /// Return the maximum heritage delay of an input parameter resource.
     pub fn get_max_input_delay(&self) -> i32 {
@@ -417,6 +442,24 @@ impl FuncProto {
             .as_ref()
             .map(|model| model.input.get_max_delay())
             .unwrap_or(0)
+    }
+
+    // Ghidra: fspec.hh:1566 FuncProto::getMaxOutputDelay
+    /// Return the maximum heritage delay of a return-value (output)
+    /// parameter resource. Feeds `Funcdata::initActiveOutput`'s maxPass.
+    pub fn get_max_output_delay(&self) -> i32 {
+        self.model
+            .as_ref()
+            .map(|model| model.get_max_output_delay())
+            .unwrap_or(0)
+    }
+
+    // RUGRA-GLUE: read accessor for the resolved model Arc (Ghidra's public
+    // `getModel()` returns the ProtoModel pointer; deriveOutputMap callers
+    // need the shared object).
+    /// Resolved prototype model, if one was set via `setModel`.
+    pub fn get_model_arc(&self) -> Option<std::sync::Arc<ProtoModelFull>> {
+        self.model.clone()
     }
 
     // Ghidra: fspec.hh:1461 FuncProto::hasInputErrors
@@ -471,6 +514,118 @@ impl FuncProto {
         };
         // Ghidra: return model->characterizeAsInputParam(addr, size);
         model.input.characterize_as_param(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:3767 FuncProto::resolveModel
+    /// If \b this has a \e merged model, pick the most likely model (from
+    /// the merged set), using the given parameter trials. Faithful to
+    /// `FuncProto::resolveModel` (fspec.cc:3767-3776): a null model returns
+    /// immediately; a concrete (non-merged) model returns immediately —
+    /// resolution is only meaningful for `ProtoModelMerged`, which selects
+    /// between alternative models based on the active trials. Rugra's
+    /// `ProtoModelFull` is always concrete, so the merged arm is unreachable
+    /// (the `selectModel` port is gated on merged-model support).
+    pub fn resolve_model(&mut self) {
+        // cc:3770 — if (model == (ProtoModel *)0) return;
+        if self.model.is_none() {
+            return;
+        }
+        // cc:3771 — if (!model->isMerged()) return; — Rugra models are
+        // always concrete; nothing to remark (cc:3775 comment: fillinMap
+        // does the trial remarking).
+    }
+
+    // Ghidra: fspec.hh:1494 FuncProto::deriveInputMap
+    /// Derive the input prototype from the active trials via the model's
+    /// input ParamList. Faithful to the inline `deriveInputMap`
+    /// (fspec.hh:1494-1495 `model->deriveInputMap(active)`, whose ProtoModel
+    /// body at fspec.hh:791-792 is `input->fillinMap(active)`) — the same
+    /// dispatch `FuncCallSpecs::derive_input_map` uses. A modelless FuncProto
+    /// is an invalid state in Ghidra (the dereference would fault); Rugra
+    /// production must bind the model first (the ActionInputPrototype
+    /// setScope-fallback glue), so the modelless arm is a defensive no-op.
+    pub fn derive_input_map(&mut self, active: &mut crate::fspec::ParamActive) {
+        if let Some(model) = self.model.as_ref() {
+            model.input.fillin_map(active);
+        }
+    }
+
+    // Ghidra: fspec.cc:4426 FuncProto::unjustifiedInputParam
+    /// Check if the given storage location looks like an \e unjustified
+    /// input parameter: contained in a normal parameter location but not
+    /// justified at the least-significant end. Passes back the full
+    /// parameter container. Faithful to `FuncProto::unjustifiedInputParam`
+    /// (fspec.cc:4426-4453) with the same ADDRESS-0001 degradation as
+    /// `characterize_as_input_param`/`possible_input_param`: the
+    /// locked-parameter justifiedContain loop compares through the
+    /// spaceless legacy `Address` plus the recorded `address_space`, so a
+    /// foreign-space parameter cannot produce a false containment (the
+    /// space equality guard below); Ghidra's `justifiedContain` itself
+    /// rejects cross-space queries (address.cc:133 `base != op2.base`).
+    pub fn unjustified_input_param(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+        res: &mut crate::fspec::VarnodeData,
+    ) -> bool {
+        // cc:4429 — if (!isDotdotdot()) { if ((flags&voidinputlock)!=0)
+        //   return false; ... }
+        if !self.is_dotdotdot {
+            if self.void_input_locked {
+                return false;
+            }
+            let num = self.parameters.len();
+            if num > 0 {
+                let mut locktest = false; // Have tested against locked symbol
+                for i in 0..num {
+                    let param = &self.parameters[i];
+                    // cc:4436 — if (!param->isTypeLocked()) continue;
+                    if !param.is_type_locked() {
+                        continue;
+                    }
+                    locktest = true;
+                    // cc:4438-4447 — iaddr.justifiedContain(param->getSize(),
+                    // addr,size,false): 0 = contained and justified, > 0 =
+                    // contained but unjustified (pass back the container).
+                    if param.get_address_space() != addr_space {
+                        // address.cc:133 — a cross-space query is never
+                        // contained; keep scanning locked params as Ghidra's
+                        // per-space containment rejection does.
+                        continue;
+                    }
+                    let iaddr = param.address.as_u64();
+                    let psize = param.data_type.get_size() as i32;
+                    let just = justified_contain_range(
+                        iaddr,
+                        psize,
+                        addr_offset,
+                        size,
+                        false,
+                        addr_space.is_big_endian(),
+                    );
+                    if just == 0 {
+                        return false; // cc:4441 — contained but not improperly
+                    }
+                    if just > 0 {
+                        res.space = param.get_address_space();
+                        res.offset = iaddr;
+                        res.size = psize;
+                        return true;
+                    }
+                }
+                if locktest {
+                    return false; // cc:4449
+                }
+            }
+        }
+        // cc:4452 — return model->unjustifiedInputParam(addr,size,res)
+        match self.model.as_ref() {
+            Some(model) => model
+                .input
+                .unjustified_container(addr_space, Address::new(addr_offset), size, res),
+            None => false,
+        }
     }
 
     // Ghidra: fspec.cc:4366 FuncProto::possibleInputParam
@@ -1187,6 +1342,7 @@ impl FuncProto {
         triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
         activeinput: &crate::fspec::ParamActive,
         find_disjoint_cover: &dyn Fn(&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (Address, i32),
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
     ) {
         if self.is_input_locked() { return; } // Input is locked, do no updating.
         // store->clearAllInputs()
@@ -1213,7 +1369,7 @@ impl FuncProto {
                     let ty = if sz as usize == vn_r.get_size() {
                         vn_r.get_type()
                     } else {
-                        None // Ghidra: getBase(sz, TYPE_UNKNOWN) — caller may fill.
+                        None // Ghidra: getBase(sz, TYPE_UNKNOWN) — filled below.
                     };
                     (cover_addr, ty)
                 } else {
@@ -1222,10 +1378,39 @@ impl FuncProto {
                 }
             };
             pieces.addr = addr;
-            pieces.ty = ty;
+            pieces.space = trial.get_space();
+            // Ghidra's high type is never null (every HighVariable carries
+            // at least the size-derived TYPE_UNKNOWN); fold Rust's None to
+            // the unknown base of the varnode's size, matching the
+            // updateInputNoTypes factory call (fspec.cc:4118).
+            pieces.ty = Some(match ty {
+                Some(t) => t,
+                None => {
+                    let size = vn.read().unwrap().get_size();
+                    crate::type_system::TypeFactory::shared_default()
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_base(size, crate::type_system::TypeMetatype::Unknown)
+                        .expect("factory always produces an unknown base type")
+                }
+            });
             pieces.flags = 0;
-            // store->setInput(count, "", pieces)
-            self.set_input_parameter(count, "", pieces);
+            // store->setInput(count, "", pieces) (fspec.cc:4079) — the store
+            // is the ScopeLocal-backed ProtoStoreSymbol for the function
+            // under analysis (FuncProto::setScope, fspec.cc:3879-3885 with
+            // funcdata.cc:69's baseaddr-1 restricted usepoint), whose
+            // setInput (fspec.cc:3147-3183) installs/refreshes the
+            // function_parameter category symbol the naming passes read.
+            // Rugra folds that side effect through this callback (the flat
+            // FuncProto store keeps signature printing on `parameters`).
+            store_set_input(count, &pieces);
+            // The Ghidra hand-off carries the empty name to the proto
+            // store, whose ScopeInternal symbol is default-named
+            // "param_<index+1>" at commit (database.cc:2481, category
+            // function_parameter with catindex=count). The flat FuncProto
+            // store folds that default name here.
+            let nm = format!("param_{}", count + 1);
+            self.set_input_parameter(count, &nm, pieces);
             count += 1;
             vn.write().unwrap().set_mark();
         }
@@ -1236,6 +1421,80 @@ impl FuncProto {
         self.update_this_pointer();
     }
 
+    // Ghidra: fspec.cc:4097 FuncProto::updateInputNoTypes
+    /// Update input parameters based on Varnode trials, but do not store
+    /// the data-type. Faithful 1:1 port of `updateInputNoTypes`
+    /// (fspec.cc:4097-4128): same used-trial walk as `update_input_types`,
+    /// with only the size used — an undefined data-type of the varnode's
+    /// size (or the disjoint-cover size for persistent varnodes) comes from
+    /// the shared TypeFactory. Names fold to the same proto-store default
+    /// ("param_<count+1>") as `update_input_types`.
+    pub fn update_input_no_types(
+        &mut self,
+        triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        activeinput: &crate::fspec::ParamActive,
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
+    ) {
+        if self.is_input_locked() { return; }
+        self.parameters.clear();
+        let mut count = 0usize;
+        let numtrials = activeinput.get_num_trials();
+        for i in 0..numtrials {
+            let trial = activeinput.get_trial(i);
+            if !trial.is_used() { continue; }
+            let slot = trial.get_slot();
+            if slot < 1 { continue; }
+            let idx = (slot - 1) as usize;
+            if idx >= triallist.len() { continue; }
+            let vn = triallist[idx].clone();
+            if vn.read().unwrap().is_mark() { continue; }
+            let mut pieces = ParameterPieces::default();
+            let factory_arc = crate::type_system::TypeFactory::shared_default();
+            let factory = factory_arc
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (addr, ty) = {
+                let vn_r = vn.read().unwrap();
+                if vn_r.is_persist() {
+                    // cc:4110-4114 — findDisjointCover + getBase(sz,UNKNOWN):
+                    // with findDisjointCover unported, the varnode's own
+                    // (addr,size) is the cover stand-in (same fold as
+                    // update_input_types' persist arm).
+                    let sz = vn_r.get_size();
+                    (
+                        vn_r.get_addr().clone(),
+                        factory
+                            .get_base(sz, crate::type_system::TypeMetatype::Unknown)
+                            .expect("factory always produces an unknown base type"),
+                    )
+                } else {
+                    // cc:4117-4119 — trial.getAddress() +
+                    // getBase(vn->getSize(),TYPE_UNKNOWN)
+                    (
+                        trial.get_address(),
+                        factory
+                            .get_base(vn_r.get_size(), crate::type_system::TypeMetatype::Unknown)
+                            .expect("factory always produces an unknown base type"),
+                    )
+                }
+            };
+            pieces.addr = addr;
+            pieces.space = trial.get_space();
+            pieces.ty = Some(ty);
+            pieces.flags = 0;
+            // store->setInput(count,"",pieces) (fspec.cc:4121) — same
+            // ScopeLocal-backed ProtoStoreSymbol::setInput side effect as
+            // update_input_types above (fspec.cc:3147-3183).
+            store_set_input(count, &pieces);
+            let nm = format!("param_{}", count + 1);
+            self.set_input_parameter(count, &nm, pieces);
+            count += 1;
+            vn.write().unwrap().set_mark();
+        }
+        for vn in triallist {
+            vn.write().unwrap().clear_mark();
+        }
+    }
     // Ghidra: fspec.cc:4194 FuncProto::updateAllTypes
     /// Set this entire function prototype from a list of names and data-types.
     /// This ports the model-driven scalar path of `updateAllTypes`
@@ -1349,8 +1608,23 @@ impl FuncProto {
         let outparm_is_size_locked = out_type_locked;
         if !out_type_locked {
             if triallist.is_empty() {
-                // store->clearOutput()
-                self.clear_unlocked_output();
+                // fspec.cc:4142 store->clearOutput() — unconditional void
+                // output: ProtoStoreInternal::clearOutput (fspec.cc:3389-
+                // 3395) replaces the outparam with ParameterBasic(voidtype);
+                // ProtoStoreSymbol::clearOutput (fspec.cc:3262-3270) sets
+                // pieces.type = getTypeVoid(). The return value itself
+                // resets to void — NOT just the lock flag (the former
+                // clear_unlocked_output delegation kept a stale type,
+                // af6c5ee2 Evidence 断言了未实现的行为, CR29 件④).
+                self.return_type = std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Void(
+                        crate::type_system::datatype::TypeBase::new(
+                            "void".to_string(),
+                            0,
+                            crate::type_system::TypeMetatype::Void,
+                        ),
+                    ),
+                );
                 return;
             }
         } else if outparm_is_size_locked {
@@ -1379,7 +1653,25 @@ impl FuncProto {
         {
             let vn0 = triallist[0].read().unwrap();
             pieces.addr = *vn0.get_addr();
-            pieces.ty = vn0.get_type();
+            // Ghidra: pieces.type = triallist[0]->getHigh()->getType()
+            // (fspec.cc:4155) — the HIGH type is never null because every
+            // untyped Varnode is created with getBase(size,TYPE_UNKNOWN)
+            // (Funcdata::newVarnode/newUnique/newConstant,
+            // funcdata_varnode.cc:83/148/…), so an unconstrained return
+            // value types as `undefined<N>`. Fold Rust's None to the same
+            // unknown base (the convention of the input-side port at
+            // fspec.cc:4118's updateInputNoTypes fold).
+            pieces.ty = Some(match vn0.get_type() {
+                Some(t) => t,
+                None => {
+                    let size = vn0.get_size();
+                    crate::type_system::typefactory::TypeFactory::shared_default()
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_base(size, crate::type_system::TypeMetatype::Unknown)
+                        .expect("factory always produces an unknown base type")
+                }
+            });
             pieces.flags = 0;
             piece_space = vn0.get_space();
         }
@@ -2072,6 +2364,15 @@ pub struct FuncCallSpecs {
     /// varnode. Used by abortSpacebaseRelative to clean up placeholders
     /// after heritage resolves the actual stack values.
     pub stack_placeholder_slot: i32,
+    /// Was the call originally a jump-table we couldn't recover? Faithful to
+    /// `FuncCallSpecs::isbadjumptable` (fspec.hh:1660), initialized false by
+    /// the constructor (fspec.cc:4945), set true only by
+    /// `FlowInfo::truncateIndirectJump`'s default failure arm
+    /// (`fc->setBadJumpTable(true)`, flow.cc:754) and carried across a clone
+    /// (fspec.cc:4974). Consumed by `ActionNameVars::lookForBadJumpTables`
+    /// (coreaction.cc:2786) to rename the switch variable's symbol to
+    /// "UNRECOVERED_JUMPTABLE".
+    pub is_bad_jump_table: bool,
     /// Do we have a locked output on the stack? Faithful to
     /// `FuncCallSpecs::isstackoutputlock` (fspec.hh:1661), initialized
     /// false by `FuncCallSpecs::init` (fspec.cc:4946) and set true by
@@ -2081,11 +2382,72 @@ pub struct FuncCallSpecs {
     /// (`Heritage::tryOutputStackGuard` builds it caller-perspective,
     /// heritage.cc:1414).
     pub is_stack_output_locked: bool,
+    /// Working extrapop for the CALL. Faithful to
+    /// `FuncCallSpecs::effective_extrapop` (fspec.hh:1650): initialized to
+    /// `ProtoModel::extrapop_unknown` by the constructor (fspec.cc:4927),
+    /// set to the model's known extrapop by `ActionExtraPopSetup`
+    /// (coreaction.cc:1454) or to the StackSolver-recovered value by
+    /// `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:306). Carried
+    /// across a clone (fspec.cc:4971).
+    effective_extrapop: i32,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
 /// `FuncCallSpecs::offset_unknown` (fspec.hh:1641).
 pub const OFFSET_UNKNOWN: i64 = i64::MIN;
+
+// RUGRA-GLUE: ENTRY_SPACE_STANDINS (ADDRESS-0001 phase-1 bridge; no direct
+// Ghidra counterpart — the oracle's entry address keeps the architecture's
+// own registered `AddrSpace*`, reached here only through the per-variant
+// stand-in because Rugra's historical Varnode carries just the flat
+// `AddressSpace` enum.) One stand-in handle per flat variant per thread,
+// interned into the Address tag table, so repeated call-spec construction
+// reuses the same allocation (intern_space dedups by identity).
+thread_local! {
+    static ENTRY_SPACE_STANDINS:
+        std::cell::RefCell<std::collections::HashMap<AddressSpace, AddrSpace>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+// RUGRA-GLUE: entry_address_with_space (ADDRESS-0001 phase-1 bridge for the
+// fspec.cc:4934 record point; the Ghidra form is the inline
+// `Address(AddrSpace*, uintb)` constructor at address.hh:270.)
+/// Build the entry address the way fspec.cc:4934 stores it: the offset plus
+/// the in(0) varnode's space. The flat enum cannot name the architecture's
+/// registered space object, so the tag refers to the per-variant stand-in,
+/// which carries that variant's documented name and dimensions
+/// (`AddressSpace::name` / `addr_size` / `word_size`). Consumers that only
+/// compare offsets (`as_u64`) are unaffected; consumers that resolve the
+/// space (printc entry dims, encode space name) see the variant's true
+/// dimensions instead of the flat Ram fallback.
+fn entry_address_with_space(space: AddressSpace, offset: u64) -> Address {
+    let handle = ENTRY_SPACE_STANDINS.with(|table| {
+        table.borrow_mut().entry(space).or_insert_with(|| {
+            let space_type = match space {
+                AddressSpace::Const => SpaceType::Constant,
+                AddressSpace::Unique => SpaceType::Internal,
+                AddressSpace::Join => SpaceType::Join,
+                AddressSpace::Stack => SpaceType::SpaceBase,
+                // ram/register/overlay are IPTR_PROCESSOR in the oracle;
+                // OTHER is Ghidra's OtherSpace (space.cc:397), also
+                // processor-typed.
+                _ => SpaceType::Processor,
+            };
+            AddrSpace::new_space(
+                space_type,
+                space.name(),
+                false,
+                space.addr_size() as u32,
+                space.word_size() as u32,
+                0,
+                0,
+                0,
+                0,
+            )
+        }).clone()
+    });
+    Address::with_space(&handle, offset)
+}
 
 impl FuncCallSpecs {
     // Ghidra: fspec.cc:4924 FuncCallSpecs::new
@@ -2105,14 +2467,32 @@ impl FuncCallSpecs {
             stackoffset: OFFSET_UNKNOWN,
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
+            // fspec.cc:4945 `isbadjumptable = false`
+            is_bad_jump_table: false,
             is_stack_output_locked: false,
+            // fspec.cc:4927 `effective_extrapop = ProtoModel::extrapop_unknown`
+            effective_extrapop: EXTRAPOP_UNKNOWN_FULL,
         }
+    }
+
+    // Ghidra: fspec.hh:1687 FuncCallSpecs::setEffectiveExtraPop
+    /// Set the specific \e extrapop associated with \b this call site.
+    pub fn set_effective_extrapop(&mut self, epop: i32) {
+        self.effective_extrapop = epop;
+    }
+
+    // Ghidra: fspec.hh:1688 FuncCallSpecs::getEffectiveExtraPop
+    /// Get the specific \e extrapop associated with \b this call site.
+    pub fn get_effective_extrapop(&self) -> i32 {
+        self.effective_extrapop
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
     /// Construct a call specification bound to the exact CALL/CALLIND op.
     /// For a direct CALL, capture input(0) before setup replaces it with the
-    /// FSPEC annotation. A cloned FSPEC input resolves through its typed
+    /// FSPEC annotation — as the oracle does, the captured entry address
+    /// carries in(0)'s space (fspec.cc:4934 `getIn(0)->getAddr()`), not just
+    /// the offset. A cloned FSPEC input resolves through its typed
     /// handle to the original call target, matching Ghidra's constructor.
     ///
     /// The composed prototype is the Ghidra default-constructed FuncProto
@@ -2155,7 +2535,12 @@ impl FuncCallSpecs {
             } else if space == AddressSpace::Iop {
                 None
             } else {
-                Some(Address::new(offset))
+                // fspec.cc:4934 `entryaddress = call_op->getIn(0)->getAddr()`
+                // — the record stores the full address (offset + the
+                // pre-annotation in(0) varnode's space), never the bare
+                // offset. The space rides the ADDRESS-0001 tag form; the
+                // stand-in handle carries the flat variant's dimensions.
+                Some(entry_address_with_space(space, offset))
             }
         });
         // fspec.cc:4926 `: FuncProto()` — fresh ctor state, void stand-in
@@ -2335,6 +2720,23 @@ impl FuncCallSpecs {
         self.is_stack_output_locked
     }
 
+    // Ghidra: fspec.hh:1701 FuncCallSpecs::setBadJumpTable
+    /// Toggle whether \b call site looked like an indirect jump. Faithful
+    /// inline mutator `setBadJumpTable` (fspec.hh:1701). Set by
+    /// `FlowInfo::truncateIndirectJump`'s default failure arm (flow.cc:754);
+    /// read by `ActionNameVars::lookForBadJumpTables` (coreaction.cc:2786)
+    /// for the "UNRECOVERED_JUMPTABLE" rename decision.
+    pub fn set_bad_jump_table(&mut self, val: bool) {
+        self.is_bad_jump_table = val;
+    }
+
+    // Ghidra: fspec.hh:1702 FuncCallSpecs::isBadJumpTable
+    /// Return \b true if \b this call site looked like an indirect jump.
+    /// Faithful inline accessor `isBadJumpTable` (fspec.hh:1702).
+    pub fn bad_jump_table(&self) -> bool {
+        self.is_bad_jump_table
+    }
+
     // Ghidra: fspec.hh:1703 FuncCallSpecs::setStackOutputLock
     /// Toggle whether the output is locked and on the stack. Faithful
     /// inline mutator `setStackOutputLock` (fspec.hh:1703). Consumer of the
@@ -2459,7 +2861,7 @@ impl FuncCallSpecs {
         }
     }
 
-    // Ghidra: fspec.cc:5668 FuncCallSpecs::buildInputFromTrials
+    // Ghidra: fspec.cc:5685 FuncCallSpecs::buildInputFromTrials
     /// Set the final input Varnodes to the CALL based on ParamActive analysis.
     /// Faithful 1:1 port of `buildInputFromTrials` (fspec.cc:5668-5741).
     ///
@@ -2533,14 +2935,19 @@ impl FuncCallSpecs {
                 // type — insert a SUBPIECE truncate before the call.
                 let vn_size = slot_vn.read().unwrap().get_size() as i32;
                 if vn_size > sz {
-                    let (op_addr, vn_off) = {
+                    let (op_addr, vn_off, vn_space) = {
                         let (op_r, vn_r) = (call_op.0.read().unwrap(), slot_vn.read().unwrap());
-                        (op_r.get_addr(), vn_r.get_offset())
+                        (op_r.get_addr(), vn_r.get_offset(), vn_r.get_space())
                     };
                     let newop = fd.new_op(2, op_addr);
                     // x86-64 is little-endian: outvn at vn->getAddr() (the
                     // big-endian +size-sz alternative is fspec.cc:5725-5726).
-                    let outvn = fd.new_varnode_out(sz as usize, Address::new(vn_off), &newop);
+                    // vn->getAddr() is the parameter varnode's FULL storage
+                    // address — its own space (stack space for stack-passed
+                    // parameters, register space for register params), not a
+                    // pinned register space (FSPEC-DEALLOC-SPACE-0001).
+                    let outvn =
+                        fd.new_varnode_out_full(sz as usize, vn_space, Address::new(vn_off), &newop);
                     fd.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_SUBPIECE);
                     fd.op_set_input(&newop, slot_vn.clone(), 0);
                     let trunc_const = fd.new_constant(1, 0);
@@ -2675,18 +3082,21 @@ impl FuncCallSpecs {
     /// constant (Ghidra's `data.opSetInput(op, newConstant(...), slot)`).
     pub fn check_input_trial_use(
         &mut self,
+        fd: &crate::funcdata::Funcdata,
         op_ref: &crate::op::PcodeOpRef,
-        has_active_output: bool,
         aliascheck: &crate::varmap::AliasChecker,
         maxancestor: i32,
     ) -> Vec<(i32, i32)> {
         let mut replace_slots: Vec<(i32, i32)> = Vec::new();
         let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-        let active = &mut self.active_input;
         let mut needs_final_check = false;
-        for i in 0..active.get_num_trials() {
-            if active.get_trial(i).is_checked() { continue; }
-            let slot = active.get_trial(i).get_slot();
+        // `active_input` is accessed per-statement (not through one long
+        // &mut binding) so `&self` can be supplied to ancestorOpUse as
+        // checkCallDoubleUse's match spec at the call sites below.
+        let num_trials = self.active_input.get_num_trials();
+        for i in 0..num_trials {
+            if self.active_input.get_trial(i).is_checked() { continue; }
+            let slot = self.active_input.get_trial(i).get_slot();
             // Resolve the trial varnode: vn = op.getIn(slot).
             let vn_arc = {
                 let op_rg = op_ref.0.read().unwrap();
@@ -2697,46 +3107,60 @@ impl FuncCallSpecs {
             if vn_space == crate::space::AddressSpace::Stack {
                 // Ghidra fspec.cc:5615-5634 — stack spacebase varnode path.
                 if aliascheck.has_local_alias(&vn.read().unwrap()) {
-                    active.get_trial_mut(i).mark_no_use();
-                } else if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), false) {
+                    self.active_input.get_trial_mut(i).mark_no_use();
+                } else if {
+                    let t = self.active_input.get_trial_mut(i);
+                    ancestor_real.execute(op_ref, slot, t, false)
+                } {
+                    // The trial is cloned out for the walk so `&self` can
+                    // ride along as checkCallDoubleUse's match spec (Ghidra
+                    // passes both pointers freely); the walk's flag
+                    // mutations (setRemFormed) persist via the write-back.
+                    let mut trial_clone = self.active_input.get_trial(i).clone();
                     let ao_result = crate::funcdata::ancestor_op_use(
-                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                        fd, maxancestor, &vn, op_ref, &mut trial_clone, 0, 0, Some(self),
                     );
+                    *self.active_input.get_trial_mut(i) = trial_clone;
                     if ao_result {
-                        active.get_trial_mut(i).mark_active();
+                        self.active_input.get_trial_mut(i).mark_active();
                     } else {
-                        active.get_trial_mut(i).mark_inactive();
+                        self.active_input.get_trial_mut(i).mark_inactive();
                     }
                 } else {
-                    active.get_trial_mut(i).mark_no_use();
+                    self.active_input.get_trial_mut(i).mark_no_use();
                 }
             } else {
                 // Ghidra fspec.cc:5635-5648 — register / other space path.
-                if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), true) {
+                if {
+                    let t = self.active_input.get_trial_mut(i);
+                    ancestor_real.execute(op_ref, slot, t, true)
+                } {
+                    let mut trial_clone = self.active_input.get_trial(i).clone();
                     let ao_result = crate::funcdata::ancestor_op_use(
-                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                        fd, maxancestor, &vn, op_ref, &mut trial_clone, 0, 0, Some(self),
                     );
+                    *self.active_input.get_trial_mut(i) = trial_clone;
                     if ao_result {
-                        active.get_trial_mut(i).mark_active();
-                        if active.get_trial(i).has_condexe_effect() {
+                        self.active_input.get_trial_mut(i).mark_active();
+                        if self.active_input.get_trial(i).has_condexe_effect() {
                             needs_final_check = true;
                         }
                     } else {
-                        active.get_trial_mut(i).mark_inactive();
+                        self.active_input.get_trial_mut(i).mark_inactive();
                     }
                 } else if vn.read().unwrap().is_input() {
-                    active.get_trial_mut(i).mark_inactive();
+                    self.active_input.get_trial_mut(i).mark_inactive();
                 } else {
-                    active.get_trial_mut(i).mark_no_use();
+                    self.active_input.get_trial_mut(i).mark_no_use();
                 }
             }
-            if active.get_trial(i).is_definitely_not_used() {
+            if self.active_input.get_trial(i).is_definitely_not_used() {
                 let vn_size = vn.read().unwrap().get_size() as i32;
                 replace_slots.push((slot, vn_size));
             }
         }
         if needs_final_check {
-            active.mark_needs_final_check();
+            self.active_input.mark_needs_final_check();
         }
         replace_slots
     }
@@ -3630,8 +4054,8 @@ impl FuncCallSpecs {
     /// Produce the covered identity/lifecycle clone slice, rebound to a new
     /// call op. This corresponds to `clone` (fspec.cc:4964-4977): it allocates
     /// a distinct owner, rebinds the exact op identity, copies the modeled
-    /// entry/stackoffset/`FuncProto`, and resets active-input/output state.
-    /// Funcdata/name plus effective extrapop, paramshift, and isbadjumptable
+    /// entry/stackoffset/isbadjumptable/`FuncProto`, and resets active-input/
+    /// output state. Funcdata/name plus effective extrapop and paramshift
     /// remain unmodeled `CALLSPEC-0001` fields, so this is not the complete
     /// 1:1 clone contract.
     pub fn clone_for_op(&self, new_op: &crate::op::PcodeOpRef) -> FuncCallSpecs {
@@ -3648,7 +4072,8 @@ impl FuncCallSpecs {
         res.entry_addr = self.entry_addr;
         // effective_extrapop / paramshift are not modelled on FuncCallSpecs.
         res.stackoffset = self.stackoffset;
-        // isbadjumptable is not modelled.
+        // fspec.cc:4974 `res->isbadjumptable = isbadjumptable`.
+        res.is_bad_jump_table = self.is_bad_jump_table;
         // res.copy(*this) — prototype already cloned via new().
         res
     }
@@ -3726,7 +4151,7 @@ pub fn fspec_encode_attributes(
             // Ghidra: AddrSpace *id = fc->getEntryAddress().getSpace();
             //         encoder.writeSpace(ATTRIB_SPACE, id);
             //         encoder.writeUnsignedInteger(ATTRIB_OFFSET, off);
-            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_string(space_attrib, &space_name_for_addr(addr));
             encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
         }
     }
@@ -3748,7 +4173,7 @@ pub fn fspec_encode_attributes_with_size(
     match fc.entry_addr {
         None => encoder.write_string(space_attrib, "fspec"),
         Some(addr) => {
-            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_string(space_attrib, &space_name_for_addr(addr));
             encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
             encoder.write_signed_integer(size_attrib, size as i64);
         }
@@ -3773,12 +4198,18 @@ pub fn fspec_print_raw(fc: &FuncCallSpecs, out: &mut String) {
     }
 }
 
-// RUGRA-GLUE: space_name_for_addr — Rugra's Address does not carry a space,
-// so for FspecSpace encoding we report the conventional "ram" (the typical
-// entry-address space) as a placeholder. This mirrors the space-name lookup
-// Ghidra performs via `addr.getSpace()->getName()`.
-fn space_name_for_addr(_addr: Address) -> &'static str {
-    "ram"
+// RUGRA-GLUE: space_name_for_addr — the oracle reads
+// `fc->getEntryAddress().getSpace()->getName()` (fspec.cc:2132-2133
+// `writeSpace`). An entry address carrying a registry tag (the
+// fspec.cc:4934 record-point form) reports its stand-in's name; the
+// legacy spaceless form (setFuncdata/deindirect callers still pass the
+// ADDRESS-0001 phase-1 `Address::new` offset form) keeps the conventional
+// "ram" placeholder, the typical entry-address space.
+fn space_name_for_addr(addr: Address) -> String {
+    match addr.get_space() {
+        Some(spc) => spc.get_name(),
+        None => "ram".to_string(),
+    }
 }
 
 
@@ -5471,6 +5902,547 @@ pub struct PrototypePieces<'a> {
     pub first_var_arg_slot: i32,
 }
 
+/// Ghidra: fspec.hh:598 `list<ModelRule> modelRules` — the fillin-relevant
+/// projection of one decoded `ModelRule` (modelrules.hh:530-560,
+/// modelrules.cc:1676-1709). `ModelRule::fillinOutputMap`
+/// (modelrules.hh:559-563) delegates to the assign action only: the
+/// datatype filter, qualifier filters, preconditions, and side-effects are
+/// never consulted on the fill-in path. This projection therefore stores
+/// exactly the per-action state the two fill-in entry points consume:
+/// `canAffectFillinOutput()` (the constructor `fillinOutputActive` flag)
+/// and `fillinOutputMap()` (the action's trial walk). The forward
+/// `assignAddress` path remains the registered
+/// FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 residual.
+#[derive(Debug, Clone)]
+pub struct ModelRuleFillin {
+    /// The decoded assign action (modelrules.cc:605
+    /// `assign = AssignAction::decodeAction(decoder, res)`).
+    pub action: FillinAction,
+}
+
+/// Ghidra: modelrules.cc:587-614 `AssignAction::decodeAction` dispatch —
+/// the seven concrete assign actions, carrying exactly the state their
+/// `fillinOutputMap` bodies read.
+#[derive(Debug, Clone)]
+pub enum FillinAction {
+    /// modelrules.cc:708 `GotoStack` (ctor sets fillinOutputActive=true;
+    /// `decode` calls `initializeEntry` which binds
+    /// `stackEntry = resource->getStackEntry()`, fspec.cc:642-654). The
+    /// bound entry's index within the owning list; `None` mirrors
+    /// Ghidra's null stackEntry.
+    GotoStack { stack_entry: Option<usize> },
+    /// modelrules.cc:780 `MultiSlotAssign` — `<join>`
+    /// (fillinOutputActive=true).
+    MultiSlot { resource_type: TypeClass, justify_right: bool, consume_most_sig: bool },
+    /// modelrules.cc:1332 `ConsumeAs` — `<consume>`
+    /// (fillinOutputActive=true).
+    Consume { resource_type: TypeClass },
+    /// modelrules.cc:748 `ConvertToPointer` — `<convert_to_ptr>`
+    /// (fillinOutputActive stays the `AssignAction` default false).
+    ConvertToPointer,
+    /// modelrules.cc:1374 `HiddenReturnAssign` — `<hidden_return>`
+    /// (fillinOutputActive stays the default false; its decode reads
+    /// voidlock/strategy into retCode, which no fill-in path reads).
+    HiddenReturn,
+    /// modelrules.cc:975 `MultiMemberAssign` — `<join_per_primitive>`
+    /// (fillinOutputActive=true; the decodeAction ctor passes
+    /// `mostSig = res->isBigEndian()`, modelrules.cc:601).
+    MultiMember { resource_type: TypeClass, consume_most_sig: bool },
+    /// modelrules.cc:1137 `MultiSlotDualAssign` — `<join_dual_class>`
+    /// (fillinOutputActive=true).
+    MultiSlotDual { base_type: TypeClass, alt_type: TypeClass, justify_right: bool, consume_most_sig: bool },
+}
+
+impl ModelRuleFillin {
+    // Ghidra: modelrules.cc:1676 ModelRule::decode (fillin projection)
+    /// Decode one `<rule>` element: open the element, then walk children in
+    /// document order structurally consuming the datatype filter
+    /// (`<datatype>`, modelrules.cc:246-269), the qualifier filters
+    /// (`<varargs>`/`<position>`/`<datatype_at>`, modelrules.cc:456-473),
+    /// the preconditions (`<consume_extra>`, modelrules.cc:566-580) and the
+    /// trailing side-effects (`<consume_extra>`/`<extra_stack>`/
+    /// `<consume_remaining>`, modelrules.cc:582-600), and decode the single
+    /// assign action via the `decodeAction` dispatch (modelrules.cc:587).
+    /// An element that is none of these is Ghidra's
+    /// "Expecting model rule action" DecoderError.
+    pub fn decode_rule(
+        list: &ParamListStandard,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<Self, String> {
+        let rule_id = decoder.open_element();
+        let mut action: Option<FillinAction> = None;
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                // Datatype filter + qualifier filters: consumed without
+                // fillin-relevant state (modelrules.cc:246-269 / 456-473).
+                "datatype" | "datatype_at" | "varargs" | "position" => {
+                    let id = decoder.open_element();
+                    decoder.close_element_skipping(id);
+                }
+                // Preconditions and side-effects (modelrules.cc:566-600).
+                "consume_extra" | "extra_stack" | "consume_remaining" => {
+                    let id = decoder.open_element();
+                    decoder.close_element_skipping(id);
+                }
+                // modelrules.cc:593-594 GotoStack(res,0) + GotoStack::decode
+                // (cc:739-744) + initializeEntry (cc:695-702): no
+                // attributes; binds the owning list's stack entry.
+                "goto_stack" => {
+                    let id = decoder.open_element();
+                    decoder.close_element(id);
+                    action = Some(FillinAction::GotoStack { stack_entry: list.get_stack_entry() });
+                }
+                // modelrules.cc:590-591 MultiSlotAssign(res) +
+                // MultiSlotAssign::decode (cc:942-963). Ctor defaults
+                // (cc:780-792): resourceType=GENERAL, justifyRight=false,
+                // consumeMostSig=false (little-endian).
+                "join" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    let mut justify_right = false;
+                    let mut consume_most_sig = false;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "reversejustify" => {
+                                if decoder.read_bool() {
+                                    justify_right = !justify_right;
+                                }
+                            }
+                            "reversesignif" => {
+                                if decoder.read_bool() {
+                                    consume_most_sig = !consume_most_sig;
+                                }
+                            }
+                            "storage" => {
+                                resource_type = string_to_type_class(&decoder.read_string());
+                            }
+                            // align (enforceAlignment) and stackspill
+                            // (consumeFromStack) are not read by
+                            // fillinOutputMap; consumed for stream position.
+                            "align" => {
+                                let _ = decoder.read_bool();
+                            }
+                            "stackspill" => {
+                                let _ = decoder.read_bool();
+                            }
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiSlot { resource_type, justify_right, consume_most_sig });
+                }
+                // modelrules.cc:592-593 ConsumeAs(TYPECLASS_GENERAL,res) +
+                // ConsumeAs::decode (cc:1366-1371).
+                "consume" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        if name == "storage" {
+                            resource_type = string_to_type_class(&decoder.read_string());
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::Consume { resource_type });
+                }
+                // modelrules.cc:594-595 ConvertToPointer(res) +
+                // ConvertToPointer::decode (cc:762-766): no attributes.
+                "convert_to_ptr" => {
+                    let id = decoder.open_element();
+                    decoder.close_element(id);
+                    action = Some(FillinAction::ConvertToPointer);
+                }
+                // modelrules.cc:596-597 HiddenReturnAssign(res,
+                // hiddenret_specialreg) + decode (cc:1386-1402): voidlock/
+                // strategy feed retCode, unread by fill-in.
+                "hidden_return" => {
+                    let id = decoder.open_element();
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "voidlock" => {
+                                let _ = decoder.read_bool();
+                            }
+                            "strategy" => {
+                                let strategy = decoder.read_string();
+                                if strategy != "normalparam" && strategy != "special" {
+                                    return Err(format!(
+                                        "Bad <hidden_return> strategy: {strategy}"
+                                    ));
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::HiddenReturn);
+                }
+                // modelrules.cc:598-600 MultiMemberAssign(TYPECLASS_GENERAL,
+                // false, res->isBigEndian(), res) + decode (cc:1054-1063).
+                "join_per_primitive" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        if name == "storage" {
+                            resource_type = string_to_type_class(&decoder.read_string());
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiMember {
+                        resource_type,
+                        consume_most_sig: list.is_big_endian(),
+                    });
+                }
+                // modelrules.cc:601-602 MultiSlotDualAssign(res) +
+                // MultiSlotDualAssign::decode (cc:1300-1330). Ctor defaults
+                // (cc:1137-1152): baseType=GENERAL, altType=FLOAT,
+                // justifyRight=false, consumeMostSig=false.
+                "join_dual_class" => {
+                    let id = decoder.open_element();
+                    let mut base_type = TypeClass::General;
+                    let mut alt_type = TypeClass::Float;
+                    let mut justify_right = false;
+                    let mut consume_most_sig = false;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "reversejustify" => {
+                                if decoder.read_bool() {
+                                    justify_right = !justify_right;
+                                }
+                            }
+                            "reversesignif" => {
+                                if decoder.read_bool() {
+                                    consume_most_sig = !consume_most_sig;
+                                }
+                            }
+                            "storage" | "a" => {
+                                base_type = string_to_type_class(&decoder.read_string());
+                            }
+                            "b" => {
+                                alt_type = string_to_type_class(&decoder.read_string());
+                            }
+                            // stackspill (consumeFromStack) and fillalternate
+                            // (fillAlternate) are not read by
+                            // fillinOutputMap; consumed for stream position.
+                            "stackspill" | "fillalternate" => {
+                                let _ = decoder.read_bool();
+                            }
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiSlotDual {
+                        base_type,
+                        alt_type,
+                        justify_right,
+                        consume_most_sig,
+                    });
+                }
+                other => {
+                    return Err(format!("Expecting model rule action: {other}"));
+                }
+            }
+        }
+        decoder.close_element(rule_id);
+        match action {
+            Some(action) => Ok(ModelRuleFillin { action }),
+            // modelrules.cc:604-605: reaching the end of the rule without
+            // an action element is the decodeAction DecoderError.
+            None => Err("Expecting model rule action".to_string()),
+        }
+    }
+}
+
+impl FillinAction {
+    // Ghidra: modelrules.hh:276-278 AssignAction::canAffectFillinOutput
+    /// The constructor `fillinOutputActive` flag per action kind: true for
+    /// GotoStack (modelrules.cc:710/717), MultiSlotAssign (cc:805/824),
+    /// MultiMemberAssign (cc:989), MultiSlotDualAssign (cc:1143/1163) and
+    /// ConsumeAs (cc:1336); the `AssignAction` default false otherwise
+    /// (modelrules.hh:276).
+    pub fn can_affect_fillin_output(&self) -> bool {
+        match self {
+            FillinAction::GotoStack { .. } => true,
+            FillinAction::MultiSlot { .. } => true,
+            FillinAction::Consume { .. } => true,
+            FillinAction::ConvertToPointer => false,
+            FillinAction::HiddenReturn => false,
+            FillinAction::MultiMember { .. } => true,
+            FillinAction::MultiSlotDual { .. } => true,
+        }
+    }
+
+    // Ghidra: modelrules.hh:313 AssignAction::fillinOutputMap (dispatch)
+    /// Test and mark the trial set that can be a valid return value.
+    /// `entries` is the owning list's ParamEntry table (Ghidra reads the
+    /// trial's `const ParamEntry *` back-pointer).
+    pub fn fillin_output_map(
+        &self,
+        active: &mut ParamActive,
+        entries: &[ParamEntry],
+    ) -> bool {
+        match self {
+            // modelrules.cc:579 AssignAction::fillinOutputMap default.
+            FillinAction::ConvertToPointer | FillinAction::HiddenReturn => false,
+            // modelrules.cc:731-744 GotoStack::fillinOutputMap
+            FillinAction::GotoStack { stack_entry } => {
+                let mut count = 0i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    if Some(entry_index) != *stack_entry {
+                        return false;
+                    }
+                    count += 1;
+                    if count > 1 {
+                        return false;
+                    }
+                }
+                count == 1
+            }
+            // modelrules.cc:902-940 MultiSlotAssign::fillinOutputMap
+            FillinAction::MultiSlot { resource_type, justify_right, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                let mut partial: i64 = -1;
+                for i in 0..active.get_num_trials() {
+                    let (entry_index, trial_size) = {
+                        let t = active.get_trial(i);
+                        match t.get_entry_index() {
+                            Some(e) => (e, t.get_size()),
+                            None => break,
+                        }
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if count == 0 {
+                        // Trials must start on first entry of the type_class
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        // Trials must be consecutive
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if trial_size != entry.get_size() {
+                        // At most, one trial can be partial size
+                        if partial != -1 {
+                            return false;
+                        }
+                        partial = i as i64;
+                    }
+                    count += 1;
+                }
+                if partial != -1 {
+                    if *justify_right {
+                        if partial != 0 {
+                            return false;
+                        }
+                    } else if partial != (count as i64) - 1 {
+                        return false;
+                    }
+                    let t = active.get_trial(partial as usize);
+                    if *justify_right == *consume_most_sig {
+                        // Partial entry must be least sig bytes
+                        if t.get_offset() != 0 {
+                            return false;
+                        }
+                    } else if t.get_offset() + t.get_size()
+                        != entries[t.get_entry_index().unwrap()].get_size()
+                    {
+                        // Partial entry must be most sig bytes
+                        return false;
+                    }
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1019-1042 MultiMemberAssign::fillinOutputMap
+            FillinAction::MultiMember { resource_type, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if count == 0 {
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if active.get_trial(i).get_offset() != 0 {
+                        // Entry must be justified
+                        return false;
+                    }
+                    count += 1;
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1242-1291 MultiSlotDualAssign::fillinOutputMap
+            FillinAction::MultiSlotDual { base_type, alt_type, justify_right, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                let mut partial: i64 = -1;
+                let mut resource_type = TypeClass::General;
+                for i in 0..active.get_num_trials() {
+                    let (entry_index, trial_size) = {
+                        let t = active.get_trial(i);
+                        match t.get_entry_index() {
+                            Some(e) => (e, t.get_size()),
+                            None => break,
+                        }
+                    };
+                    let entry = &entries[entry_index];
+                    if count == 0 {
+                        resource_type = entry.get_type();
+                        if resource_type != *base_type && resource_type != *alt_type {
+                            return false;
+                        }
+                    } else if entry.get_type() != resource_type {
+                        // Trials must come from action's type_class
+                        return false;
+                    }
+                    if count == 0 {
+                        // Trials must start on first entry of the type_class
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        // Trials must be consecutive
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if trial_size != entry.get_size() {
+                        // At most, one trial can be partial size
+                        if partial != -1 {
+                            return false;
+                        }
+                        partial = i as i64;
+                    }
+                    count += 1;
+                }
+                if partial != -1 {
+                    if *justify_right {
+                        if partial != 0 {
+                            return false;
+                        }
+                    } else if partial != (count as i64) - 1 {
+                        return false;
+                    }
+                    let t = active.get_trial(partial as usize);
+                    if *justify_right == *consume_most_sig {
+                        // Partial entry must be least sig bytes
+                        if t.get_offset() != 0 {
+                            return false;
+                        }
+                    } else if t.get_offset() + t.get_size()
+                        != entries[t.get_entry_index().unwrap()].get_size()
+                    {
+                        // Partial entry must be most sig bytes
+                        return false;
+                    }
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1345-1364 ConsumeAs::fillinOutputMap
+            FillinAction::Consume { resource_type } => {
+                let mut count = 0i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if !entry.is_first_in_class() {
+                        return false;
+                    }
+                    count += 1;
+                    if count > 1 {
+                        return false;
+                    }
+                    if active.get_trial(i).get_offset() != 0 {
+                        // Entry must be justified
+                        return false;
+                    }
+                }
+                count > 0
+            }
+        }
+    }
+}
+
 /// A standard model for parameters as an ordered list of storage resources.
 /// Faithful port of `class ParamListStandard` (fspec.hh:589-646).
 #[derive(Debug, Clone)]
@@ -5483,6 +6455,10 @@ pub struct ParamListStandard {
     entry: Vec<ParamEntry>,
     space_base: Option<AddressSpace>,
     stack_entry_index: Option<usize>,
+    /// Ghidra: fspec.hh:598 `list<ModelRule> modelRules` — rules to apply
+    /// when assigning addresses (fillin-relevant projection, see
+    /// [`ModelRuleFillin`]).
+    model_rules: Vec<ModelRuleFillin>,
 }
 
 impl Default for ParamListStandard {
@@ -5504,6 +6480,7 @@ impl ParamListStandard {
             entry: Vec::new(),
             space_base: None,
             stack_entry_index: None,
+            model_rules: Vec::new(),
         }
     }
 
@@ -5512,9 +6489,9 @@ impl ParamListStandard {
     ///
     /// `<pentry>` and `<group>` children are decoded in document order.  Once
     /// the first `<rule>` is seen, subsequent resource entries are rejected,
-    /// matching Ghidra's two-phase child walk.  ModelRule decoding is outside
-    /// this slice; rule elements are consumed without changing the decoded
-    /// ParamEntry list.
+    /// matching Ghidra's two-phase child walk.  `<rule>` children decode
+    /// into the fillin-relevant [`ModelRuleFillin`] projection
+    /// (fspec.cc:1490-1500).
     pub fn decode(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
@@ -5530,6 +6507,7 @@ impl ParamListStandard {
         self.entry.clear();
         self.space_base = None;
         self.stack_entry_index = None;
+        self.model_rules.clear();
         let mut pointer_max = 0i32;
         let mut split_float = true;
 
@@ -5614,8 +6592,13 @@ impl ParamListStandard {
                 }
                 "rule" => {
                     saw_rule = true;
-                    let rule_id = decoder.open_element();
-                    decoder.close_element_skipping(rule_id);
+                    // fspec.cc:1493-1495: modelRules.emplace_back();
+                    // modelRules.back().decode(decoder, this). Entries are
+                    // fully decoded before the first rule (two-phase walk,
+                    // fspec.cc:1477-1500), so GotoStack's initializeEntry
+                    // binding sees the final entry table.
+                    let rule = ModelRuleFillin::decode_rule(self, decoder)?;
+                    self.model_rules.push(rule);
                 }
                 "pentry" | "group" => {
                     return Err(
@@ -6597,15 +7580,21 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1614 ParamListStandardOut::initialize
-    /// Cache the output fill-in policy (`initialize`, fspec.cc:1614-1627).
-    /// The locked implementation scans `modelRules`; only when no rule can
-    /// affect fill-in does it keep `use_fillin_fallback=true` and force
-    /// `auto_killed_by_call=true`. Rugra does not yet own the decoded rules,
-    /// so this is exactly the empty-rule branch. Production
-    /// `join_dual_class` therefore remains a fixture-recorded MISMATCH.
+    /// Cache the output fill-in policy (`initialize`, fspec.cc:1614-1627):
+    /// start legacy (`useFillinFallback=true`), then clear it if any
+    /// decoded model rule `canAffectFillinOutput()`. Only the legacy
+    /// branch forces `autoKilledByCall = true`.
     pub fn initialize(&mut self) {
         self.use_fillin_fallback = true;
-        self.base.set_auto_killed_by_call(true);
+        for rule in self.base.model_rules.iter() {
+            if rule.action.can_affect_fillin_output() {
+                self.use_fillin_fallback = false;
+                break;
+            }
+        }
+        if self.use_fillin_fallback {
+            self.base.set_auto_killed_by_call(true);
+        }
     }
 
     // Ghidra: fspec.cc:1569 ParamListStandardOut::assignMap
@@ -6825,13 +7814,13 @@ impl ParamListStandardOut {
 
     // Ghidra: fspec.cc:1721 ParamListStandardOut::fillinMap
     /// Decide the formal output parameter given a set of trials, following
-    /// the structural branches of `fillinMap` (fspec.cc:1721-1763). If `use_fillinFallback`
-    /// is set, defers entirely to the fallback path; otherwise walks the
-    /// trials, attaches each active one to its entry (rejecting remainder /
-    /// indirect-creation pieces that aren't first-in-class), then asks the
-    /// model rules to settle the output. Rugra has no decoded model-rule
-    /// objects yet, so the non-fallback path reaches
-    /// `fillin_map_fallback(true)`; the locked fixture records this residual.
+    /// the structural branches of `fillinMap` (fspec.cc:1721-1763). If
+    /// `use_fillin_fallback` is set, defers entirely to the fallback path;
+    /// otherwise walks the trials, attaches each active one to its entry
+    /// (rejecting remainder / indirect-creation pieces that aren't
+    /// first-in-class), then asks the model rules to settle the output,
+    /// falling back to the first-entry-only fallback
+    /// (`fillinMapFallback(active, true)`, fspec.cc:1762).
     pub fn fillin_map(&self, active: &mut ParamActive) {
         if active.get_num_trials() == 0 { return; }
         if self.use_fillin_fallback {
@@ -6868,10 +7857,24 @@ impl ParamListStandardOut {
             active.get_trial_mut(i).set_entry(entry_idx, res);
         }
         active.sort_trials(self.base.get_entry());
-        // FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 residual: concrete
-        // `ModelRule::fillinOutputMap` ownership is not yet connected to
-        // this list. The locked implementation walks rules in declaration
-        // order before reaching the first-entry-only fallback.
+        // fspec.cc:1746-1761: walk the model rules in declaration order;
+        // the first whose fillinOutputMap accepts the trial set settles
+        // the output — every active trial is marked used, inactives get
+        // markNoUse with the entry reset — and fillinMap returns.
+        for rule in self.base.model_rules.iter() {
+            if rule.action.fillin_output_map(active, self.base.get_entry()) {
+                for i in 0..active.get_num_trials() {
+                    let t_active = active.get_trial(i).is_active();
+                    if t_active {
+                        active.get_trial_mut(i).mark_used();
+                    } else {
+                        active.get_trial_mut(i).mark_no_use();
+                        active.get_trial_mut(i).clear_entry();
+                    }
+                }
+                return;
+            }
+        }
         self.fillin_map_fallback(active, true);
     }
 
@@ -6900,9 +7903,7 @@ impl ParamListStandardOut {
     // Ghidra: fspec.cc:1776 ParamListStandardOut::decode
     /// Decode this list, then cache the available fill-in information. The
     /// locked `decode` (fspec.cc:1776-1780) delegates `<pentry>` / `<group>` /
-    /// `<rule>` parsing and calls `initialize()`. Rugra's base decoder keeps
-    /// entry order but only consumes rule elements, so initialization observes
-    /// the empty-rule branch; metadata records the production mismatch.
+    /// `<rule>` parsing and calls `initialize()`.
     pub fn decode(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
@@ -7126,6 +8127,12 @@ impl ParamListOutput {
     // ParamListStandard::getEntry.
     pub fn get_entry(&self) -> &[ParamEntry] {
         self.standard_out().get_entry()
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::getMaxDelay (fspec.hh:642).
+    pub fn get_max_delay(&self) -> i32 {
+        self.standard_out().base.get_max_delay()
     }
 }
 
@@ -7496,6 +8503,13 @@ impl ProtoModelFull {
         self.output.get_entry()
     }
 
+    // Ghidra: fspec.hh:1572 ProtoModel::getMaxOutputDelay
+    /// Maximum heritage delay across all potential return-value resources
+    /// (`ParamListStandard::calcDelay`, fspec.cc:1153-1163).
+    pub fn get_max_output_delay(&self) -> i32 {
+        self.output.get_max_delay()
+    }
+
     // Ghidra: fspec.cc:2472 ProtoModel::lookupEffect (static)
     /// Look up an effect from a (sorted) EffectRecord list. Faithful 1:1 port
     /// of `lookupEffect` (fspec.cc:2472-2495). Returns the matching effect
@@ -7627,7 +8641,7 @@ impl ProtoModelFull {
         &self.likelytrash
     }
 
-    // Ghidra: fspec.cc:2993 ProtoModelMerged::intersectEffects
+    // Ghidra: fspec.cc:2780 ProtoModelMerged::intersectEffects
     /// Intersect this model's effect list with another list, in place.
     /// Faithful 1:1 port of `ProtoModelMerged::intersectEffects`
     /// (fspec.cc:2780-2803). Both lists must be sorted by address. Only
@@ -8274,6 +9288,97 @@ mod tests {
         fc.set_funcdata("", Address::new(0x2530));
         assert_eq!(fc.prototype.name, "free");
         assert_eq!(fc.entry_addr.map(|a| a.as_u64()), Some(0x2530));
+    }
+
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
+    /// The entry-address record point stores in(0)'s full address — the
+    /// offset AND the varnode's space (fspec.cc:4934 `getIn(0)->getAddr()`,
+    /// read before the FSPEC annotation swap). PRINTC-OPCALL-ENTRYSPACE-0001
+    /// fspec half: the space rides the ADDRESS-0001 tag form through the
+    /// per-variant stand-in, so consumers resolving `getEntryAddress()`'s
+    /// space see the in(0) space's own dimensions instead of a flat Ram
+    /// fallback, while offset-only consumers (`as_u64`) are unchanged.
+    #[test]
+    fn test_new_for_op_entry_addr_carries_in0_space() {
+        use crate::funcdata::Funcdata;
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+
+        let void_proto = || {
+            FuncProto::new(
+                String::new(),
+                Arc::new(Datatype::Void(TypeBase::new(
+                    "void".to_string(),
+                    0,
+                    TypeMetatype::Void,
+                ))),
+            )
+        };
+        let mut fd = Funcdata::new("entryspace", Address::new(0x7000), 0x20);
+
+        // Direct CALL whose in(0) is a ram-space target varnode — the
+        // production form both lifter paths emit (x86 `call rel` exports
+        // `*[ram]`, sleigh_lift.rs convert; iced builds
+        // VarnodeRaw(Ram, target, 8), x86_lift.rs).
+        let call = fd.new_op(1, Address::new(0x7004));
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let target = fd
+            .vbank
+            .create_with_space(8, AddressSpace::Ram, 0x22f0);
+        fd.op_set_input(&call, target, 0);
+        let fc = FuncCallSpecs::new_for_op(&call, void_proto());
+        let entry = fc.entry_addr.expect("direct CALL records an entry");
+        // Offset channel unchanged: compatibility consumers (annotation
+        // varnode payload, printRaw hex, encode offset) see the same value.
+        assert_eq!(entry.as_u64(), 0x22f0);
+        // Space channel filled: the stand-in carries the ram variant's own
+        // name and dimensions (fspec.cc:4934 keeps in(0)'s ram address, so
+        // printc's fc->getEntryAddress() dims resolve to ram's (8,1)).
+        let spc = entry.get_space().expect("entry address carries a space");
+        assert_eq!(spc.get_name(), "ram");
+        assert_eq!(spc.get_addr_size(), 8);
+        assert_eq!(spc.get_word_size(), 1);
+        // The tagged form is a distinct address from the legacy spaceless
+        // one (address.hh:356: base==op2.base fails), pinning that the
+        // record no longer produces the legacy form.
+        assert_ne!(entry, Address::new(0x22f0));
+
+        // A const-space in(0) (SLEIGH relative-label form) keeps the const
+        // space in the record, as the oracle's getAddr() would.
+        let call2 = fd.new_op(1, Address::new(0x7008));
+        fd.op_set_opcode(&call2, OpCode::CPUI_CALL);
+        let const_target = fd.new_constant(8, 0x1234);
+        fd.op_set_input(&call2, const_target, 0);
+        let fc2 = FuncCallSpecs::new_for_op(&call2, void_proto());
+        let entry2 = fc2.entry_addr.expect("const in(0) still records");
+        assert_eq!(entry2.as_u64(), 0x1234);
+        let spc2 = entry2.get_space().expect("const entry carries a space");
+        assert_eq!(spc2.get_name(), "const");
+        assert_eq!(spc2.get_addr_size(), 8);
+        assert_eq!(spc2.get_word_size(), 1);
+
+        // An iop-space in(0) without a bound callspec records no entry
+        // (the annotation space never carries a callee address).
+        let call3 = fd.new_op(1, Address::new(0x700c));
+        fd.op_set_opcode(&call3, OpCode::CPUI_CALL);
+        let iop_vn = fd
+            .vbank
+            .create_with_space(8, AddressSpace::Iop, 0x99);
+        fd.op_set_input(&call3, iop_vn, 0);
+        let fc3 = FuncCallSpecs::new_for_op(&call3, void_proto());
+        assert!(fc3.entry_addr.is_none());
+
+        // Clone case (fspec.cc:4935-4940): an in(0) already converted to an
+        // FSPEC annotation resolves through the typed handle to the source
+        // spec's entry — including its space tag.
+        let owner = Arc::new(std::sync::RwLock::new(fc));
+        let annotation = fd.new_varnode_call_specs(&owner);
+        let call4 = fd.new_op(1, Address::new(0x7010));
+        fd.op_set_opcode(&call4, OpCode::CPUI_CALL);
+        fd.op_set_input(&call4, annotation, 0);
+        let fc4 = FuncCallSpecs::new_for_op(&call4, void_proto());
+        assert_eq!(fc4.entry_addr, Some(entry));
     }
 
     // ---- ParamTrial / ParamActive tests ----

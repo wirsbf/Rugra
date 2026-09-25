@@ -367,6 +367,28 @@ cover 才是合法状态）。
 多不相连范围下的 `contains`/`getEntryAddr`与 RangeList marshal 仍归
 `BLOCKBASIC-COVER-0001`，不由该字段的存在推断已完成。
 
+### 2026-09-22（SB-HERITAGE50-BLOCKCOVER-0001）：多范围 cover + copyRange/mergeRange + getEntryAddr
+
+- `initial_range: Option<(Address, Address)>` 升级为 `cover: RangeList`
+  （block.hh:465 `RangeList cover` 的 1:1 对应，复用 `crate::address::RangeList`）。
+  `set_initial_range` 语义不变（cover.clear + 单闭区间插入）。
+- 新增 `copy_range(&BlockBasic)`（block.hh:468 `copyRange`）：node-split
+  重复块继承原块完整 cover（funcdata_block.cc:832 已接线）。
+- 新增 `merge_range(&BlockBasic)`（block.hh:469 `mergeRange`）：拼接块
+  cover 取并集；`splice_block_basic` 在 CFG 拼接前调用（funcdata_block.cc:942）。
+- `get_start_addr`/`get_stop_addr`（block.cc:2319/2328）改为读 cover 的
+  **按 (space,offset) 排序的首/末范围**首/末地址——拼接块吸收了更低地址
+  的块后，`getStart()` 返回那个更低的地址（正是 heritage MULTIEQUAL
+  创建 `fd->newOp(sizein, bl->getStart())` 所取的地址；Ghidra oracle
+  next_url block28 实测 cover={[0x2534..],[0x50e7..]}→getStart=0x2534）。
+- 新增 `get_entry_addr()`（block.cc:2302 `getEntryAddr`）：单范围=范围首
+  地址；多范围=**包含首条 op 的那个范围**的首地址。printc emitLabel
+  （printc.cc:3170）用它而不是 getStart——label 与 getStart 在拼接块上
+  可以不同（首 op 是 heritage 插在块头的 MULTIEQUAL，其地址=getStart）。
+- 残余（仍归 `BLOCKBASIC-COVER-0001`）：`contains`（cover.inRange）的
+  comment 域消费、RangeList marshal、Ghidra 空 cover invalid-Address()
+  语义的精确化。
+
 ---
 
 ### `pub fn add_op(&mut self, op: PcodeOpRef)`
@@ -1047,6 +1069,7 @@ BlockGraph 新增：
 - `FlowBlock::swap_edges()`（block.cc:218-233）— **2026-08-23 补齐 cc:225-228**：交换 out[0]/out[1] 后，按交换后槽位回写目标块入边的 reverse_index（此前缺失，negateCondition 后 get_in_rev_index 会过期）。
 - `FlowBlock::get_in_rev_index(slot)` trait 方法（block.hh:308）— 入边的反向索引。
 - `find_condition(bl1,edge1,bl2,edge2)` 自由函数（block.cc:839-858）— 返回支配两路径的 CBRANCH 块 + slot1。解锁 RuleInt2FloatCollapse 核心。
+  - **2026-09-23（MYPROGRESS-INT2FLOATCOLLAPSE-0001）修正 bl1/edge1 步进语义**：Ghidra 循环体（cc:845-847）每跳一步执行 `bl1=cond; edge1=0`，最终 `slot1=bl1->getInRevIndex(edge1)`（cc:856）取的是 **cond 正下方块** 对 cond 的反向出边槽位（即 dir2unsigned 判向）。旧实现误用调用方原始 bl1/edge1 求反索引——菱形（walk≥1 hop）场景恒返回臂块唯一出边槽 0，导致 RuleInt2FloatCollapse 的 `dir2unsigned` 判向永假、规则在 `(basevn<0)` 形态永不 fire。现随 walk 维护 `cur_bl1/cur_edge1`，逐字对齐。
 
 ### 2026-07-01（续 2）：is_entry_point + get_start_block
 - `FlowBlock::is_entry_point()`（block.hh:325）— ENTRY_POINT flag 检查，trait default。
@@ -1144,9 +1167,13 @@ printHeader、markUnstructured、scopeBreak、nextFlowAfter、flipInPlace、mars
   `next_flow_after` / `encode_header` / `flip_in_place_execute`。
 - **BlockSwitch**（block.cc:3596-3661）：`get_switch_block` /
   `get_num_case_blocks` / `get_case_block` / `get_num_labels` / `get_label` /
-  `is_default_case` / `is_exit` / `mark_unstructured_targets` /
+  `is_default_case` / `mark_unstructured_targets` /
   `scope_break_break_cases` / `print_header` / `next_flow_after` /
   `get_switch_varnode`。
+  （`is_exit` 已删除——CASEWRAP-CR-F2：零调用者，且读取期从已消费 case 块重导
+  `size_out()==1` 在 identifyInternal 半删出边后恒 false；oracle 的 `isExit(i)`
+  读的是 addCase 期捕获的 `caseblocks[i].isexit`（block.hh:791），对应 Rugra 的
+  `case_isexit`/`default_isexit` 捕获旗标数组，block.cc:3511-3514。）
 
 **调用点更新（blockaction.rs）：**
 - 3 个 `BlockIf` 构造点（blockaction.rs:3128/3163/3630）+ 1 个 `BlockGoto`
@@ -1207,7 +1234,7 @@ blockaction.rs 的私有 `find_spanning_tree`（位置索引域、HashMap 局部
     LowlevelError 等价的 anyhow 错误，cc:1110-1111）。
 
 **支撑原语（均为 trait 默认实现或自由函数）：**
-- `set_in_edge_flag(slot, flag)` — setOutEdgeFlag 的镜像入边半边（block.cc:245）。
+- `set_in_edge_flag(slot, flag)` — setOutEdgeFlag 的镜像入边半边（block.cc:240）。
 - `set_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整 Ghidra
   setOutEdgeFlag（block.cc:240-246）：出边 + 目标块镜像入边；自环边（目标即
   本块）在单一把锁内同时写两侧，避免对调用方已持有的写锁重入死锁。
@@ -1295,7 +1322,7 @@ findIrreducible 标的 f_irreducible 也清掉——重建遍的收敛依赖 cc:
   `is_irreducible_in(i)`（block.hh:333）— 入边半边谓词（get_in 读 flags，
   与既有 `is_loop_in`/`is_irreducible_out` 同模式）。
 - `clear_in_edge_flag(slot, flag)` — clearOutEdgeFlag 的镜像入边半边
-  （block.cc:254）。
+  （block.cc:250）。
 - `clear_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整
   Ghidra clearOutEdgeFlag（block.cc:250-256）：自环边单锁双写，与
   `set_out_edge_flag_mirrored` 对称。
@@ -1410,7 +1437,7 @@ max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）
   生效；原 BlockBasic 专属实现对结构块（BlockIf/BlockGoto/BlockList/…）静默
   跳过，留下过期 reverse_index → 后续 OOB panic。
 - `FlowBlock::dedup/eliminate_in_dups/eliminate_out_dups/find_dups`
-  （block.cc:447-523）完整移植：消除重复边用**成对** half-delete
+  （block.cc:446-523）完整移植：消除重复边用**成对** half-delete
   （cc:461-462/490-491），两侧 reverse_index 同步维护；`find_dups` 的
   f_mark/f_mark2 标记协议照搬（自环经 self_arc 报告）。
 - `FlowBlock::remove_in_edge_from`（Rugra 排除表形式的 removeInEdge
@@ -1499,7 +1526,7 @@ oracle：`BlockGoto : BlockGraph`（block.hh:547），`newBlockGoto(bl)`（block
   身份；printc 发射侧切 target_dyn+get_start_addr() 属 PRINTC-GOTOPRINTS-0001，
   另一 agent 协调）。
 - `impl FlowBlock for BlockGoto`：`get_ops` 委托 wrapped（getBlock(0) 虚链的
-  flatten 投影）；`sub_block(0)` 返回 wrapped；`first_op`（block.cc:1330
+  flatten 投影）；`sub_block(0)` 返回 wrapped；`first_op`（block.cc:1327
   BlockGraph::firstOp）与 `get_exit_leaf_trait`（block.hh:561）委托 wrapped。
 - `BlockGoto::mark_unstructured_target`（block.cc:2856-2864）：先递归
   wrapped（cc:2859 BlockGraph::markUnstructured），再在 gototype==f_goto_goto
@@ -1553,3 +1580,275 @@ body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容
   master 上即 MISMATCH，本次重钉 comparand sha 后复核数字不变）。oracle 侧
   观测同时实证了 target 为复合块（whiledo/list/goto）—— dyn target 设计的
   直接依据。
+
+### 2026-08-30（BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001）：诊断设施
+
+- `print_tree_dbg`（RUGRA-GLUE，BlockGraph::printTree 的诊断复刻，block.cc:616
+  printTree 语义）：递归 dump 结构树（索引/类型/front-leaf 地址/BlockGoto 目标
+  + goto_type + prints 预计算/if-goto 目标/Switch cases），供 curl/httpd runners
+  的 RUGRA_DUMP_FUNC hook 与 examples/blockstruct_tree_dump.rs 使用。
+- `dbg_front_leaf_start_addr`：穿透 BlockCopy 包装读 front leaf 起始地址（组合
+  节点自身无地址；BlockCopy 未覆写 get_start_addr）。
+
+## 2026-09-22：JUMPTABLE-TABLEAPI-0001 P0-A — BlockBasic::noInterveningStatement
+
+`BlockBasic::no_intervening_statement()`（block.cc:2712-2747）：block 内不产生
+外流值的检查——marker/branch 跳过；special 拒 CALL/STORE/NEW；非 special 跳
+COPY/SUBPIECE；输出 addr-tied 拒绝；任一后代 op 的 parent 不在本块拒绝。
+自块身份用 self_ref Arc 与 op.parent Arc 的 ptr_eq（add_block 同时建立两者）。
+供 JumpBasic::foldInOneGuard（jumptable.cc:1394）守卫使用。
+
+## 2026-09-22 追加（BLOCKSTRUCT-MULTIGOTO-0001 — BlockMultiGoto 类型 + BlockSwitch per-case gototype）
+
+- 新增 `BlockMultiGoto`（Ghidra block.hh:573-593）:gotoedges（addEdge 纯 vector push,不建图边,block.hh:580）、defaultswitch（setDefaultGoto/hasDefaultGoto）、wrapped（getBlock(0) 组件,同 BlockGoto::wrapped 模式）。FlowBlock impl:getType=t_multigoto；scope_break_trait→wrapped.scope_break(-1,cur_loop_exit)（cc:2918-2922,curexit 丢弃换 -1）；mark_unstructured_trait 纯递归（无覆写=BlockGraph 递归语义）；nextFlowAfter 恒 None（cc:2931-2936）；get_ops/sub_block/first_op/get_exit_leaf 委托 wrapped；print_header "Multi goto block"。
+- `front_leaf` 补 MultiGoto arm（经 wrapped 下降,block.hh:587-589 委托链）——此前落入 catch-all 返回自身。
+- `BlockSwitch` 新增 `case_gototypes: Vec<u32>`（CaseOrder::gototype per case,block.hh:778）与 `default_gototype: u32`:`mark_unstructured_targets` 与 `scope_break_break_cases` 从"conservative no-op"落为真实实现（cc:3607-3610 gototype==f_goto_goto→markCopyBlock(UNSTRUCTURED_TARG);cc:3620-3623 goto case 目标==curexit→提升 f_break_goto）。
+- 新增 `front_leaf_start_addr`（printc.cc:2303 emitGotoStatement 的 exp_bl→emitLabel 投影）:front leaf 的 BlockCopy original 起始地址（BlockCopy 不覆写 getStart,与 oracle 一致,block.hh:505-538）。
+
+## 2026-09-22 追加（GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001 — nextFlowAfter 分臂单一事实源 + 死代码清理）
+
+- **`next_flow_after_successors`（pub，模块级）提升进 block.rs**：oracle
+  `getParent()->nextFlowAfter(this)`（block.cc:2885 经 BlockGoto::gotoPrints 触达）
+  的逐父类型虚分发表，对一 composite 的全部组件一次算清 —— 原
+  `goto_prints_walk_level` 只建了 12 个 override 中的 BlockGraph 兄弟臂
+  （block.cc:1335-1353），If/WhileDo/DoWhile/InfLoop/Goto/Switch 六类父类型的
+  分臂全部缺失（Lane BJ 审计：while body 尾 break-goto 会被旧纯兄弟规则吞成
+  死循环）。分臂逐条对照 oracle：
+  - `FlowBlock` 基类（block.hh:884-887）恒 null —— 叶子不经 walk 触达；
+  - `BlockGraph`/`BlockList`（block.cc:1335-1353；block.hh:600 无 override）
+    兄弟规则（提取为 `graph_sibling_successors`（pub），末组件 = 外层 succ，根
+    null）；
+  - `BlockGoto`（block.cc:2899-2903）任意组件 → 目标 front leaf；
+  - `BlockMultiGoto`（block.cc:2931-2934）恒 null —— Rust component_list_dyn
+    对 MultiGoto 为空（wrapped 是调度 basic 叶，无内部 goto），结构上不可达；
+  - `BlockCondition`（block.cc:3053-3056）恒 null；
+  - `BlockIf`（block.cc:3127-3134）槽0（条件，含 if-goto 单组件形态）→ null，
+    其余槽（tc/fc）→ 父臂 succ，**无兄弟扫描**（两个 body 的后继是整个 if 的
+    后继，不是对方）；
+  - `BlockWhileDo`（block.cc:3341-3351）槽0 → null，body → front_leaf(cond) =
+    **循环头**（body 尾 goto 对比的是头而非循环后 —— break-goto 不再被吞）；
+  - `BlockDoWhile`（block.cc:3448-3451）恒 null（可能在迭代）；
+  - `BlockInfLoop`（block.cc:3476-3483）任意组件 → front_leaf(getBlock(0)) =
+    循环头（显式回边 goto → prints=false，不再多打 goto+标签）；
+  - `BlockSwitch`（block.cc:3639-3661）：oracle 臂① `getBlock(0)==bl → null`
+    指**调度根 cs[0]**（Rust 存于 `BlockSwitch::control`，不在组件表内 —— 旧
+    coreaction 分表把 components[0]（第一个 case）误当调度根给 null，本次修
+    正：无槽0 特判）；臂② 非 t_goto case → null（"break statement in the
+    flow"）；臂③-⑤ t_goto case → 打印序下一 caseblock 的 front leaf，末位 →
+    父臂。序基准：oracle caseblocks 经 finalizePrinting label/depth stable_sort
+    （block.cc:3591，ActionFinalStructure 在 scopeBreak/markUnstructured 前先调
+    finalizePrinting，blockaction.cc:2192）；Rust 以组件序（cases+default 追
+    尾）= 自身发射序建模（printc emit_block_switch 同序）——真实 label 排序
+    落地于 JUMPTABLE-TABLEAPI-0001，届时两侧须同步排序。
+- **`goto_prints_visit` 改用分表递归**（`goto_prints_walk_level` 删除）：
+  `compute_goto_prints` 根层走 `graph_sibling_successors(components, None)`，
+  每层经 `next_flow_after_successors` 派发 —— 与 coreaction.rs
+  ActionReturnSplit 的 gather walk 共用同一实现（**单一事实源**；
+  ReturnSplit 保持 mid-pipeline 现算、不读 prints_precomputed —— 与 oracle
+  两态惰性求值语义一致）。
+- **删除 7 个无调用点的死代码 typed 方法**（各有简化且未接入任何链路，避免
+  双源漂移）：`BlockGoto::next_flow_after_index`、
+  `BlockIf::next_flow_after_parent`、`BlockWhileDo::next_flow_after`、
+  `BlockDoWhile::next_flow_after`、`BlockInfLoop::next_flow_after`、
+  `BlockCondition::next_flow_after`、`BlockSwitch::next_flow_after`。
+  `BlockGraph::next_flow_after`（block.cc:1335 根图形态）保留 —— 仍被
+  `goto_prints_in`（parent 接线形态）消费。
+- **双侧 fixture**：`tests/oracle/goto_prints_nextflowafter_1204.{cc,rs}` +
+  `tools/run_goto_prints_nextflowafter_oracle.sh` —— 六形态（while 尾
+  break-goto / infloop 回边 / switch fallthru / goto 套 goto / if-else 尾 /
+  dowhile 尾）锁定全部 12 分臂，**MATCH**（per-(composite,component) 后继身份
+  + per-goto gototype/prints 双侧逐字节一致）；Switch 槽位以 oracle 索引打印
+  （调度根=槽0），label 全 0 使 stable_sort 保序（真实 label 排序绑定
+  JUMPTABLE-TABLEAPI-0001）。
+## 2026-09-22：BlockSwitch label 管道结构层（JUMPTABLE-TABLEAPI-0001 消费半部）
+
+BlockSwitch 补齐 Ghidra ctor/finalizePrinting 语义（block.cc:3485-3601）：
+- 新增字段 `jump: Option<Arc<RwLock<JumpTable>>>`（block.hh:753，ctor
+  cc:3488 `jump = ind->getJumptable()`，经 block.cc:630 FlowBlock::getJumptable
+  的 BRANCHIND last-op 反查）与 `case_order: Vec<CaseOrder>`（block.hh:767
+  caseblocks 的 Rust 平行数组形态）。
+- 新增 `pub struct CaseOrder`（block.hh:755-767）：basicblock/label/depth/
+  chain/outindex，`CaseOrder::placeholder` 对应 addCase 的逐字段初始化
+  （cc:3498-3505：label=0/depth=0/chain=-1）。
+- `BlockSwitch::finalize_case_labels`（block.cc:3556-3592）：pass1 标记
+  fall-thru 链非根 depth=-1（cc:3562-3570）；pass2 仅链根设 label
+  （numIndicesByBlock>0 && depth==0，cc:3571-3589）并沿链下传
+  depthcount/label；stable_sort 按 CaseOrder::compare（block.hh:903-909，
+  label→depth），Rust 侧 cases/case_gototypes/case_values/case_order 四数组
+  联动置换；最后按 print-time 查询（block.hh:780/787）物化
+  `case_values[i][j] = getLabelByIndex(getIndexByBlock(basic_i, j))`，
+  get_num_labels/get_label 读取物化结果（值与 oracle 的活查询恒等，
+  finalizePrinting 先于任何打印运行）。
+- `BlockGraph::finalize_printing`（block.cc:1364-1371）：子节点递归入口，
+  由 ActionFinalStructure 调用（见 docs/api/blockaction.md）。
+- 自由函数 `finalize_printing_block`（RUGRA-GLUE，C++ virtual dispatch 的
+  Rust 形态）：Switch 分支先递归 control+非 goto case（= newBlockSwitch 经
+  identifyInternal 消费的 list 成员，cc:3559/1913；goto 臂目标留在周围图由
+  父图递归覆盖，cc:3548-3553）再跑 finalize_case_labels；其余复合块走
+  component_list_dyn 继承递归；叶子为 FlowBlock::finalizePrinting 空实现
+  （block.hh:262）。
+
+fixture：tests/oracle/printc_switch_emit_1204.rs 字面量补
+`jump: None, case_order: Vec::new()`（行为不变，仅结构体字段跟进），
+metadata rust_fixture_sha256 重钉（e8f69bfc→81656ef8）。
+
+## 2026-09-22（续）：CaseOrder 补 Clone
+
+`CaseOrder` derive 补 `Clone`（collapse 期重建点需按位携带 caseblocks）。
+
+## 2026-09-22（续 2）：finalize 见证 dump（调试工具）
+
+`finalize_case_labels` 尾部新增 RUGRA_BS_DUMP=1/2 门控的
+`[BLOCKSTRUCT] finalizePrinting case[i] label=0x.. depth= chain= outindex=
+labels=[..]` 逐臂见证输出（RUGRA-GLUE，无 Ghidra 对应物；label 管道结构层
+验收的观察窗口）。
+
+## 2026-09-22（续 3）：orderBlocks 顶层排序（BLOCKSTRUCT-ORDERBLOCKS-0001，Lane BV）
+
+`BlockGraph::order_blocks`（block.hh:430-431）：`if (list.size()!=1)
+sort(list.begin(),list.end(),compareFinalOrder)` 的完整移植——单元素列表
+跳过排序；排序用 `compare_final_order`（见下），在 ActionFinalStructure
+（blockaction.cc:2191）内、finalizePrinting/scopeBreak/markUnstructured
+**之前**调用，使 scopeBreak 的 next-sibling fall-thru（block.cc:1277-1287）、
+gotoPrints 的 next-in-flow 后继（block.cc:2881-2890）与 emitBlockGraph 的
+发射序都看到最终打印序。
+
+自由函数 `compare_final_order`（block.cc:709-730 FlowBlock::compareFinalOrder）
+返回 `std::cmp::Ordering`，三个排序键逐行对齐：
+
+1. **entry 键**（cc:712-713）：`getIndex()==0` 恒最前（双侧索引互异，
+   both-zero 分支映射 Equal 仅为保持全序）；
+2. **RETURN 键**（cc:717-728）：`lastOp()`（per-type virtual 分派）为
+   CPUI_RETURN 的块排在所有非 RETURN 结尾块之后，含
+   (RETURN,null)/(null,RETURN) 两臂；两个 RETURN 结尾块双向比较均为
+   false（cc:719+724），即并列（tie），映射 `Ordering::Equal`，永不落入
+   索引比较；
+3. **index 键**（cc:729）：其余按 `getIndex()` 升序。
+
+tie 解析：libstdc++ `std::sort` 对 ≤16 元素范围走插入排序 phase（对 tie
+稳定）；Rust 用稳定 `sort_by`，小列表（真实结构图的常态）tie 保序与 oracle
+一致。>16 元素范围的 quicksort phase tie 置换差异为已登记残差（metadata
+residual_diffs，当前 curl/httpd 全语料所有函数顶层列表均为单元素，
+block.hh:431 守卫直接跳过，A/B 字节恒等）。
+
+新增 per-type `lastOp` 委托覆盖（compareFinalOrder 的依赖，此前 trait 默认
+None 与 oracle 分派不符）：
+
+- `BlockGoto::last_op`（block.hh:562）：`wrapped`（getBlock(0)）委托；
+- `BlockMultiGoto::last_op`（block.hh:590）：同上。
+
+`Ord for BlockRef` 注释更正：其纯 index 比较对应 `compareBlockIndex`
+（block.hh:893，Varnode def-block 排序用），非 compareFinalOrder；真正的
+compareFinalOrder 落在 `compare_final_order` 自由函数。
+
+单测：`compare_final_order_sort_keys_and_order_blocks_guard`
+（entry/RETURN/null 三臂、双 RETURN tie、index 键、单元素守卫、
+order_blocks 端到端置换）。B2 双侧 fixture：
+`tests/oracle/blockstruct_orderblocks_1204`（5 case：entry-first+return-last+
+stable tie、null/RETURN 混合臂、真 BlockGoto 包裹 RETURN 块委托、真
+BlockMultiGoto 包裹非 RETURN 块委托、单元素跳过）——双侧投影逐字节
+MATCH（runner `tools/run_blockstruct_orderblocks_oracle.sh`）。
+
+### 2026-09-22：markLabelBumpUp 家族接线与死代码纠偏（BLOCKSTRUCT-MARKLABELBUMPUP-0001，Lane CC）
+
+- **新增 trait 默认方法** `FlowBlock::mark_label_bump_up_trait(bump)`（对应
+  block.hh:195 虚方法声明、block.cc:259-264 基类体）：`bump=true` 时置
+  `f_label_bumpup`，无递归无清除；叶子（BlockBasic/BlockCopy）继承该默认
+  （Ghidra 二者均直接继承 FlowBlock）。
+- **新增 `BlockGraph::mark_label_bump_up`**（block.cc:1258-1268）：基类法
+  标自身（bump=true 时）→ list 为空即返 → list[0] 原样接收 bump、
+  list[1..] 一律 false（虚派发）。`ActionFinalStructure::apply` 以
+  `mark_label_bump_up(false)` 驱动（blockaction.cc:2195）。
+- **新增继承 override**（Ghidra 中继承 BlockGraph::markLabelBumpUp 的类）：
+  BlockGoto/BlockMultiGoto（单一 `wrapped`=list[0]，gotoedges/gototarget
+  不在 list 内不递归）、BlockList（children[0] 收 bump 其余 false）、
+  BlockCondition（first 收 bump、second false）、BlockIf（[condition,
+  if_body, else_body?] 列表序，condition 收 bump，cc:newBlockIf/
+  newBlockIfElse block.cc:1822-1852）、BlockSwitch（[control, cases...,
+  default]，control=getBlock(0) 收 bump，grabCaseBasic block.cc:3524-3534）。
+- **死代码三 override 重写**（BlockWhileDo block.cc:3316 / BlockDoWhile
+  block.cc:3426 / BlockInfLoop block.cc:3454）：旧实现对 condition+body
+  双双平铺 `set_flags(LABEL_BUMPUP)`（WhileDo 连 body 也置位）且无递归，
+  违背 cc:3319/3429/3457 的 `BlockGraph::markLabelBumpUp(true)` 语义。
+  重写后：自置位 → WhileDo: condition(true)/body(false)；DoWhile/
+  InfLoop: 唯一子（list[0]）(true) → `!bump` 时清自身。嵌套前链（内层
+  循环收到 true）保持自身旗标——B2 fixture nested_loops_front 判别。
+- **消费侧**（printc.rs `emit_any_label_statement` 顶部）：补
+  printc.cc:3222 `if (bl->isLabelBumpUp()) return;` 早退——被旗标块的
+  label 语句跳过，由外层循环构造入口的调用统一打印（walker 级
+  `emit_any_label_statement` 于构造首个 token 前触发，位置等价 oracle
+  的 cc:3014/3076/3104/2965 构造入口调用）。
+- 验证与三门禁见 docs/api/blockaction.md 同日条目；B2 双侧 fixture
+  `tests/oracle/blockstruct_marklabelbumpup_1204`（runner
+  `tools/run_blockstruct_marklabelbumpup_oracle.sh`）5/5 MATCH。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 — default_label 字段）
+
+`BlockSwitch` 增 `default_label: Option<u64>`：oracle 的 default 是 caseblocks 普通成员
+（addCase cc:3515 isdefault），label 取其基本块首个表索引（finalizePrinting
+block.cc:3573-3576），与全部 case 一起按 (label,depth) 稳定排序（cc:3591）——
+`default:` 印在 label 秩位而非末位。Rugra default 走独立槽，该字段由
+`finalize_case_labels` 末尾按同款配方计算（front_leaf→original 基本块 +
+getIndexByBlock(basic,0)→getLabelByIndex）；无表索引或 case_order/cases 长度不齐时
+None（printc 保持末位旧位）。已知角落：default 为 fall-thru 链非根时 oracle 继承
+链根 label（cc:3577-3584），Rugra 按自身首索引排位（语料未见）。消费方与门禁见
+docs/api/printc.md 同日条目。
+
+## 2026-09-23：RULE-PULLSUBMULTI-LOOPIN-0001 关闭 — FlowBlock::hasLoopIn 落地
+
+新增 trait 默认方法 `has_loop_in`（block.cc:428-428-433 逐行）：任一入边带
+`f_loop_edge` 即真。边标已由 `find_spanning_tree`（block.cc:1101 回边标
+`F_BACK_EDGE|F_LOOP_EDGE`，Rugra block.rs:3492 同字面）维护，
+`ActionLaneDivide` 前无清除点，规则期读取即 oracle 语义。消费者
+`RulePullsubMulti::applyOp` cc:883 守卫（"We only pull up, do not pull down
+to bottom of loop"）接入：match_url Phase 2 ordinal 28 oppool1 首个发射错位
+（idx 358，Rugra 多发 pullsub_multi+dumptyhump）即 __libc_csu_init 循环体
+phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=861 对齐。
+四类核对：引用参数=无（只读入边 flags）；遍历序=入边槽位序；计数器=无；
+排序键=flag 位测试（block.hh:110 f_loop_edge=2）。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-CASE-GOTO-WRAP-0001 — case_isexit 平行数组 + nextFlowAfter 合并打印序）
+
+1. **`BlockSwitch::case_isexit`/`default_isexit`**：`CaseOrder::isexit`（block.hh:763，
+   addCase block.cc:3511-3514 于 grabCaseBasic 时、identifyInternal 半删组件外部出边
+   之前捕获的 `bl->sizeOut()==1`）的 Rust 平行数组传输——与 `case_gototypes` 同形
+   态；`finalize_case_labels` 稳定排序联合置换；捕获点在 blockaction.rs
+   `try_rule_switch`（写域主 commit）。
+2. **`next_flow_after_successors` Switch 臂**：对齐 `BlockSwitch::nextFlowAfter`
+   （block.cc:3639-3661）的 caseblocks 遍历序——default 以其 label 序位插入合并
+   打印序（def_pos 配方同 printc），goto 组件的后继=合并序下一位的前叶，最后一个
+   caseblock 交父臂（cc:3659-3660）；不再用「cases+尾部 default」的原始组件序（该
+   序使最后真实 case 的后继成为 default 前叶，goto 目标恰好是 default 时丢 goto
+   语句，httpd main case 0x66 实证）。文档注释同步改写。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-DEFAULTCHAIN-0001 — default 进入链图 + 排序 rank key）
+
+1. **`BlockSwitch::default_order`**（新字段）：oracle 的 `caseblocks` 含正式 default
+   为普通成员（grabCaseBasic cc:3529-3533 逐组件 addCase；仅 cc:3515 isdefault 旗
+   标区分）。Rugra 把 default 体放独立 `default_case` 槽，此前链图（cc:3536-3544
+   fall-thru chain）无法把「case 组件 goto 目标=default 基本块」的链边接上——
+   glob_set 的 `'\\'`(0x4c48→0x4c5e) 链断，default 以自身首表项 0x5e 排序，落
+   `'`'` 之后并显式 `goto switchD_..._5e`。新虚拟条目（index=case_order.len()）
+   由 `grab_case_order`（blockaction.rs）注册进同一 casemap，default 自身的
+   fall-thru 链（default→另一 case 的罕见形）同样建模。
+2. **`finalize_case_labels` 扩展视图**：cc:3562-3591 两遍 label/depth + 稳定排序
+   在 `case_order + default_order` 扩展向量上执行（链索引=grab 时索引，先遍历后
+   排序，同 oracle）；default 作为链非根继承链根 label（cc:3577-3584），合并序中
+   落在根后（depth tie-break，block.hh:907）。
+3. **`default_label` 语义升级为 rank key**：printc 的 def_pos 与
+   `next_flow_after` 的合并序都数 `label < default_label`；key=
+   `max(前缀 regular label)+1`（首位为 0），使 count==oracle 合并序前缀数 r
+   （链根与 default 同 label 时仍计入前缀=oracle 的 depth tie-break）。残角：
+   链穿过 default 延续（default 后还有同 label regular）无精确标量，key 尽力
+   （RUGRA_BS_DUMP 见证；双语料实测 0 次触发）。
+4. **效果**（curl 默认脸 489→474）：glob_set 38→23——switch 体与 canon 同构
+   （`case '\\':` 直落 `default:` 无 goto、`case ']'` 居 default 后）；httpd
+   908 逐字节恒等；glob_word 等 label-rank 消费者 def_pos 数学等价（root-default
+   的 count 不变量，A/B 零差亲证）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 10 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

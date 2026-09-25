@@ -26,6 +26,10 @@ NULL input slot 建模：Ghidra 的 `PcodeOp` 构造函数（op.cc:71，`inrefs(
 `inrefs` 是非可选 `Vec<Arc<RwLock<Varnode>>>`，因此用 `null_slot_sentinel()`
 （脱离 bank、size-0 的 Varnode）表示 NULL 槽：不经 `VarnodeBank` 创建（无
 create-index/计数副作用）、不带 descendant、在观察投影中按 NULL 处理。
+（2026-09-22，SB-ORD159-NULLSLOT-0001：本文件私有 `null_slot_sentinel` 改为
+委托 `crate::op::null_slot_sentinel()` 的进程级共享实例——两个 NULL 槽之间
+`Arc::ptr_eq` 恒 true，匹配 Ghidra 指针相等；`createReplacement` 的
+逐槽 unset 循环不再需要手动补写哨兵，`op_unset_input` 自带 clearInput。）
 
 ## 导出的公共 API
 
@@ -58,6 +62,13 @@ create-index/计数副作用）、不带 descendant、在观察投影中按 NULL
 - `create_replacement(fd, def_op)` — 创建实际 Varnode (transform.cc:175)；
   `piece` 类型 bit 未字节对齐时 `panic!("Varnode piece is not byte aligned")`
   （cc:197-198 LowlevelError 的 panic 映射，同 funcdata.rs 既有惯例）；
+  piece 臂地址 **vn 自身空间限定**（2026-09-25 FAMILY-AUDIT-SPACELESS-SITES-0001：
+  cc:202 `Address addr = vn->getAddr() + bytePos` 保留 vn 的空间，cc:207
+  newVarnodeOut 收完整 (space,offset)——def 分支改
+  `new_varnode_out_full(byte_size, vn_space, addr, def)`，unique 临时/栈/ram
+  piece 不再钉死寄存器空间；free 分支 `vbank.create_with_space(vn_space,…)`
+  空间本就正确——其 raw-create 形态与 cc:205 `newVarnode` 完整尾
+  （assignHigh/laned/queryProperties）的差异属邻接适配面观察，已登记未改）；
   `constant_iop` 分支 (cc:211-215) 经模块私有 `get_op_from_const_offset`
   把占位符 `val` 解码回受影响 PcodeOp（op.hh:249 静态 `getOpFromConst` 的
   按 offset 形态），再 `Funcdata::new_varnode_iop` 物化 iop 空间注记；
@@ -218,3 +229,5 @@ SeqNum time/order、def-use、块内顺序和 bank 计数。
 不得残留 `residual_union`、`out_of_scope_observations` 逐条校验）。fixture
 metadata schema 2 的每个 coverage 项仍为 `{status, covers, residual_todo_ids}`。
 <!-- annotation-pass: 2026-07-04 -->
+
+- 2026-09-25 (FAMAUDIT integration): constructor sites merged to master; this note records the integration commit touching the module.
