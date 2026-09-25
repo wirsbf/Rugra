@@ -110,11 +110,25 @@ impl DebugGlobalDatabase {
             address_size = unit.encoding().address_size as usize;
             let mut entries = unit.entries();
             // (depth, name, is_subprogram) stack for parent-function
-            // tracking: next_dfs yields (depth, entry) in document order, so
-            // popping the stack down to depth-1 leaves the direct parent.
+            // tracking. next_dfs yields (DELTA depth, entry): the isize is
+            // the depth CHANGE from the previous entry (gimli unit.rs
+            // EntriesTree::next_dfs — same accumulation pattern the
+            // read_prototype_children/read_struct_fields walks use), so the
+            // absolute level is accumulated separately and the stack is
+            // popped down to it, keeping the ancestors. Treating the delta
+            // as the absolute level popped the enclosing subprogram frame
+            // off the stack on every first child (a +1 child of a depth-1
+            // subprogram read as "depth 1" -> pop the subprogram's own
+            // frame), so every function-static (DW_TAG_variable with
+            // DW_OP_addr nested in a DW_TAG_subprogram) imported with
+            // parent_function = None and printed its bare ELF-stripped name;
+            // the locked-oracle spellings are my_get_token::save @0x17510
+            // and next_url::beenhere @0x17518 (ghidra_curl_1204.c:1226+).
             let mut scope_stack: Vec<(usize, Option<String>, bool)> = Vec::new();
-            while let Some((depth, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
-                let depth = usize::try_from(depth).unwrap_or(0);
+            let mut absolute_depth: isize = 0;
+            while let Some((delta, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+                absolute_depth += delta;
+                let depth = usize::try_from(absolute_depth).unwrap_or(0);
                 while scope_stack.len() > depth {
                     scope_stack.pop();
                 }

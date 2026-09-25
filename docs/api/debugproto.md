@@ -99,6 +99,17 @@ declared variable type with C array decay (0x17660 `glob_expand` →
 `URLGlob **`, 0x17520 `config` → `Configurable *`, 0x17680 `glob_buffer`
 → `char *`).
 
+Function-statics — `DW_TAG_variable` nested inside a `DW_TAG_subprogram` —
+carry the enclosing function's name in `DebugGlobalVariable::
+parent_function` (gimli's `next_dfs` yields a depth DELTA per entry, so the
+absolute level is accumulated before the scope stack pops; misreading the
+delta as the absolute level used to drop the subprogram frame and flatten
+every static to a bare name — `CURLCANON-DBSYM-DUP-RAWNAME-0001`). The
+driver renders those as `<parent>::<name>` spellings in both the Program-DB
+DWARF layer and the name-proxy overlay: locked witnesses
+`my_get_token::save` @0x17510 and `next_url::beenhere` @0x17518
+(`ghidra_curl_1204.c:1226+`).
+
 `DebugGlobalDatabase::seed_global_locked` (`GLOBWORD-C5-GLOBAL-TYPEFLOW-0001`)
 is the driver-side projection of the DWARF front end's committed-data-type
 semantic: Ghidra's analyzer creates Data with a locked-in type, the decompiler
