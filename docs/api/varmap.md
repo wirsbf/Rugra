@@ -513,8 +513,16 @@ store is ported yet"）：
   apply 头部调用（coreaction.cc:5398 位置）：输入 varnode 命中推荐地址即
   `updateType(dt, true, false)`（锁入不覆写）。当前唯一生产者=collect_name_recs
   的 this 指针臂；funcdata_varnode.cc:1725-1742 的第二生产者
-  （checkParamTypeRecommendations）属参数分析域未移植（has_type_recommendations
-  访问器已备）。
+  （checkParamTypeRecommendations）属参数分析域未移植——登记
+  **VARMAP-PARAMTYPERECOMM-0001**（has_type_recommendations 访问器已备）。
+  **CR-F7NAME 复审修**（同 commit）：恢复链 invalid-usepoint 臂的 vn 解析按
+  entry 自身 uselimit 取 first-use 地址（database.cc:122-127：空 uselimit=invalid
+  Address → findLinkedVarnode 的 addr-tied 扫描臂 funcdata_varnode.cc:1233-1241；
+  有限 uselimit=首 range 首地址 → usepoint-in-range 扫描臂 :1242-1249——修前误传
+  存储偏移，恒走扫描臂）；remap 传参改用 rename 后的最终唯一名（oracle 传 Symbol
+  本体 funcdata_varnode.cc:1104-1126，修前传 pre-unique 推荐名，碰撞去重时
+  symbol_table 记录名≠符号名）；新增真 vbank 双侧 fixture（addr-tied 正/负 +
+  uselimit 有限正/负）覆盖修前 UNTESTED 分支。
 
 可观测性：TYPESEED committed locals 全部 name+type-locked、平台参数符号
 name+type-locked，故当前所有语料下三存储恒空、恢复链恒 no-op（与 oracle

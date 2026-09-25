@@ -2757,14 +2757,15 @@ impl ScopeLocal {
         self.type_recommend.push(TypeRecommend { space, offset, dtype: dt });
     }
 
-    // Ghidra: varmap.hh:219 ScopeLocal::hasTypeRecommendations
+    // Ghidra: varmap.hh:264 ScopeLocal::hasTypeRecommendations
     /// Are there any data-type recommendations on this scope? Faithful to
-    /// `hasTypeRecommendations` (varmap.hh:219 `!typeRecommend.empty()`).
+    /// `hasTypeRecommendations` (varmap.hh:264 `!typeRecommend.empty()`).
     /// The oracle's second producer (`Funcdata::checkParamTypeRecommendations`,
     /// funcdata_varnode.cc:1725-1742) consults it before adding a "this"-
     /// pointer recommendation; Rugra's param-analysis path does not build
-    /// that producer yet (the store's only current producer is the
-    /// collectNameRecs "this"-pointer arm).
+    /// that producer yet — registered as VARMAP-PARAMTYPERECOMM-0001 (the
+    /// store's only current producer is the collectNameRecs "this"-pointer
+    /// arm).
     pub fn has_type_recommendations(&self) -> bool {
         !self.type_recommend.is_empty()
     }
@@ -2960,11 +2961,32 @@ impl ScopeLocal {
                         continue;
                     }
                     // cc:1526: vn = fd->findLinkedVarnode(entry).
+                    // CR-F7NAME A: the entry's own getFirstUseAddress
+                    // (database.cc:122-127): an EMPTY uselimit is the
+                    // invalid Address() — findLinkedVarnode then takes the
+                    // "first varnode at (size,addr), must be addr-tied,
+                    // else null" branch (funcdata_varnode.cc:1233-1241) —
+                    // a use-limited entry passes its first range's first
+                    // address into the usepoint-in-range scan
+                    // (funcdata_varnode.cc:1242-1249). The cc:1524-1525
+                    // addrtied gate makes the empty-uselimit form the
+                    // branch's reachable population (the SYMBOL-level
+                    // addrtied flag is set exactly when a static mapping
+                    // has an empty uselimit, database.cc:1149-1150), but
+                    // the branch itself keys on the ENTRY, so both forms
+                    // are carried. Rugra's find_linked_varnode seam marks
+                    // the invalid usestart as Address::new(0).
+                    let first_use_addr = match entry.uselimit.first() {
+                        None => crate::address::Address::new(0),
+                        Some(&(_space_idx, first, _last)) => {
+                            crate::address::Address::new(first)
+                        }
+                    };
                     let vn = fd.find_linked_varnode(
                         entry.start,
                         entry.size.max(0) as usize,
                         false,
-                        crate::address::Address::new(entry.start),
+                        first_use_addr,
                         0,
                     );
                     (sym_idx, vn)
@@ -3026,19 +3048,27 @@ impl ScopeLocal {
                 continue;
             }
             // cc:1543-1545: renameSymbol(sym, makeNameUnique(name)) +
-            //   setSymbolId + setAttribute(namelock).
-            if let Some(unique) = self.make_name_unique(&rec.name) {
-                self.rename_symbol(sym_idx, &unique);
-            }
+            //   setSymbolId + setAttribute(namelock). makeNameUnique's
+            //   failure is Ghidra's LowlevelError (unreachable below
+            //   100000 same-named symbols) — the let-else skips the
+            //   remainder of this recommendation on that path.
+            let Some(unique_name) = self.make_name_unique(&rec.name) else {
+                continue;
+            };
+            self.rename_symbol(sym_idx, &unique_name);
             self.symbols[sym_idx].symbol_id = rec.symbol_id;
             self.symbols[sym_idx].namelock = true;
             // cc:1546-1548: if (vn != 0) fd->remapVarnode(vn, sym,
-            //   usepoint) — the usepoint Address is invalid in the
+            //   usepoint) — the oracle passes the Symbol itself
+            //   (funcdata_varnode.cc:1104-1110), which now carries the
+            //   FINAL uniquified name (CR-F7NAME B): the remap records
+            //   the post-rename name, never the pre-unique recommendation
+            //   spelling. The usepoint Address is invalid in the
             //   invalid-usepoint arm (Address() default), matching the
             //   oracle passing the recommendation's own useaddr.
             if let Some(vn) = &vn {
                 let usepoint_addr = crate::address::Address::new(rec.usepoint.unwrap_or(0));
-                fd.remap_varnode(vn, &rec.name, usepoint_addr);
+                fd.remap_varnode(vn, &unique_name, usepoint_addr);
             }
         }
 
@@ -3075,16 +3105,20 @@ impl ScopeLocal {
                 continue;
             }
             // cc:1565-1567: renameSymbol(makeNameUnique(name)) +
-            //   setAttribute(namelock) + setSymbolId.
-            if let Some(unique) = self.make_name_unique(&rec.name) {
-                self.rename_symbol(sym_idx, &unique);
-            }
+            //   setAttribute(namelock) + setSymbolId. CR-F7NAME B: the
+            //   uniquified final name flows into the remap below (the
+            //   oracle passes the Symbol itself, funcdata_varnode.cc:
+            //   1120-1126, whose name is the post-rename spelling).
+            let Some(unique_name) = self.make_name_unique(&rec.name) else {
+                continue;
+            };
+            self.rename_symbol(sym_idx, &unique_name);
             self.symbols[sym_idx].namelock = true;
             self.symbols[sym_idx].symbol_id = rec.symbol_id;
             // cc:1568: fd->remapDynamicVarnode(vn, sym, address, hash).
             fd.remap_dynamic_varnode(
                 &vn_found,
-                &rec.name,
+                &unique_name,
                 crate::address::Address::new(rec.use_point),
                 rec.hash,
             );
@@ -5524,6 +5558,160 @@ mod tests {
         let mut fd = crate::funcdata::Funcdata::new("t", crate::address::Address::new(0x1000), 0x100);
         scope.recover_name_recommendations_for_symbols(&mut fd);
         assert_eq!(scope.symbols[sym].name, "$$undef00000001");
+    }
+
+    // --- CR-F7NAME A: the real-vbank two-sided fixture for the
+    // invalid-usepoint arm's vn resolution (funcdata_varnode.cc:1218-1251).
+    // The first-use address comes from the ENTRY's own uselimit
+    // (database.cc:122-127): empty → the invalid Address() → the
+    // addr-tied-scan branch (:1233-1241); a range → the
+    // usepoint-in-range scan (:1242-1249). ---
+
+    /// Side 1: an unrestricted (empty-uselimit) entry resolves through the
+    /// addr-tied scan — positive (addr-tied varnode matches, remap records
+    /// the FINAL uniquified name, CR-F7NAME B) and negative (a non-tied
+    /// varnode at the same storage yields no vn; the rename still lands,
+    /// the remap does not).
+    #[test]
+    fn test_recover_invalid_usepoint_resolves_via_addr_tied_scan() {
+        // Positive: addr-tied varnode at (4, stack, 0x40).
+        let mut scope = ScopeLocal::new();
+        // Two same-named recommendations force makeNameUnique's dedup on
+        // the second — the remap must record the FINAL name (B).
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x50,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 2,
+        });
+        let sym1 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        let sym2 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000002",
+            Some(int_dt(4, TypeMetatype::Int)), 0x50, None);
+        scope.symbols[sym1].addrtied = true;
+        scope.symbols[sym2].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new(
+            "t", crate::address::Address::new(0x1000), 0x100);
+        let vn1 = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x40);
+        vn1.write().unwrap().set_flags(
+            crate::varnode::varnode_flags::ADDRTIED
+                | crate::varnode::varnode_flags::INSERT);
+        let vn2 = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x50);
+        vn2.write().unwrap().set_flags(
+            crate::varnode::varnode_flags::ADDRTIED
+                | crate::varnode::varnode_flags::INSERT);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        // Both symbols renamed; the second through the dedup suffix.
+        assert_eq!(scope.symbols[sym1].name, "cust_name");
+        let second_name = scope.symbols[sym2].name.clone();
+        assert_ne!(second_name, "cust_name");
+        assert!(second_name.starts_with("cust_name"));
+        // CR-F7NAME B: the remaps record the FINAL names, not the
+        // pre-unique recommendation spelling.
+        assert_eq!(fd.symbol_table.get(&0x40), Some(&"cust_name".to_string()));
+        assert_eq!(fd.symbol_table.get(&0x50), Some(&second_name));
+
+        // Negative: a non-tied varnode at the storage — the addr-tied scan
+        // returns null (funcdata_varnode.cc:1238-1239), so the rename
+        // still lands but the remap never records the slot.
+        let mut scope = ScopeLocal::new();
+        scope.name_recommend.push(NameRecommend {
+            space: crate::space::AddressSpace::Stack,
+            offset: 0x40,
+            usepoint: None,
+            size: 4,
+            name: "cust_name".to_string(),
+            symbol_id: 1,
+        });
+        let sym = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "$$undef00000001",
+            Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[sym].addrtied = true;
+        let mut fd = crate::funcdata::Funcdata::new(
+            "t", crate::address::Address::new(0x1000), 0x100);
+        let vn = fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Stack, 0x40);
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INSERT);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert!(!fd.symbol_table.contains_key(&0x40));
+    }
+
+    /// Side 2: a use-limited entry (the only mapping at the recommendation
+    /// address, on a SYMBOL whose addrtied flag comes from a disjoint
+    /// unrestricted whole map) resolves through the usepoint-in-range scan
+    /// — the first-use address is the entry's first uselimit range offset,
+    /// NOT the storage offset. An unwritten varnode's use point is
+    /// fd.baseaddr - 1 (varnode.cc getUsePoint), so the two fd bases below
+    /// pick the match and the miss.
+    #[test]
+    fn test_recover_use_limited_entry_resolves_via_usepoint_scan() {
+        let build = |fd_base: u64| -> (ScopeLocal, usize, crate::funcdata::Funcdata) {
+            let mut scope = ScopeLocal::new();
+            scope.name_recommend.push(NameRecommend {
+                space: crate::space::AddressSpace::Stack,
+                offset: 0x40,
+                usepoint: None,
+                size: 4,
+                name: "cust_name".to_string(),
+                symbol_id: 1,
+            });
+            // The addrtied whole map [0x80,0x87] sets the SYMBOL flag
+            // (database.cc:1149-1150, addMap's empty-uselimit rule) without
+            // overlapping the recommendation address.
+            let sym = scope.add_symbol(
+                crate::space::AddressSpace::Stack, "$$undef00000001",
+                Some(int_dt(8, TypeMetatype::Int)), 0x80, None);
+            assert!(scope.symbols[sym].addrtied); // the addMap rule fired
+            // The use-limited 4-byte piece [0x40,0x43] with the uselimit
+            // range [0x2000,0x2fff] — the only entry overlapping the
+            // recommendation, so findOverlap returns it unambiguously and
+            // its own uselimit drives the scan branch.
+            let ram_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
+            scope.add_map_entry(
+                sym,
+                crate::space::AddressSpace::Stack,
+                0x40,
+                4,
+                0,
+                crate::varnode::varnode_flags::MAPPED,
+                vec![(ram_index, 0x2000, 0x2fff)],
+            );
+            let mut fd = crate::funcdata::Funcdata::new(
+                "t", crate::address::Address::new(fd_base), 0x100);
+            let vn = fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Stack, 0x40);
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INSERT);
+            (scope, sym, fd)
+        };
+        // Positive: fd base 0x3000 → the unwritten varnode's use point is
+        // 0x2fff, inside [0x2000,0x2fff] → the scan matches → remap runs.
+        let (mut scope, sym, mut fd) = build(0x3000);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert_eq!(fd.symbol_table.get(&0x40), Some(&"cust_name".to_string()));
+        // Negative: fd base 0x2000 → use point 0x1fff < 0x2000 → the scan
+        // misses → rename lands, remap does not. (With the pre-CR form —
+        // the storage offset 0x40 as the first-use address — BOTH cases
+        // matched; this side is what pins the fix.)
+        let (mut scope, sym, mut fd) = build(0x2000);
+        scope.recover_name_recommendations_for_symbols(&mut fd);
+        assert_eq!(scope.symbols[sym].name, "cust_name");
+        assert!(!fd.symbol_table.contains_key(&0x40));
     }
 
     #[test]
