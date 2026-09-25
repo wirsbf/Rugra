@@ -135,9 +135,13 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
   分析窗口（scope 并集树减 paramrange，由 `ScopeLocal::build_map_state` 按 varmap.cc:1260 组装）
 - `analysis_range()` / `hints()` — RUGRA-GLUE 只读观察口（锁定 fixture 的观察面；C++ 侧经
   `#define private public` 直读 `range`/`maplist`）
-- `add_range(start, dtype, flags, rt, high_ind)` — `MapState::addRange` (varmap.cc:896)：size<=0 或
+- `add_range(start, dtype, flags, rt, high_ind)` — `MapState::addRange` (varmap.cc:896)：**2026-09-25
+  RANGEHINT-CR-F2** `ct==NULL || ct->getSize()==0` 一律代换 `defaultType` 后**继续**（varmap.cc:899-900；
+  此前 `Some(零尺寸)` 走 `size<=0` 早退被直接丢弃=欠收 hint，与 oracle 的"代换后继续"相悖——零尺寸
+  Some 现进 default 类型与尺寸；default-less 测试构造器保持匿名 size-1 形继续，不再丢弃；单测
+  `test_mapstate_add_range_zero_size_substitutes_default` / `..._bare_constructor_keeps_flow` 钉死）；
   完整 extent `[st, st+size-1]`（uintb 回绕）不在分析窗口单一 range 内则丢弃（`range.inRange(addr,sz)`，
-  varmap.cc:902 / address.cc:468-487，`window_in_range`）；无类型回退默认类型；`sst` 为
+  varmap.cc:902 / address.cc:468-487，`window_in_range`）；`sst` 为
   byteToAddress+sign_extend+addressToByte（varmap.cc:904-906，1-word-size 8 字节栈上即
   `start as i64`——负偏移保持负值供 `RangeHint::compare` 有符号排序）
 - `add_fixed_type(start, dtype, flags)` — `MapState::addFixedType` (varmap.cc:926)

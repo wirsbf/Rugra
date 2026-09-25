@@ -1504,7 +1504,8 @@ impl MapState {
 
     // Ghidra: varmap.cc:896 MapState::addRange
     /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896):
-    /// a null/zero-size type falls back to the default type, then the
+    /// a null/zero-size type is SUBSTITUTED with the default type and the
+    /// flow continues (varmap.cc:899-900 — never dropped), then the
     /// FULL extent `[st, st+sz-1]` must fit inside one range of the
     /// analysis window (`range.inRange(Address(spaceid,st),sz)`,
     /// varmap.cc:902 — address.cc:468-487) or the hint is dropped;
@@ -1516,9 +1517,19 @@ impl MapState {
     /// (-1 if not an array reference).
     pub fn add_range(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32,
                      rt: RangeType, high_ind: i32) {
-        let dtype = dtype.or_else(|| self.default_type.clone());
+        // varmap.cc:899-900: (ct == (Datatype *)0) || (ct->getSize() == 0)
+        // → ct = defaultType — a zero-size Some is SUBSTITUTED with the
+        // default type and the flow CONTINUES; it is never dropped. The
+        // default-less `MapState::new` constructor (test-only; the oracle
+        // always threads getBase(1,TYPE_UNKNOWN) here, varmap.cc:1261)
+        // cannot substitute and keeps the historical anonymous size-1
+        // fallback of the map_or below.
+        let dtype = match dtype {
+            Some(d) if d.get_size() != 0 => Some(d),
+            _ => self.default_type.clone(),
+        };
+        // varmap.cc:901: int4 sz = ct->getSize();
         let size = dtype.as_ref().map_or(1, |d| d.get_size() as i32);
-        if size <= 0 { return; }
         // if (!range.inRange(Address(spaceid,st),sz)) return; (varmap.cc:902)
         if !window_in_range(&self.range, start, size as u64) { return; }
         // intb sst = byteToAddress(st, wordSize); sst = sign_extend(sst,
@@ -5427,6 +5438,52 @@ mod tests {
         assert_eq!(scope.symbols.len(), 1);
         assert_eq!(scope.symbols[0].start, 0);
         assert_eq!(scope.symbols[0].size, 4);
+    }
+
+    // --- RANGEHINT-CR-F2: a zero-size Some is substituted, never dropped ---
+
+    #[test]
+    fn test_mapstate_add_range_zero_size_substitutes_default() {
+        // varmap.cc:899-900: a ct with getSize()==0 → ct = defaultType, and
+        // the flow CONTINUES — the hint is collected with the default type
+        // and its size. Pre-fix behavior: the Some(zero-size) input was
+        // silently dropped (the `size <= 0` early return).
+        let mut state =
+            MapState::new_with_default(vec![(0, 0xfffff)], int_dt(4, TypeMetatype::Int));
+        state.add_range(
+            0x20,
+            Some(int_dt(0, TypeMetatype::Int)),
+            0,
+            RangeType::Fixed,
+            -1,
+        );
+        assert_eq!(state.hint_count(), 1, "zero-size Some must not be dropped");
+        assert_eq!(state.hints()[0].start, 0x20);
+        assert_eq!(state.hints()[0].size, 4, "size comes from the substituted default");
+        assert_eq!(
+            state.hints()[0].dtype.as_ref().map(|d| d.get_size()),
+            Some(4),
+            "dtype is the substituted default"
+        );
+    }
+
+    #[test]
+    fn test_mapstate_add_range_zero_size_bare_constructor_keeps_flow() {
+        // The default-less `MapState::new` (test-only; the oracle always has
+        // defaultType, varmap.cc:1261) cannot substitute: the flow still
+        // continues with the historical anonymous size-1 shape instead of
+        // dropping the hint (pre-fix: dropped).
+        let mut bare = MapState::new(vec![(0, 0xfffff)]);
+        bare.add_range(
+            0x40,
+            Some(int_dt(0, TypeMetatype::Int)),
+            0,
+            RangeType::Fixed,
+            -1,
+        );
+        assert_eq!(bare.hint_count(), 1, "flow continues even without a default");
+        assert_eq!(bare.hints()[0].size, 1);
+        assert!(bare.hints()[0].dtype.is_none());
     }
 
     // --- SCOPE-FINDOVERLAP-KEY-0001 (F1/F2/F3) ---
