@@ -8880,10 +8880,43 @@ impl PrintC {
                                 if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(Self::cast_type_string(t)) } else { None }
                             });
                         if let Some(ref ptr_name) = addr_type_name {
-                            self.emit
-                                .print(&format!("*(({} *)", ptr_name.trim_end_matches(" *")));
-                            self.push_input(def_op, 1);
-                            self.emit.print(")");
+                            // HTTPDMAIN-F3-DOUBLECAST-0001: fold the arm's
+                            // typed wrapper when the address input is an
+                            // implied CPUI_CAST — the inlined def already
+                            // prints the same `(T *)` prefix (the address
+                            // varnode IS the CAST's output, so the wrapper
+                            // type and the inlined cast type are the same
+                            // text by dataflow). The oracle's opLoad
+                            // (printc.cc:486-498) pushes only the
+                            // dereference token — every cast in the golden
+                            // comes from a CAST op, exactly one each
+                            // (printc.cc:448 opTypeCast); the double
+                            // `(T *)(T *)` switch-head form was this
+                            // transport's wrapper stacking on the inlined
+                            // cast. `*` + the cast expression is legal C
+                            // (`*(T *)expr`).
+                            let addr_inline_casts = {
+                                let addr_vn = def_op.inrefs[1].read().unwrap();
+                                addr_vn.is_implied()
+                                    && addr_vn
+                                        .get_def()
+                                        .map(|d| {
+                                            d.read().unwrap().opcode
+                                                == OpCode::CPUI_CAST
+                                        })
+                                        .unwrap_or(false)
+                            };
+                            if addr_inline_casts {
+                                self.emit.print("*");
+                                self.push_input(def_op, 1);
+                            } else {
+                                self.emit.print(&format!(
+                                    "*(({} *)",
+                                    ptr_name.trim_end_matches(" *")
+                                ));
+                                self.push_input(def_op, 1);
+                                self.emit.print(")");
+                            }
                         } else {
                             // *(long *)addr — default cast so *addr is legal C even
                             // when addr was inferred as a non-pointer scalar.
@@ -8995,7 +9028,41 @@ impl PrintC {
                     self.emit.print(&format!("({})", type_name));
                 }
                 if !def_op.inrefs.is_empty() {
-                    self.push_input(def_op, 0);
+                    // printlanguage.cc:277 (parentheses): a binary child under
+                    // the typecast presurround (prec 62, printc.cc:35) takes
+                    // operand parens — the RPN transport gets this from the
+                    // token machinery (canon `apr_ctime((undefined1 *)
+                    // ((long)plVar12 + 0x60), ...)`), the legacy inline
+                    // channel mirrors the same nesting rule here so the
+                    // switch-head form keeps the oracle's operand parens
+                    // (golden main: `*(undefined1 *)((long)plVar12 + 0x33)`).
+                    let child_needs_parens = {
+                        let in_vn = def_op.inrefs[0].read().unwrap();
+                        if in_vn.is_implied() {
+                            in_vn
+                                .get_def()
+                                .map(|d| {
+                                    let dg = d.read().unwrap();
+                                    !dg.is_dead()
+                                        && optoken::binary_token(dg.opcode)
+                                            .map(|t| {
+                                                t.precedence
+                                                    < optoken::CAST_PRECEDENCE
+                                            })
+                                            .unwrap_or(false)
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    };
+                    if child_needs_parens && !self.discovery_pass {
+                        self.emit.print("(");
+                        self.push_input(def_op, 0);
+                        self.emit.print(")");
+                    } else {
+                        self.push_input(def_op, 0);
+                    }
                 }
                 return;
             }

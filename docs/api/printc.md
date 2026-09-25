@@ -3388,3 +3388,36 @@ no-op）；STRINGDATA 字面量臂硬编码 `"badstring"`。
   out）→ 打印侧忠实读 int8 → "badstring" + `(char *)`。登记
   `COREACTION-CALLOTHER-OUTTOKEN-0001`（coreaction.rs token 计算 +
   userop.rs InternalStringOp 特化；修后本票验收即达）。
+
+### 2026-09-26：HTTPDMAIN-F3-DOUBLECAST-0001 — switch 头双重强转折叠+legacy CAST 操作数括号
+
+**症状**（httpd canon main switch 头亲证）：
+`switch(*((undefined1 *)(undefined1 *)(long)plVar12 + 0x33))` 发两层
+`(undefined1 *)`，golden 同位 `switch(*(undefined1 *)((long)plVar12 + 0x33))`
+恰一层；其余表达式无此病。
+
+- **根因（本 session 探针钉死）**：switch 头经 `emit_switch_head_expr`
+  → `push_varnode`（**legacy 直发通道**）渲染，语句体走 RPN 通道——两条
+  运输层对 LOAD 的处理不同：RPN 的 LOAD 臂忠实（cc:486-498 只发
+  dereference token，cast 全部来自内联 CAST op，每 op 恰一次
+  printc.cc:448）；legacy 的 `emit_inline_expr` LOAD 臂自带
+  `*((T *)` 类型化包装（Rugra 传输层发明，oracle 无对应物），叠加内联
+  CAST 自己的 `(T *)` → 同型双层。地址输入即 CAST 输出 varnode，
+  两处类型文本恒等（数据流保证）。
+- **修法①（同型折叠）**：legacy LOAD 臂在地址输入为 implied 且 def 为
+  CPUI_CAST 时省略自身包装，发 `*` + 输入（内联 CAST 已带同型 cast，
+  `*(T *)expr` 合法 C）——oracle opLoad 从不发包装，cast 文本只来自
+  CAST op。
+- **修法②（操作数括号）**：legacy `emit_inline_expr` CAST 臂补
+  printlanguage.cc:277 的嵌套规则——typecast presurround（prec 62，
+  printc.cc:35）下的二元子表达式（binary token prec < 62）加操作数
+  括号。RPN 通道由 token 机制免费获得（canon
+  `apr_ctime((undefined1 *)((long)plVar12 + 0x60),...)` 亲证），
+  legacy 通道此前缺失——修后 `(T *)((long)p + 0x33)` 形与 RPN/golden
+  一致。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票②后）**：main
+  switch 头与 golden 3757 行逐字节一致
+  （`switch(*(undefined1 *)((long)plVar12 + 0x33))`）；httpd canon
+  **862→860**、httpd 镜 **265→263**；curl canon 267/curl 镜 101/vsh 镜
+  14 全部不变；defects=0/numbering=0 全档；bank 391/391；lib
+  1735P/1F（nonzeromask 预存）。
