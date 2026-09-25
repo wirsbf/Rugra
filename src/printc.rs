@@ -2663,9 +2663,22 @@ impl PrintC {
             // argument group.
             OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
-                    let v0 = in0.read().unwrap();
-                    let off = v0.get_offset();
-                    drop(v0);
+                    // printc.cc:597-602: the unnamed-callee arm reads
+                    // fc->getEntryAddress() — the callspec's entry address,
+                    // whose space is the CALL's pre-annotation in(0)
+                    // address space (fspec.cc:4934 ctor). Rugra's Iop
+                    // annotation mirrors only the offset
+                    // (new_varnode_call_specs compatibility_offset), so the
+                    // space rides the callspec channel: get_call_spec() ->
+                    // entry_addr. Lock order follows the fspec.rs:2470-2477
+                    // snapshot pattern — the varnode guard is dropped
+                    // before the callspec is locked.
+                    let (off, fc) = {
+                        let v0 = in0.read().unwrap();
+                        (v0.get_offset(), v0.get_call_spec())
+                    };
+                    let entry = fc.and_then(|fc| fc.read().unwrap().entry_addr);
+                    let (addr_size, word_size) = Self::entry_addr_dims(entry.as_ref());
                     self.symbol_table
                         .get(&off)
                         .cloned()
@@ -2676,26 +2689,29 @@ impl PrintC {
                             // AddrSpace::printRaw (space.cc:206-222) zero-
                             // pads to 2*addrsize (sz shrunk to 4 below
                             // 2^32), so the direct-runner golden spells
-                            // `func_0x00003190`. The `FUN_%x` face is the
+                            // `func_0x00003190`. The `FUN_` face is the
                             // headless FRONTEND's database name (analyzeHeadless
                             // symbol manager), which the decompiler library
                             // never generates — Rugra's canon-tier fallback
-                            // keeps it for the headless golden, and the
-                            // direct-runner tier (GENSMOKE-S3 /
+                            // keeps it for the headless golden, spelled with
+                            // the same printRaw digit rule (`FUN_00102020`),
+                            // and the direct-runner tier (GENSMOKE-S3 /
                             // MIRROR2-S3 callee-naming family) takes the
                             // oracle's generic name (tier probe:
                             // typefactory direct_runner_tier_active, the
-                            // MIRROR-ENVS-CANONICAL-0001 bundle).
+                            // MIRROR-ENVS-CANONICAL-0001 bundle). Both faces
+                            // take (addrsize, wordsize) from the entry
+                            // space channel, not a hardwired Ram.
                             if crate::type_system::typefactory::direct_runner_tier_active() {
                                 format!(
                                     "func_{}",
-                                    Self::addr_space_print_raw(
-                                        crate::space::AddressSpace::Ram,
-                                        off
-                                    )
+                                    Self::addr_space_print_raw_dims(addr_size, word_size, off)
                                 )
                             } else {
-                                format!("FUN_{:x}", off)
+                                format!(
+                                    "FUN_{}",
+                                    Self::print_raw_zero_pad_digits(addr_size, word_size, off)
+                                )
                             }
                         })
                 } else {
@@ -7245,33 +7261,83 @@ impl PrintC {
             // OtherSpace::printRaw (space.cc:410-414): plain hex.
             AddressSpace::Other(_) => format!("0x{:x}", offset),
             // Base AddrSpace::printRaw (space.cc:206-222).
-            _ => {
-                let mut sz = space.addr_size();
-                if sz > 4 {
-                    if (offset >> 32) == 0 {
-                        // Don't print a bunch of zeroes at front of address
-                        sz = 4;
-                    } else if (offset >> 48) == 0 {
-                        sz = 6;
-                    }
-                }
-                let wordsize = space.word_size() as u64;
-                // byteToAddress (space.hh:523-525): byte units -> addressable
-                // units.
-                let addr_units = if wordsize > 1 {
-                    offset / wordsize
-                } else {
-                    offset
-                };
-                let mut text = format!("0x{:0width$x}", addr_units, width = 2 * sz);
-                if wordsize > 1 {
-                    let cut = offset % wordsize;
-                    if cut != 0 {
-                        text.push_str(&format!("+{}", cut));
-                    }
-                }
-                text
+            _ => Self::addr_space_print_raw_dims(
+                space.addr_size(),
+                space.word_size() as u64,
+                offset,
+            ),
+        }
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Digit core of the base `AddrSpace::printRaw` (space.cc:209-216): the
+    /// sz shrink (`sz > 4` → 4 when `offset>>32==0`, else 6 when
+    /// `offset>>48==0`), then `setfill('0') << setw(2*sz) << hex <<
+    /// byteToAddress(offset, wordsize)` — digits only, without the `"0x"`
+    /// prefix and the `+cut` suffix. This digit face is what the headless
+    /// FRONTEND's database name `FUN_<digits>` carries (golden witnesses
+    /// `FUN_00102020` / `FUN_0012c520`: shrunk width 8), the shared rule
+    /// behind both unnamed-callee faces (PRINTC-FUN-PAD-0001).
+    fn print_raw_zero_pad_digits(addr_size: usize, word_size: u64, offset: u64) -> String {
+        let mut sz = addr_size;
+        if sz > 4 {
+            if (offset >> 32) == 0 {
+                // Don't print a bunch of zeroes at front of address
+                sz = 4;
+            } else if (offset >> 48) == 0 {
+                sz = 6;
             }
+        }
+        // byteToAddress (space.hh:523-525): byte units -> addressable units.
+        let addr_units = if word_size > 1 {
+            offset / word_size
+        } else {
+            offset
+        };
+        format!("{:0width$x}", addr_units, width = 2 * sz)
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Base-space transport form of `AddrSpace::printRaw` (space.cc:206-222)
+    /// parameterized by the space's own `(addrsize, wordsize)`: `"0x"` +
+    /// [`Self::print_raw_zero_pad_digits`] + `+cut` (decimal) when
+    /// `wordsize > 1` and `offset % wordsize != 0`. The entry-space channel
+    /// (printc.cc:602 `fc->getEntryAddress()`) resolves dims through the
+    /// registry handle, which has no flat-enum arm in
+    /// [`Self::addr_space_print_raw`], so the base form is built directly
+    /// from the dims here (PRINTC-OPCALL-ENTRYSPACE-0001).
+    fn addr_space_print_raw_dims(addr_size: usize, word_size: u64, offset: u64) -> String {
+        let mut text = format!(
+            "0x{}",
+            Self::print_raw_zero_pad_digits(addr_size, word_size, offset)
+        );
+        if word_size > 1 {
+            let cut = offset % word_size;
+            if cut != 0 {
+                text.push_str(&format!("+{}", cut));
+            }
+        }
+        text
+    }
+
+    // Ghidra: fspec.hh:1686 FuncCallSpecs::getEntryAddress
+    /// `(addrsize, wordsize)` of a callspec entry address (printc.cc:602
+    /// `fc->getEntryAddress()`; that address is the CALL's pre-annotation
+    /// in(0) address per the fspec.cc:4934 ctor, so the space is the
+    /// callee's own). An entry address carrying a registry space
+    /// (ADDRESS-0001 `Address::with_space` form) contributes its true dims;
+    /// `FuncCallSpecs::new_for_op` (fspec.rs) still builds the legacy
+    /// spaceless `Address::new(offset)` form, whose dims fall back to the
+    /// flat Ram defaults (addrsize 8, wordsize 1 — the effective space of
+    /// every direct CALL target in the production corpora; the fspec-side
+    /// space population is PRINTC-OPCALL-ENTRYSPACE-0001's fspec half).
+    fn entry_addr_dims(entry: Option<&crate::address::Address>) -> (usize, u64) {
+        match entry.and_then(crate::address::Address::get_space) {
+            Some(spc) => (spc.get_addr_size() as usize, spc.get_word_size() as u64),
+            None => (
+                crate::space::AddressSpace::Ram.addr_size(),
+                crate::space::AddressSpace::Ram.word_size() as u64,
+            ),
         }
     }
 
@@ -17981,13 +18047,16 @@ mod tests {
             .debug_get_output_ref()
             .to_string();
         // Statement form, no assignment LHS; bare `return;` — the oracle's
-        // no-output-CALL bytes.
+        // no-output-CALL bytes. PRINTC-FUN-PAD-0001: the FUN_ fallback
+        // spells the printRaw digit rule (space.cc:209-216) — zero-padded
+        // width 8 for the <2^32 constant target (0x104c50 →
+        // FUN_00104c50), the headless golden database-name face.
         assert!(
-            text.contains("FUN_104c50(0x42);"),
+            text.contains("FUN_00104c50(0x42);"),
             "void callee CALL must print as a statement, got: {text}"
         );
         assert!(
-            !text.contains("= FUN_104c50("),
+            !text.contains("= FUN_00104c50("),
             "void callee CALL must not print an assignment LHS, got: {text}"
         );
         assert!(
@@ -17995,7 +18064,7 @@ mod tests {
             "RETURN consuming a void-callee CALL output must print bare, got: {text}"
         );
         assert!(
-            !text.contains("return FUN_104c50"),
+            !text.contains("return FUN_00104c50"),
             "void callee tail call must not render `return f();`, got: {text}"
         );
     }
@@ -18043,8 +18112,9 @@ mod tests {
             .expect("EmitNoMarkup")
             .debug_get_output_ref()
             .to_string();
+        // PRINTC-FUN-PAD-0001: padded digit face — 0x5a5a → FUN_00005a5a.
         assert!(
-            text.contains("= FUN_5a5a("),
+            text.contains("= FUN_00005a5a("),
             "locked non-void callee keeps the assignment LHS, got: {text}"
         );
     }
@@ -18591,6 +18661,111 @@ mod tests {
         assert!(
             !child_needs_parens(CPUI_INT_ADD, CPUI_COPY, true),
             "COPY child: not a tracked binary op, no parens"
+        );
+    }
+
+    #[test]
+    fn test_print_raw_zero_pad_digits_fun_face() {
+        use super::PrintC;
+
+        // space.cc:209-216 digit core, the FUN_ database-name face
+        // (PRINTC-FUN-PAD-0001). Golden witnesses: the headless corpus
+        // spells every unnamed function `FUN_` + 8 zero-padded hex digits
+        // (curl `FUN_00102020`, httpd `FUN_0012c520`): x86-64 ram
+        // (addrsize 8, wordsize 1) with offset>>32==0 shrinks sz to 4 →
+        // setw(8).
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x102020),
+            "00102020",
+            "FUN_ face: shrunk width 8 (golden FUN_00102020)"
+        );
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x12c520),
+            "0012c520",
+            "FUN_ face: httpd golden witness spelling"
+        );
+        // space.cc:211-212: offset>>32==0 → sz=4 even for a 6-byte space.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(6, 1, 0x102020),
+            "00102020"
+        );
+        // space.cc:213-214: offset>>32!=0 but offset>>48==0 → sz=6 →
+        // setw(12). The bare `{:x}` face would print `123456789ab` (11
+        // digits) — the pad is the contract this test pins.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x123456789ab),
+            "0123456789ab"
+        );
+        // offset>>48!=0 → no shrink → setw(16).
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(8, 1, 0x123456789abcdef0),
+            "123456789abcdef0"
+        );
+        // space.cc:210: sz>4 gate — a 4-byte space never shrinks.
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(4, 1, 0x102020),
+            "00102020"
+        );
+        // byteToAddress (space.hh:523-525): wordsize 4 → addressable units
+        // = offset/4. The +cut suffix belongs to the transport face only.
+        assert_eq!(PrintC::print_raw_zero_pad_digits(8, 4, 0x100), "00000040");
+        // Transport face (space.cc:216-221): "0x" + digits + "+cut" when
+        // wordsize>1 and offset%wordsize!=0.
+        assert_eq!(
+            PrintC::addr_space_print_raw_dims(8, 4, 0x102),
+            "0x00000040+2"
+        );
+        assert_eq!(
+            PrintC::addr_space_print_raw_dims(8, 1, 0x3190),
+            "0x00003190",
+            "func_ face: direct-runner golden spelling"
+        );
+    }
+
+    #[test]
+    fn test_entry_addr_dims_channel() {
+        use super::PrintC;
+        use crate::address::Address;
+        use crate::space::{AddrSpace, SpaceType};
+
+        // printc.cc:602 `fc->getEntryAddress()` dims channel
+        // (PRINTC-OPCALL-ENTRYSPACE-0001): a spaceless legacy entry (the
+        // current FuncCallSpecs::new_for_op form) and a missing callspec
+        // both take the flat Ram defaults — the hardwired-Ram behavior this
+        // must reproduce until fspec populates Address::with_space.
+        assert_eq!(PrintC::entry_addr_dims(None), (8, 1));
+        assert_eq!(
+            PrintC::entry_addr_dims(Some(&Address::new(0x102020))),
+            (8, 1),
+            "spaceless legacy entry address → flat Ram dims"
+        );
+        // An entry address carrying a registry space (ADDRESS-0001
+        // with_space form) contributes the space's own dims: a 4-byte
+        // wordsize-2 processor space → (4, 2).
+        let spc = AddrSpace::new_space(
+            SpaceType::Processor,
+            "ram_ws2",
+            false,
+            4,
+            2,
+            1,
+            0,
+            1,
+            1,
+        );
+        let entry = Address::with_space(&spc, 0x102020);
+        assert_eq!(
+            PrintC::entry_addr_dims(Some(&entry)),
+            (4, 2),
+            "entry-space channel: registry handle dims flow through"
+        );
+        // End to end: the FUN_ digits take the entry space's rule, not a
+        // hardwired Ram: 4-byte space, wordsize 2 → addressable units
+        // 0x81010 → setw(8).
+        let (sz, ws) = PrintC::entry_addr_dims(Some(&entry));
+        assert_eq!(
+            PrintC::print_raw_zero_pad_digits(sz, ws, 0x102020),
+            "00081010"
         );
     }
 }
