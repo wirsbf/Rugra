@@ -3143,8 +3143,18 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
         // DEFAULT-FLIP: EmitPrettyPrint rides the action DB default
         // (the canon assembly the oracle always runs); the
         // RUGRA_SYMDB=0 opt-out keeps the historical EmitNoMarkup
-        // byte stream, and the mirror keeps its own contract.
-        let pretty_emit = action_db_attached;
+        // byte stream. MIRROREMIT-HTTPD: the mirror face rides the
+        // same pretty emitter — the oracle's PrintLanguage
+        // constructor is mode-blind (printlanguage.cc:69 fires for
+        // the direct-runner single-function harness exactly as for
+        // the full analyzeHeadless face, so the direct-runner golden
+        // is Oppen 100-column output; the curl driver already
+        // mirrors this unconditionally at curl_decompile.rs:6319).
+        // `pretty_emit` therefore keys off the DB OR the mirror;
+        // only the canon RUGRA_SYMDB=0 opt-out still selects
+        // NoMarkup. The mirror's seed rejection (RUGRA_MIRROR runs
+        // never seed) is a separate gate and keeps its semantics.
+        let pretty_emit = action_db_attached || mirror_fn;
         let mut printer = if pretty_emit {
             PrintC::new(Box::new(rugra::prettyprint::EmitPrettyPrint::new()))
         } else {
@@ -4146,8 +4156,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // RUGRA_SYMDB=0 restores the historical fold-only face (no Database,
     // no spacebase scope source, EmitNoMarkup stream) — the old face is
     // opt-out, not deleted. The mirror keeps absolute precedence over
-    // both: any mirror component present => no Database, no attach, no
-    // emitter switch (bare-library truth channel).
+    // both: any mirror component present => no Database, no attach
+    // (bare-library truth channel); the emitter no longer follows the DB
+    // — the mirror face rides the oracle-default EmitPrettyPrint
+    // (MIRROREMIT-HTTPD, see the print-site comment), matching the
+    // mode-blind PrintLanguage constructor (printlanguage.cc:69).
     let symdb_opt_out = std::env::var("RUGRA_SYMDB").ok().as_deref() == Some("0");
     let action_db_template: Option<rugra::database::Database> = if mirror || symdb_opt_out {
         None
