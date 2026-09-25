@@ -212,3 +212,27 @@ F09-DECL 8 | F12-ENTRYUNAFF 5 | F17-FIELDARR 4 | F13-FORSPLIT 3(+1) | F11-DATPRE
 F14-CONSTQUAL 2(+2) | F19-WRAP 3 | F20-CSUMASK 1(+1) | F18-DONOTHING 1 | F21-TYPEOPEXPR 1
 TOTAL 267(含对侧合并注记)
 ```
+
+## 9. 附:复现脚本全文（自包含,/dev/shm 清理后可直接重建）
+
+`full_diffs.py`（全函数无截断骨架 diff,复用 compare_ghidra.py 归一化）:
+
+```python
+import sys, difflib, os
+sys.path.insert(0, '<repo>/tools')
+import compare_ghidra as cg
+rugra_c, ghidra_c, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(outdir, exist_ok=True)
+rfuncs = cg.parse_functions(open(rugra_c).read())
+gfuncs = cg.parse_functions(open(ghidra_c).read())
+pairs = cg.match_functions(rfuncs, gfuncs)
+for addr, rname, rbody, gname, gbody in sorted(pairs):
+    d = list(difflib.unified_diff(cg.normalize_skeleton(gbody), cg.normalize_skeleton(rbody),
+                                  fromfile='ghidra/'+gname, tofile='rugra/'+rname, lineterm='', n=2))
+    n = sum(1 for l in d if l.startswith(('+', '-')) and not l.startswith(('+++', '---')))
+    if n:
+        open(os.path.join(outdir, gname.replace('/', '_') + '.diff'), 'w').write('\n'.join(d) + '\n')
+        print(f"{gname}: {n} raw +/- lines")
+```
+
+`classify.py`（逐行分族;正则序敏感,以本文 §2 手工合并表为权威口径）:见 git 历史 `/dev/shm/rugra-tests/curlattr/classify.py` v3（关键序:VARARGS→UNIONSTORE→PROTOCAST→LOCALTYPE→BOOLTYPE→STATICSCOPE→NAMEREC→PROTOREC→ENTRYUNAFF→DONOTHING→USTACK→DATPREFIX→UNKADDR→CONSTQUAL→FORSPLIT→FIELDARR→CSUMASK→WRAP→DECL→TYPEOPEXPR;±对侧行手工并回本族）。
