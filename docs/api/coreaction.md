@@ -3709,3 +3709,53 @@ guard 翻转，无其他逻辑变化；调用方不持工厂 guard，无重入�
 三字段（cfg(test) 编译修复，零行为；字段本体见 docs/api/block.md 同日节）。
 
 ## 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+## 2026-09-26：ActionConditionalConst inSlot 回边索引 + blockIsDom 前置门（SQ-STACKSPILL-TYPEWRITEBACK-0001，Lane STACKSPILL）
+
+**find_const_compare 的 inSlot 取值**（`// Ghidra: coreaction.cc:4478 ActionConditionalConst::findConstCompare`）：
+oracle cc:4511 `points.emplace_back(varVn, constVn, bl->getOut(constEdge), bl->getOutRevIndex(constEdge), blockDom[constEdge])`
+——ConstPoint 的 `inSlot` 是 **`getOutRevIndex(constEdge)`**（const 块 in-edge
+列表里指向本分支块的那条边的下标），不是分支块自己的 out-edge 下标。旧端口直接
+传 `const_edge`（且把已传入的 `bl_out_rev_index` 参数标为 "not used"），两者只在
+目标块 in-edge 排序恰好镜像分支 out-edge 编号时重合。反例（sasquatch sigwinch
+@0xabd7）：`je ac39` 是 ac39 的 **in-edge 0** 却是分支块的 **out-edge 1** —— 假
+inSlot 使 propagateConstant 的 immediate-edge 臂（cc:4408 `op->getIn(point.inSlot)
+== varVn`）匹配到**错误的 MULTIEQUAL 槽**，经 handlePhiNodes/placeCopy 把
+`piVar5→unaff_R12` 的栈溢出 COPY 链 phi 输入替换成 const-0（`unaff_R12 = 0`），
+随后 RuleEarlyRemoval 销毁无读者的 `COPY R12 = RAX`@0xabe7，
+ActionInferTypes 的 int4* 传播链断裂（writeBack coreaction.cc:5043 无类型可回写
+→ gatherVarnodes 的 fixed hint 全 Unknown，varmap.cc:1140 `vn->getType()`）——
+golden `int4 *piStack_68`/`int4 *unaff_R12` 退化为 `xunknown8`。修复 =
+`in_slot = bl_out_rev_index[const_edge]`（block.rs `get_out_rev_index` 既有忠实
+镜像，block.hh:303）。oracle 侧探针实证（锁定库 +condconst/ruleaction 只读
+trace）：oracle 同点位 `inSlotMatch=0`（假 inSlot 下才会匹配），MULTIEQUAL 保
+持 R12@copy 输入，`unaff_R12 = piVar5` 存活。
+
+**propagate_constant 的 cc:4435 前置门**（`// Ghidra: coreaction.cc:4383 ActionConditionalConst::propagateConstant`）：
+oracle cc:4435 `if (!point.blockIsDom) continue;` 在 dominates 判定**之前**把
+非支配点整条跳过——既不做常量替换也**不 pushConstant**。旧端口把该门折叠进
+`if (block_is_dom && dominated { … } else { push_constant }`，使 blockIsDom=false
+的点（如多前驱 merge 目标）落进 else 臂——在 `COPY R12 = RAX` 这类溢出链 COPY
+输出上伪造 ConstPoint，同样终结于 const-0 phi 替换。修复 = 还原三段结构：
+`if !block_is_dom { continue; } if dominated { …replace… } else { push_constant }`。
+
+E2E（基=8dbb5072 干净基线 worktree A/B 亲证）：①sq 面 D3 族收敛——sigwinch
+`piStack_68`/`unaff_R12 = piVar5`（24 行残差=typedef 前导+ram 命名+CASTFUSE，
+各有既有票）、progressbar_error `piStack_150/188/190`+`pxStack_d8/e0`（24）、
+squashfs_opendir_1 `pxStack_170`（36）；②canon curl md5 `6af97704`、httpd md5
+`d6fd730a` 双字节恒等；③镜面棘轮 curl 58/65、httpd 124/150、vsh 15/16 全 PASS
+未重钉，sq 6860/7500+810/810（numbering=7 预存承重）；④bank 391/391；⑤cargo
+test --lib 1749P/0F。sq 全量 skeleton 7060→6860（−200），53 函数改善
+（process_extract_files −844/add_path −842/pre_scan −375 等）。
+
+**遗留两支（登记 TODO，见车道终报）**：(a) read_inode_3/1 + LzmaEnc_CodeOneBlock
+三函数 0→~850 回退——oracle 侧 condconst 探针实证这些函数的 ram 合并被
+cc:4404 `varVn->isAddrTied() && 同址` 守卫拦下（oracle 探针 at(var)=1），而
+Rugra 裸面 gen_decompile 无 Database（symboltab=None），ram varnode 永不携带
+addrtied——CSPEC-GLOBAL-APPLY-0001 既登记残差（Architecture 收集
+global_scope_ranges 但从不应用到 Database）；canon 驱动侧手补
+`db.add_range(0..MAX)` 故 canon 不受影响。(b) cc:4404 的 oracle 精确形式
+（去掉 Rugra 端多余的 `out.isAddrTied()` 合取项）单独验证时打破 httpd canon
+字节恒等（460367b2 vs d6fd730a，ap_fini_vhost_config 等 5 函数）——旧合取项
+是 canon 现状的承重补偿（Rugra 侧 ram 合并输出 varnode 缺 addrtied 旗标），
+须随 (a) 的 Database 底层修复一并对齐（A/B 复测）。
