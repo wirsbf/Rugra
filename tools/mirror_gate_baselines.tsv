@@ -16,8 +16,15 @@
 # ceiling=22639 是 DBLHI 修复后重钉（GEN4-SQ-CEILING-REPIN-0001）: 实测 15889 +
 # 5 非 ok 函数（golden 共 3375 行）的 worst-case diff 上界 2×3375=6750;
 # floor=805=实测 matched（progress_bar 修复后 +1）。
+# 2026-09-26 MERGEBATCH5 波次增益锁定（MERGEBATCH5-RATCHET-REPIN-0001, root 授权重钉,
+# @6178d1ea = SLOTDEEP 并入态 fresh 实测）: curl/httpd/vsh 三面吸收 PFLUSH/VZEXT/
+# F8FOR/JTDEST/sqnullt/widthop 窗口全量增益——58/138/15 全部命中历史最好值,
+# 上限自冻结基线（275/460/55, 5afcc032 时代）收紧到 65/150/16（实测+安全余量）;
+# sq 面吸收 SLOTDEEP 退役增益——skeleton 7060（8418→7060, −1358）, 上限 22639→7500,
+# floor 805→810（PFLUSH 收口后 ok/matched 满额 810/810, health 全绿）;
+# numbering=7 硬断言保持 runner 内写死不变（承重态, 绑 GEN4-SQ-DUPDECL-NUMBERING-0001）。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
-curl	275	74	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
-httpd	460	29	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
-vsh	55	71	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
-sq	22639	805	GEN4-SQ-CEILING-REPIN-0001	7a39afad	2026-09-26
+curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
+httpd	150	29	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
+vsh	16	71	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
+sq	7500	810	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
