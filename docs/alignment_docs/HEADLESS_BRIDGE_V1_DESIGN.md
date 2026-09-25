@@ -938,6 +938,16 @@ oracle env-flip 154/156 为其子集——本通道额外收返回消费形 int 
    undefined224*（dynsym st_size=224）压过使用流，增量步进印成
    `(undefined224 *)((long)puVar15 + 8)`（canon `ppuVar14 + 1`）——
    typeprop/SYMDB 优先级域残差，登记 `V3SIG-UND224-TYPEORDER-0001`。
+   **收口（2026-09-25 Lane UNDARR，§16.3 项 3 驱动侧根因关闭）**：
+   TYPEORDER 判决（W0–W6 oracle 见证）确认该残差系驱动 DATASYM 输入捏造
+   ——`undefined_t(st_size)` 造出 `TypeFactory::getBase` 结构上产不出的
+   >10 字节 unknown 标量（type.cc:3652-3657 该尺寸恒产 `undefined[size]`
+   数组）。两驱动 DATASYM 构造点已改为 oracle 真实输入形：整_extent 指针槽
+   （reloc 标记或 NULL 尾零槽）→ `undefined*[N]`（W6 oracle 验证形，canon
+   族形零 cast）；其余 8 整除 → `undefined8[N]`（W5 形）；非 8 整除 →
+   `undefined[size]`；≤10 保持标量。main 四行族（decl/init/load/step）翻
+   canon 族：`undefined **ppuVar15`/`*ppuVar15`（零 cast）/`+ 1`；
+   `undefined224` 全文计数=0。
 4. **varargs 3 drops** 与 **ap_run_post_config 元数冲突**：canon 未锁（站点
    元数不一致即证），弃收即对齐方向。
 5. 间接调用拼写（`void(*V)()` vs `code *V`）、canary 物化（local_40 拆分）、

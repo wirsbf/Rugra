@@ -3028,13 +3028,110 @@ fn build_worker_architecture(
                     } else {
                         sym.st_size as i32
                     };
-                    let dtype = std::sync::Arc::new(rugra::type_system::datatype::Datatype::Base(
-                        rugra::type_system::datatype::TypeBase::new(
-                            format!("undefined{size}"),
-                            size as usize,
-                            rugra::type_system::datatype::TypeMetatype::Unknown,
-                        ),
-                    ));
+                    // DATASYM object typing (V3SIG-UND224-TYPEORDER-0001):
+                    // TypeFactory::getBase never materializes an unknown
+                    // scalar wider than max_basetype_size == 10
+                    // (type.cc:3652-3657 answers such sizes with an
+                    // undefined[size] byte array), so the analyzeHeadless
+                    // transport cannot carry e.g. a 4096-byte
+                    // "undefined4096" scalar — the former undefined{size}
+                    // fabrication here built an input form the locked
+                    // oracle cannot produce. Mirror the oracle's real
+                    // input forms: whole-extent pointer slots (relocated,
+                    // or initialized all-zero NULL terminator tail) ->
+                    // undefined *[size/8] (W6 oracle witness, canon main
+                    // loop family); other 8-divisible sizes ->
+                    // undefined8[size/8] (W5 witness); remaining >10 sizes
+                    // -> undefined[size]; <=10 keeps the named scalar.
+                    let undefined1 = || {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    "undefined".to_string(),
+                                    1,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
+                    let undefined8 = || {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    "undefined8".to_string(),
+                                    8,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
+                    let pointer_reloc_slots: std::collections::HashSet<u64> = elf
+                        .dynrelas
+                        .iter()
+                        .filter(|rel| {
+                            rel.r_type == goblin::elf::reloc::R_X86_64_RELATIVE
+                                || rel.r_type == goblin::elf::reloc::R_X86_64_64
+                                || rel.r_type == goblin::elf::reloc::R_X86_64_GLOB_DAT
+                        })
+                        .map(|rel| rel.r_offset)
+                        .collect();
+                    // Slot-bytes reader over PROGBITS sections (the same
+                    // vaddr->file mapping model the httpd driver uses for
+                    // its DATASYM rule): a slot carries pointer evidence
+                    // when a relocation marks it OR its initialized bytes
+                    // read as the all-zero NULL terminator (trailing-null
+                    // pointer tables). Unmapped slots (.bss) carry none.
+                    let progbits: Vec<(u64, u64, u64)> = elf
+                        .section_headers
+                        .iter()
+                        .filter(|sh| sh.sh_type == 1 && sh.sh_size > 0)
+                        .map(|sh| (sh.sh_addr, sh.sh_offset, sh.sh_size))
+                        .collect();
+                    let byte_at = |vaddr: u64| -> Option<u8> {
+                        progbits
+                            .iter()
+                            .find(|&&(a, _, sz)| vaddr >= a && vaddr < a + sz)
+                            .map(|&(a, off, _)| (off + (vaddr - a)) as usize)
+                            .and_then(|i| image.get(i).copied())
+                    };
+                    let size_usize = size as usize;
+                    let dtype = if size_usize > 10 {
+                        let (element, count) = if size_usize % 8 == 0 {
+                            let slot_is_pointer = |slot: u64| -> bool {
+                                pointer_reloc_slots.contains(&slot)
+                                    || (0..8).all(|k| byte_at(slot + k) == Some(0))
+                            };
+                            let all_pointer_slots = (0..size_usize / 8)
+                                .all(|i| slot_is_pointer(address + (i as u64) * 8));
+                            if all_pointer_slots {
+                                (
+                                    rugra::type_system::typefactory::TypeFactory::shared_default()
+                                        .write()
+                                        .unwrap()
+                                        .get_type_pointer_default(undefined1()),
+                                    size_usize / 8,
+                                )
+                            } else {
+                                (undefined8(), size_usize / 8)
+                            }
+                        } else {
+                            (undefined1(), size_usize)
+                        };
+                        rugra::type_system::typefactory::TypeFactory::shared_default()
+                            .write()
+                            .unwrap()
+                            .get_array(element, count)
+                    } else {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    format!("undefined{size}"),
+                                    size_usize,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
                     let scope = db.global_scope_id;
                     let _ = db.add_symbol_mapped(
                         scope,
