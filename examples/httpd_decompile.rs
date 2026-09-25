@@ -892,6 +892,7 @@ fn tracked_context_architecture(
 // KNOWN_BASES type; `input_lock` is set only when every slot is evidenced
 // (partial entries keep active arity recovery); `ret` is the agreed
 // cast-free consumer type, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct V3CalleeProto {
     name: String,
     params: Vec<Option<String>>,
@@ -928,12 +929,14 @@ fn install_v3sig_callee_protos(
     // data-org gap (only the Ghidra-fallback flavor registers it) and gets
     // a direct 1-byte Unknown core construction (setCoreType table entry).
     let resolve = |spelling: &str| -> Option<std::sync::Arc<Datatype>> {
+        // HEADLESS-BRIDGE-PARAMID-0001: pointer DEPTH now round-trips (the
+        // harvested manifest carries single-star spellings only, so the
+        // shipped table is unchanged; the self-produced table may recover
+        // char ** slots and must not silently collapse them to char *).
         let trimmed = spelling.trim();
-        let (base, is_pointer) = (
-            trimmed.trim_end_matches('*').trim(),
-            trimmed.ends_with('*'),
-        );
-        let base_type = if base == "undefined" {
+        let stars = trimmed.chars().filter(|ch| *ch == '*').count();
+        let base = trimmed.trim_end_matches('*').trim();
+        let mut resolved = if base == "undefined" {
             std::sync::Arc::new(Datatype::Base(TypeBase::new(
                 "undefined".to_string(),
                 1,
@@ -942,11 +945,10 @@ fn install_v3sig_callee_protos(
         } else {
             types.read().unwrap().find_by_name(base)?
         };
-        if is_pointer {
-            Some(types.write().unwrap().get_type_pointer_default(base_type))
-        } else {
-            Some(base_type)
+        for _ in 0..stars {
+            resolved = types.write().unwrap().get_type_pointer_default(resolved);
         }
+        Some(resolved)
     };
 
     // The model carrier: the CALLER's own funcp already carries the bound
@@ -1046,6 +1048,1281 @@ fn install_v3sig_callee_protos(
     }
     installed
 }
+
+// ===========================================================================
+// HEADLESS-BRIDGE-PARAMID-0001: the self-hosted Parameter ID iteration.
+//
+// Ghidra's Decompiler Parameter ID analyzer (the Java-side
+// DecompilerParameterIdAnalyzer; the decompile-cpp library exposes only the
+// transport — FlowInfo::queryCall -> FuncCallSpecs::setFuncdata ->
+// ActionDefaultParams' fc->copy(otherfunc->getFuncProto()),
+// coreaction.cc:2322-2330) repeatedly decompiles every function, extracts
+// recovered prototype forms, commits them as locked signatures, and
+// iterates to a fixed point; every later decompilation then sees those
+// callee signatures at its call sites. The V3SIG channel already proved
+// the locked side end to end with a harvested manifest (canon call-site
+// forms, 60 entries); this lane swaps the channel's INPUT for the
+// binary's own runtime output.
+//
+// The commit payload is CALL-SITE evidence, read from the pipeline's
+// final state (never from printed text): for every direct call, the
+// callee entry, the machine arity (CALL op argument count), each
+// argument slot's recovered type (the arg varnode's post-pipeline type —
+// the same surface update_output_types reads for returns), and the live
+// call output's consumer type. An untyped varnode (undefined-family
+// scalar) is the "no evidence" form; a pointer-typed varnode is the
+// "x[k] / &x / (T *)" form; the merge applies the harvest's rules
+// (arity conflict drops the entry, slot conflicts kill the slot,
+// undefined-family scalars carry no evidence under the strict default,
+// full-evidence arity -> input lock, agreeing live consumers -> return
+// lock). A callee-side fd.funcp harvest was measured first and REJECTED:
+// canon's own callee headers drift from its call-site forms (the
+// Parameter ID drift the BRIDGE docs record), and locking the callee
+// side verbatim made the face WORSE than bare (1189 vs 1097 skeleton).
+// PLT-slot entries are dropped from the table — an imported external
+// location is never a decompiled function, and canon's locks there come
+// from the import-signature channel, which this lane does not
+// self-host.
+//
+// Round 1 decompiles the iteration universe (the print window plus every
+// analyzer-discovered called target — the front-end's function universe,
+// same extents heuristic) with NO callee locks; each round merges its
+// evidence into a fresh table and the next round installs that table
+// through the identical three-lock callspec arm
+// (install_v3sig_callee_protos). Locked sites keep contributing
+// evidence (their arg varnodes echo the lock after typeprop), so the
+// iteration is monotone and stops at a fixed point or at
+// RUGRA_PARAMID_ROUNDS (default 3, clamped 1..=3). Opt-in only
+// (RUGRA_PARAMID=1); the mirror gate keeps absolute precedence and
+// RUGRA_SEEDS=0 stays the global escape, exactly like the manifest
+// channel. The default and RUGRA_V3SIG=0 faces are untouched: with the
+// env unset this whole block is dead code and the loop below runs the
+// exact historical computation. RUGRA_PARAMID_EVIDENCE=loose admits
+// undefined-family scalars as evidence (a recall instrument; it
+// over-locks and was measured worse on the face).
+// ===========================================================================
+
+// One iteration round's shared per-thread state — every capture the former
+// inline closure cloned per function (mirror state, print/action symbol
+// DBs, seed manifests, the tracked-context Architecture template, effect
+// records, symbol/string tables, entry sets) plus the swappable V3SIG
+// callee-proto table. The main loop clones this per function exactly like
+// the old captures did; PARAMID rounds clone it per function per round
+// with the current iteration's table.
+#[derive(Clone)]
+struct SharedDecompileCtx {
+    mirror_fn: bool,
+    mirror_img: Option<std::sync::Arc<Vec<u8>>>,
+    loader_img: Option<std::sync::Arc<Vec<u8>>>,
+    mirror_syms: Vec<(u64, String)>,
+    print_db: std::sync::Arc<std::sync::RwLock<rugra::database::Database>>,
+    action_db: Option<rugra::database::Database>,
+    typeseed_locals: Option<
+        std::sync::Arc<std::collections::HashMap<String, Vec<rugra::funcdata::CommittedLocal>>>,
+    >,
+    v3sig_protos: Option<std::sync::Arc<HashMap<u64, V3CalleeProto>>>,
+    // HEADLESS-BRIDGE-PARAMID-0001: the evidence policy for harvest rounds
+    // (strict default; loose admits undefined-family scalars as evidence —
+    // see evidence_spelling).
+    loose_evidence: bool,
+    thread_arch: rugra::arch::Architecture,
+    default_effects: Vec<rugra::fspec::EffectRecord>,
+    sym_table: HashMap<u64, String>,
+    str_table: HashMap<u64, String>,
+    proto_db: HashMap<u64, usize>,
+    entry_set: std::sync::Arc<std::collections::HashSet<u64>>,
+    plt_ranges: Vec<(u64, u64, u64)>,
+}
+
+// One function's decompile inputs (the lifted raw ops, the front-end
+// branch-ref set, the stage-emitter selection) plus the harvest switch.
+#[derive(Clone)]
+struct FunctionTask {
+    name: String,
+    vaddr: u64,
+    size: usize,
+    raw_ops: Vec<rugra::pcoderaw::PcodeOpRaw>,
+    branch_ref_addrs: std::collections::HashSet<u64>,
+    stage_binary: Option<Vec<u8>>,
+    stage_proj: bool,
+    stage_drill: bool,
+    harvest_proto: bool,
+}
+
+// One decompile's products: the printed C text (None = the function
+// failed) and, when the task asked for it, the call-site evidence the
+// pipeline's final state exhibits (the Parameter ID commit payload).
+struct FunctionOutcome {
+    text: Option<String>,
+    sites: Option<Vec<CallSiteEvidence>>,
+}
+
+// HEADLESS-BRIDGE-V3-SIGLOCK-0003 helper (extracted verbatim from main so
+// the PARAMID comparison loads the identical manifest table shape).
+fn load_v3sig_manifest(path: &str) -> Option<HashMap<u64, V3CalleeProto>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(raw) => {
+                let mut table = HashMap::new();
+                if let Some(serde_json::Value::Object(callees)) = raw.get("callees") {
+                    for (addr, entry) in callees {
+                        let Some(key) = addr.strip_prefix("0x").and_then(|digits| u64::from_str_radix(digits, 16).ok()) else {
+                            continue;
+                        };
+                        let Some(serde_json::Value::String(name)) = entry.get("name") else {
+                            continue;
+                        };
+                        let mut params = Vec::new();
+                        if let Some(serde_json::Value::Array(slots)) = entry.get("params") {
+                            for slot in slots {
+                                let spelling = match slot.get("type") {
+                                    Some(serde_json::Value::String(t)) if slot.get("locked") == Some(&serde_json::Value::Bool(true)) => Some(t.clone()),
+                                    _ => None,
+                                };
+                                params.push(spelling);
+                            }
+                        }
+                        let ret = match entry.get("return") {
+                            Some(serde_json::Value::String(t)) => Some(t.clone()),
+                            _ => None,
+                        };
+                        let input_lock = entry.get("input_lock")
+                            == Some(&serde_json::Value::Bool(true))
+                            && !params.is_empty()
+                            && params.iter().all(|slot| slot.is_some());
+                        table.insert(
+                            key,
+                            V3CalleeProto {
+                                name: name.clone(),
+                                params,
+                                ret,
+                                input_lock,
+                            },
+                        );
+                    }
+                }
+                eprintln!(
+                    "[V3SIG] loaded {}: {} callee prototypes ({} input-locked, {} return-locked)",
+                    path,
+                    table.len(),
+                    table.values().filter(|c| c.input_lock).count(),
+                    table.values().filter(|c| c.ret.is_some()).count()
+                );
+                Some(table)
+            }
+            Err(err) => {
+                eprintln!("[V3SIG] manifest {} is not valid JSON: {} (gate disabled)", path, err);
+                None
+            }
+        },
+        Err(err) => {
+            eprintln!("[V3SIG] cannot read manifest {}: {} (gate disabled)", path, err);
+            None
+        }
+    }
+}
+
+// Parameter ID's commit payload, caller side: the call-site forms the
+// decompiled body itself exhibits — for every direct call, the callee
+// entry, the machine arity (the CALL op's argument count), each argument
+// slot's recovered type (the arg varnode's post-pipeline type — the same
+// surface update_output_types reads for returns), and the call output's
+// consumer type when the output is live. The manifest harvest derived
+// these forms from the canon golden's PRINTED text (bare locals, element
+// forms, casts); the runtime state carries the identical information
+// without a text round-trip: a varnode the pipeline left untyped IS the
+// "no evidence" form (undefined-family scalar), a pointer-typed varnode
+// is the "x[k] / &x / cast target" form.
+struct CallSiteEvidence {
+    entry: u64,
+    arity: usize,
+    /// Slot spellings for input-unlocked sites; None for sites whose
+    /// callee input is already locked (a locked site prints the lock
+    /// echo, never fresh evidence).
+    slots: Option<Vec<Option<String>>>,
+    ret: Option<String>,
+}
+
+// The harvest's KNOWN_BASES gate (tools/harvest_local_manifest.py): a
+// slot whose recovered base spelling the lock channel cannot install
+// faithfully is dead evidence, never a conflict.
+fn known_evidence_base(base: &str) -> bool {
+    matches!(
+        base,
+        "void" | "char" | "byte" | "undefined" | "undefined1" | "undefined2" | "undefined4"
+            | "undefined8" | "short" | "ushort" | "int" | "uint" | "long" | "ulong" | "size_t"
+            | "time_t" | "__pid_t" | "float" | "double" | "bool"
+    )
+}
+
+// One varnode type -> one evidence spelling. Pointers are always
+// informative (the "x[k] / &x / (T *)" family). An undefined-family
+// SCALAR is the untyped default: strict policy (default) treats it as no
+// evidence — canon's bare-undefined8 local rule only ever saw locals the
+// analyzer had actually committed that way, while every untyped Rugra
+// varnode carries undefined<N>; the loose policy
+// (RUGRA_PARAMID_EVIDENCE=loose) admits it for recall measurement.
+fn evidence_spelling(
+    dt: &std::sync::Arc<rugra::type_system::datatype::Datatype>,
+    loose: bool,
+) -> Option<String> {
+    let spelling = dt.print_raw();
+    let base = spelling.trim_end_matches('*').trim();
+    if !known_evidence_base(base) {
+        return None;
+    }
+    if spelling.contains('*') {
+        return Some(spelling);
+    }
+    if loose {
+        return Some(spelling);
+    }
+    match base {
+        "undefined" | "undefined1" | "undefined2" | "undefined4" | "undefined8" => None,
+        _ => Some(spelling),
+    }
+}
+
+fn extract_callsite_evidence(fd: &Funcdata, loose: bool) -> Vec<CallSiteEvidence> {
+    let mut out = Vec::new();
+    for owner in &fd.callspecs {
+        let spec = owner.read().unwrap();
+        let Some(entry_addr) = spec.entry_addr else { continue };
+        let Some(op_ref) = spec.find_call_op(fd) else { continue };
+        let op = op_ref.0.read().unwrap();
+        if op.num_input() < 1 {
+            continue;
+        }
+        // Evidence comes from every direct-call site regardless of lock
+        // state: a locked site's arg varnodes carry the lock's types after
+        // typeprop, so its evidence echoes the installed lock — the same
+        // self-consistency Ghidra's Parameter ID re-derivation sees once a
+        // commit lands (the commit persists because rederivation agrees).
+        // This keeps the iteration monotone (locks only add typed args,
+        // typed args only add locks) instead of oscillating.
+        let mut slots = Vec::new();
+        for i in 1..op.num_input() {
+            let spelling = op
+                .get_in(i)
+                .and_then(|vn| vn.read().unwrap().get_type())
+                .and_then(|dt| evidence_spelling(&dt, loose));
+            slots.push(spelling);
+        }
+        // A live CALL output is a consumed return: its varnode type is the
+        // consumer-side form (dead outputs are removed before the print,
+        // so get_out() itself is the "used" test).
+        let ret = op
+            .get_out()
+            .and_then(|vn| vn.read().unwrap().get_type())
+            .and_then(|dt| evidence_spelling(&dt, loose));
+        out.push(CallSiteEvidence {
+            entry: entry_addr.as_u64(),
+            arity: op.num_input() - 1,
+            slots: Some(slots),
+            ret,
+        });
+    }
+    out
+}
+
+// The harvest's merge rules over one round's site records for a single
+// callee (tools/harvest_local_manifest.py --callee): arity conflict
+// across sites drops the whole entry (varargs/derived — canon left those
+// unlocked); per slot, distinct informative spellings kill the slot
+// (unevidenced sites never conflict); input locks only on a full
+// evidenced arity; the return locks only when every live consumer type
+// agrees.
+fn merge_callsite_evidence(
+    entry: u64,
+    name: &str,
+    sites: &[CallSiteEvidence],
+) -> Option<V3CalleeProto> {
+    let mut arity: Option<usize> = None;
+    for site in sites {
+        if site.slots.is_none() {
+            continue;
+        }
+        match arity {
+            None => arity = Some(site.arity),
+            Some(prev) if prev != site.arity => return None, // varargs drop
+            Some(_) => {}
+        }
+    }
+    let arity = arity?;
+    let mut slots: Vec<Option<String>> = vec![None; arity];
+    let mut conflicted: Vec<bool> = vec![false; arity];
+    if arity > 0 {
+        for site in sites {
+            let Some(site_slots) = site.slots.as_ref() else { continue };
+            for (i, spelling) in site_slots.iter().enumerate() {
+                let Some(spelling) = spelling else { continue };
+                if conflicted[i] {
+                    continue;
+                }
+                match &slots[i] {
+                    Some(prev) if prev != spelling => conflicted[i] = true,
+                    Some(_) => {}
+                    None => slots[i] = Some(spelling.clone()),
+                }
+            }
+        }
+    }
+    let mut ret: Option<String> = None;
+    let mut ret_conflict = false;
+    for site in sites {
+        let Some(spelling) = site.ret.as_ref() else { continue };
+        if ret_conflict {
+            continue;
+        }
+        match &ret {
+            Some(prev) if prev != spelling => ret_conflict = true,
+            Some(_) => {}
+            None => ret = Some(spelling.clone()),
+        }
+    }
+    if ret_conflict {
+        ret = None;
+    }
+    let input_lock = arity > 0 && slots.iter().all(|slot| slot.is_some());
+    if !input_lock && ret.is_none() {
+        return None; // nothing to lock (the manifest's inert entries)
+    }
+    Some(V3CalleeProto {
+        name: name.to_string(),
+        params: if input_lock { slots } else { vec![None; arity] },
+        ret,
+        input_lock,
+    })
+}
+
+// The main window's skip filter (the historical loop condition, extracted
+// so the PARAMID iteration window is the printing pass's own window).
+fn skipped_from_main_window(size: usize, name: &str) -> bool {
+    size < 5
+        || name == "_start"
+        || name.starts_with("register_tm_clones")
+        || name.starts_with("deregister_tm_clones")
+        || name == "__libc_csu_init"
+        || name == "__libc_csu_fini"
+        || name == "frame_dummy"
+}
+
+// The iced prelude for one function: linear disassembly + lift + the
+// DRIVER-RIPREL-CONSTFOLD-0001 const-fold, plus the front-end branch-ref
+// set (PRINTC-LABSPELL-LABSYMS-0001). Lifted verbatim from the main loop
+// so PARAMID harvest rounds and the printing pass share one builder.
+fn lift_function_ops(
+    code_bytes: &[u8],
+    vaddr: u64,
+    name: &str,
+) -> Option<(Vec<rugra::pcoderaw::PcodeOpRaw>, std::collections::HashSet<u64>)> {
+    let mut raw_ops = Vec::new();
+    // PRINTC-LABSPELL-LABSYMS-0001: the front-end reference set — every
+    // direct-branch (jmp/jcc) target of the disassembly, i.e. exactly the
+    // flow references Ghidra's disassembler creates and the source of its
+    // default `LAB_` LABEL symbols. Derived from the instruction stream,
+    // NOT from lifted pcode: pipeline stages (condexe merging, block
+    // surgery) rewrite CBRANCH destination inputs into unique-space
+    // temps, which hides the static target from a pcode-level scan.
+    let mut branch_ref_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut disasm = X86_64Disassembler::new();
+    let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
+        Ok(insts) => insts,
+        Err(_) => return None,
+    };
+    for inst in &instructions {
+        if inst.is_branch() {
+            if let Some(bt) = inst.branch_target() {
+                branch_ref_addrs.insert(bt.as_u64());
+            }
+        }
+    }
+
+    let mut lifter = X86Lifter::new();
+    for inst in &instructions {
+        let mut ops = lifter.lift(inst);
+        for op in &mut ops {
+            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        }
+        raw_ops.extend(ops);
+    }
+    // DRIVER-RIPREL-CONSTFOLD-0001: fold the iced-lift path's
+    // rip-relative memory EAs (`INT_ADD(RIP, const)` -> the const)
+    // before injection. The X86_64Disassembler already resolves a
+    // rip-relative displacement to the ABSOLUTE target, so the
+    // general memory arms' `INT_ADD(reg:0x288:8, abs)` double-counts
+    // rip; SLEIGH's rrip/disp const-fold exports the constant EA
+    // directly (oracle dumps: push/comis arms — `COPY val <-
+    // ram:abs` / `FLOAT_NAN in=(ram:0x1c:4)` with no LOAD, no addr
+    // ops; the direct-runner mirror golden's `return
+    // xRam00000000000a1040;` for suck_in_APR's `mov 0x74765(%rip),
+    // %rax`). The folded shapes LOAD(ram,const)/STORE(ram,const,v)
+    // are exactly the oracle's constant-EA pcode, which
+    // RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4277/4319)
+    // then reindex into direct global varnodes.
+    let folded_eas = fold_rip_relative_eas(&mut raw_ops);
+    if folded_eas > 0 {
+        eprintln!("[PREPASS] DRIVER-RIPREL-CONSTFOLD-0001: {} rip-relative EAs folded in {}", folded_eas, name);
+    }
+    Some((raw_ops, branch_ref_addrs))
+}
+
+// The PARAMID iteration loop itself. Round 1 runs bare (no callee locks —
+// v3sig_protos None); every round joins the same 15s-guarded threads the
+// main loop uses and harvests fd.funcp from each outcome; the next round
+// installs the fresh table. A round whose harvest equals the table it ran
+// under is the fixed point (one more pass cannot change anything) and
+// stops the loop early.
+fn run_paramid_iteration(
+    functions: &[(u64, usize, u64, String)],
+    max_functions: usize,
+    discovered: &[u64],
+    plt_slots: &[u64],
+    sections: &[(u64, u64, u64)],
+    shared: &SharedDecompileCtx,
+    rounds: usize,
+    buffer: &[u8],
+) -> HashMap<u64, V3CalleeProto> {
+    // The iteration window is the main loop's own window (same ledger,
+    // same skip filter): Parameter ID only ever commits signatures for
+    // functions it decompiled, and this driver's decompile set is that
+    // window. Callees outside it (PLT thunks, undiscovered bodies) keep
+    // active recovery — the coverage boundary the manifest comparison
+    // below attributes.
+    let mut tasks: Vec<FunctionTask> = Vec::new();
+    for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
+        if idx >= max_functions {
+            break;
+        }
+        if skipped_from_main_window(size, name) {
+            continue;
+        }
+        let max_size = std::cmp::min(size, 8192);
+        let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
+        if file_offset as usize >= buffer.len() {
+            continue;
+        }
+        let code_bytes = &buffer[file_offset as usize..end_off];
+        let Some((raw_ops, branch_ref_addrs)) = lift_function_ops(code_bytes, vaddr, name) else {
+            continue;
+        };
+        tasks.push(FunctionTask {
+            name: name.clone(),
+            vaddr,
+            size,
+            raw_ops,
+            branch_ref_addrs,
+            stage_binary: None,
+            stage_proj: false,
+            stage_drill: false,
+            harvest_proto: true,
+        });
+    }
+    let window_count = tasks.len();
+
+    // The analyzer's function universe beyond the print window: every
+    // called target + code-reference entry the front-end registered (the
+    // same `analysis_discovered` set the print DB carries), MINUS the PLT
+    // import thunks — an external import cannot be decompiled (the stub
+    // body recovers nothing Parameter ID could commit), and canon's locks
+    // on those slots come from the import-signature channel, not
+    // Parameter ID. Extents: bounded by the next known entry (the
+    // front-end's neighbor heuristic — ledger entries, discovered
+    // targets, and PLT slots all bound), capped at the window lift's
+    // 8192 ceiling.
+    let window_addrs: std::collections::HashSet<u64> = tasks.iter().map(|task| task.vaddr).collect();
+    let plt_set: std::collections::HashSet<u64> = plt_slots.iter().copied().collect();
+    let mut bounds: Vec<u64> = functions.iter().map(|f| f.0)
+        .chain(discovered.iter().copied())
+        .chain(plt_slots.iter().copied())
+        .collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut disc: Vec<u64> = discovered.to_vec();
+    disc.sort_unstable();
+    disc.dedup();
+    let mut discovered_count = 0usize;
+    for target in disc {
+        if plt_set.contains(&target) || window_addrs.contains(&target) {
+            continue;
+        }
+        let Some(next_bound) = bounds.iter().find(|&&bound| bound > target) else {
+            continue;
+        };
+        let size = std::cmp::min(*next_bound - target, 8192) as usize;
+        if size < 5 {
+            continue;
+        }
+        let Some(&(sec_addr, sec_offset, sec_size)) = sections
+            .iter()
+            .find(|&&(addr, _, sz)| target >= addr && target < addr + sz)
+        else {
+            continue;
+        };
+        let file_offset = sec_offset + (target - sec_addr);
+        let end_off = std::cmp::min(file_offset as usize + size, buffer.len());
+        if file_offset as usize >= buffer.len() || sec_size == 0 {
+            continue;
+        }
+        let code_bytes = &buffer[file_offset as usize..end_off];
+        let name = shared
+            .sym_table
+            .get(&target)
+            .cloned()
+            .unwrap_or_else(|| {
+                rugra::debugproto::analyze_headless_function_symbol_name(
+                    target,
+                    ANALYZE_HEADLESS_IMAGE_BASE,
+                )
+            });
+        let Some((raw_ops, branch_ref_addrs)) = lift_function_ops(code_bytes, target, &name) else {
+            continue;
+        };
+        tasks.push(FunctionTask {
+            name,
+            vaddr: target,
+            size,
+            raw_ops,
+            branch_ref_addrs,
+            stage_binary: None,
+            stage_proj: false,
+            stage_drill: false,
+            harvest_proto: true,
+        });
+        discovered_count += 1;
+    }
+    eprintln!(
+        "[PARAMID] iteration window: {} window + {} discovered functions",
+        window_count, discovered_count
+    );
+
+    let mut table: HashMap<u64, V3CalleeProto> = HashMap::new();
+    for round in 1..=rounds {
+        let mut round_shared = shared.clone();
+        round_shared.v3sig_protos =
+            if table.is_empty() { None } else { Some(std::sync::Arc::new(table.clone())) };
+        // Per-callee site records for this round's merge.
+        let mut records: HashMap<u64, Vec<CallSiteEvidence>> = HashMap::new();
+        let mut decompiled = 0usize;
+        for task in &tasks {
+            let task = task.clone();
+            let round_shared = round_shared.clone();
+            let handle = std::thread::spawn(move || decompile_one_function(task, round_shared));
+            // Same watchdog shape as the main loop's join: a hung function
+            // contributes no evidence this round (Parameter ID skips
+            // functions the decompiler cannot process).
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(handle.join());
+            });
+            if let Ok(Ok(Some(outcome))) = rx.recv_timeout(std::time::Duration::from_secs(15)) {
+                if let Some(sites) = outcome.sites {
+                    decompiled += 1;
+                    for site in sites {
+                        records.entry(site.entry).or_default().push(site);
+                    }
+                }
+            }
+        }
+        // The commit step: merge this round's call-site forms into lock
+        // entries (arity consensus, slot evidence, return agreement — the
+        // harvest rules; see merge_callsite_evidence).
+        let mut next: HashMap<u64, V3CalleeProto> = HashMap::new();
+        for (entry, sites) in &records {
+            // Parameter ID commits signatures for functions it decompiled;
+            // an imported external location is never a decompiled function
+            // (canon's locks on PLT slots come from the import-signature
+            // channel, which this lane does not self-host). PLT-slot
+            // evidence is dropped wholesale — the callers keep active
+            // recovery, exactly like the bare face at those sites.
+            if plt_set.contains(entry) {
+                continue;
+            }
+            let name = shared
+                .sym_table
+                .get(entry)
+                .cloned()
+                .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+            if let Some(proto) = merge_callsite_evidence(*entry, &name, sites) {
+                // Canon address key (base-0 entry + image base) — the same
+                // key space the manifest and install arm use.
+                next.insert(entry + ANALYZE_HEADLESS_IMAGE_BASE, proto);
+            }
+        }
+        eprintln!(
+            "[PARAMID] round {}/{} ({}): {} decompiled, {} site records -> {} callee locks (prev {})",
+            round,
+            rounds,
+            if table.is_empty() { "bare" } else { "locked" },
+            decompiled,
+            records.len(),
+            next.len(),
+            table.len()
+        );
+        if next == table {
+            eprintln!("[PARAMID] fixed point reached at round {}", round);
+            table = next;
+            break;
+        }
+        table = next;
+    }
+    table
+}
+
+// The lane's acceptance instrument: the self-produced table against the
+// harvested manifest's 60 canon call-site locks, per entry and per slot.
+// Names are display-only (canon FUN_ spellings vs ELF symbol names);
+// shapes compare (params, ret, input_lock) exactly.
+fn compare_paramid_table_vs_manifest(
+    self_table: &HashMap<u64, V3CalleeProto>,
+    manifest: &HashMap<u64, V3CalleeProto>,
+) {
+    let shape_equal = |a: &V3CalleeProto, b: &V3CalleeProto| -> bool {
+        a.params == b.params && a.ret == b.ret && a.input_lock == b.input_lock
+    };
+    let mut all_addrs: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    all_addrs.extend(manifest.keys().copied());
+    all_addrs.extend(self_table.keys().copied());
+    let (mut exact, mut shape_diff, mut manifest_only, mut self_only) = (0u32, 0u32, 0u32, 0u32);
+    let (mut slots_eq, mut slots_ne, mut slots_m_only, mut slots_s_only) = (0u32, 0u32, 0u32, 0u32);
+    let (mut ret_eq, mut ret_ne, mut ret_m_only, mut ret_s_only) = (0u32, 0u32, 0u32, 0u32);
+    for addr in &all_addrs {
+        match (manifest.get(addr), self_table.get(addr)) {
+            (Some(m), Some(s)) => {
+                if shape_equal(s, m) {
+                    exact += 1;
+                } else {
+                    shape_diff += 1;
+                    let first = if s.input_lock != m.input_lock {
+                        "lock-flag"
+                    } else if s.params.len() != m.params.len() {
+                        "arity"
+                    } else if s.ret != m.ret {
+                        "return-type"
+                    } else {
+                        "param-type"
+                    };
+                    eprintln!(
+                        "[PARAMID-CMP] 0x{:x} SHAPE-DIFF({}): manifest {} il={} params={:?} ret={:?} | self {} il={} params={:?} ret={:?}",
+                        addr, first, m.name, m.input_lock, m.params, m.ret, s.name, s.input_lock, s.params, s.ret
+                    );
+                }
+                let longer = m.params.len().max(s.params.len());
+                for i in 0..longer {
+                    match (m.params.get(i), s.params.get(i)) {
+                        (Some(Some(_)), Some(Some(_))) => {
+                            if m.params.get(i) == s.params.get(i) {
+                                slots_eq += 1;
+                            } else {
+                                slots_ne += 1;
+                            }
+                        }
+                        (Some(Some(_)), _) => slots_m_only += 1,
+                        (_, Some(Some(_))) => slots_s_only += 1,
+                        _ => {}
+                    }
+                }
+                match (&m.ret, &s.ret) {
+                    (Some(_), Some(_)) => {
+                        if m.ret == s.ret {
+                            ret_eq += 1;
+                        } else {
+                            ret_ne += 1;
+                        }
+                    }
+                    (Some(_), None) => ret_m_only += 1,
+                    (None, Some(_)) => ret_s_only += 1,
+                    (None, None) => {}
+                }
+            }
+            (Some(m), None) => {
+                manifest_only += 1;
+                eprintln!(
+                    "[PARAMID-CMP] 0x{:x} MANIFEST-ONLY: {} il={} params={:?} ret={:?} (outside the driver window / call-graph coverage)",
+                    addr, m.name, m.input_lock, m.params, m.ret
+                );
+            }
+            (None, Some(s)) => {
+                self_only += 1;
+                eprintln!(
+                    "[PARAMID-CMP] 0x{:x} SELF-ONLY: {} il={} params={:?} ret={:?} (no manifest counterpart)",
+                    addr, s.name, s.input_lock, s.params, s.ret
+                );
+            }
+            (None, None) => unreachable!("address union has no owner"),
+        }
+    }
+    let overlap = exact + shape_diff;
+    let entry_precision = if overlap > 0 { exact as f64 / overlap as f64 } else { 0.0 };
+    let entry_recall = if !manifest.is_empty() { exact as f64 / manifest.len() as f64 } else { 0.0 };
+    eprintln!("[PARAMID-CMP] ===== self-produced table vs manifest =====");
+    eprintln!(
+        "[PARAMID-CMP] entries: manifest={} self={} overlap={} | exact={} shape-diff={} manifest-only={} self-only={}",
+        manifest.len(), self_table.len(), overlap, exact, shape_diff, manifest_only, self_only
+    );
+    eprintln!(
+        "[PARAMID-CMP] entry-level: precision(exact/overlap)={:.1}% recall(exact/manifest)={:.1}%",
+        entry_precision * 100.0, entry_recall * 100.0
+    );
+    eprintln!(
+        "[PARAMID-CMP] param slots (overlap): equal={} different={} manifest-locked-only={} self-locked-only={}",
+        slots_eq, slots_ne, slots_m_only, slots_s_only
+    );
+    eprintln!(
+        "[PARAMID-CMP] return locks (overlap): equal={} different={} manifest-only={} self-only={}",
+        ret_eq, ret_ne, ret_m_only, ret_s_only
+    );
+}
+
+// HEADLESS-BRIDGE-PARAMID-0001: one function's complete decompile — the
+// exact body the main loop originally ran inline inside its per-function
+// thread, lifted verbatim into a callable so the PARAMID iteration rounds
+// run the identical computation for harvest (same lifts, same seeds, same
+// action DB template, same print stack; only the caller decides whether
+// the text is printed and whether the final FuncProto is harvested).
+fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Option<FunctionOutcome> {
+    let FunctionTask {
+        name: func_name,
+        vaddr,
+        size: func_size,
+        raw_ops,
+        branch_ref_addrs,
+        stage_binary,
+        stage_proj: stage_proj_fn,
+        stage_drill: stage_drill_fn,
+        harvest_proto,
+    } = task;
+    let mirror_fn = shared.mirror_fn;
+    let mirror_img = shared.mirror_img.as_ref().map(|bytes| bytes.as_ref().clone());
+    let loader_img = shared.loader_img.as_ref().map(|bytes| bytes.as_ref().clone());
+    let mirror_syms = shared.mirror_syms.clone();
+    let print_db = shared.print_db.clone();
+    let action_db = shared.action_db.clone();
+    let typeseed_locals = shared.typeseed_locals.clone();
+    let v3sig_protos = shared.v3sig_protos.clone();
+    let thread_arch = shared.thread_arch.clone();
+    let default_effects = shared.default_effects.clone();
+    let sym_table = shared.sym_table.clone();
+    let str_table = shared.str_table.clone();
+    let proto_db = shared.proto_db.clone();
+    let entry_set = shared.entry_set.clone();
+    let plt_ranges = shared.plt_ranges.clone();
+
+        let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
+        // HEADLESS-BRIDGE-V1-TYPESEED (C1): attach the canon-address-keyed
+        // committed-local seeds before any action runs (the <localdb>
+        // transport position). Manifest keys are analyzeHeadless
+        // addresses = this driver's base-0 vaddr + 0x100000.
+        if let Some(table) = typeseed_locals.as_ref() {
+            if let Some(seeds) =
+                table.get(&format!("0x{:x}", vaddr + ANALYZE_HEADLESS_IMAGE_BASE))
+            {
+                eprintln!(
+                    "[THREAD] {} typeseed: {} committed locals",
+                    func_name,
+                    seeds.len()
+                );
+                fd.committed_locals = seeds.clone();
+            }
+        }
+        // HTTPD-STACKSLOT-FOLD-0001: Ghidra's Funcdata constructor always
+        // binds its Architecture (`glb = scope->getArch()`, funcdata.cc:48)
+        // — the headless oracle that produced
+        // tests/golden/ghidra_httpd_1204.c decompiled every function with
+        // its BfdArchitecture attached, and `RuleLoadVarnode::
+        // correctSpacebase` / `RuleStoreVarnode` (ruleaction.cc:4173-4341)
+        // dereference `data.getArch()->getSpaceBySpacebase(...)`
+        // unconditionally. Rugra's arch-less Funcdata made those rules
+        // take the miss branch for the input-RSP case, so spacebase-
+        // relative STORE/LOAD (`push`/`sub rsp` prologues and `mov
+        // [rsp+k], reg` spills) never reindexed into the stack space and
+        // printed as raw `*(..)(in_RSP-8)` pointer expressions (148
+        // in_RSP lines). Attach the canonical x86-64 Architecture —
+        // exactly what curl's runner does with its worker arch at
+        // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
+        // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
+        // in_RSP lines 148→0 (2026-08-30).
+        // SB-CONSTBASE-0001: the attached Architecture now carries the
+        // pspec tracked-context partitions (DF=0 over whole ram, the
+        // oracle BfdArchitecture init chain architecture.cc:1190 ->
+        // globalcontext.cc:531-549), so ActionConstbase observes the
+        // same tracked set the oracle does and inserts the entry-head
+        // `COPY DF <- 0` (coreaction.cc:692-704). First cross-side
+        // mirror divergence was exactly this op missing
+        // (HTTPD_CONSTBASE_TRACKED_DF_ROOTCAUSE_2026-09-22.md).
+        // RUGRA-FLOW-MIRROR-0001: under the gate the Architecture also
+        // carries the PT_LOAD loader (the oracle BfdArchitecture maps
+        // every PT_LOAD — the loader is part of the input contract).
+        // Jumptable recovery reads the table bytes through
+        // fd.arch.loader (jumptable.rs sanity_check / find_normalized
+        // readonly rescue / emulate get_load_image_value — the
+        // MemoryImage channel of jumptable.cc:1225-1226/1588-1598); a
+        // bare loader-less Architecture makes recovery DataUnavail and
+        // main's relative-offset switch at 0x2ba94 (table @0x88530)
+        // fail-thunks into CALLIND + artificial RETURN (the first
+        // recorded httpd cross-side divergence, see
+        // /dev/shm/rugra-tests/sb-httpdff/cross_side_report.txt).
+        let mut thread_arch = thread_arch;
+        {
+            // HTTPD-ARCH-LOADER-0001: Ghidra's BfdArchitecture maps
+            // every PT_LOAD segment and builds its StringManager over
+            // that loader BEFORE any Funcdata exists — the input
+            // contract holds for every decompilation, not only the
+            // single-function mirror harness. Attaching the same
+            // PT_LOAD image + arch.build_string_manager() on the
+            // default path restores the oracle channels that read
+            // through the loader: ActionConstantPtr's string lookup
+            // (RuleLoadVarnode::isString / PrintC::pushPtrCharConstant
+            // printc.cc:1698-1719, via the shared StringManager) typed
+            // `lea rip->"Apr 20 2024 20:23:43"` returns as char* and
+            // rendered the quoted literal in the oracle, while the
+            // loader-less arch left the constant undefined8 and printed
+            // `return 0x7e290;` with a `long` signature.
+            let image = mirror_img
+                .clone()
+                .or_else(|| loader_img.clone());
+            if let Some(image) = image {
+                thread_arch.loader = Some(std::sync::Arc::new(
+                    rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image),
+                ));
+                thread_arch.build_string_manager();
+            }
+        }
+        if mirror_fn {
+            let image = mirror_img
+                .as_deref()
+                .expect("mirror image captured behind the gate");
+            thread_arch.loader = Some(std::sync::Arc::new(
+                rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image.to_vec()),
+            ));
+        }
+        // ACTION-SYMDB-DATASYM-0001 (canon only): attach the action-side
+        // Database BEFORE any pipeline query — setVarnodeProperties
+        // fires as early as the iced prelude's input promotions, and
+        // ActionConstantPtr's isPointer queryContainer
+        // (coreaction.cc:1151) runs mid-pipeline. Mirror keeps
+        // symboltab unset through the pipeline (bare-BFD parity).
+        let action_db_attached = action_db.is_some();
+        if let Some(db) = action_db {
+            let db_arc = std::sync::Arc::new(std::sync::RwLock::new(db));
+            // HTTPD-SBSCOPE-TOKEN-0001: TypeSpacebase::getSubType
+            // (type.cc:2947) resolves a spacebase-relative PTRSUB's
+            // field type through the global scope — TypeOpPtrsub::
+            // getOutputToken's downChain (typeop.cc:2357) depends on it
+            // to hand back the FunctionSymbol's code type, which makes
+            // the token EQUAL the spacebase-constant typelocked output
+            // high type and hits the ActionSetCasts::castOutput
+            // short-circuit (coreaction.cc:2544 — no CAST on the
+            // `FUN_0012dc80` callback argument; oracle probe C: locked
+            // e40ed130 + flow-override CALL at the PLT tail-jmp prints
+            // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)`).
+            // Without this handle the spacebase types carry an empty map,
+            // the token degrades to the anonymous 1-byte unknown fallback
+            // (type.cc:2360), and castOutput's implied+typelock force
+            // arm prints `(BADTYPE *)FUN_0012dc80` — ap_pregfree's
+            // 2-line gated residual. The curl driver wires the same
+            // handle at curl_decompile.rs:2476; mirror keeps the factory
+            // slot empty (bare-BFD parity).
+            if let Some(types) = thread_arch.types.as_ref() {
+                types
+                    .write()
+                    .unwrap()
+                    .set_spacebase_scope_source(Some(db_arc.clone()));
+            }
+            thread_arch.set_symboltab(db_arc);
+        }
+        fd.set_arch(std::sync::Arc::new(thread_arch));
+        // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
+        // model's EffectRecord surface (see tracked_context_architecture)
+        // BEFORE the prelude marks inputs, so the iced prelude's
+        // input promotions carry Funcdata::setInputVarnode's effect
+        // tail (funcdata_varnode.cc:365-370) like every Ghidra input.
+        fd.funcp.effects = default_effects;
+        if !mirror_fn {
+            fd.external_prototypes = proto_db;
+            // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden
+            // addresses are this driver's base-0 addresses + 0x100000.
+            // Warning texts that embed an address render through
+            // Funcdata::print_raw_code_addr (oracle printRaw spelling),
+            // so install the same delta the code-label layer carries.
+            fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
+        }
+        // RUGRA-FLOW-MIRROR-0001: under the gate the symbol set is the
+        // dynsym-defined functions only (registerDynamicFunctionSymbols
+        // mirror — the oracle's bare BFD harness registers no PLT thunk
+        // names and no analysis-discovered FUN_ defaults); the default
+        // path keeps the full HTTPD-URAM-SYMBOLIZE-0001 table.
+        if mirror_fn {
+            for &(sym_addr, ref sym_name) in &mirror_syms {
+                fd.add_symbol(sym_addr, sym_name.clone());
+            }
+        } else {
+            for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
+        }
+        for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }
+
+        // RUGRA-FLOW-MIRROR-0001: the mirror load — the oracle contract
+        // fd->followFlow(Address(code,0), Address(code,highest))
+        // (funcdata_op.cc:756; stage_projection_1204.cc:419). SLEIGH
+        // decodes through the full PT_LOAD image at base 0, so the
+        // unbounded range can lift .plt/.plt.sec thunks below .text;
+        // tail jumps into thunks truncate through the jumptable
+        // fail-thunk path (jumptable.cc:2304-2320 -> flow.cc:727/735
+        // CALLIND + artificial halt), the same contract the curl mirror
+        // established. The analyzer transport is NOT applied here: no
+        // tail-call CALL_RETURN overrides (below), no inferred callee
+        // prototypes (external_prototypes stays empty — bare-BFD
+        // parity, the RUGRA_BARE_LOAD principle), and an empty flow
+        // callee table. .rodata strings stay seeded: the oracle
+        // StringManager reads the same bytes through the loader.
+        // Known recorded delta: the Funcdata size keeps the ELF
+        // st_size (3062 for main) where the oracle harness's 2-arg
+        // Scope::addFunction leaves it unset; size is outside the
+        // projection grammar, and any behavioral effect surfaces as a
+        // consumer-side divergence record.
+        if mirror_fn {
+            let image = match mirror_img.as_deref() {
+                Some(image) => image,
+                None => {
+                    eprintln!("[THREAD] {} flow mirror failed: no PT_LOAD image", func_name);
+                    return None;
+                }
+            };
+            let mut sleigh = rugra::disasm::sleigh_lift::SleighLifter::new();
+            if let Err(error) = sleigh.configure_x86_64(image, 0) {
+                eprintln!("[THREAD] {} flow mirror SLEIGH setup failed: {:?}", func_name, error);
+                return None;
+            }
+            eprintln!("[THREAD] {} flow mirror: follow_flow_range(0, u64::MAX)", func_name);
+            let callee_protos = std::collections::BTreeMap::new();
+            if let Err(error) = rugra::flow::follow_flow_range(
+                &mut fd,
+                &mut sleigh,
+                0,
+                u64::MAX,
+                &callee_protos,
+            ) {
+                eprintln!("[THREAD] {} flow mirror failed: {}", func_name, error);
+                return None;
+            }
+            eprintln!("[THREAD] {} flow mirror done ops={} blocks={}",
+                func_name, fd.obank.optree.len(), fd.bblocks.get_size());
+        } else {
+
+        // Tail-call flow overrides — transport of Ghidra's Java-side
+        // TailCallAnalyzer writing FlowOverride CALL_RETURN entries into
+        // the program DB before decompilation: a direct `jmp` whose
+        // target is a KNOWN function entry OUTSIDE this function's own
+        // range is a tail call (PLT thunks, `jmp ap_getword` wrappers,
+        // shared tail chunks like 0x2c960 that other functions call).
+        // `inject_raw_ops` applies the override at the raw layer
+        // (flow.cc:474-475 position) rewriting BRANCH→CALL and
+        // appending the CALL_RETURN's RETURN. Without it the printer
+        // emits the dangling `code_rXXXX: goto code_rXXXX;` self-loop
+        // (GOTO-LABEL-UNPRINTED-0001 symptom family).
+        for raw in &raw_ops {
+            if rugra::opcodes::OpCode::from_i32(raw.get_opcode())
+                != Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+            {
+                continue;
+            }
+            let Some(tgt) = raw.inputs().first() else { continue };
+            if tgt.space != rugra::space::AddressSpace::Ram { continue; }
+            let known_entry = entry_set.contains(&tgt.offset)
+                || plt_ranges.iter().any(|&(s, e, es)| {
+                    tgt.offset >= s && tgt.offset < e && (tgt.offset - s) % es == 0
+                });
+            if !known_entry { continue; }
+            if vaddr <= tgt.offset && tgt.offset < vaddr + func_size as u64 { continue; }
+            if let Some(seq) = raw.seq_num() {
+                fd.localoverride.insert_flow_override(
+                    seq.get_addr(),
+                    rugra::override_rs::FlowOverride::CallReturn,
+                );
+            }
+        }
+
+        fd.inject_raw_ops(&raw_ops);
+        eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());
+        // HTTPD-MAIN-WARNUNREACH-JTEDGE-0001: the oracle's load
+        // contract is Funcdata::followFlow (funcdata_op.cc:756), whose
+        // generateOps phase 2 recovers jump tables BEFORE block
+        // generation (flow.cc:796-821) so every switch gets its case
+        // out-edges (collectEdges BRANCHIND arm, flow.cc:933-957) and
+        // switchOver map (funcdata_op.cc:777-778). The linear batch
+        // inject above fused the lift and block formation, leaving
+        // BRANCHIND blocks edge-less — main's 30 case bodies became
+        // spanning-tree extra roots and ActionUnreachable emitted 30
+        // "Removing unreachable block" warnings. Run the recovery
+        // wiring here, at the same position relative to the linear
+        // sweep (A/B evidence: RUGRA_MIRROR=1 through follow_flow_range
+        // = 0 warnings + real case bodies on the same binary).
+        let recovered = rugra::flow::recover_jump_tables_injected(&mut fd);
+        match recovered {
+            Ok(count) if count > 0 => {
+                eprintln!("[THREAD] {} jumptable recovery: {} tables", func_name, count)
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // The LowlevelError channel Ghidra lets escape
+                // followFlow — the function cannot decompile.
+                eprintln!("[THREAD] {} jumptable recovery failed: {}", func_name, error);
+                return None;
+            }
+        }
+        // HEADLESS-BRIDGE-V3-SIGLOCK-0003: install the callee locked
+        // prototypes on this function's call sites AFTER injection
+        // (callspecs exist — the model-bound funcp registers them —
+        // and the CALL ops still carry only their target inputs) and
+        // BEFORE the action pipeline (ActionPrototypeTypes' locked
+        // arms, ActionFuncLink's inputlocked attach, and
+        // ActionInferTypes' typeprop anchoring all run inside
+        // perform_action). The install position mirrors the oracle
+        // harness's pre-action callee installs (stage_shape_diag.cc
+        // STAGE_CALLEE_PROTOS, "before the target's action pass, so
+        // ActionDefaultParams copies each callee proto onto its call
+        // sites exactly like the Program database boundary").
+        if let Some(table) = v3sig_protos {
+            if let Some(types) = fd.arch.as_ref().and_then(|arch| arch.types.clone()) {
+                let locked = install_v3sig_callee_protos(&mut fd, &table, &types);
+                if locked > 0 {
+                    eprintln!("[THREAD] {} v3sig: {} callee protos locked", func_name, locked);
+                }
+            }
+        }
+        }
+
+        let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+        fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
+
+        let mut db = ActionDatabase::new();
+        db.set_default_actions();
+        {
+            let mut fd_write = fd_arc.write().unwrap();
+            if stage_proj_fn || stage_drill_fn {
+                // Stage emitters fully replace the plain perform_action
+                // run for the selected function: the projection/drill
+                // stepping itself drives the same unmodified Action tree
+                // to completion (BREAK_START frontier pauses only), and
+                // the C body still prints afterwards, exactly like the
+                // curl driver's emitter path.
+                eprintln!(
+                    "[THREAD] {} stage emitters start (proj={} drill={})",
+                    func_name, stage_proj_fn, stage_drill_fn
+                );
+                let stage_image = stage_binary
+                    .as_deref()
+                    .expect("stage image captured behind stage envs");
+                if stage_proj_fn {
+                    if let Err(err) = emit_stage_projection(
+                        &mut fd_write,
+                        &mut db,
+                        stage_image,
+                        &func_name,
+                        vaddr,
+                    ) {
+                        eprintln!("[STAGE] projection failed: {}", err);
+                        std::process::exit(1);
+                    }
+                }
+                if stage_drill_fn {
+                    if let Err(err) = emit_stage_drill(
+                        &mut fd_write,
+                        &mut db,
+                        stage_image,
+                        &func_name,
+                        vaddr,
+                    ) {
+                        eprintln!("[STAGE] drill failed: {}", err);
+                        std::process::exit(1);
+                    }
+                }
+                eprintln!("[THREAD] {} stage emitters done", func_name);
+            } else {
+                eprintln!("[THREAD] {} actions start", func_name);
+                let result = db.perform_action("decompile", &mut fd_write);
+                eprintln!("[THREAD] {} actions done ({})", func_name, if result.is_ok() { "ok" } else { "err" });
+            }
+        }
+
+        // HTTPD-CODEREF-SYMBOLIZE-0001 (print-only install): swap the
+        // action-phase Architecture for a clone carrying the global
+        // function-symbol Database, so PrintC::doc_function's snapshot
+        // (printc.rs doc_function: fd.arch.symboltab) resolves code-
+        // address constants through the global scope. The action-phase
+        // queries never saw the DB (channel-absent decompile, per the
+        // build-site comment above). The print-side resolution itself
+        // lives in printc's constant leaf (constant_leaf_text's
+        // untyped/Unknown arms -> code_entry_constant_text, the
+        // pushPtrCodeConstant chain printc.cc:1730) — the oracle's
+        // equivalent state is the Parameter-ID-locked function-pointer
+        // param type the analyzer attached (canon evidence:
+        // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)` at both
+        // call sites vs the analyzer-less direct-runner golden's
+        // `0x2dc80`).
+        // ACTION-SYMDB-DATASYM-0001: MIRROR-ONLY while the action DB is
+        // attached. When no action Database was attached (the mirror,
+        // or the RUGRA_SYMDB=0 opt-out), the historical print swap
+        // keeps serving the print-side code-ref channel exactly as
+        // before.
+        if mirror_fn || !action_db_attached {
+            let mut fd_write = fd_arc.write().unwrap();
+            if let Some(a) = fd_write.arch.clone() {
+                let mut print_arch = (*a).clone();
+                print_arch.set_symboltab(print_db.clone());
+                fd_write.arch = Some(std::sync::Arc::new(print_arch));
+            }
+        }
+
+        let fd_read = fd_arc.read().unwrap();
+        // BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001 diagnostic: dump the final
+        // structured tree (sblocks) for the RUGRA_DUMP_FUNC target.
+        if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
+            if dump_fn == func_name {
+                if let Some(scope) = fd_read.scope.as_ref() {
+                    eprintln!("[DUMP] === local symbols for {} ===", func_name);
+                    for (i, sym) in scope.symbols.iter().enumerate() {
+                        eprintln!(
+                            "[DUMP] sym#{i} name={} start={:#x} size={} tl={} nl={} dt={:?}",
+                            sym.name,
+                            sym.start,
+                            sym.size,
+                            sym.typelock,
+                            sym.namelock,
+                            sym.dtype.as_ref().map(|d| d.get_name().to_string())
+                        );
+                    }
+                }
+                eprintln!("[DUMP] === structure tree for {} ===", func_name);
+                let mut tree_out = String::new();
+                for blk in &fd_read.sblocks.blocks {
+                    rugra::block::print_tree_dbg(blk, 0, &mut tree_out);
+                }
+                eprintln!("{}", tree_out);
+            }
+        }
+        // ACTION-SYMDB-DATASYM-0001 (render residual ②): the oracle's
+        // PrintLanguage default emitter is EmitPrettyPrint
+        // (printlanguage.cc:69 `emit = new EmitPrettyPrint()`), whose
+        // Oppen scan-queue inserts the golden's 100-column line breaks
+        // (ap_set_name_virtual_host's CALL splits after
+        // `&DAT_001a0820,`; EmitNoMarkup streams tokens unwrapped).
+        // DEFAULT-FLIP: EmitPrettyPrint rides the action DB default
+        // (the canon assembly the oracle always runs); the
+        // RUGRA_SYMDB=0 opt-out keeps the historical EmitNoMarkup
+        // byte stream, and the mirror keeps its own contract.
+        let pretty_emit = action_db_attached;
+        let mut printer = if pretty_emit {
+            PrintC::new(Box::new(rugra::prettyprint::EmitPrettyPrint::new()))
+        } else {
+            PrintC::new(Box::new(EmitNoMarkup::new()))
+        };
+        // PRINTC-LABSPELL-LABSYMS-0001: the front-end program-DB
+        // code-label layer (same contract as the curl driver's install,
+        // see the long block comment there): every direct-branch target
+        // of the disassembly (branch_ref_addrs, collected at lift time)
+        // becomes a default `LAB_<image-based addr>` LABEL symbol —
+        // exactly the reference set the front-end disassembler creates —
+        // minus addresses whose primary symbol is not a LABEL (the
+        // thread's sym_table proxy: thunks, discovered functions; and
+        // the func_entry_set: ELF + call targets) and minus the
+        // function's own entry. The raw-BFD mirror keeps the layer
+        // empty with base 0.
+        if !mirror_fn {
+            let mut code_labels: HashMap<u64, String> = HashMap::new();
+            for &dest in &branch_ref_addrs {
+                if dest == vaddr
+                    || sym_table.contains_key(&dest)
+                    || entry_set.contains(&dest)
+                {
+                    continue;
+                }
+                code_labels
+                    .entry(dest)
+                    .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
+            }
+            // DRIVER-SWITCHD-LABEL-0001: the headless
+            // DecompilerSwitchAnalysis pass consumes the decompiler's
+            // dumped <jumptable> XML (jumptable.cc:2769-2790
+            // JumpTable::encode: one <dest> per address-table entry with
+            // its case label when not JumpValues::NO_LABEL) and creates
+            // LABEL symbols at every case destination named
+            // `caseD_<hex label>` in the namespace `switchD_<dispatch
+            // addr>` (the BRANCHIND address), plus `default` at the
+            // default destination; later passes print the qualified
+            // form through emitLabel's queryCodeLabel (printc.cc:3176)
+            // -> ScopeGhidra::findCodeLabel (database_ghidra.cc:308-325).
+            // Mirrored here from the recovered JumpTables: first entry
+            // wins a shared destination (curl glob_set 0x4c5e is both
+            // case 0x5e and the folded default and prints caseD_5e),
+            // `default` only where no caseD label landed (resolved as
+            // the default_block out-edge target of the BRANCHIND
+            // block), overriding the plain LAB_ defaults. Skipped in
+            // the raw-BFD mirror (no analyzer symbol layer there).
+            let mut switchd_labels: HashMap<u64, String> = HashMap::new();
+            for jt in &fd_read.jump_tables {
+                let jt_rg = jt.read().unwrap();
+                if jt_rg.addresstable.is_empty() {
+                    continue;
+                }
+                let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
+                for (i, dest) in jt_rg.addresstable.iter().enumerate() {
+                    let case_value = jt_rg.label.get(i).copied();
+                    if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
+                        switchd_labels.entry(dest.as_u64()).or_insert_with(|| {
+                            format!("switchD_{:08x}_caseD_{:x}", dispatch, case_value.unwrap())
+                        });
+                    }
+                }
+                if jt_rg.default_block >= 0 {
+                    let default_addr = jt_rg.indirect.as_ref().and_then(|indirect| {
+                        let parent = indirect.read().unwrap().parent.clone()?;
+                        let blk = parent.upgrade()?;
+                        let blk_rg = blk.read().unwrap();
+                        let slot = jt_rg.default_block as usize;
+                        if slot >= blk_rg.size_out() {
+                            return None;
+                        }
+                        let edge = blk_rg.get_out(slot)?;
+                        let tgt = edge.point.read().unwrap();
+                        Some(tgt.get_start_addr().as_u64())
+                    });
+                    if let Some(default_addr) = default_addr {
+                        if !switchd_labels.contains_key(&default_addr) {
+                            switchd_labels
+                                .entry(default_addr)
+                                .or_insert_with(|| format!("switchD_{:08x}_default", dispatch));
+                        }
+                    }
+                }
+            }
+            for (addr, name) in switchd_labels {
+                code_labels.insert(addr, name);
+            }
+            printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
+        }
+        printer.doc_function(&fd_read);
+        let output = printer.take_emit();
+        // ACTION-SYMDB-DATASYM-0001: symmetric extraction — the pretty
+        // path flushes the scan queue then reuses the same low-level
+        // getOutput post-processing.
+        let text = if pretty_emit {
+            let text = output
+                .into_any()
+                .downcast::<rugra::prettyprint::EmitPrettyPrint>()
+                .unwrap();
+            text.get_output()
+        } else {
+            let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
+            text.get_output()
+        };
+        let sites = if harvest_proto {
+            Some(extract_callsite_evidence(&fd_read, shared.loose_evidence))
+        } else {
+            None
+        };
+        Some(FunctionOutcome { text: Some(text), sites })
+    }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Rugra Decompilation: httpd ===\n");
@@ -1347,7 +2624,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // explicit form, equivalent to the new default. A binary whose callee
     // manifest is absent decompiles as the unchanneled face (graceful
     // no-op — the httpd-only manifest never gates other corpora).
-    let v3sig_active = if mirror_flow_enabled() {
+    // HEADLESS-BRIDGE-PARAMID-0001: the self-hosted Parameter ID mode
+    // (opt-in RUGRA_PARAMID=1) replaces this channel's manifest input —
+    // the callee-siglock locks become the binary's own runtime-recovered
+    // prototypes (see run_paramid_iteration before the main loop). The
+    // mirror gate keeps absolute precedence (projection purity) and
+    // RUGRA_SEEDS=0 stays the global escape, exactly like the manifest
+    // channel.
+    let paramid_active = if mirror_flow_enabled() {
+        eprintln!("[PARAMID] self-hosted Parameter ID mode ignored under the mirror gate (projection purity)");
+        false
+    } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        false
+    } else {
+        std::env::var("RUGRA_PARAMID").ok().as_deref() == Some("1")
+    };
+    let v3sig_active = if paramid_active {
+        eprintln!("[V3SIG] manifest load skipped: RUGRA_PARAMID=1 self-hosted mode owns the callee-siglock channel");
+        false
+    } else if mirror_flow_enabled() {
         eprintln!("[V3SIG] callee-siglock gate ignored under the mirror gate (projection purity)");
         false
     } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
@@ -1358,71 +2653,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The manifest table: canon address (base-0 vaddr + 0x100000) ->
     // (callee name, params Vec<Option<type spelling>>, return spelling,
     // input_lock). Defensive JSON decode, same shape as the TYPESEED gate.
-    let v3sig_table: Option<
+    let mut v3sig_table: Option<
         std::sync::Arc<HashMap<u64, V3CalleeProto>>,
     > = if v3sig_active {
         let path = std::env::var("RUGRA_V3SIG_MANIFEST")
             .unwrap_or_else(|_| "tests/golden/manifests/callee_siglock_httpd_1204.json".to_string());
-        match std::fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(raw) => {
-                    let mut table = HashMap::new();
-                    if let Some(serde_json::Value::Object(callees)) = raw.get("callees") {
-                        for (addr, entry) in callees {
-                            let Some(key) = addr.strip_prefix("0x").and_then(|digits| u64::from_str_radix(digits, 16).ok()) else {
-                                continue;
-                            };
-                            let Some(serde_json::Value::String(name)) = entry.get("name") else {
-                                continue;
-                            };
-                            let mut params = Vec::new();
-                            if let Some(serde_json::Value::Array(slots)) = entry.get("params") {
-                                for slot in slots {
-                                    let spelling = match slot.get("type") {
-                                        Some(serde_json::Value::String(t)) if slot.get("locked") == Some(&serde_json::Value::Bool(true)) => Some(t.clone()),
-                                        _ => None,
-                                    };
-                                    params.push(spelling);
-                                }
-                            }
-                            let ret = match entry.get("return") {
-                                Some(serde_json::Value::String(t)) => Some(t.clone()),
-                                _ => None,
-                            };
-                            let input_lock = entry.get("input_lock")
-                                == Some(&serde_json::Value::Bool(true))
-                                && !params.is_empty()
-                                && params.iter().all(|slot| slot.is_some());
-                            table.insert(
-                                key,
-                                V3CalleeProto {
-                                    name: name.clone(),
-                                    params,
-                                    ret,
-                                    input_lock,
-                                },
-                            );
-                        }
-                    }
-                    eprintln!(
-                        "[V3SIG] loaded {}: {} callee prototypes ({} input-locked, {} return-locked)",
-                        path,
-                        table.len(),
-                        table.values().filter(|c| c.input_lock).count(),
-                        table.values().filter(|c| c.ret.is_some()).count()
-                    );
-                    Some(std::sync::Arc::new(table))
-                }
-                Err(err) => {
-                    eprintln!("[V3SIG] manifest {} is not valid JSON: {} (gate disabled)", path, err);
-                    None
-                }
-            },
-            Err(err) => {
-                eprintln!("[V3SIG] cannot read manifest {}: {} (gate disabled)", path, err);
-                None
-            }
-        }
+        load_v3sig_manifest(&path).map(std::sync::Arc::new)
     } else {
         None
     };
@@ -1910,12 +3146,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         functions
     };
 
+    // HEADLESS-BRIDGE-PARAMID-0001: the shared per-thread context (see the
+    // struct doc). Built once from the same captures the former inline
+    // closure cloned per function; the main loop and the PARAMID rounds
+    // clone it per thread.
+    let mut shared_ctx = SharedDecompileCtx {
+        mirror_fn: mirror,
+        mirror_img: mirror_image.map(std::sync::Arc::new),
+        loader_img: loader_image_shared.map(std::sync::Arc::new),
+        mirror_syms: mirror_fn_syms.clone(),
+        print_db: print_symbol_db.clone(),
+        action_db: action_db_template.clone(),
+        typeseed_locals: typeseed_manifest.clone(),
+        v3sig_protos: v3sig_table.clone(),
+        loose_evidence: std::env::var("RUGRA_PARAMID_EVIDENCE").ok().as_deref() == Some("loose"),
+        thread_arch: tracked_arch.clone(),
+        default_effects: default_effects.clone(),
+        sym_table: symbol_table.clone(),
+        str_table: string_table.clone(),
+        proto_db: prototype_db.clone(),
+        entry_set: std::sync::Arc::new(func_entry_set.clone()),
+        plt_ranges: plt_entry_ranges.clone(),
+    };
+
+    // HEADLESS-BRIDGE-PARAMID-0001 (opt-in RUGRA_PARAMID=1): run the
+    // Parameter-ID iteration loop BEFORE the printing pass and swap the
+    // V3SIG channel's input from the harvested manifest to the binary's
+    // own runtime-recovered prototypes. The final face pass (the main
+    // loop below) then decompiles with the self-produced locks installed
+    // — the same three-lock callspec transport the manifest channel uses.
+    if paramid_active {
+        let rounds = std::env::var("RUGRA_PARAMID_ROUNDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(1, 3))
+            .unwrap_or(3);
+        eprintln!(
+            "[PARAMID] self-hosted Parameter ID mode: {} iteration round(s) over the main window",
+            rounds
+        );
+        let plt_slots: Vec<u64> = plt_imports.iter().map(|(&addr, _)| addr).collect();
+        let sections: Vec<(u64, u64, u64)> = if let Object::Elf(ref elf) = &obj {
+            elf.section_headers
+                .iter()
+                .map(|header| (header.sh_addr, header.sh_offset, header.sh_size))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let self_table = run_paramid_iteration(
+            &functions,
+            max_functions,
+            &analysis_discovered,
+            &plt_slots,
+            &sections,
+            &shared_ctx,
+            rounds,
+            &buffer,
+        );
+        eprintln!(
+            "[PARAMID] final self-produced table: {} callee prototypes ({} input-locked, {} return-locked)",
+            self_table.len(),
+            self_table.values().filter(|c| c.input_lock).count(),
+            self_table.values().filter(|c| c.ret.is_some()).count()
+        );
+        if std::env::var("RUGRA_PARAMID_DEBUG").ok().as_deref() == Some("1") {
+            let mut keys = self_table.keys().copied().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for key in keys {
+                let entry = &self_table[&key];
+                eprintln!(
+                    "[PARAMID] 0x{:x} {} il={} params={:?} ret={:?}",
+                    key, entry.name, entry.input_lock, entry.params, entry.ret
+                );
+            }
+        }
+        // The lane's acceptance instrument: exact-match table against the
+        // harvested manifest (canon call-site locks). Diagnostics only —
+        // stderr, never the C output stream.
+        if std::env::var("RUGRA_PARAMID_COMPARE").ok().as_deref() != Some("0") {
+            let path = std::env::var("RUGRA_V3SIG_MANIFEST")
+                .unwrap_or_else(|_| "tests/golden/manifests/callee_siglock_httpd_1204.json".to_string());
+            if let Some(manifest) = load_v3sig_manifest(&path) {
+                compare_paramid_table_vs_manifest(&self_table, &manifest);
+            }
+        }
+        shared_ctx.v3sig_protos = Some(std::sync::Arc::new(self_table));
+        v3sig_table = shared_ctx.v3sig_protos.clone();
+    }
+
+
     for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
         if idx >= max_functions && stage_selector.is_none() { break; }
         if stage_selector.is_some() {
             if !stage_target_selected(vaddr, name) { continue; }
             stage_seen = true;
-        } else if size < 5 || name == "_start" || name.starts_with("register_tm_clones") || name.starts_with("deregister_tm_clones") || name == "__libc_csu_init" || name == "__libc_csu_fini" || name == "frame_dummy" {
+        } else if skipped_from_main_window(size, name) {
             continue;
         }
 
@@ -1926,610 +3252,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if file_offset as usize >= buffer.len() { continue; }
         let code_bytes = &buffer[file_offset as usize..end_off];
 
-        // RUGRA-FLOW-MIRROR-0001: per-function mirror captures (only live
-        // behind the gate). Under the gate the iced prelude is skipped —
-        // SLEIGH + follow_flow_range inside the thread replace it.
-        let mirror_fn = mirror;
-        let mirror_img = mirror_image.clone();
-        let loader_img = loader_image_shared.clone();
-        let mirror_syms = mirror_fn_syms.clone();
-        // HTTPD-CODEREF-SYMBOLIZE-0001: per-thread share of the print-side
-        // symbol Database (read-only at print time).
-        let print_db = print_symbol_db.clone();
-        // ACTION-SYMDB-DATASYM-0001: per-thread fresh clone of the action
-        // Database template — the pipeline's mapGlobals/linkSymbolReference
-        // additions stay function-local (no cross-thread pollution; the
-        // oracle's sequential headless run shares one Database, but every
-        // observable name it derives is a pure function of (address, type)
-        // through buildVariableName, so the pristine-per-function clone is
-        // order-independent and deterministic).
-        let action_db = action_db_template.clone();
-
-        let mut raw_ops = Vec::new();
-        // PRINTC-LABSPELL-LABSYMS-0001: the front-end reference set — every
-        // direct-branch (jmp/jcc) target of the disassembly, i.e. exactly the
-        // flow references Ghidra's disassembler creates and the source of its
-        // default `LAB_` LABEL symbols. Derived from the instruction stream,
-        // NOT from lifted pcode: pipeline stages (condexe merging, block
-        // surgery) rewrite CBRANCH destination inputs into unique-space
-        // temps, which hides the static target from a pcode-level scan.
-        let mut branch_ref_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        if !mirror_fn {
-            let mut disasm = X86_64Disassembler::new();
-            let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
-                Ok(insts) => insts,
-                Err(_) => { total_fail += 1; continue; }
-            };
-            for inst in &instructions {
-                if inst.is_branch() {
-                    if let Some(bt) = inst.branch_target() {
-                        branch_ref_addrs.insert(bt.as_u64());
-                    }
+        // HEADLESS-BRIDGE-PARAMID-0001: the lift stage — the identical
+        // disassemble+lift+const-fold block the loop ran inline (see
+        // lift_function_ops), extracted so the PARAMID harvest rounds
+        // build byte-identical raw ops. Under the mirror gate the iced
+        // prelude is skipped — SLEIGH + follow_flow_range inside the
+        // thread replace it.
+        let (raw_ops, branch_ref_addrs) = if !mirror {
+            match lift_function_ops(code_bytes, vaddr, name) {
+                Some(pair) => pair,
+                None => {
+                    total_fail += 1;
+                    continue;
                 }
             }
+        } else {
+            (Vec::new(), std::collections::HashSet::new())
+        };
 
-            let mut lifter = X86Lifter::new();
-            for inst in &instructions {
-                let mut ops = lifter.lift(inst);
-                for op in &mut ops {
-                    op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-                }
-                raw_ops.extend(ops);
-            }
-            // DRIVER-RIPREL-CONSTFOLD-0001: fold the iced-lift path's
-            // rip-relative memory EAs (`INT_ADD(RIP, const)` -> the const)
-            // before injection. The X86_64Disassembler already resolves a
-            // rip-relative displacement to the ABSOLUTE target, so the
-            // general memory arms' `INT_ADD(reg:0x288:8, abs)` double-counts
-            // rip; SLEIGH's rrip/disp const-fold exports the constant EA
-            // directly (oracle dumps: push/comis arms — `COPY val <-
-            // ram:abs` / `FLOAT_NAN in=(ram:0x1c:4)` with no LOAD, no addr
-            // ops; the direct-runner mirror golden's `return
-            // xRam00000000000a1040;` for suck_in_APR's `mov 0x74765(%rip),
-            // %rax`). The folded shapes LOAD(ram,const)/STORE(ram,const,v)
-            // are exactly the oracle's constant-EA pcode, which
-            // RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4277/4319)
-            // then reindex into direct global varnodes.
-            let folded_eas = fold_rip_relative_eas(&mut raw_ops);
-            if folded_eas > 0 {
-                eprintln!("[PREPASS] DRIVER-RIPREL-CONSTFOLD-0001: {} rip-relative EAs folded in {}", folded_eas, name);
-            }
-        }
 
-        let default_effects = default_effects.clone();
-        let sym_table = symbol_table.clone();
-        let str_table = string_table.clone();
-        let func_name = name.clone();
-        let func_size = size;
-        let proto_db = prototype_db.clone();
-        let entry_set = func_entry_set.clone();
-        let plt_ranges = plt_entry_ranges.clone();
         // The stage emitters hash the full ELF image for the META
         // fingerprint (curl carries request.binary_image the same way); the
         // clone exists only behind the stage envs.
         let stage_binary = if stage_proj || stage_drill { Some(buffer.clone()) } else { None };
-        let stage_proj_fn = stage_proj;
-        let stage_drill_fn = stage_drill;
-        // SB-CONSTBASE-0001: per-thread clone of the tracked-context
-        // Architecture template (see tracked_context_architecture).
-        let thread_arch = tracked_arch.clone();
-        // HEADLESS-BRIDGE-V1-TYPESEED: per-thread manifest handle (Arc clone
-        // only behind the gate; None keeps the historical path untouched).
-        let typeseed_locals = typeseed_manifest.clone();
-        // HEADLESS-BRIDGE-V3-SIGLOCK-0003: per-thread callee-proto manifest
-        // handle (Arc clone only behind the gate).
-        let v3sig_protos = v3sig_table.clone();
+        // HEADLESS-BRIDGE-PARAMID-0001: the per-function thread now runs
+        // the lifted decompile_one_function body — byte-for-byte the
+        // former inline closure with the same inputs (lifted raw ops,
+        // branch-ref set, per-round shared context).
+        let task = FunctionTask {
+            name: name.clone(),
+            vaddr,
+            size,
+            raw_ops,
+            branch_ref_addrs,
+            stage_binary,
+            stage_proj,
+            stage_drill,
+            harvest_proto: false,
+        };
+        let shared = shared_ctx.clone();
 
-        let handle = std::thread::spawn(move || -> Option<String> {
-            let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
-            // HEADLESS-BRIDGE-V1-TYPESEED (C1): attach the canon-address-keyed
-            // committed-local seeds before any action runs (the <localdb>
-            // transport position). Manifest keys are analyzeHeadless
-            // addresses = this driver's base-0 vaddr + 0x100000.
-            if let Some(table) = typeseed_locals.as_ref() {
-                if let Some(seeds) =
-                    table.get(&format!("0x{:x}", vaddr + ANALYZE_HEADLESS_IMAGE_BASE))
-                {
-                    eprintln!(
-                        "[THREAD] {} typeseed: {} committed locals",
-                        func_name,
-                        seeds.len()
-                    );
-                    fd.committed_locals = seeds.clone();
-                }
-            }
-            // HTTPD-STACKSLOT-FOLD-0001: Ghidra's Funcdata constructor always
-            // binds its Architecture (`glb = scope->getArch()`, funcdata.cc:48)
-            // — the headless oracle that produced
-            // tests/golden/ghidra_httpd_1204.c decompiled every function with
-            // its BfdArchitecture attached, and `RuleLoadVarnode::
-            // correctSpacebase` / `RuleStoreVarnode` (ruleaction.cc:4173-4341)
-            // dereference `data.getArch()->getSpaceBySpacebase(...)`
-            // unconditionally. Rugra's arch-less Funcdata made those rules
-            // take the miss branch for the input-RSP case, so spacebase-
-            // relative STORE/LOAD (`push`/`sub rsp` prologues and `mov
-            // [rsp+k], reg` spills) never reindexed into the stack space and
-            // printed as raw `*(..)(in_RSP-8)` pointer expressions (148
-            // in_RSP lines). Attach the canonical x86-64 Architecture —
-            // exactly what curl's runner does with its worker arch at
-            // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
-            // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
-            // in_RSP lines 148→0 (2026-08-30).
-            // SB-CONSTBASE-0001: the attached Architecture now carries the
-            // pspec tracked-context partitions (DF=0 over whole ram, the
-            // oracle BfdArchitecture init chain architecture.cc:1190 ->
-            // globalcontext.cc:531-549), so ActionConstbase observes the
-            // same tracked set the oracle does and inserts the entry-head
-            // `COPY DF <- 0` (coreaction.cc:692-704). First cross-side
-            // mirror divergence was exactly this op missing
-            // (HTTPD_CONSTBASE_TRACKED_DF_ROOTCAUSE_2026-09-22.md).
-            // RUGRA-FLOW-MIRROR-0001: under the gate the Architecture also
-            // carries the PT_LOAD loader (the oracle BfdArchitecture maps
-            // every PT_LOAD — the loader is part of the input contract).
-            // Jumptable recovery reads the table bytes through
-            // fd.arch.loader (jumptable.rs sanity_check / find_normalized
-            // readonly rescue / emulate get_load_image_value — the
-            // MemoryImage channel of jumptable.cc:1225-1226/1588-1598); a
-            // bare loader-less Architecture makes recovery DataUnavail and
-            // main's relative-offset switch at 0x2ba94 (table @0x88530)
-            // fail-thunks into CALLIND + artificial RETURN (the first
-            // recorded httpd cross-side divergence, see
-            // /dev/shm/rugra-tests/sb-httpdff/cross_side_report.txt).
-            let mut thread_arch = thread_arch;
-            {
-                // HTTPD-ARCH-LOADER-0001: Ghidra's BfdArchitecture maps
-                // every PT_LOAD segment and builds its StringManager over
-                // that loader BEFORE any Funcdata exists — the input
-                // contract holds for every decompilation, not only the
-                // single-function mirror harness. Attaching the same
-                // PT_LOAD image + arch.build_string_manager() on the
-                // default path restores the oracle channels that read
-                // through the loader: ActionConstantPtr's string lookup
-                // (RuleLoadVarnode::isString / PrintC::pushPtrCharConstant
-                // printc.cc:1698-1719, via the shared StringManager) typed
-                // `lea rip->"Apr 20 2024 20:23:43"` returns as char* and
-                // rendered the quoted literal in the oracle, while the
-                // loader-less arch left the constant undefined8 and printed
-                // `return 0x7e290;` with a `long` signature.
-                let image = mirror_img
-                    .clone()
-                    .or_else(|| loader_img.clone());
-                if let Some(image) = image {
-                    thread_arch.loader = Some(std::sync::Arc::new(
-                        rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image),
-                    ));
-                    thread_arch.build_string_manager();
-                }
-            }
-            if mirror_fn {
-                let image = mirror_img
-                    .as_deref()
-                    .expect("mirror image captured behind the gate");
-                thread_arch.loader = Some(std::sync::Arc::new(
-                    rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image.to_vec()),
-                ));
-            }
-            // ACTION-SYMDB-DATASYM-0001 (canon only): attach the action-side
-            // Database BEFORE any pipeline query — setVarnodeProperties
-            // fires as early as the iced prelude's input promotions, and
-            // ActionConstantPtr's isPointer queryContainer
-            // (coreaction.cc:1151) runs mid-pipeline. Mirror keeps
-            // symboltab unset through the pipeline (bare-BFD parity).
-            let action_db_attached = action_db.is_some();
-            if let Some(db) = action_db {
-                let db_arc = std::sync::Arc::new(std::sync::RwLock::new(db));
-                // HTTPD-SBSCOPE-TOKEN-0001: TypeSpacebase::getSubType
-                // (type.cc:2947) resolves a spacebase-relative PTRSUB's
-                // field type through the global scope — TypeOpPtrsub::
-                // getOutputToken's downChain (typeop.cc:2357) depends on it
-                // to hand back the FunctionSymbol's code type, which makes
-                // the token EQUAL the spacebase-constant typelocked output
-                // high type and hits the ActionSetCasts::castOutput
-                // short-circuit (coreaction.cc:2544 — no CAST on the
-                // `FUN_0012dc80` callback argument; oracle probe C: locked
-                // e40ed130 + flow-override CALL at the PLT tail-jmp prints
-                // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)`).
-                // Without this handle the spacebase types carry an empty map,
-                // the token degrades to the anonymous 1-byte unknown fallback
-                // (type.cc:2360), and castOutput's implied+typelock force
-                // arm prints `(BADTYPE *)FUN_0012dc80` — ap_pregfree's
-                // 2-line gated residual. The curl driver wires the same
-                // handle at curl_decompile.rs:2476; mirror keeps the factory
-                // slot empty (bare-BFD parity).
-                if let Some(types) = thread_arch.types.as_ref() {
-                    types
-                        .write()
-                        .unwrap()
-                        .set_spacebase_scope_source(Some(db_arc.clone()));
-                }
-                thread_arch.set_symboltab(db_arc);
-            }
-            fd.set_arch(std::sync::Arc::new(thread_arch));
-            // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
-            // model's EffectRecord surface (see tracked_context_architecture)
-            // BEFORE the prelude marks inputs, so the iced prelude's
-            // input promotions carry Funcdata::setInputVarnode's effect
-            // tail (funcdata_varnode.cc:365-370) like every Ghidra input.
-            fd.funcp.effects = default_effects;
-            if !mirror_fn {
-                fd.external_prototypes = proto_db;
-                // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden
-                // addresses are this driver's base-0 addresses + 0x100000.
-                // Warning texts that embed an address render through
-                // Funcdata::print_raw_code_addr (oracle printRaw spelling),
-                // so install the same delta the code-label layer carries.
-                fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
-            }
-            // RUGRA-FLOW-MIRROR-0001: under the gate the symbol set is the
-            // dynsym-defined functions only (registerDynamicFunctionSymbols
-            // mirror — the oracle's bare BFD harness registers no PLT thunk
-            // names and no analysis-discovered FUN_ defaults); the default
-            // path keeps the full HTTPD-URAM-SYMBOLIZE-0001 table.
-            if mirror_fn {
-                for &(sym_addr, ref sym_name) in &mirror_syms {
-                    fd.add_symbol(sym_addr, sym_name.clone());
-                }
-            } else {
-                for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
-            }
-            for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }
+        let handle = std::thread::spawn(move || decompile_one_function(task, shared));
 
-            // RUGRA-FLOW-MIRROR-0001: the mirror load — the oracle contract
-            // fd->followFlow(Address(code,0), Address(code,highest))
-            // (funcdata_op.cc:756; stage_projection_1204.cc:419). SLEIGH
-            // decodes through the full PT_LOAD image at base 0, so the
-            // unbounded range can lift .plt/.plt.sec thunks below .text;
-            // tail jumps into thunks truncate through the jumptable
-            // fail-thunk path (jumptable.cc:2304-2320 -> flow.cc:727/735
-            // CALLIND + artificial halt), the same contract the curl mirror
-            // established. The analyzer transport is NOT applied here: no
-            // tail-call CALL_RETURN overrides (below), no inferred callee
-            // prototypes (external_prototypes stays empty — bare-BFD
-            // parity, the RUGRA_BARE_LOAD principle), and an empty flow
-            // callee table. .rodata strings stay seeded: the oracle
-            // StringManager reads the same bytes through the loader.
-            // Known recorded delta: the Funcdata size keeps the ELF
-            // st_size (3062 for main) where the oracle harness's 2-arg
-            // Scope::addFunction leaves it unset; size is outside the
-            // projection grammar, and any behavioral effect surfaces as a
-            // consumer-side divergence record.
-            if mirror_fn {
-                let image = match mirror_img.as_deref() {
-                    Some(image) => image,
-                    None => {
-                        eprintln!("[THREAD] {} flow mirror failed: no PT_LOAD image", func_name);
-                        return None;
-                    }
-                };
-                let mut sleigh = rugra::disasm::sleigh_lift::SleighLifter::new();
-                if let Err(error) = sleigh.configure_x86_64(image, 0) {
-                    eprintln!("[THREAD] {} flow mirror SLEIGH setup failed: {:?}", func_name, error);
-                    return None;
-                }
-                eprintln!("[THREAD] {} flow mirror: follow_flow_range(0, u64::MAX)", func_name);
-                let callee_protos = std::collections::BTreeMap::new();
-                if let Err(error) = rugra::flow::follow_flow_range(
-                    &mut fd,
-                    &mut sleigh,
-                    0,
-                    u64::MAX,
-                    &callee_protos,
-                ) {
-                    eprintln!("[THREAD] {} flow mirror failed: {}", func_name, error);
-                    return None;
-                }
-                eprintln!("[THREAD] {} flow mirror done ops={} blocks={}",
-                    func_name, fd.obank.optree.len(), fd.bblocks.get_size());
-            } else {
-
-            // Tail-call flow overrides — transport of Ghidra's Java-side
-            // TailCallAnalyzer writing FlowOverride CALL_RETURN entries into
-            // the program DB before decompilation: a direct `jmp` whose
-            // target is a KNOWN function entry OUTSIDE this function's own
-            // range is a tail call (PLT thunks, `jmp ap_getword` wrappers,
-            // shared tail chunks like 0x2c960 that other functions call).
-            // `inject_raw_ops` applies the override at the raw layer
-            // (flow.cc:474-475 position) rewriting BRANCH→CALL and
-            // appending the CALL_RETURN's RETURN. Without it the printer
-            // emits the dangling `code_rXXXX: goto code_rXXXX;` self-loop
-            // (GOTO-LABEL-UNPRINTED-0001 symptom family).
-            for raw in &raw_ops {
-                if rugra::opcodes::OpCode::from_i32(raw.get_opcode())
-                    != Some(rugra::opcodes::OpCode::CPUI_BRANCH)
-                {
-                    continue;
-                }
-                let Some(tgt) = raw.inputs().first() else { continue };
-                if tgt.space != rugra::space::AddressSpace::Ram { continue; }
-                let known_entry = entry_set.contains(&tgt.offset)
-                    || plt_ranges.iter().any(|&(s, e, es)| {
-                        tgt.offset >= s && tgt.offset < e && (tgt.offset - s) % es == 0
-                    });
-                if !known_entry { continue; }
-                if vaddr <= tgt.offset && tgt.offset < vaddr + func_size as u64 { continue; }
-                if let Some(seq) = raw.seq_num() {
-                    fd.localoverride.insert_flow_override(
-                        seq.get_addr(),
-                        rugra::override_rs::FlowOverride::CallReturn,
-                    );
-                }
-            }
-
-            fd.inject_raw_ops(&raw_ops);
-            eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());
-            // HTTPD-MAIN-WARNUNREACH-JTEDGE-0001: the oracle's load
-            // contract is Funcdata::followFlow (funcdata_op.cc:756), whose
-            // generateOps phase 2 recovers jump tables BEFORE block
-            // generation (flow.cc:796-821) so every switch gets its case
-            // out-edges (collectEdges BRANCHIND arm, flow.cc:933-957) and
-            // switchOver map (funcdata_op.cc:777-778). The linear batch
-            // inject above fused the lift and block formation, leaving
-            // BRANCHIND blocks edge-less — main's 30 case bodies became
-            // spanning-tree extra roots and ActionUnreachable emitted 30
-            // "Removing unreachable block" warnings. Run the recovery
-            // wiring here, at the same position relative to the linear
-            // sweep (A/B evidence: RUGRA_MIRROR=1 through follow_flow_range
-            // = 0 warnings + real case bodies on the same binary).
-            let recovered = rugra::flow::recover_jump_tables_injected(&mut fd);
-            match recovered {
-                Ok(count) if count > 0 => {
-                    eprintln!("[THREAD] {} jumptable recovery: {} tables", func_name, count)
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    // The LowlevelError channel Ghidra lets escape
-                    // followFlow — the function cannot decompile.
-                    eprintln!("[THREAD] {} jumptable recovery failed: {}", func_name, error);
-                    return None;
-                }
-            }
-            // HEADLESS-BRIDGE-V3-SIGLOCK-0003: install the callee locked
-            // prototypes on this function's call sites AFTER injection
-            // (callspecs exist — the model-bound funcp registers them —
-            // and the CALL ops still carry only their target inputs) and
-            // BEFORE the action pipeline (ActionPrototypeTypes' locked
-            // arms, ActionFuncLink's inputlocked attach, and
-            // ActionInferTypes' typeprop anchoring all run inside
-            // perform_action). The install position mirrors the oracle
-            // harness's pre-action callee installs (stage_shape_diag.cc
-            // STAGE_CALLEE_PROTOS, "before the target's action pass, so
-            // ActionDefaultParams copies each callee proto onto its call
-            // sites exactly like the Program database boundary").
-            if let Some(table) = v3sig_protos {
-                if let Some(types) = fd.arch.as_ref().and_then(|arch| arch.types.clone()) {
-                    let locked = install_v3sig_callee_protos(&mut fd, &table, &types);
-                    if locked > 0 {
-                        eprintln!("[THREAD] {} v3sig: {} callee protos locked", func_name, locked);
-                    }
-                }
-            }
-            }
-
-            let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
-            fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
-
-            let mut db = ActionDatabase::new();
-            db.set_default_actions();
-            {
-                let mut fd_write = fd_arc.write().unwrap();
-                if stage_proj_fn || stage_drill_fn {
-                    // Stage emitters fully replace the plain perform_action
-                    // run for the selected function: the projection/drill
-                    // stepping itself drives the same unmodified Action tree
-                    // to completion (BREAK_START frontier pauses only), and
-                    // the C body still prints afterwards, exactly like the
-                    // curl driver's emitter path.
-                    eprintln!(
-                        "[THREAD] {} stage emitters start (proj={} drill={})",
-                        func_name, stage_proj_fn, stage_drill_fn
-                    );
-                    let stage_image = stage_binary
-                        .as_deref()
-                        .expect("stage image captured behind stage envs");
-                    if stage_proj_fn {
-                        if let Err(err) = emit_stage_projection(
-                            &mut fd_write,
-                            &mut db,
-                            stage_image,
-                            &func_name,
-                            vaddr,
-                        ) {
-                            eprintln!("[STAGE] projection failed: {}", err);
-                            std::process::exit(1);
-                        }
-                    }
-                    if stage_drill_fn {
-                        if let Err(err) = emit_stage_drill(
-                            &mut fd_write,
-                            &mut db,
-                            stage_image,
-                            &func_name,
-                            vaddr,
-                        ) {
-                            eprintln!("[STAGE] drill failed: {}", err);
-                            std::process::exit(1);
-                        }
-                    }
-                    eprintln!("[THREAD] {} stage emitters done", func_name);
-                } else {
-                    eprintln!("[THREAD] {} actions start", func_name);
-                    let result = db.perform_action("decompile", &mut fd_write);
-                    eprintln!("[THREAD] {} actions done ({})", func_name, if result.is_ok() { "ok" } else { "err" });
-                }
-            }
-
-            // HTTPD-CODEREF-SYMBOLIZE-0001 (print-only install): swap the
-            // action-phase Architecture for a clone carrying the global
-            // function-symbol Database, so PrintC::doc_function's snapshot
-            // (printc.rs doc_function: fd.arch.symboltab) resolves code-
-            // address constants through the global scope. The action-phase
-            // queries never saw the DB (channel-absent decompile, per the
-            // build-site comment above). The print-side resolution itself
-            // lives in printc's constant leaf (constant_leaf_text's
-            // untyped/Unknown arms -> code_entry_constant_text, the
-            // pushPtrCodeConstant chain printc.cc:1730) — the oracle's
-            // equivalent state is the Parameter-ID-locked function-pointer
-            // param type the analyzer attached (canon evidence:
-            // `apr_pool_cleanup_kill(param_1,param_2,FUN_0012dc80)` at both
-            // call sites vs the analyzer-less direct-runner golden's
-            // `0x2dc80`).
-            // ACTION-SYMDB-DATASYM-0001: MIRROR-ONLY while the action DB is
-            // attached. When no action Database was attached (the mirror,
-            // or the RUGRA_SYMDB=0 opt-out), the historical print swap
-            // keeps serving the print-side code-ref channel exactly as
-            // before.
-            if mirror_fn || !action_db_attached {
-                let mut fd_write = fd_arc.write().unwrap();
-                if let Some(a) = fd_write.arch.clone() {
-                    let mut print_arch = (*a).clone();
-                    print_arch.set_symboltab(print_db.clone());
-                    fd_write.arch = Some(std::sync::Arc::new(print_arch));
-                }
-            }
-
-            let fd_read = fd_arc.read().unwrap();
-            // BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001 diagnostic: dump the final
-            // structured tree (sblocks) for the RUGRA_DUMP_FUNC target.
-            if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
-                if dump_fn == func_name {
-                    if let Some(scope) = fd_read.scope.as_ref() {
-                        eprintln!("[DUMP] === local symbols for {} ===", func_name);
-                        for (i, sym) in scope.symbols.iter().enumerate() {
-                            eprintln!(
-                                "[DUMP] sym#{i} name={} start={:#x} size={} tl={} nl={} dt={:?}",
-                                sym.name,
-                                sym.start,
-                                sym.size,
-                                sym.typelock,
-                                sym.namelock,
-                                sym.dtype.as_ref().map(|d| d.get_name().to_string())
-                            );
-                        }
-                    }
-                    eprintln!("[DUMP] === structure tree for {} ===", func_name);
-                    let mut tree_out = String::new();
-                    for blk in &fd_read.sblocks.blocks {
-                        rugra::block::print_tree_dbg(blk, 0, &mut tree_out);
-                    }
-                    eprintln!("{}", tree_out);
-                }
-            }
-            // ACTION-SYMDB-DATASYM-0001 (render residual ②): the oracle's
-            // PrintLanguage default emitter is EmitPrettyPrint
-            // (printlanguage.cc:69 `emit = new EmitPrettyPrint()`), whose
-            // Oppen scan-queue inserts the golden's 100-column line breaks
-            // (ap_set_name_virtual_host's CALL splits after
-            // `&DAT_001a0820,`; EmitNoMarkup streams tokens unwrapped).
-            // DEFAULT-FLIP: EmitPrettyPrint rides the action DB default
-            // (the canon assembly the oracle always runs); the
-            // RUGRA_SYMDB=0 opt-out keeps the historical EmitNoMarkup
-            // byte stream, and the mirror keeps its own contract.
-            let pretty_emit = action_db_attached;
-            let mut printer = if pretty_emit {
-                PrintC::new(Box::new(rugra::prettyprint::EmitPrettyPrint::new()))
-            } else {
-                PrintC::new(Box::new(EmitNoMarkup::new()))
-            };
-            // PRINTC-LABSPELL-LABSYMS-0001: the front-end program-DB
-            // code-label layer (same contract as the curl driver's install,
-            // see the long block comment there): every direct-branch target
-            // of the disassembly (branch_ref_addrs, collected at lift time)
-            // becomes a default `LAB_<image-based addr>` LABEL symbol —
-            // exactly the reference set the front-end disassembler creates —
-            // minus addresses whose primary symbol is not a LABEL (the
-            // thread's sym_table proxy: thunks, discovered functions; and
-            // the func_entry_set: ELF + call targets) and minus the
-            // function's own entry. The raw-BFD mirror keeps the layer
-            // empty with base 0.
-            if !mirror_fn {
-                let mut code_labels: HashMap<u64, String> = HashMap::new();
-                for &dest in &branch_ref_addrs {
-                    if dest == vaddr
-                        || sym_table.contains_key(&dest)
-                        || entry_set.contains(&dest)
-                    {
-                        continue;
-                    }
-                    code_labels
-                        .entry(dest)
-                        .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
-                }
-                // DRIVER-SWITCHD-LABEL-0001: the headless
-                // DecompilerSwitchAnalysis pass consumes the decompiler's
-                // dumped <jumptable> XML (jumptable.cc:2769-2790
-                // JumpTable::encode: one <dest> per address-table entry with
-                // its case label when not JumpValues::NO_LABEL) and creates
-                // LABEL symbols at every case destination named
-                // `caseD_<hex label>` in the namespace `switchD_<dispatch
-                // addr>` (the BRANCHIND address), plus `default` at the
-                // default destination; later passes print the qualified
-                // form through emitLabel's queryCodeLabel (printc.cc:3176)
-                // -> ScopeGhidra::findCodeLabel (database_ghidra.cc:308-325).
-                // Mirrored here from the recovered JumpTables: first entry
-                // wins a shared destination (curl glob_set 0x4c5e is both
-                // case 0x5e and the folded default and prints caseD_5e),
-                // `default` only where no caseD label landed (resolved as
-                // the default_block out-edge target of the BRANCHIND
-                // block), overriding the plain LAB_ defaults. Skipped in
-                // the raw-BFD mirror (no analyzer symbol layer there).
-                let mut switchd_labels: HashMap<u64, String> = HashMap::new();
-                for jt in &fd_read.jump_tables {
-                    let jt_rg = jt.read().unwrap();
-                    if jt_rg.addresstable.is_empty() {
-                        continue;
-                    }
-                    let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
-                    for (i, dest) in jt_rg.addresstable.iter().enumerate() {
-                        let case_value = jt_rg.label.get(i).copied();
-                        if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
-                            switchd_labels.entry(dest.as_u64()).or_insert_with(|| {
-                                format!("switchD_{:08x}_caseD_{:x}", dispatch, case_value.unwrap())
-                            });
-                        }
-                    }
-                    if jt_rg.default_block >= 0 {
-                        let default_addr = jt_rg.indirect.as_ref().and_then(|indirect| {
-                            let parent = indirect.read().unwrap().parent.clone()?;
-                            let blk = parent.upgrade()?;
-                            let blk_rg = blk.read().unwrap();
-                            let slot = jt_rg.default_block as usize;
-                            if slot >= blk_rg.size_out() {
-                                return None;
-                            }
-                            let edge = blk_rg.get_out(slot)?;
-                            let tgt = edge.point.read().unwrap();
-                            Some(tgt.get_start_addr().as_u64())
-                        });
-                        if let Some(default_addr) = default_addr {
-                            if !switchd_labels.contains_key(&default_addr) {
-                                switchd_labels
-                                    .entry(default_addr)
-                                    .or_insert_with(|| format!("switchD_{:08x}_default", dispatch));
-                            }
-                        }
-                    }
-                }
-                for (addr, name) in switchd_labels {
-                    code_labels.insert(addr, name);
-                }
-                printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
-            }
-            printer.doc_function(&fd_read);
-            let output = printer.take_emit();
-            // ACTION-SYMDB-DATASYM-0001: symmetric extraction — the pretty
-            // path flushes the scan queue then reuses the same low-level
-            // getOutput post-processing.
-            if pretty_emit {
-                let text = output
-                    .into_any()
-                    .downcast::<rugra::prettyprint::EmitPrettyPrint>()
-                    .unwrap();
-                Some(text.get_output())
-            } else {
-                let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
-                Some(text.get_output())
-            }
-        });
 
         // Wait with timeout (like curl_decompile) to prevent single-function
         // hangs; stage-emitter runs wait indefinitely (frontier stepping is
@@ -2540,7 +3304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let result = join_handle.join();
             let _ = tx.send(result);
         });
-        let received: Result<Result<Option<String>, Box<dyn std::any::Any + Send>>, ()> =
+        let received: Result<Result<Option<FunctionOutcome>, Box<dyn std::any::Any + Send>>, ()> =
             if stage_selector.is_some() {
                 rx.recv().map_err(|_| ())
             } else {
@@ -2549,7 +3313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(_) => Err(()),
                 }
             };
-        match received {
+        match received.map(|inner| inner.map(|outcome| outcome.and_then(|outcome| outcome.text))) {
             Ok(Ok(Some(output))) => {
                 println!("/* ---- 0x{:x}: {} ({} bytes) ---- */", vaddr, name, size);
                 println!("{}", output);
