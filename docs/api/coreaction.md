@@ -1,5 +1,45 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-26：ActionPreferComplement BFS 补 BlockGoto/BlockMultiGoto 下降臂（HTTPDMAIN-F5-IFELSE-RETEST-0001 / lane F5IF）
+
+**根因（锁定 oracle e40ed130 git-archive + F5T 仪器化 trace 双侧对照亲证）**：httpd main
+configtest if/else 取向翻转（~166 skeleton 行）不是结构化规则缺口——oracle
+`ruleBlockIfElse`（blockaction.cc:1416）与 Rugra `try_rule_if_else` 在该分支产出**完全
+相同**的 BlockIfElse（tc=out(1)=configtest@0x2c214，fc=out(0)=normal@0x2c130，无
+negateCondition，双侧 trace 逐事件一致）；golden 的 `if (iVar3==0){正常路}` 取向来自
+**结构化之后**的 `ActionPreferComplement`（blockaction.cc:2140-2167）→
+`BlockIf::preferComplement`（block.cc:3093-3109）：`opFlipInPlaceTest` 对
+`INT_NOTEQUAL` 返回 0（规范化方向，funcdata_op.cc:1237-1240）→ 翻条件
+（`INT_NOTEQUAL→INT_EQUAL`）+ `swapBlocks(1,2)` 交换 then/else 臂。oracle trace 亲证
+`PREFERCOMP blk@2c109 test=0 → FLIPPED`（main 内 6 个 if/else 节点仅此一处翻转，
+2be90/2beae/2bec8/2bee6/2c130 均 test=1 不翻）。
+
+Rugra 侧机制全在（`prefer_complement`/`flip_in_place_test`/`op_flip_in_place_execute`
+逐行核对 block.cc:3093/2368/funcdata_op.cc:1221/1280 忠实），但 `apply` 的 BFS 子节点
+访问器 `structure_children` **对 `BlockGoto`/`BlockMultiGoto` 返回空表**——oracle 的
+BFS 经 `BlockGraph::getSize()/getBlock(i)`（blockaction.cc:2154-2160）对两者**会下降**：
+`BlockGoto : BlockGraph`（block.hh:547）与 `BlockMultiGoto : BlockGraph`（block.hh:573）
+都是单组件复合块，wrapped 块由 `identifyInternal(ret,[bl])` 装入（newBlockGoto
+block.cc:1706-1708 / newBlockMultiGoto block.cc:1736-1739），`getBlock(0)` 即 wrapped
+块。main 的 configtest if/else 恰好嵌在 `BlockGoto@0x2ba58` 包裹的子树内（goto 目标
+`code_r0x0002ba58:` 区），BFS 在 Goto 节点断流 → 该 if/else 从未被 offered
+`prefer_complement` → 保持结构化期取向 `if (X != 0){configtest} else {正常路}`。
+
+**修复**：`structure_children` 补两臂——`BlockGoto` 返回 `[wrapped]`、`BlockMultiGoto`
+返回 `[wrapped]`（镜像 getSize()==1/getBlock(0)），BFS 恢复与 oracle 同构的下降。修后
+Rugra 亲证（RUGRA_F5_TRACE）：main 的 prefer_complement 访问集与 oracle 逐节点一致
+（2be90/2beae/2bec8/2bee6 test=1，**2c109 test=0 翻转**，第二趟管线 pass 2c109 test=1
+=翻转粘性，与 oracle 同形）；输出 `if (iVar2 == 0){正常路} else {configtest}` 与
+mirror golden L3325 逐字一致。
+
+**验收（fast-release 亲测，基=master 641994a6）**：httpd canon **590→436**/0/0，
+`--func main` **232→78**（−154，带内 ~70±20）；逐函数 delta **仅 main 变化**（其余
+33 函数字节恒等，零回退、零附带翻转）；curl canon **267/0/0 == 基线**逐数恒等；
+镜面棘轮三门禁/bank 391/391/cargo test 见车道终报。残余 78 行归因：F4 char\* stamp
+~15 + F6 串模型 ~8 + F7 `__s1` 推荐 ~6 + F8 for↔while ~2 + F3 双重 cast 1 + RETADDR
+硬地板 2 + F5 残余（翻转后块交换 churn 内的变量名/类型派生行），全部在归因报告已登记
+族内，零未登记差异。
+
 ## 2026-09-26：13 处 union facing 退化读换 fd-aware 孪生（UNIONRESOLVE-PKG-A-0001 / lane PKGA）
 
 审计底稿 `docs/alignment_audit/UNION_CONSUMER_AUDIT_2026-09-26.md` §一 coreaction 表的

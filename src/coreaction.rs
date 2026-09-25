@@ -16287,8 +16287,8 @@ impl ActionPreferComplement {
         block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
         use crate::block::{
-            BlockCondition, BlockDoWhile, BlockIf, BlockInfLoop, BlockList, BlockSwitch,
-            BlockWhileDo,
+            BlockCondition, BlockDoWhile, BlockGoto, BlockIf, BlockInfLoop, BlockList,
+            BlockMultiGoto, BlockSwitch, BlockWhileDo,
         };
         let bl = block.read().unwrap();
         let mut out: Vec<
@@ -16317,6 +16317,26 @@ impl ActionPreferComplement {
             out.extend(bsw.cases.iter().cloned());
             if let Some(dc) = &bsw.default_case {
                 out.push(dc.clone());
+            }
+        } else if let Some(bg) = bl.as_any().downcast_ref::<BlockGoto>() {
+            // Ghidra `BlockGoto : BlockGraph` (block.hh:547): exactly one
+            // component — the wrapped block, moved in by
+            // `identifyInternal(ret,[bl])` (block.cc:1706-1708, newBlockGoto).
+            // The oracle's ActionPreferComplement BFS (blockaction.cc:2155-
+            // 2160) descends via getSize()/getBlock(i), so a BlockGoto's
+            // wrapped child IS visited and enqueued; skipping it starved
+            // prefer_complement of every BlockIf nested inside a goto-wrapped
+            // subtree (httpd main configtest if/else orientation, F5).
+            if let Some(w) = &bg.wrapped {
+                out.push(w.clone());
+            }
+        } else if let Some(bmg) = bl.as_any().downcast_ref::<BlockMultiGoto>() {
+            // Same one-component shape: `BlockMultiGoto : BlockGraph`
+            // (block.hh:573), wrapped block installed by
+            // `identifyInternal(ret,[bl])` (block.cc:1736-1739,
+            // newBlockMultiGoto).
+            if let Some(w) = &bmg.wrapped {
+                out.push(w.clone());
             }
         }
         out
