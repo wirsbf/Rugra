@@ -44,6 +44,21 @@ use rugra::space::AddressSpace;
 // golden addresses = this driver's base-0 raw addresses + this base);
 // hoisted to file scope for the action-side Database builders.
 const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
+// HTTPDMAIN-F2-IMAGEBASE-DECISION-0001 (F2B, 2026-09-26): the driver now
+// loads the ET_DYN image at its NATIVE analyzeHeadless base 0x100000
+// instead of base-0-with-display-delta. The canon golden's producer
+// (analyzeHeadless) imports the PIE at the preferred image base 0x100000,
+// so every canon-space address below (function entries, symbols, strings,
+// labels, and the IR itself — including CALL return-address constants)
+// is created directly in the golden's image-based form; the
+// display_image_base/code_label_base deltas collapse to 0 and the F2
+// family (retaddr constants missing the 0x100000 increment, ~140 lines in
+// main) self-heals. The flow-mirror gate (RUGRA-FLOW-MIRROR-0001) keeps
+// the locked oracle BfdArchitecture contract — BFD raw section vma, PIE
+// base 0 — so under the mirror gate every shift below is the identity
+// and the mirror/bank faces stay byte-identical to the base-0 oracle
+// projections (bank pins and the direct-runner golden unchanged).
+const NATIVE_IMAGE_BASE: u64 = 0x100000;
 
 // RUGRA-GLUE (RUGRA-FLOW-MIRROR-0001, httpd lane BP / MIRROR-ENVS-CANONICAL
 // -0001): the flow-mirror gate — the oracle single-function input contract.
@@ -573,6 +588,7 @@ fn build_action_data_symbol_db(
     string_table: &HashMap<u64, String>,
     analysis_discovered: &[u64],
     symbol_table: &HashMap<u64, String>,
+    image_base: u64, // F2B: shift applied to raw ELF-derived addresses (canon)
 ) -> rugra::database::Database {
     use rugra::database::symbol_flags;
     use rugra::type_system::datatype::{Datatype, TypeArray, TypeBase, TypeMetatype};
@@ -607,8 +623,8 @@ fn build_action_data_symbol_db(
         if ph.p_type != PT_LOAD || ph.p_memsz == 0 {
             continue;
         }
-        let first = Address::new(ph.p_vaddr);
-        let last = Address::new(ph.p_vaddr + ph.p_memsz - 1);
+        let first = Address::new(ph.p_vaddr + image_base);
+        let last = Address::new(ph.p_vaddr + image_base + ph.p_memsz - 1);
         if let Some(range) = rugra::address::Range::new(first, last) {
             db.add_range(global_scope_id, range);
         }
@@ -616,10 +632,10 @@ fn build_action_data_symbol_db(
     for header in elf.section_headers.iter() {
         if (header.sh_flags & 0x4) != 0 {
             // SHF_EXECINSTR
-            exec_ranges.push((header.sh_addr, header.sh_addr + header.sh_size));
+            exec_ranges.push((header.sh_addr + image_base, header.sh_addr + image_base + header.sh_size));
         }
         if header.sh_type == 1 && header.sh_size > 0 {
-            vaddr_to_file.push((header.sh_addr, header.sh_offset, header.sh_size));
+            vaddr_to_file.push((header.sh_addr + image_base, header.sh_offset, header.sh_size));
         }
     }
     let byte_at = |vaddr: u64| -> Option<u8> {
@@ -658,7 +674,7 @@ fn build_action_data_symbol_db(
         if ph.p_type != PT_LOAD || (ph.p_flags & PF_R) == 0 || (ph.p_flags & PF_W) != 0 {
             continue;
         }
-        ronly_ranges.push((ph.p_vaddr, ph.p_vaddr + ph.p_filesz));
+        ronly_ranges.push((ph.p_vaddr + image_base, ph.p_vaddr + image_base + ph.p_filesz));
     }
     // The transport's per-symbol readonly attribute (block-permission
     // driven): applied to every mapped data symbol landing in an R-only
@@ -713,7 +729,7 @@ fn build_action_data_symbol_db(
                 || rel.r_type == goblin::elf::reloc::R_X86_64_64
                 || rel.r_type == goblin::elf::reloc::R_X86_64_GLOB_DAT
         })
-        .map(|rel| rel.r_offset)
+        .map(|rel| rel.r_offset + image_base)
         .collect();
     let object_datatype = |addr: u64, size: usize| -> Arc<Datatype> {
         let undefined1 = || {
@@ -772,15 +788,16 @@ fn build_action_data_symbol_db(
             continue;
         }
         let size = if sym.st_size > 0 { sym.st_size as usize } else { 8 };
+        let sym_addr = sym.st_value + image_base;
         if let Some(sym_id) = db.add_symbol_mapped(
             global_scope_id,
             name,
-            Some(object_datatype(sym.st_value, size)),
-            Address::new(sym.st_value),
+            Some(object_datatype(sym_addr, size)),
+            Address::new(sym_addr),
             size as i32,
         ) {
-            mark_readonly(&mut db, sym_id, sym.st_value);
-            covered.push((sym.st_value, sym.st_value + size as u64));
+            mark_readonly(&mut db, sym_id, sym_addr);
+            covered.push((sym_addr, sym_addr + size as u64));
         }
     }
 
@@ -797,8 +814,8 @@ fn build_action_data_symbol_db(
         if base.is_empty() {
             continue;
         }
-        let slot = rel.r_offset;
-        let name = format!("PTR_{}_{:08x}", base, ANALYZE_HEADLESS_IMAGE_BASE + slot);
+        let slot = rel.r_offset + image_base;
+        let name = format!("PTR_{}_{:08x}", base, slot);
         if let Some(sym_id) = db.add_symbol_mapped(
             global_scope_id,
             &name,
@@ -846,7 +863,7 @@ fn build_action_data_symbol_db(
             .take(16)
             .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
             .collect();
-        let name = format!("s_{}_{:08x}", sanitized, ANALYZE_HEADLESS_IMAGE_BASE + saddr);
+        let name = format!("s_{}_{:08x}", sanitized, saddr);
         if let Some(sym_id) = db.add_symbol_mapped(
             global_scope_id,
             &name,
@@ -872,7 +889,7 @@ fn build_action_data_symbol_db(
         if covered.iter().any(|&(a, b)| raw >= a && raw < b) {
             continue;
         }
-        let name = format!("DAT_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + raw);
+        let name = format!("DAT_{:08x}", raw);
         if let Some(sym_id) = db.add_symbol_mapped(
             global_scope_id,
             &name,
@@ -895,8 +912,8 @@ fn build_action_data_symbol_db(
         if ph.p_type != PT_LOAD || (ph.p_flags & PF_R) == 0 || (ph.p_flags & PF_W) != 0 {
             continue;
         }
-        let first = Address::new(ph.p_vaddr);
-        let last = Address::new(ph.p_vaddr + ph.p_filesz - 1);
+        let first = Address::new(ph.p_vaddr + image_base);
+        let last = Address::new(ph.p_vaddr + image_base + ph.p_filesz - 1);
         if let Some(range) = rugra::address::Range::new(first, last) {
             db.set_property_range(
                 rugra::varnode::varnode_flags::READONLY,
@@ -1334,7 +1351,9 @@ fn install_v3sig_callee_protos(
         .collect();
     let mut installed = 0usize;
     for (owner, entry) in specs {
-        let Some(entry_proto) = table.get(&(entry + ANALYZE_HEADLESS_IMAGE_BASE)) else {
+        // F2B: entry is canon-space (native load) — the manifest keys are
+        // the canon call-site addresses, so the lookup is direct.
+        let Some(entry_proto) = table.get(&entry) else {
             continue;
         };
         if !entry_proto.input_lock && entry_proto.ret.is_none() {
@@ -2719,7 +2738,7 @@ fn run_paramid_iteration(
             .unwrap_or_else(|| {
                 rugra::debugproto::analyze_headless_function_symbol_name(
                     target,
-                    ANALYZE_HEADLESS_IMAGE_BASE,
+                    0, // F2B: target is already canon-space
                 )
             });
         let Some((raw_ops, branch_ref_addrs)) = lift_function_ops(code_bytes, target, &name) else {
@@ -2805,12 +2824,12 @@ fn run_paramid_iteration(
                     .sym_table
                     .get(entry)
                     .cloned()
-                    .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                    .unwrap_or_else(|| format!("FUN_{:08x}", entry));
                 for site in sites {
                     eprintln!(
                         "[PARAMID-SITE] r{} 0x{:x} {} <- {}: arity={} slots={:?} ret={:?}",
                         round,
-                        entry + ANALYZE_HEADLESS_IMAGE_BASE,
+                        entry,
                         name,
                         site.caller,
                         site.arity,
@@ -2836,11 +2855,11 @@ fn run_paramid_iteration(
                 .sym_table
                 .get(entry)
                 .cloned()
-                .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                .unwrap_or_else(|| format!("FUN_{:08x}", entry));
             if let Some(proto) = merge_callsite_evidence(*entry, &name, sites, &mut dead) {
-                // Canon address key (base-0 entry + image base) — the same
-                // key space the manifest and install arm use.
-                next.insert(entry + ANALYZE_HEADLESS_IMAGE_BASE, proto);
+                // Canon address key — the same key space the manifest and
+                // install arm use (F2B: entries are canon-space natively).
+                next.insert(*entry, proto);
             }
         }
         eprintln!(
@@ -3020,10 +3039,11 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
         // HEADLESS-BRIDGE-V1-TYPESEED (C1): attach the canon-address-keyed
         // committed-local seeds before any action runs (the <localdb>
         // transport position). Manifest keys are analyzeHeadless
-        // addresses = this driver's base-0 vaddr + 0x100000.
+        // addresses = the canon manifest key space; F2B: vaddr is already
+        // canon-space (native load), so the key is the raw vaddr.
         if let Some(table) = typeseed_locals.as_ref() {
             if let Some(seeds) =
-                table.get(&format!("0x{:x}", vaddr + ANALYZE_HEADLESS_IMAGE_BASE))
+                table.get(&format!("0x{:x}", vaddr))
             {
                 eprintln!(
                     "[THREAD] {} typeseed: {} committed locals",
@@ -3090,8 +3110,13 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
                 .clone()
                 .or_else(|| loader_img.clone());
             if let Some(image) = image {
+                // F2B: canon runs load NATIVELY at the analyzeHeadless
+                // image base (every loader-mediated address — strings,
+                // jumptable bytes — reads in canon space); the mirror
+                // branch re-attaches at base 0 below (oracle contract).
+                let load_base = if mirror_fn { 0 } else { NATIVE_IMAGE_BASE };
                 thread_arch.loader = Some(std::sync::Arc::new(
-                    rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image),
+                    rugra::loadimage::RawLoadImage::from_bytes("httpd", load_base, image),
                 ));
                 thread_arch.build_string_manager();
             }
@@ -3148,12 +3173,10 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
         fd.funcp.effects = default_effects;
         if !mirror_fn {
             fd.external_prototypes = proto_db;
-            // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden
-            // addresses are this driver's base-0 addresses + 0x100000.
-            // Warning texts that embed an address render through
-            // Funcdata::print_raw_code_addr (oracle printRaw spelling),
-            // so install the same delta the code-label layer carries.
-            fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
+            // F2B: canon addresses are natively image-based now — the
+            // RESIDMAP-PRINTBATCH-0001 display delta collapses to 0 (the
+            // raw address already prints the golden's 0x12xxxx form).
+            fd.set_display_image_base(0);
         }
         // RUGRA-FLOW-MIRROR-0001: under the gate the symbol set is the
         // dynsym-defined functions only (registerDynamicFunctionSymbols
@@ -3513,7 +3536,7 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
                 }
                 code_labels
                     .entry(dest)
-                    .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
+                    .or_insert_with(|| format!("LAB_{:08x}", dest));
             }
             // DRIVER-SWITCHD-LABEL-0001: the headless
             // DecompilerSwitchAnalysis pass consumes the decompiler's
@@ -3539,7 +3562,7 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
                 if jt_rg.addresstable.is_empty() {
                     continue;
                 }
-                let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
+                let dispatch = jt_rg.opaddress.as_u64();
                 for (i, dest) in jt_rg.addresstable.iter().enumerate() {
                     let case_value = jt_rg.label.get(i).copied();
                     if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
@@ -3573,7 +3596,7 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
             for (addr, name) in switchd_labels {
                 code_labels.insert(addr, name);
             }
-            printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
+            printer.set_code_label_layer(code_labels, 0);
         }
         printer.doc_function(&fd_read);
         let output = printer.take_emit();
@@ -3615,6 +3638,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let obj = Object::parse(&buffer)?;
 
+    // HTTPDMAIN-F2-IMAGEBASE-DECISION-0001 (F2B): the per-run load base.
+    // Canon runs load the image NATIVELY at the analyzeHeadless preferred
+    // base 0x100000 — every address this driver creates (entries, symbols,
+    // strings, IR, labels) is the golden's image-based form directly, and
+    // the display deltas collapse to 0. The flow-mirror gate keeps the
+    // locked oracle BfdArchitecture contract (BFD raw vma = PIE base 0),
+    // so under the gate img_base is 0 and every shift below is the
+    // identity (mirror face + bank pins stay byte-identical).
+    let mirror = mirror_flow_enabled();
+    let img_base: u64 = if mirror { 0 } else { NATIVE_IMAGE_BASE };
+
     // HTTPD-URAM-SYMBOLIZE-0001 (parse point): the PLT thunk import is
     // parsed once up front (it re-parses the image independently of the
     // goblin object below) so both the symbol_table seeding inside the ELF
@@ -3630,10 +3664,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if sym.st_value != 0 {
                 if let Some(name) = elf.strtab.get_at(sym.st_name) {
                     if !name.is_empty() {
-                        symbol_table.insert(sym.st_value, name.to_string());
+                        // F2B: canon-space key (raw st_value + img_base;
+                        // identity under the mirror gate).
+                        symbol_table.insert(sym.st_value + img_base, name.to_string());
                     }
                     if sym.is_function() {
                         let mut file_off = 0u64;
+                        // file_off stays FILE-relative: resolved against the
+                        // raw base-0 section bounds (both sides of the
+                        // comparison unshifted).
                         for header in elf.section_headers.iter() {
                             if sym.st_value >= header.sh_addr && sym.st_value < header.sh_addr + header.sh_size {
                                 file_off = header.sh_offset + (sym.st_value - header.sh_addr);
@@ -3642,7 +3681,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if file_off > 0 {
                             let size = if sym.st_size > 0 { sym.st_size as usize } else { 512 };
-                            functions.push((sym.st_value, size, file_off, name.to_string()));
+                            functions.push((sym.st_value + img_base, size, file_off, name.to_string()));
                         }
                     }
                 }
@@ -3652,7 +3691,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for sym in elf.dynsyms.iter() {
             if sym.is_function() && sym.st_value != 0 {
                 if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
-                    symbol_table.entry(sym.st_value).or_insert_with(|| name.to_string());
+                    symbol_table.entry(sym.st_value + img_base).or_insert_with(|| name.to_string());
                     let mut file_off = 0u64;
                     for header in elf.section_headers.iter() {
                         if sym.st_value >= header.sh_addr && sym.st_value < header.sh_addr + header.sh_size {
@@ -3660,9 +3699,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             break;
                         }
                     }
-                    if file_off > 0 && !functions.iter().any(|f| f.0 == sym.st_value) {
+                    if file_off > 0 && !functions.iter().any(|f| f.0 == sym.st_value + img_base) {
                         let size = if sym.st_size > 0 { sym.st_size as usize } else { 512 };
-                        functions.push((sym.st_value, size, file_off, name.to_string()));
+                        functions.push((sym.st_value + img_base, size, file_off, name.to_string()));
                     }
                 }
             }
@@ -3685,7 +3724,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // (87 call sites: 82 thunk imports + 5 discovered functions).
         for (&thunk_addr, thunk_name) in plt_imports.iter() {
             symbol_table
-                .entry(thunk_addr)
+                .entry(thunk_addr + img_base)
                 .or_insert_with(|| thunk_name.clone());
         }
         eprintln!(
@@ -3716,7 +3755,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let len = i - s_start;
                 if len >= 4 {
                     let s = String::from_utf8_lossy(&data[s_start..i]).to_string();
-                    string_table.insert(header.sh_addr + s_start as u64, s);
+                    string_table.insert(header.sh_addr + img_base + s_start as u64, s);
                 }
                 i += 1;
             }
@@ -3990,7 +4029,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     HTTPD_IMPORT_SIGNATURES.len(),
                 );
                 let plt: HashMap<u64, String> =
-                    plt_imports.iter().map(|(&a, n)| (a, n.clone())).collect();
+                    plt_imports.iter().map(|(&a, n)| (a + img_base, n.clone())).collect();
                 Some(std::sync::Arc::new(ImportSignatureContext { ledger, plt }))
             } else {
                 None
@@ -4004,8 +4043,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr_to_fileoff = |addr: u64| -> Option<(usize, usize)> {
         if let Object::Elf(ref elf) = obj {
             for header in elf.section_headers.iter() {
-                if addr >= header.sh_addr && addr < header.sh_addr + header.sh_size {
-                    let off = (header.sh_offset + (addr - header.sh_addr)) as usize;
+                // F2B: queries arrive in canon space; section bounds are
+                // raw — compare against the shifted bound (identity under
+                // the mirror gate).
+                let lo = header.sh_addr + img_base;
+                let hi = lo + header.sh_size;
+                if addr >= lo && addr < hi {
+                    let off = (header.sh_offset + (addr - lo)) as usize;
                     let end = std::cmp::min(off + 512, buffer.len());
                     return Some((off, end));
                 }
@@ -4038,7 +4082,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Object::Elf(ref elf) = obj {
             for header in elf.section_headers.iter() {
                 if (header.sh_flags & 0x4) != 0 && header.sh_size > 0 {
-                    ranges.push((header.sh_addr, header.sh_addr + header.sh_size));
+                    ranges.push((header.sh_addr + img_base, header.sh_addr + img_base + header.sh_size));
                 }
             }
         }
@@ -4161,7 +4205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         elf.section_headers
             .iter()
             .filter(|h| h.sh_flags & 0x4 != 0) // SHF_EXECINSTR
-            .map(|h| (h.sh_addr, h.sh_addr + h.sh_size))
+            .map(|h| (h.sh_addr + img_base, h.sh_addr + img_base + h.sh_size))
             .collect()
     } else {
         Vec::new()
@@ -4211,7 +4255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chain(code_ref_fn_entries.iter().copied())
         .collect();
     for &target in &analysis_discovered {
-        if symbol_table.contains_key(&target) || plt_imports.contains(target) {
+        if symbol_table.contains_key(&target) || plt_imports.contains(target.wrapping_sub(img_base)) {
             continue;
         }
         symbol_table
@@ -4219,7 +4263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or_insert_with(|| {
                 rugra::debugproto::analyze_headless_function_symbol_name(
                     target,
-                    ANALYZE_HEADLESS_IMAGE_BASE,
+                    0, // F2B: target is already canon-space
                 )
             });
     }
@@ -4230,7 +4274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // print needs the same name channel). Thunks and named symbols keep
     // their existing entries.
     for &target in &lea_codeptr_targets {
-        if symbol_table.contains_key(&target) || plt_imports.contains(target) {
+        if symbol_table.contains_key(&target) || plt_imports.contains(target.wrapping_sub(img_base)) {
             continue;
         }
         if !exec_ranges.iter().any(|&(start, end)| target >= start && target < end) {
@@ -4240,7 +4284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             target,
             rugra::debugproto::analyze_headless_function_symbol_name(
                 target,
-                ANALYZE_HEADLESS_IMAGE_BASE,
+                0, // F2B: target is already canon-space
             ),
         );
     }
@@ -4288,7 +4332,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // oracle harness). Both stay None/empty when the gate is unset; the
     // per-function clones below only exist behind the gate, same shape as
     // the stage_binary capture.
-    let mirror = mirror_flow_enabled();
+    // F2B: the flag is hoisted to the parse boundary above (img_base
+    // selection); this binding re-reads nothing.
     let mirror_image: Option<Vec<u8>> = if mirror {
         match &obj {
             Object::Elf(elf) => Some(worker_memory_image_bytes(elf, &buffer)),
@@ -4395,7 +4440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let switchd_default_fns: Vec<(u64, usize, u64)> = if mirror {
         Vec::new()
     } else {
-        scan_switch_default_handlers(&obj, &buffer, &functions)
+        scan_switch_default_handlers(&obj, &buffer, &functions, img_base)
     };
     if !switchd_default_fns.is_empty() {
         eprintln!(
@@ -4409,7 +4454,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let switchd_cased_fns: Vec<(u64, usize, u64)> = if mirror {
         Vec::new()
     } else {
-        scan_switch_cased_handlers(&obj, &buffer, &functions, &switchd_default_fns)
+        scan_switch_cased_handlers(&obj, &buffer, &functions, &switchd_default_fns, img_base)
     };
     if !switchd_cased_fns.is_empty() {
         eprintln!(
@@ -4429,7 +4474,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 elf.shdr_strtab.get_at(h.sh_name).map(|n| n.starts_with(".plt")).unwrap_or(false)
             })
             .filter(|h| (h.sh_flags & 0x4) != 0) // SHF_EXECINSTR
-            .map(|h| (h.sh_addr, h.sh_addr + h.sh_size, h.sh_entsize.max(1)))
+            .map(|h| (h.sh_addr + img_base, h.sh_addr + img_base + h.sh_size, h.sh_entsize.max(1)))
             .collect()
     } else { Vec::new() };
 
@@ -4524,6 +4569,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &string_table,
             &analysis_discovered,
             &symbol_table,
+            img_base,
         ))
     };
 
@@ -4551,7 +4597,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let functions = if stage_selector.is_some() {
         let mut extended = functions;
         if let Object::Elf(elf) = &obj {
-            extended.extend(stage_plt_thunk_ledger_entries(elf, &buffer));
+            extended.extend(stage_plt_thunk_ledger_entries(elf, &buffer, img_base));
             extended.sort_by_key(|f| f.0);
             extended.dedup_by_key(|f| f.0);
         }
@@ -4626,11 +4672,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "[PARAMID] self-hosted Parameter ID mode: {} iteration round(s) over the main window",
             rounds
         );
-        let plt_slots: Vec<u64> = plt_imports.iter().map(|(&addr, _)| addr).collect();
+        let plt_slots: Vec<u64> = plt_imports.iter().map(|(&addr, _)| addr + img_base).collect();
         let sections: Vec<(u64, u64, u64)> = if let Object::Elf(ref elf) = &obj {
             elf.section_headers
                 .iter()
-                .map(|header| (header.sh_addr, header.sh_offset, header.sh_size))
+                .map(|header| (header.sh_addr + img_base, header.sh_offset, header.sh_size))
                 .collect()
         } else {
             Vec::new()
@@ -4806,9 +4852,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|&(a, s, d)| (a, s, d, "caseD_0")),
         );
         for &(thunk_addr, thunk_size, dispatch, tag) in &named_switchd_fns {
+            // F2B: scanner outputs are canon-space; the qualified name and
+            // header address use them directly (numeric form unchanged —
+            // the same digits the base-0 + 0x100000 spelling produced).
             let qualified_name = format!(
                 "switchD_{:08x}::{}",
-                ANALYZE_HEADLESS_IMAGE_BASE + dispatch,
+                dispatch,
                 tag
             );
             eprintln!(
@@ -4819,10 +4868,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut file_off = 0usize;
             if let Object::Elf(elf) = &obj {
                 for header in elf.section_headers.iter() {
-                    if thunk_addr >= header.sh_addr
-                        && thunk_addr < header.sh_addr + header.sh_size
-                    {
-                        file_off = (header.sh_offset + (thunk_addr - header.sh_addr)) as usize;
+                    // F2B: compare in canon space (thunk_addr is canon).
+                    let lo = header.sh_addr + img_base;
+                    let hi = lo + header.sh_size;
+                    if thunk_addr >= lo && thunk_addr < hi {
+                        file_off = (header.sh_offset + (thunk_addr - lo)) as usize;
                         break;
                     }
                 }
@@ -4874,7 +4924,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let import_signatures_switchd = import_signatures.clone();
             let handle = std::thread::spawn(move || -> Option<String> {
                 let mut fd = Funcdata::new(
-                    &format!("switchD_{:08x}::{}", ANALYZE_HEADLESS_IMAGE_BASE + dispatch, tag),
+                    &format!("switchD_{:08x}::{}", dispatch, tag),
                     Address::new(thunk_addr),
                     thunk_size as i32,
                 );
@@ -4904,7 +4954,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tgt.offset,
                         rugra::debugproto::analyze_headless_function_symbol_name(
                             tgt.offset,
-                            ANALYZE_HEADLESS_IMAGE_BASE,
+                            0, // F2B: tgt is canon-space
                         ),
                     );
                     if let Some(seq) = raw.seq_num() {
@@ -4985,7 +5035,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(Ok(Some(output))) => {
                     println!(
                         "/* ---- 0x{:x}: {} ({} bytes) ---- */",
-                        ANALYZE_HEADLESS_IMAGE_BASE + thunk_addr, tag, thunk_size
+                        thunk_addr, tag, thunk_size
                     );
                     println!("{}", output);
                     println!();
@@ -5059,6 +5109,7 @@ fn scan_switch_default_handlers(
     obj: &Object,
     buffer: &[u8],
     functions: &[(u64, usize, u64, String)],
+    image_base: u64, // F2B: canon shift (identity under mirror; scanner is canon-only)
 ) -> Vec<(u64, usize, u64)> {
     // .text bounds (vaddr, file offset, length).
     let mut text: Option<(u64, usize, usize)> = None;
@@ -5079,6 +5130,7 @@ fn scan_switch_default_handlers(
     if text_off >= buffer.len() || text_off + text_len > buffer.len() {
         return Vec::new();
     }
+    let text_va = text_va + image_base;
     let text_end = text_va + text_len as u64;
 
     let mut disasm = X86_64Disassembler::new();
@@ -5234,6 +5286,7 @@ fn scan_switch_cased_handlers(
     buffer: &[u8],
     functions: &[(u64, usize, u64, String)],
     default_fns: &[(u64, usize, u64)],
+    image_base: u64, // F2B: canon shift (identity under mirror; canon-only scanner)
 ) -> Vec<(u64, usize, u64)> {
     // .text bounds (vaddr, file offset, length) — same construction as the
     // DEFFN scan.
@@ -5255,6 +5308,7 @@ fn scan_switch_cased_handlers(
     if text_off >= buffer.len() || text_off + text_len > buffer.len() {
         return Vec::new();
     }
+    let text_va = text_va + image_base;
     let text_end = text_va + text_len as u64;
 
     let mut disasm = X86_64Disassembler::new();
@@ -5284,8 +5338,11 @@ fn scan_switch_cased_handlers(
     let section_file_off = |vaddr: u64| -> Option<usize> {
         if let Object::Elf(elf) = obj {
             for header in elf.section_headers.iter() {
-                if vaddr >= header.sh_addr && vaddr < header.sh_addr + header.sh_size {
-                    return Some((header.sh_offset + (vaddr - header.sh_addr)) as usize);
+                // F2B: queries arrive in canon space; shift the bound.
+                let lo = header.sh_addr + image_base;
+                let hi = lo + header.sh_size;
+                if vaddr >= lo && vaddr < hi {
+                    return Some((header.sh_offset + (vaddr - lo)) as usize);
                 }
             }
         }
@@ -6027,6 +6084,7 @@ fn stage_frontier(
 fn stage_plt_thunk_ledger_entries(
     elf: &goblin::elf::Elf,
     buffer: &[u8],
+    image_base: u64, // F2B: canon shift for entry addresses (identity under mirror)
 ) -> Vec<(u64, usize, u64, String)> {
     // <slot-addr, slot-file-off> + name per section kind.
     let mut plt0: Option<(u64, u64)> = None;
@@ -6085,7 +6143,7 @@ fn stage_plt_thunk_ledger_entries(
         };
         if size > 0 {
             entries.push((
-                addr,
+                addr + image_base,
                 size,
                 off,
                 format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + addr),
@@ -6109,7 +6167,7 @@ fn stage_plt_thunk_ledger_entries(
             let rip_base = slot_addr + 4 + tail as u64;
             let name = glob_dat_owner((rip_base as i64 + disp) as u64)
                 .unwrap_or_else(|| format!("slot_{:x}", slot_addr));
-            entries.push((slot_addr, 4 + tail, (slot_off) as u64, name));
+            entries.push((slot_addr + image_base, 4 + tail, (slot_off) as u64, name));
         }
     }
 
@@ -6130,7 +6188,7 @@ fn stage_plt_thunk_ledger_entries(
                 Some(tail) => 4 + tail,
                 None => 16, // reloc-backed slot: keep it, honest slot extent
             };
-            entries.push((slot_addr, body, slot_off as u64, name.to_string()));
+            entries.push((slot_addr + image_base, body, slot_off as u64, name.to_string()));
         }
     }
 
