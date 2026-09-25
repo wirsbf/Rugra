@@ -427,8 +427,16 @@ impl TransformVar {
                 let addr = Address::new(vn_offset + byte_pos as u64);
                 // renormal(byteSize) is a no-op for Rugra's Address (no sub-byte
                 // alignment tracking); the address is already byte-aligned.
+                // transform.cc:202-207: the piece address stays in the ORIGINAL
+                // varnode's space (`Address addr = vn->getAddr() + bytePos`
+                // keeps vn's space; both newVarnode/newVarnodeOut take the full
+                // space-qualified Address) — unique-space temporaries and
+                // stack/ram pieces must not be pinned to the register space
+                // (FAMILY-AUDIT-SPACELESS-SITES-0001).
                 if let Some(def) = def_op {
-                    self.replacement = Some(fd.new_varnode_out(self.byte_size as usize, addr, def));
+                    self.replacement = Some(
+                        fd.new_varnode_out_full(self.byte_size as usize, vn_space, addr, def),
+                    );
                 } else {
                     // Create a free varnode at the piece address.
                     self.replacement = Some(

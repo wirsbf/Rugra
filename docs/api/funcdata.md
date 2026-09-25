@@ -2799,3 +2799,5 @@ newVarnode 同地址替换臂）。修复：比较改为
 → 输出 cmp 字节恒等 = 等价性实证而非休眠；跨空间同偏移一旦出现即按 oracle
 判 false。本文件同函数 cc:135 替换臂已由 HERITAGE-CROSSSPACE-MERGE-0001
 （XCROSS lane）空间限定，本行收口该函数最后一个无空间位点。
+
+- 2026-09-25 (FAMAUDIT integration): constructor sites merged to master; this note records the integration commit touching the module.

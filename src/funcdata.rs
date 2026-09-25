@@ -10161,19 +10161,30 @@ impl Funcdata {
                         // MULTIEQUAL at the same address in outblock, any use
                         // beyond outblock propagated through another register,
                         // so the new MULTIEQUAL must write a unique.
+                        // cc:118's Address::operator== (address.hh:356-358)
+                        // compares space AND offset — a register-space origvn
+                        // and a stack/ram MULTIEQUAL out at the same offset
+                        // are NOT the same storage; the spaceless offset-only
+                        // compare wrongly forced neednewunique for
+                        // cross-space matches (FAMILY-AUDIT-SPACELESS-SITES-0001).
                         let same_addr_addrtied = {
-                            let (orig_addr, orig_addrtied) = {
+                            let (orig_addr, orig_space, orig_addrtied) = {
                                 let orig_rg = origvn.read().unwrap();
-                                (*orig_rg.get_addr(), orig_rg.is_addr_tied())
+                                (
+                                    *orig_rg.get_addr(),
+                                    orig_rg.address_space,
+                                    orig_rg.is_addr_tied(),
+                                )
                             };
-                            let out_addr = {
+                            let out_matches = {
                                 let o = op.read().unwrap();
-                                o.get_out().and_then(|v| {
+                                o.get_out().is_some_and(|v| {
                                     let v_rg = v.read().unwrap();
-                                    Some(*v_rg.get_addr())
+                                    v_rg.address_space == orig_space
+                                        && *v_rg.get_addr() == orig_addr
                                 })
                             };
-                            out_addr.is_some_and(|a| a == orig_addr) && orig_addrtied
+                            out_matches && orig_addrtied
                         };
                         if same_addr_addrtied {
                             neednewunique = true;
