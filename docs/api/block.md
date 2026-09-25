@@ -1167,9 +1167,13 @@ printHeader、markUnstructured、scopeBreak、nextFlowAfter、flipInPlace、mars
   `next_flow_after` / `encode_header` / `flip_in_place_execute`。
 - **BlockSwitch**（block.cc:3596-3661）：`get_switch_block` /
   `get_num_case_blocks` / `get_case_block` / `get_num_labels` / `get_label` /
-  `is_default_case` / `is_exit` / `mark_unstructured_targets` /
+  `is_default_case` / `mark_unstructured_targets` /
   `scope_break_break_cases` / `print_header` / `next_flow_after` /
   `get_switch_varnode`。
+  （`is_exit` 已删除——CASEWRAP-CR-F2：零调用者，且读取期从已消费 case 块重导
+  `size_out()==1` 在 identifyInternal 半删出边后恒 false；oracle 的 `isExit(i)`
+  读的是 addCase 期捕获的 `caseblocks[i].isexit`（block.hh:791），对应 Rugra 的
+  `case_isexit`/`default_isexit` 捕获旗标数组，block.cc:3511-3514。）
 
 **调用点更新（blockaction.rs）：**
 - 3 个 `BlockIf` 构造点（blockaction.rs:3128/3163/3630）+ 1 个 `BlockGoto`
