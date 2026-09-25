@@ -1194,3 +1194,30 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   （均不在本 lane 写域，随本字段一并在案）；③=activereturn/processJoins
   存根（COREACTION-JOINSPACE 残差行）；④与 ①同根（无 spec →
   callOpIndirectEffect 极性保守 → 栈屏障 INDIRECT 全开）。
+
+### 2026-09-25：opCall entry 空间通道填充侧（PRINTC-OPCALL-ENTRYSPACE-0001 fspec 半项，Lane FSPECW）
+
+- **记录点带空间**：`FuncCallSpecs::new_for_op` 的 entry 快照（varnode 守卫
+  先释再锁 callspec 的锁序保持不变）此前产 `Address::new(offset)`——无空间
+  legacy 形。oracle 的记录点是 fspec.cc:4934
+  `entryaddress = call_op->getIn(0)->getAddr()`：CALL 注解化**前**的 in(0)
+  varnode 完整地址（空间+offset）。Rugra 的 in(0) varnode 只携带 flat
+  `AddressSpace` enum（`loc` 恒 spaceless），故经新增 RUGRA-GLUE 桥
+  `entry_address_with_space(space, offset)` 以 ADDRESS-0001 tag 形重建完整
+  地址：per-variant stand-in 句柄（thread-local 单例表，携带该 variant 的
+  name/addrsize/wordsize）+ 原offset。
+- **行为面**：offset 通道逐字节不变（annotation varnode 的
+  compatibility_offset、fspec_print_raw 十六进制、encode offset 全走
+  `as_u64()`）；空间通道激活——printc 的 `entry_addr_dims`
+  （`fc->getEntryAddress()` 消费侧，NAMFIX 已落）从 flat Ram 兜底改为解析
+  stand-in 的真实 dims；`space_name_for_addr`（fspec.cc:2132-2133
+  `writeSpace` 镜像）从硬编码 "ram" 改为读 tag 名，legacy spaceless 形
+  （set_funcdata/deindirect 调用方传入的 ADDRESS-0001 phase-1 形）保留
+  "ram" 占位。CALLIND 仍 None（fspec.cc:4942 间接调用不记录）；克隆臂
+  （in(0) 已是 FSPEC 注解）仍经 typed Weak 恢复原 spec 的 entry（fspec.cc:
+  4935-4940，含其空间 tag）。
+- **休眠正确化**：当前双语料（curl/httpd）所有直接 CALL 的 in(0) 均为 ram
+  空间（SLEIGH `*[ram]` export 与 iced `VarnodeRaw(Ram,…)` 两路同形），
+  stand-in dims (8,1) == flat Ram 兜底，printc func_ 兜底面 0 触发
+  （NAMFIX 已证）——E2E 输出恒等；单测
+  `test_new_for_op_entry_addr_carries_in0_space` 钉 ram/const/iop/克隆四臂。

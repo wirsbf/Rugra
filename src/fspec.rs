@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use crate::address::Address;
-use crate::space::{AddressSpace, SpaceType};
+use crate::space::{AddrSpace, AddressSpace, SpaceType};
 use crate::type_system::datatype::Datatype;
 
 /// Effect type for a memory range across a call. Faithful to
@@ -2396,6 +2396,59 @@ pub struct FuncCallSpecs {
 /// `FuncCallSpecs::offset_unknown` (fspec.hh:1641).
 pub const OFFSET_UNKNOWN: i64 = i64::MIN;
 
+// RUGRA-GLUE: ENTRY_SPACE_STANDINS (ADDRESS-0001 phase-1 bridge; no direct
+// Ghidra counterpart — the oracle's entry address keeps the architecture's
+// own registered `AddrSpace*`, reached here only through the per-variant
+// stand-in because Rugra's historical Varnode carries just the flat
+// `AddressSpace` enum.) One stand-in handle per flat variant per thread,
+// interned into the Address tag table, so repeated call-spec construction
+// reuses the same allocation (intern_space dedups by identity).
+thread_local! {
+    static ENTRY_SPACE_STANDINS:
+        std::cell::RefCell<std::collections::HashMap<AddressSpace, AddrSpace>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+// RUGRA-GLUE: entry_address_with_space (ADDRESS-0001 phase-1 bridge for the
+// fspec.cc:4934 record point; the Ghidra form is the inline
+// `Address(AddrSpace*, uintb)` constructor at address.hh:270.)
+/// Build the entry address the way fspec.cc:4934 stores it: the offset plus
+/// the in(0) varnode's space. The flat enum cannot name the architecture's
+/// registered space object, so the tag refers to the per-variant stand-in,
+/// which carries that variant's documented name and dimensions
+/// (`AddressSpace::name` / `addr_size` / `word_size`). Consumers that only
+/// compare offsets (`as_u64`) are unaffected; consumers that resolve the
+/// space (printc entry dims, encode space name) see the variant's true
+/// dimensions instead of the flat Ram fallback.
+fn entry_address_with_space(space: AddressSpace, offset: u64) -> Address {
+    let handle = ENTRY_SPACE_STANDINS.with(|table| {
+        table.borrow_mut().entry(space).or_insert_with(|| {
+            let space_type = match space {
+                AddressSpace::Const => SpaceType::Constant,
+                AddressSpace::Unique => SpaceType::Internal,
+                AddressSpace::Join => SpaceType::Join,
+                AddressSpace::Stack => SpaceType::SpaceBase,
+                // ram/register/overlay are IPTR_PROCESSOR in the oracle;
+                // OTHER is Ghidra's OtherSpace (space.cc:397), also
+                // processor-typed.
+                _ => SpaceType::Processor,
+            };
+            AddrSpace::new_space(
+                space_type,
+                space.name(),
+                false,
+                space.addr_size() as u32,
+                space.word_size() as u32,
+                0,
+                0,
+                0,
+                0,
+            )
+        }).clone()
+    });
+    Address::with_space(&handle, offset)
+}
+
 impl FuncCallSpecs {
     // Ghidra: fspec.cc:4924 FuncCallSpecs::new
     /// Create a new call specification
@@ -2437,7 +2490,9 @@ impl FuncCallSpecs {
     // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
     /// Construct a call specification bound to the exact CALL/CALLIND op.
     /// For a direct CALL, capture input(0) before setup replaces it with the
-    /// FSPEC annotation. A cloned FSPEC input resolves through its typed
+    /// FSPEC annotation — as the oracle does, the captured entry address
+    /// carries in(0)'s space (fspec.cc:4934 `getIn(0)->getAddr()`), not just
+    /// the offset. A cloned FSPEC input resolves through its typed
     /// handle to the original call target, matching Ghidra's constructor.
     ///
     /// The composed prototype is the Ghidra default-constructed FuncProto
@@ -2480,7 +2535,12 @@ impl FuncCallSpecs {
             } else if space == AddressSpace::Iop {
                 None
             } else {
-                Some(Address::new(offset))
+                // fspec.cc:4934 `entryaddress = call_op->getIn(0)->getAddr()`
+                // — the record stores the full address (offset + the
+                // pre-annotation in(0) varnode's space), never the bare
+                // offset. The space rides the ADDRESS-0001 tag form; the
+                // stand-in handle carries the flat variant's dimensions.
+                Some(entry_address_with_space(space, offset))
             }
         });
         // fspec.cc:4926 `: FuncProto()` — fresh ctor state, void stand-in
@@ -4091,7 +4151,7 @@ pub fn fspec_encode_attributes(
             // Ghidra: AddrSpace *id = fc->getEntryAddress().getSpace();
             //         encoder.writeSpace(ATTRIB_SPACE, id);
             //         encoder.writeUnsignedInteger(ATTRIB_OFFSET, off);
-            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_string(space_attrib, &space_name_for_addr(addr));
             encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
         }
     }
@@ -4113,7 +4173,7 @@ pub fn fspec_encode_attributes_with_size(
     match fc.entry_addr {
         None => encoder.write_string(space_attrib, "fspec"),
         Some(addr) => {
-            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_string(space_attrib, &space_name_for_addr(addr));
             encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
             encoder.write_signed_integer(size_attrib, size as i64);
         }
@@ -4138,12 +4198,18 @@ pub fn fspec_print_raw(fc: &FuncCallSpecs, out: &mut String) {
     }
 }
 
-// RUGRA-GLUE: space_name_for_addr — Rugra's Address does not carry a space,
-// so for FspecSpace encoding we report the conventional "ram" (the typical
-// entry-address space) as a placeholder. This mirrors the space-name lookup
-// Ghidra performs via `addr.getSpace()->getName()`.
-fn space_name_for_addr(_addr: Address) -> &'static str {
-    "ram"
+// RUGRA-GLUE: space_name_for_addr — the oracle reads
+// `fc->getEntryAddress().getSpace()->getName()` (fspec.cc:2132-2133
+// `writeSpace`). An entry address carrying a registry tag (the
+// fspec.cc:4934 record-point form) reports its stand-in's name; the
+// legacy spaceless form (setFuncdata/deindirect callers still pass the
+// ADDRESS-0001 phase-1 `Address::new` offset form) keeps the conventional
+// "ram" placeholder, the typical entry-address space.
+fn space_name_for_addr(addr: Address) -> String {
+    match addr.get_space() {
+        Some(spc) => spc.get_name(),
+        None => "ram".to_string(),
+    }
 }
 
 
@@ -9222,6 +9288,97 @@ mod tests {
         fc.set_funcdata("", Address::new(0x2530));
         assert_eq!(fc.prototype.name, "free");
         assert_eq!(fc.entry_addr.map(|a| a.as_u64()), Some(0x2530));
+    }
+
+    // Ghidra: fspec.cc:4934 FuncCallSpecs::FuncCallSpecs
+    /// The entry-address record point stores in(0)'s full address — the
+    /// offset AND the varnode's space (fspec.cc:4934 `getIn(0)->getAddr()`,
+    /// read before the FSPEC annotation swap). PRINTC-OPCALL-ENTRYSPACE-0001
+    /// fspec half: the space rides the ADDRESS-0001 tag form through the
+    /// per-variant stand-in, so consumers resolving `getEntryAddress()`'s
+    /// space see the in(0) space's own dimensions instead of a flat Ram
+    /// fallback, while offset-only consumers (`as_u64`) are unchanged.
+    #[test]
+    fn test_new_for_op_entry_addr_carries_in0_space() {
+        use crate::funcdata::Funcdata;
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+
+        let void_proto = || {
+            FuncProto::new(
+                String::new(),
+                Arc::new(Datatype::Void(TypeBase::new(
+                    "void".to_string(),
+                    0,
+                    TypeMetatype::Void,
+                ))),
+            )
+        };
+        let mut fd = Funcdata::new("entryspace", Address::new(0x7000), 0x20);
+
+        // Direct CALL whose in(0) is a ram-space target varnode — the
+        // production form both lifter paths emit (x86 `call rel` exports
+        // `*[ram]`, sleigh_lift.rs convert; iced builds
+        // VarnodeRaw(Ram, target, 8), x86_lift.rs).
+        let call = fd.new_op(1, Address::new(0x7004));
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let target = fd
+            .vbank
+            .create_with_space(8, AddressSpace::Ram, 0x22f0);
+        fd.op_set_input(&call, target, 0);
+        let fc = FuncCallSpecs::new_for_op(&call, void_proto());
+        let entry = fc.entry_addr.expect("direct CALL records an entry");
+        // Offset channel unchanged: compatibility consumers (annotation
+        // varnode payload, printRaw hex, encode offset) see the same value.
+        assert_eq!(entry.as_u64(), 0x22f0);
+        // Space channel filled: the stand-in carries the ram variant's own
+        // name and dimensions (fspec.cc:4934 keeps in(0)'s ram address, so
+        // printc's fc->getEntryAddress() dims resolve to ram's (8,1)).
+        let spc = entry.get_space().expect("entry address carries a space");
+        assert_eq!(spc.get_name(), "ram");
+        assert_eq!(spc.get_addr_size(), 8);
+        assert_eq!(spc.get_word_size(), 1);
+        // The tagged form is a distinct address from the legacy spaceless
+        // one (address.hh:356: base==op2.base fails), pinning that the
+        // record no longer produces the legacy form.
+        assert_ne!(entry, Address::new(0x22f0));
+
+        // A const-space in(0) (SLEIGH relative-label form) keeps the const
+        // space in the record, as the oracle's getAddr() would.
+        let call2 = fd.new_op(1, Address::new(0x7008));
+        fd.op_set_opcode(&call2, OpCode::CPUI_CALL);
+        let const_target = fd.new_constant(8, 0x1234);
+        fd.op_set_input(&call2, const_target, 0);
+        let fc2 = FuncCallSpecs::new_for_op(&call2, void_proto());
+        let entry2 = fc2.entry_addr.expect("const in(0) still records");
+        assert_eq!(entry2.as_u64(), 0x1234);
+        let spc2 = entry2.get_space().expect("const entry carries a space");
+        assert_eq!(spc2.get_name(), "const");
+        assert_eq!(spc2.get_addr_size(), 8);
+        assert_eq!(spc2.get_word_size(), 1);
+
+        // An iop-space in(0) without a bound callspec records no entry
+        // (the annotation space never carries a callee address).
+        let call3 = fd.new_op(1, Address::new(0x700c));
+        fd.op_set_opcode(&call3, OpCode::CPUI_CALL);
+        let iop_vn = fd
+            .vbank
+            .create_with_space(8, AddressSpace::Iop, 0x99);
+        fd.op_set_input(&call3, iop_vn, 0);
+        let fc3 = FuncCallSpecs::new_for_op(&call3, void_proto());
+        assert!(fc3.entry_addr.is_none());
+
+        // Clone case (fspec.cc:4935-4940): an in(0) already converted to an
+        // FSPEC annotation resolves through the typed handle to the source
+        // spec's entry — including its space tag.
+        let owner = Arc::new(std::sync::RwLock::new(fc));
+        let annotation = fd.new_varnode_call_specs(&owner);
+        let call4 = fd.new_op(1, Address::new(0x7010));
+        fd.op_set_opcode(&call4, OpCode::CPUI_CALL);
+        fd.op_set_input(&call4, annotation, 0);
+        let fc4 = FuncCallSpecs::new_for_op(&call4, void_proto());
+        assert_eq!(fc4.entry_addr, Some(entry));
     }
 
     // ---- ParamTrial / ParamActive tests ----
