@@ -1981,3 +1981,30 @@ RulePtrArith::evaluatePointerExpression 引到 6876）与 RuleDoubleShift +1
 e40ed130 的真实定义行替换 N（类名无 `::` 的代表性行引用不动），共 **221
 处**；修后复核脚本验证 584 个函数引用 0 漂移，`check_ghidra_refs --all
 --strict` 绿。注释-only：零行为变化。
+
+## 2026-09-26：ANNO 残留修正 + 验证声明勘误（RULEACTION-ANNO-DRIFT-RESIDUAL-0001）
+
+CR-ADDRUNIT 终判指出上一节的完整性声明不实：纠偏脚本的 oracle 定义行解析器
+只匹配标量返回类型（`Varnode \*\s+` 要求星号后空白，而 oracle 实际风格是
+`Varnode *Foo::bar(` 星号紧贴函数名），**13 处指针返回型方法注释漏网**，另
+**2 处错域**（RuleIgnoreNan::testForComparison 引 9722=applyOp 定义行、
+RulePullsubMulti::findSubpiece 引 1005=调用点）；"584 个函数引用 0 漂移"
+实为 584 = 339 函数级 + 245 类名级行次的总和，函数级验证本身带同一解析器
+缺口——声明作废。本 commit 修正 15 处（reviewer 亲验真值表，本车道逐行
+复核 oracle 定义起始行后替换）：
+
+getHiBit 5659→5641 / getBooleanResult 10335→10317 / detectThreeWay
+10035→10017 / checkSignExtraction 8776→8758 / findForm 8069→8051 /
+checkSignExtForm 8928→8910 / findSubshift 7928→7910 / determineDatatype
+7481→7463 / checkBoolean 9277→9259 / constructBool 9346→9328 /
+testForComparison 9696→9678 与 9722→9678 / buildMultiples 6374→6356 /
+buildExtra 6408→6390 / findSubpiece 1005→849。
+
+解析器缺口登记 TOOLS-REFS-DEFSTART-0001（定义行正则须接受
+`Type \*Class::fn(` 星号贴名形 + 裸构造函数形，且防贪婪回溯误配）；类名级
+（无 `::`）代表性行引用豁免维持 RULEACTION-ANNO-CLASSNAME-0001（reviewer
+计 174；本车道复计口径 245 行次/127 唯一 (行,名) 对，计数口径差登记于该
+票）。修正后复验（解析器已修）：函数级 339 处 0 漂移，唯一未解析=
+AddrSpace::byteToAddress（跨文件 space.hh 定义、引 ruleaction.cc:6294 调用
+点，既有风格，checker 有效）；`check_ghidra_refs --all --strict` 绿。
+注释-only 15 行，函数体零改动。

@@ -7473,7 +7473,7 @@ impl RuleSLess2Zero {
 
     /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
     /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
-    // Ghidra: ruleaction.cc:5659 RuleSLess2Zero::getHiBit
+    // Ghidra: ruleaction.cc:5641 RuleSLess2Zero::getHiBit
     fn get_hi_bit(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -7673,7 +7673,7 @@ impl RulePopcountBoolXor {
     /// Faithful to `getBooleanResult` (ruleaction.cc:10335-10419).
     /// Returns (Some(vn), const_res) if found, or (None, const_res) where
     /// const_res is -1 (not found), 0, or 1 (constant result).
-    // Ghidra: ruleaction.cc:10335 RulePopcountBoolXor::getBooleanResult
+    // Ghidra: ruleaction.cc:10317 RulePopcountBoolXor::getBooleanResult
     fn get_boolean_result(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         mut bit_pos: i32,
@@ -8765,7 +8765,7 @@ impl RuleThreeWayCompare {
     /// Detect a three-way comparison pattern rooted at `addop`. Returns the
     /// less-than op, or None. Faithful to `detectThreeWay`
     /// (ruleaction.cc:10035-10124).
-    // Ghidra: ruleaction.cc:10035 RuleThreeWayCompare::detectThreeWay
+    // Ghidra: ruleaction.cc:10017 RuleThreeWayCompare::detectThreeWay
     fn detect_three_way(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, bool)> {
@@ -10022,7 +10022,7 @@ impl Rule for RuleSubNormal {
 /// Verify that a Varnode is a sign extraction `V s>> (size*8-1)`.
 /// Returns the base Varnode, or None. Faithful to `checkSignExtraction`
 /// (ruleaction.cc:8776-8792).
-// Ghidra: ruleaction.cc:8776 RuleSignMod2nOpt::checkSignExtraction
+// Ghidra: ruleaction.cc:8758 RuleSignMod2nOpt::checkSignExtraction
 fn check_sign_extraction(
     out_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -10575,7 +10575,7 @@ impl RuleDivOpt {
 
     /// Detect the division-by-multiplication form. Faithful to `findForm`
     /// (ruleaction.cc:8069-8143). Returns (in_vn, n, y128, xsize, ext_opc).
-    // Ghidra: ruleaction.cc:8069 RuleDivOpt::findForm
+    // Ghidra: ruleaction.cc:8051 RuleDivOpt::findForm
     fn find_form(
         op: &crate::op::PcodeOpRef,
     ) -> Option<(
@@ -11125,7 +11125,7 @@ impl RuleSignMod2nOpt2 {
 
     /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
     /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
-    // Ghidra: ruleaction.cc:8928 RuleSignMod2nOpt2::checkSignExtForm
+    // Ghidra: ruleaction.cc:8910 RuleSignMod2nOpt2::checkSignExtForm
     fn check_sign_ext_form(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -11296,7 +11296,7 @@ impl RuleDivTermAdd {
     /// Find SUBPIECE (high) form: SUB(V,c) or SUB(V,c)>>n. Returns
     /// (subpiece_op, total_truncation_bits, shift_opcode). Faithful to
     /// `findSubshift` (ruleaction.cc:7928-7953).
-    // Ghidra: ruleaction.cc:7928 RuleDivTermAdd::findSubshift
+    // Ghidra: ruleaction.cc:7910 RuleDivTermAdd::findSubshift
     fn find_subshift(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, i32, OpCode)> {
@@ -12329,7 +12329,7 @@ impl RulePullsubMulti {
     /// Find a preexisting SUBPIECE of `base_vn` with the given size+shift.
     /// Faithful to `findSubpiece` (ruleaction.cc:849-870). Returns the output
     /// Varnode or None.
-    // Ghidra: ruleaction.cc:1005 RulePullsubMulti::findSubpiece
+    // Ghidra: ruleaction.cc:849 RulePullsubMulti::findSubpiece
     fn find_subpiece(
         base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         out_size: u32,
@@ -13818,7 +13818,7 @@ impl RulePieceStructure {
     /// structured (struct/array/union) data-type the varnode is part of, plus
     /// the base offset. Uses `getStructuredType` and, for the partial case,
     /// resolves the byte offset via `SymbolEntry` then walks `getSubType`.
-    // Ghidra: ruleaction.cc:7481 RulePieceStructure::determineDatatype
+    // Ghidra: ruleaction.cc:7463 RulePieceStructure::determineDatatype
     fn determine_datatype(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
@@ -16467,7 +16467,7 @@ impl RuleConditionalMove {
     /// Faithful to `checkBoolean` (ruleaction.cc:9277-9303). Given a MULTIEQUAL
     /// input, return its boolean root if it is a boolean value (bool-output op
     /// or a COPY of a 0/1 constant), else None.
-    // Ghidra: ruleaction.cc:9277 RuleConditionalMove::checkBoolean
+    // Ghidra: ruleaction.cc:9259 RuleConditionalMove::checkBoolean
     fn check_boolean(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -16577,7 +16577,7 @@ impl RuleConditionalMove {
     /// before `insertop`. Rugra has no such cross-block cloner, so:
     ///   - `ops` empty   → return `vn` itself (faithful, no cloning needed).
     ///   - `ops` non-empty → return None (cannot clone); caller bails.
-    // Ghidra: ruleaction.cc:9346 RuleConditionalMove::constructBool
+    // Ghidra: ruleaction.cc:9328 RuleConditionalMove::constructBool
     fn construct_bool(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
@@ -16988,7 +16988,7 @@ impl RuleIgnoreNan {
     /// the output varnode of `op` when `op`'s opcode equals `match_code` (so the
     /// caller can continue the chain), else None. Increments `count` on a real
     /// transformation.
-    // Ghidra: ruleaction.cc:9696 RuleIgnoreNan::testForComparison
+    // Ghidra: ruleaction.cc:9678 RuleIgnoreNan::testForComparison
     fn test_for_comparison(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -17041,7 +17041,7 @@ impl RuleIgnoreNan {
     /// is another CBRANCH reading (in slot 1) a comparison on `float_var`, and
     /// that block's other out-edge rejoins the sibling branch, replace the NaN
     /// input with a constant.
-    // Ghidra: ruleaction.cc:9722 RuleIgnoreNan::testForComparison
+    // Ghidra: ruleaction.cc:9678 RuleIgnoreNan::testForComparison
     fn try_cbranch_protection(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -18901,7 +18901,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
-    // Ghidra: ruleaction.cc:6374 AddTreeState::buildMultiples
+    // Ghidra: ruleaction.cc:6356 AddTreeState::buildMultiples
     fn build_multiples(
         &mut self,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -18952,7 +18952,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
-    // Ghidra: ruleaction.cc:6408 AddTreeState::buildExtra
+    // Ghidra: ruleaction.cc:6390 AddTreeState::buildExtra
     fn build_extra(
         &mut self,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
