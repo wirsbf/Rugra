@@ -3012,3 +3012,47 @@ main 真·局部变量循环=canon 同形）；curl 全量 727/0/0→**635/0/0**
 （getparameter 261→171、main 127→125；改动仅限这两函数、全部 config 行）；
 httpd **1123/0/0 恒等**；投影 bank 391/391；gcc 审计 104 OK/20 FAIL
 fail 名集与基线逐名相同；双跑 cmp 恒等；`::` 零泄漏（仅 `::config` 族）。
+
+### 2026-09-25：PRINTC-COMMENTFILL-ARM — emit_line_comment 接通 start/stop_comment（注释 fill 解锁）
+
+`emit_line_comment`（printlanguage.cc:589-648）此前在 cc:598/647 两处把
+`emit->startComment()`/`emit->stopComment(id)` 误当"纯 markup 调用"省略——该判定只对
+`EmitNoMarkup` 成立；对 oracle 管线唯一的 `PrintLanguage` 配置
+`EmitPrettyPrint`（printlanguage.cc:69 `emit = new EmitPrettyPrint()`）不成立：
+`startComment` 压入 begin_comment token，`print` 时置 `commentmode=true` 并把
+`spaceremain` 压入 indentstack（prettyprint.cc:630-635）；此后注释体内每个强制断行
+（cc:616-617 `\n` → `tagLine()`）在新缩进后追加 comment fill
+（prettyprint.cc:689-693 `lowlevel->print(commentfill)`），`stopComment` 的
+end_comment token 清 `commentmode` 并弹栈（cc:652-664）。PrintC 经
+`setCStyleComments()`=printc.hh:242 → `setCommentDelimeter("/* "," */",false)` →
+printlanguage.cc:98-110 以 start 定界符宽度生成全空格 fill（`"   "`，3 列）。
+
+**两行接线**（src/printc.rs `emit_line_comment`）：`tag_line(indent)` 之后
+`let comment_id = self.emit.start_comment();`，`" */"` 之后
+`self.emit.stop_comment(comment_id);`。EmitNoMarkup 直连路径（非 oracle 的
+PrintLanguage 配置）两调用为 trait no-op，绝对缩进字节复刻分支不受影响。
+
+**可观测效果**：多行注释记录（单记录多变量 `\n` 连接）的续行从 20 列变为
+**23 列（20 缩进 + 3 fill）= canon 形**；单行记录字节不变（首行 tagLine 时
+commentmode 尚为 false，无 fill——与 oracle 时序一致）。
+
+**配套驱动通道**（examples/curl_decompile.rs，`RUGRA_CMTSEED=<file>` 门）：
+canon 的 `/* Unresolved local var: ... */` 记录族（analyzer 侧经程序 commentdb
+进入，type=warning 由 instr_comment_type=user2|warning 放行，
+printlanguage.cc:582）的锁定语料注入通道——`<hexaddr>\t<text>` 记录（`\n` 转义），
+fad=目标入口、锚=记录地址按 [vaddr,vaddr+size) 过滤，经生产
+`CommentDatabaseInternal::add_comment` 注入（与 SECSEED stage_cmt_diag oracle
+harness 同契约）。锚校准：Rugra `find_position` 走 spaceless 精确匹配 backup 路径
+（comment.rs，op.addr==comm.addr），入口/部分词法块首指令无存活 op——7 条记录按
+canon 锚定语句的首个存活 op 校准（0x3729/0x3850/0x3c91/0x3f52/0x428d/0x44bb/0x522e），
+e40ed130 oracle 复核 17 记录/45 行逐字节=canon（my_get_line 一条在 bare harness 环境
+内差一语句=环境噪声，Rugra 侧 canon 精确）。
+
+**验证**（oracle=12.0.4 e40ed130，canon `tests/golden/ghidra_curl_1204.c`）：
+默认脸（无 env 门）curl E2E **577/0/0 与基线逐字节恒等**（零回归）；
+RUGRA_CMTSEED 注入脸 Unresolved 注释族 **0→45 行/17 块全部字节=canon、全部落在
+canon 锚定语句位**（9 块的 next-stmt 文本带预存语料残差——`pcVar11/pcVar12` 临时
+编号、`fp/__stream`、`pFVar10/pCVar9(Configurable*)` 类型推断、`(const char*)`
+cast 与 `my_get_token::save` 限定名，默认脸同位同文，非本改动引入）；
+skeleton **577→520（−57）**、defects=0、numbering=0；投影 bank 391/391；
+双跑 cmp 恒等。

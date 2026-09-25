@@ -11028,7 +11028,10 @@ impl PrintLanguage for PrintC {
     /// printc.hh:242 `setCommentDelimeter("/* "," */",false)`), so
     /// `commentstart == "/* "` and `commentend == " */"` are PrintC
     /// invariants here. `indent < 0` selects `line_commentindent`
-    /// (cc:595-596; value 20 per printlanguage.cc:580).
+    /// (cc:595-596; value 20 per printlanguage.cc:580). The body is
+    /// bracketed by `startComment`/`stopComment` (cc:598/647), which on
+    /// EmitPrettyPrint gate the 3-space comment fill on forced breaks
+    /// inside the comment (prettyprint.cc:690-693).
     fn emit_line_comment(&mut self, indent: i32, text: &str) {
         // cc:595-596: if (indent <0) indent = line_commentindent;
         let indent = if indent < 0 {
@@ -11058,8 +11061,18 @@ impl PrintLanguage for PrintC {
         if !emitted_absolute_indent {
             self.emit.tag_line(indent);
         }
-        // cc:598-602: startComment + the opening delimiter. Markup calls are
-        // no-ops for the plain-text emitter; only the delimiter prints.
+        // cc:598: int4 id = emit->startComment(); — NOT a markup-only call:
+        // on the oracle's EmitPrettyPrint (the PrintLanguage emitter,
+        // printlanguage.cc:69) the begin_comment token flips commentmode on
+        // (prettyprint.cc:630-631), so every forced break inside the comment
+        // body (cc:616-617 '\n' -> tagLine()) prints the comment fill after
+        // the new indent (prettyprint.cc:689-693), yielding the canon 23-col
+        // continuation (20-col indent + 3-space fill armed by
+        // setCStyleComments -> setCommentDelimeter, printlanguage.cc:98-110).
+        // For a bare EmitNoMarkup emitter — never the oracle's PrintLanguage
+        // configuration — the trait call is a no-op and the absolute-indent
+        // bytes above already reproduce the lowlevel stream.
+        let comment_id = self.emit.start_comment();
         // cc:601: emit->tagComment(commentstart, comment_color, spc, off);
         self.emit.tag_comment("/* ");
         // cc:603-644: byte token walk over the comment text.
@@ -11120,7 +11133,10 @@ impl PrintLanguage for PrintC {
         }
         // cc:645-646: if (commentend.size() != 0) tagComment(commentend, ...).
         self.emit.tag_comment(" */");
-        // cc:647: stopComment — markup only, no plain-text bytes.
+        // cc:647: emit->stopComment(id); — closes the comment group: the
+        // end_comment token clears commentmode (prettyprint.cc:652-653), so
+        // forced breaks after this comment get no fill.
+        self.emit.stop_comment(comment_id);
     }
 
     // Ghidra: printc.cc:123 PrintC::docAllProto
