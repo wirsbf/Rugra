@@ -3302,3 +3302,48 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
   httpd 镜 412、httpd canon 872、vsh 镜 51 全部不变；defects=0/numbering=0
   五档全零；bank 391/391 MATCH；cargo test --lib 1730P/1F（唯一失败=
   test_nonzeromask_pipeline_wiring，VHOST 在案基线预存）。
+
+### 2026-09-26：MSTRUCT-WHILEDO-LABEL-PRINTC-0001 — 循环构造入口标号补发
+
+**症状**（curl 镜 glob_word 亲证）：`goto code_r0x00004c20;`（×2）与
+`goto code_r0x00004d0e;`（×2）引用的标号在函数内无定义（悬空 goto，gcc
+不可编译形态）；golden 同位在 `while( true )` / `do {` 头**前**打印
+`code_r0x00004c20:` / `code_r0x00004d0e:`。
+
+- **根因（本 session 探针钉死）**：oracle 的
+  `emitAnyLabelStatement(bl)` 调用位于**每个构造发射器自身入口**
+  （emitBlockCopy cc:2762、emitForLoop cc:2965、emitBlockWhileDo cc:3014、
+  emitBlockDoWhile cc:3076、emitBlockInfLoop cc:3104——虚分发 `emit` 的
+  任何路径都会经过）。Rugra 把该调用集中到分发器
+  `emit_block_structured`（对每个块先查后派发），但两条派发路径**绕过**
+  分发器直达构造发射器：①`emit_structured_list`（cc:2795-2812 子块循环）
+  经 `emit_flow_block` 派发 List 子块；②`emit_switch_case_body`
+  （cc:3339-3341 `bl2->emit(this)` 的传输层）直接匹配类型调
+  `emit_structured_whiledo/dowhile/infloop`。glob_word 的 whiledo
+  （0x4c20，顶层 List 子块）与 infloop（0x4d0e，switch case 体）恰好
+  各命中一条绕行路径——构造入口标号检查从未运行（探针
+  RUGRA_DBG_LABELS 亲证：两构造的 self_type 从不出现在
+  emit_any_label_statement 调用记录中，而其前叶 targ=true 已由
+  blockaction.cc:2194 `markUnstructured` 链正确标记——block 侧无缺口）。
+- **修法（oracle 逐位复刻）**：四个循环构造发射器入口、在
+  `pushMod(); unsetMod(no_branch|only_branch)` 之后（oracle 调用序）补
+  `emit_any_label_statement(block_arc)`：`emit_structured_whiledo`
+  （cc:3014）、`emit_structured_dowhile`（cc:3076）、
+  `emit_structured_infloop`（cc:3104）、`emit_for_loop`（cc:2965——签名
+  加 `block_arc` 参数以携带 Arc；旧注释"dispatcher 已覆盖故跳过"的
+  假设被两条绕行路径证伪，已删）。与分发器传输调用（GOTO-LABEL-
+  UNPRINTED-0001 的 Basic/Goto/List/Switch 运输层）经 printed_labels
+  once-guard 幂等：先到先打印，输出位置相同（构造首文本之前）。
+  oracle 的 only_branch 语义同时修复：构造入口调用在 unset 之后运行，
+  即使调用方带 only_branch（emitBlockLs cc:2810 尾块 only_branch 派发）
+  标号也照印——与 oracle 一致。
+- **效果（本 worktree fast-release 亲测，基=master 1414f6e3）**：glob_word
+  两标号与 golden 逐字节同位（`code_r0x00004c20:` 在 `while( true )` 前、
+  `code_r0x00004d0e:` 在 `do {` 前），悬空 goto 清零；curl 镜
+  110→101（glob_word 13→5、glob_set 3→2，其余 72 函数逐函数零变化）；
+  curl canon 269→267；httpd 镜 265、httpd canon 862、vsh 镜 15 全部
+  不变；defects=0/numbering=0 全档；bank 391/391；cargo test --lib
+  1735P/1F（nonzeromask 预存）。glob_word 剩余 5 行：xStack_40 多余
+  声明（F-DECL 族）+2 行语句序差 + `break;` vs `goto code_r0x00004c20;`
+  （switch-case 反向边 goto 类型分类，MSTRUCT-SWITCHGOTO-SELECTGOTO-0001
+  族 block 侧残差，非 printc 域）。

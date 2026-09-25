@@ -5639,7 +5639,7 @@ impl PrintC {
                         // getIterateOp()!=0, dispatch to emitForLoop and return.
                         // The for-loop body + braces are emitted by emit_for_loop,
                         // so we must NOT fall through to the while-body path below.
-                        self.emit_for_loop(while_data, graph, emitted);
+                        self.emit_for_loop(block_arc, while_data, graph, emitted);
                         return;
                     }
                     // cc:3012-3013: pushMod(); unsetMod(no_branch|only_branch) —
@@ -5652,6 +5652,24 @@ impl PrintC {
                     self.push_mod();
                     self.unset_mod(
                         print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+                    // cc:3014: emitAnyLabelStatement(bl) — the label for a
+                    // goto into this loop's header prints HERE, at the
+                    // construct entry (before the `while` keyword line),
+                    // never inside the condition/body: markLabelBumpUp
+                    // (block.cc:3316-3322 "whiledos steal lower blocks
+                    // labels") flagged the condition chain LABEL_BUMPUP, so
+                    // the leaf's own emission point is suppressed and this
+                    // call is the label's only print site
+                    // (MSTRUCT-WHILEDO-LABEL-PRINTC-0001). The call lives in
+                    // the construct emitter — not only in the dispatcher —
+                    // because emit_structured_list (cc:2795-2812 children)
+                    // and emit_switch_case_body (cc:3339-3341) dispatch
+                    // constructs via the type match directly, bypassing
+                    // emit_block_structured; the oracle's virtual emit has
+                    // the same per-construct call on every dispatch path.
+                    // Idempotent with the dispatcher's transport call via
+                    // the printed_labels once-guard.
+                    self.emit_any_label_statement(block_arc);
                     if overflow {
                         // cc:3022: emit->tagLine();
                         self.emit.tag_line(0);
@@ -5808,6 +5826,12 @@ impl PrintC {
                     self.push_mod();
                     self.unset_mod(
                         print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+                    // cc:3076: emitAnyLabelStatement(bl) — construct-entry
+                    // label print site (same per-construct placement as the
+                    // whiledo sibling; see the cc:3014 note). Idempotent
+                    // with the dispatcher's transport call via the
+                    // printed_labels once-guard.
+                    self.emit_any_label_statement(block_arc);
                     self.emit.tag_line(0);
                     // cc:3078: print(KEYWORD_DO) — bare keyword, no trailing
                     // space; the brace emitter supplies " {" (same_line
@@ -5903,6 +5927,14 @@ impl PrintC {
             self.push_mod();
             self.unset_mod(
                 print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+            // cc:3104: emitAnyLabelStatement(bl) — construct-entry label
+            // print site (same per-construct placement as the whiledo
+            // sibling; see the cc:3014 note). Load-bearing for infloops
+            // dispatched as switch case bodies: emit_switch_case_body
+            // (cc:3339-3341) bypasses emit_block_structured, so without
+            // this call the label for a goto into the `do {` header has no
+            // print site (glob_word 0x4d0e).
+            self.emit_any_label_statement(block_arc);
             self.emit.tag_line(0);
             // cc:3106: print(KEYWORD_DO) — bare keyword (same one-space
             // brace contract as emit_structured_dowhile cc:3078).
@@ -14575,6 +14607,7 @@ impl PrintC {
     /// `while(...)` branch instead; we defensively no-op here.
     pub fn emit_for_loop(
         &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         bl: &crate::block::BlockWhileDo,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
@@ -14582,10 +14615,15 @@ impl PrintC {
         // cc:2963-2964: pushMod(); unsetMod(no_branch|only_branch);
         self.push_mod();
         self.unset_mod(print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
-        // cc:2965: emitAnyLabelStatement(bl);
-        // (label emission requires the block Arc; Rugra's WhileDo label path
-        // is handled by emit_block_structured before dispatching here, so we
-        // skip the redundant label emission to avoid double-printing.)
+        // cc:2965: emitAnyLabelStatement(bl) — construct-entry label print
+        // site (same per-construct placement as the whiledo sibling; see
+        // the cc:3014 note). The former skip assumed the dispatcher's
+        // transport call covered the WhileDo, but emit_structured_list
+        // (cc:2795-2812) and emit_switch_case_body (cc:3339-3341) dispatch
+        // constructs directly, bypassing emit_block_structured — the label
+        // for a goto into a for-loop header needs this call. Idempotent
+        // with the dispatcher call via the printed_labels once-guard.
+        self.emit_any_label_statement(block_arc);
         // cc:2966-2967: emitCommentBlockTree(condBlock); emit->tagLine();
         self.emit_comment_block_tree(&bl.condition);
         self.emit.tag_line(0);
