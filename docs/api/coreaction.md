@@ -1,5 +1,40 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-25：castInput 的 CALL/CALLIND 分派臂（CURLWIRE-SIGLOCK-WIRING-0001）
+
+- **缺口**：`cast_input` 的 opcode 分发（原 :5432 区）没有 CPUI_CALL/CALLIND 臂——
+  CALL 落入通用 metain 回退（`input_metatype(CPUI_CALL)=None` → ct 恒 null → 只有
+  markExplicit 路径），被调 callspec 上已装载的 TYPE_LOCKED 参数槽永不驱动实参
+  cast。oracle 链：coreaction.cc:2662 `op->getOpcode()->getInputCast(op,slot,strategy)`
+  虚分派——TypeOpCall（typeop.cc:660）/TypeOpCallind（typeop.cc:738）**均不覆写**
+  `getInputCast`，落基臂 typeop.cc:295-303：reqtype=
+  `op->inputTypeLocal(slot)`（虚分派到 TypeOpCall::getInputLocal typeop.cc:687-718 /
+  TypeOpCallind::getInputLocal typeop.cc:745-773——callspec 的 typelocked 参数
+  slot-1，CALL 侧非 VOID 且 size<=输入，CALLIND 侧仅 VOID 守卫）、curtype=
+  `vn->getHighTypeReadFacing(op)`、`castStandard(req,cur,false,true)`。
+- **新增 `call_input_cast`**（`// Ghidra: typeop.cc:295 TypeOp::getInputCast`）：
+  reqtype 经已移植的 `TypeOpCall::get_input_local`（typeop.rs:2006，callspec 从
+  slot-0 fspec 注解解析）/`TypeOpCallind::get_input_local_in_fd`（typeop.rs:2201，
+  经 `fd.get_call_specs_of_op`）；curtype 链 `vn_high_type_read_facing → v_type →
+  get_base(in_size,Unknown)`（Ghidra 的 getHighTypeReadFacing 不返回 null）；
+  `cast_standard_full(&req,&cur,false,true)`。op 读锁限定在 reqtype 查找内
+  （read-facing 需自取同 op 锁——写者等待时 std RwLock 读读递归无保证）。
+  分发臂在 metain 回退前（CALL|CALLIND → call_input_cast）。
+- **curl 效果**：默认脸 487→**417**（−70 骨架行，defects/numbering 双零）——
+  getparameter 121→53、my_get_line 10→6、main 104→102、hugehelp 6→0（配合驱动侧
+  DAT 标签 1 字节 undefined 类型修正，cast.cc:374 指针→unknown 不 cast 规则恢复）。
+  残差归因：parseconfig +4 = DAT_LAB 族（Rugra 把 `%s%s%s` 符号化为字面量而 canon
+  保持 &DAT，canon 的 `(Configurable*)&DAT` cast 位移到 Rugra 的两个
+  `getparameter(...,(Configurable *)in_RCX)` 位点——臂对给定类型态的行为与 oracle
+  一致，类型态差异先存）。
+- **httpd 效果**：默认脸 **908/0/0 与基线逐函数恒等**（同臂两语料共享；配套
+  examples/httpd_decompile.rs 的 char 元类型 Uint→Int 修正——canon char=INT 元类型，
+  字符串常量 char* 与 libc 锁定参数 char* 相等则 cast.cc:304 无 cast；原 Uint 元
+  类型使 peel 后 INT vs UINT 触发 24+ 位点 `(char *)` 假 cast，+117 行）。
+- 验证：curl/httpd 双跑字节恒等；bank 391/391 MATCH；mirror 门拒绝日志+双跑恒等；
+  gcc 审计 104 OK/20 FAIL 同基线同名集；`cargo test --lib` 1713P/1F（nonzeromask
+  预存）。
+
 ## 2026-09-25：语料名字表清除（EXPEL-CORPUS-TABLES-0001 / AUDIT-CORPUS-MARKERS-GATE-0001）
 
 - **删除** `known_param_count` / `known_param_types` / `is_known_function`

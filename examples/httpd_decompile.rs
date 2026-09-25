@@ -449,7 +449,7 @@ fn build_action_data_symbol_db(
     // `char * ap_get_server_built(void) { return "..."; }`).
     let char_t = Arc::new(Datatype::Base(TypeBase::new_char(
         "char".to_string(),
-        TypeMetatype::Uint,
+        TypeMetatype::Int,
     )));
     let mut string_starts: Vec<u64> = string_table.keys().copied().collect();
     string_starts.sort_unstable();
