@@ -7458,7 +7458,7 @@ impl Rule for RuleHumptyOr {
 /// Faithful to Ghidra's `RuleEqual2Zero` (ruleaction.cc:5857-5924).
 ///
 /// Simplify INT_SLESS applied to 0 or -1. Faithful to `RuleSLess2Zero`
-/// (ruleaction.cc:5711-5840). Forms include:
+/// (ruleaction.cc:5693-5837). Forms include:
 /// - `-1 s< SUB(V,hi) => -1 s< V`
 /// - `SUB(V,hi) s< 0 => V s< 0`
 /// - `-1 s< ~V => V s< 0`
@@ -7472,7 +7472,7 @@ impl RuleSLess2Zero {
     pub fn new() -> Self { Self }
 
     /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
-    /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
+    /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5641-5664).
     // Ghidra: ruleaction.cc:5641 RuleSLess2Zero::getHiBit
     fn get_hi_bit(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -7505,7 +7505,7 @@ impl Rule for RuleSLess2Zero {
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5711-5840).
+        // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5693-5837).
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
             (op.inrefs.get(0).cloned(), op.inrefs.get(1).cloned())
@@ -7661,7 +7661,7 @@ impl Rule for RuleSLess2Zero {
 }
 
 /// Simplify boolean expressions combined through POPCOUNT. Faithful to
-/// `RulePopcountBoolXor` (ruleaction.cc:10265-10321). Transforms:
+/// `RulePopcountBoolXor` (ruleaction.cc:10258-10304). Transforms:
 ///   `popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`
 pub struct RulePopcountBoolXor;
 
@@ -7670,7 +7670,7 @@ impl RulePopcountBoolXor {
     pub fn new() -> Self { Self }
 
     /// Extract the boolean varnode producing a bit at the given position.
-    /// Faithful to `getBooleanResult` (ruleaction.cc:10335-10419).
+    /// Faithful to `getBooleanResult` (ruleaction.cc:10317-10402).
     /// Returns (Some(vn), const_res) if found, or (None, const_res) where
     /// const_res is -1 (not found), 0, or 1 (constant result).
     // Ghidra: ruleaction.cc:10317 RulePopcountBoolXor::getBooleanResult
@@ -8764,7 +8764,7 @@ impl RuleThreeWayCompare {
 
     /// Detect a three-way comparison pattern rooted at `addop`. Returns the
     /// less-than op, or None. Faithful to `detectThreeWay`
-    /// (ruleaction.cc:10035-10124).
+    /// (ruleaction.cc:10017-10106).
     // Ghidra: ruleaction.cc:10017 RuleThreeWayCompare::detectThreeWay
     fn detect_three_way(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -10021,7 +10021,7 @@ impl Rule for RuleSubNormal {
 
 /// Verify that a Varnode is a sign extraction `V s>> (size*8-1)`.
 /// Returns the base Varnode, or None. Faithful to `checkSignExtraction`
-/// (ruleaction.cc:8776-8792).
+/// (ruleaction.cc:8758-8774).
 // Ghidra: ruleaction.cc:8758 RuleSignMod2nOpt::checkSignExtraction
 fn check_sign_extraction(
     out_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -10574,7 +10574,7 @@ impl RuleDivOpt {
     pub fn new() -> Self { Self }
 
     /// Detect the division-by-multiplication form. Faithful to `findForm`
-    /// (ruleaction.cc:8069-8143). Returns (in_vn, n, y128, xsize, ext_opc).
+    /// (ruleaction.cc:8051-8125). Returns (in_vn, n, y128, xsize, ext_opc).
     // Ghidra: ruleaction.cc:8051 RuleDivOpt::findForm
     fn find_form(
         op: &crate::op::PcodeOpRef,
@@ -11124,7 +11124,7 @@ impl RuleSignMod2nOpt2 {
     pub fn new() -> Self { Self }
 
     /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
-    /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
+    /// (ruleaction.cc:8910-8934). Returns the base Varnode V or None.
     // Ghidra: ruleaction.cc:8910 RuleSignMod2nOpt2::checkSignExtForm
     fn check_sign_ext_form(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -11290,12 +11290,12 @@ impl Rule for RuleSignMod2nOpt2 {
 pub struct RuleDivTermAdd;
 
 impl RuleDivTermAdd {
-    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
+    // Ghidra: ruleaction.cc:7830 RuleDivTermAdd
     pub fn new() -> Self { Self }
 
     /// Find SUBPIECE (high) form: SUB(V,c) or SUB(V,c)>>n. Returns
     /// (subpiece_op, total_truncation_bits, shift_opcode). Faithful to
-    /// `findSubshift` (ruleaction.cc:7928-7953).
+    /// `findSubshift` (ruleaction.cc:7910-7935).
     // Ghidra: ruleaction.cc:7910 RuleDivTermAdd::findSubshift
     fn find_subshift(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -11457,7 +11457,7 @@ impl Rule for RuleDivTermAdd {
         Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
+    // Ghidra: ruleaction.cc:7830 RuleDivTermAdd
     fn get_name(&self) -> &str { "divtermadd" }
     // Ghidra: ruleaction.cc:7822 RuleDivTermAdd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
@@ -13847,7 +13847,7 @@ impl PieceNode {
 /// statements.
 ///
 /// Faithful to `RulePieceStructure` (ruleaction.cc:7625-7720) plus helpers
-/// `determineDatatype` (7481-7517), `spanningRange` (7519-7541),
+/// `determineDatatype` (7463-7492), `spanningRange` (7501-7513),
 /// `convertZextToPiece` (7543-7572), `findReplaceZext` (7574-7596),
 /// `separateSymbol` (7598-7611), and the `PieceNode` engine (op.cc:801-876).
 ///
@@ -13867,7 +13867,7 @@ impl RulePieceStructure {
     // Ghidra: ruleaction.cc:7613 RulePieceStructure
     pub fn new() -> Self { Self }
 
-    /// Faithful to `determineDatatype` (ruleaction.cc:7481-7510). Returns the
+    /// Faithful to `determineDatatype` (ruleaction.cc:7463-7492). Returns the
     /// structured (struct/array/union) data-type the varnode is part of, plus
     /// the base offset. Uses `getStructuredType` and, for the partial case,
     /// resolves the byte offset via `SymbolEntry` then walks `getSubType`.
@@ -13914,7 +13914,7 @@ impl RulePieceStructure {
         }
     }
 
-    /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
+    /// Faithful to `spanningRange` (ruleaction.cc:7501-7513). True unless the
     /// range falls within a single non-structured element.
     // Ghidra: ruleaction.cc:7501 RulePieceStructure::spanningRange
     fn spanning_range(
@@ -16122,7 +16122,7 @@ fn find_contiguous_whole(
 /// Search for concatenations with unlikely things to inform return/parameter
 /// consumption calculation.
 ///
-/// Faithful to `RulePiecePathology` (ruleaction.cc:10578-10616) plus helpers
+/// Faithful to `RulePiecePathology` (ruleaction.cc:10560-10594) plus helpers
 /// `isPathology` (ruleaction.cc:10427-10505) and `tracePathologyForward`
 /// (ruleaction.cc:10506-10570).
 ///
@@ -16409,7 +16409,7 @@ impl Rule for RulePiecePathology {
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
+        // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10560-10594).
         use crate::op::pcodeop_flags;
         let (vn, lsb_vn) = {
             let op = op_arc.read().unwrap();
@@ -16497,8 +16497,8 @@ impl Rule for RulePiecePathology {
 /// Simplify various conditional move situations.
 ///
 /// Faithful to `RuleConditionalMove` (ruleaction.cc:9390-9558) plus helpers
-/// `checkBoolean` (9277-9303), `gatherExpression` (9305-9344),
-/// `constructBool` (9346-9381).
+/// `checkBoolean` (9259-9276), `gatherExpression` (9287-9316),
+/// `constructBool` (9328-9341).
 ///
 /// NOTE: This rule is fundamentally block/control-flow driven. The block
 /// in-edge analysis (find the common root block ending in a CBRANCH), the
@@ -16517,7 +16517,7 @@ impl RuleConditionalMove {
     // Ghidra: ruleaction.cc:9361 RuleConditionalMove
     pub fn new() -> Self { Self }
 
-    /// Faithful to `checkBoolean` (ruleaction.cc:9277-9303). Given a MULTIEQUAL
+    /// Faithful to `checkBoolean` (ruleaction.cc:9259-9276). Given a MULTIEQUAL
     /// input, return its boolean root if it is a boolean value (bool-output op
     /// or a COPY of a 0/1 constant), else None.
     // Ghidra: ruleaction.cc:9259 RuleConditionalMove::checkBoolean
@@ -16541,7 +16541,7 @@ impl RuleConditionalMove {
         None
     }
 
-    /// Faithful to `gatherExpression` (ruleaction.cc:9305-9334). Collects the
+    /// Faithful to `gatherExpression` (ruleaction.cc:9287-9316). Collects the
     /// set of PcodeOps (in `branch`) that define `vn` and would need to be
     /// duplicated to propagate the expression out of the branch.
     ///
@@ -16623,7 +16623,7 @@ impl RuleConditionalMove {
         true
     }
 
-    /// Faithful to `constructBool` (ruleaction.cc:9346-9381). Returns the
+    /// Faithful to `constructBool` (ruleaction.cc:9328-9341). Returns the
     /// Varnode representing the (possibly reproduced) boolean expression.
     ///
     /// Ghidra uses `CloneBlockOps::cloneExpression` to duplicate the `ops` set
@@ -16903,7 +16903,7 @@ impl Rule for RuleConditionalMove {
 ///
 /// Faithful to `RuleIgnoreNan` (ruleaction.cc:9740-9787) plus helpers
 /// `checkBackForCompare` (9622-9662), `isAnotherNan` (9664-9694),
-/// `testForComparison` (9696-9738).
+/// `testForComparison` (9678-9720).
 ///
 /// The `nan_ignore_all` short-circuit (treat NaN as always false) is
 /// implemented via `get_arch()`. When `nan_ignore_all` is false, the deeper
@@ -17031,7 +17031,7 @@ impl RuleIgnoreNan {
         opc == OpCode::CPUI_FLOAT_NAN
     }
 
-    /// Faithful to `RuleIgnoreNan::testForComparison` (ruleaction.cc:9696-9738).
+    /// Faithful to `RuleIgnoreNan::testForComparison` (ruleaction.cc:9678-9720).
     ///
     /// The NaN output reaches `op` through input `slot`. If `op` combines it
     /// (BOOL_OR/BOOL_AND/INT_EQUAL/INT_NOTEQUAL) with a floating-point
@@ -18996,7 +18996,7 @@ impl<'a> AddTreeState<'a> {
             .unwrap_or(1)
     }
 
-    /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
+    /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6356-6384).
     // Ghidra: ruleaction.cc:6356 AddTreeState::buildMultiples
     fn build_multiples(
         &mut self,
@@ -19047,7 +19047,7 @@ impl<'a> AddTreeState<'a> {
         res_node
     }
 
-    /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
+    /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6390-6418).
     // Ghidra: ruleaction.cc:6390 AddTreeState::buildExtra
     fn build_extra(
         &mut self,
