@@ -1529,7 +1529,12 @@ the ports follow the real current signatures:
 - `emit_prototype_inputs(FuncProto)` — printc.cc:2222 `emitPrototypeInputs`
   （PRINTC-FORMAT-0001：参数逗号按 `PrintC::comma` spacing=0（printc.cc:57）
   裸打印；参数名 join 按 type OpTokens（printc.cc:73-77）——尾部 `*` 类型
-  `char *pattern`、基类型 `int argc`）
+  `char *pattern`、基类型 `int argc`；PRINTC-BADJT-PARAMSYM-0001：每个
+  参数先查 backing Symbol——`param_backing_symbol(i)` 投影
+  `ProtoStoreSymbol::getInput` 的 `getCategorySymbol(function_parameter,i)`
+  现读（fspec.cc:3244-3255），命中走 `emit_local_symbol_decl`（=
+  `emitVarDecl(sym)`，印**符号 dtype + 符号 displayName**，改名穿透），
+  未命中保留 proto 类型+proto 名的 else 形态）
 - `doc_type_definitions(TypeFactory)` — printc.cc:2401 `docTypeDefinitions(const TypeFactory*)`
 - `emit_type_definition(Datatype)` — printc.cc:2369 `emitTypeDefinition`
 - `emit_struct_definition(TypeStruct)` — printc.cc:2120 `emitStructDefinition`
@@ -1541,20 +1546,27 @@ the ports follow the real current signatures:
 Helper ports (text-faithful render path; the Atom/OpToken expression-stack
 model is not present in Rugra's print layer):
 - `build_type_stack` — printc.cc:143 `buildTypeStack`（匿名 PTR/ARRAY/CODE
-  下钻至命名 base；无 proto 的 CODE 层以合成 `void` 替代
-  `glb->types->getTypeVoid()`，见函数内 DIVERGENCE 注记）
+  下钻至命名 base；PRINTC-BADJT-PARAMSYM-0001：无 proto 的匿名 CODE 层
+  在此 break 为 base——oracle `findNoName`（type.cc:3454-3476）把
+  `getTypeCode()` 的匿名 TypeCode 折叠到 spec coretype `code`
+  （sleigh_arch.cc buildCoreTypes），故 oracle 代码指针的栈形是
+  `[Ptr, Code("code")]` 命名 break，`void (*x)` 从不出现；Rugra 的
+  匿名无 proto Code 是同一对象的工厂别名，在此做同一折叠）
 - `type_stack_for` — RUGRA-GLUE 借用适配器（Arc 入栈/出栈配对）
 - `push_type_start_opt` — printc.cc:264 `pushTypeStart`（签名
   `Option<&Arc<Datatype>>`，buildTypeStack 型栈渲染；匿名 base 走
-  `generic_type_name`；单层栈按 cc:275-278 仅由 `noident` 决定
-  type_expr_space/nospace — 命名单层指针 `char *` 因此渲染 `char * x`，
-  oracle named_ptr_contrast 锁定；原 `emit_type_prefix` 组合名捷径与
-  `datatype_name_ends_with_star` 连接启发式已移除）
+  `generic_type_name`，唯匿名无 proto CODE base 拼 `code`（coretype
+  折叠的拼写面，`code *UNRECOVERED_JUMPTABLE`）；单层栈按 cc:275-278
+  仅由 `noident` 决定 type_expr_space/nospace — 命名单层指针 `char *`
+  因此渲染 `char * x`，oracle named_ptr_contrast 锁定；原
+  `emit_type_prefix` 组合名捷径与 `datatype_name_ends_with_star`
+  连接启发式已移除）
 - `decl_prefix_ends_with_star` — RUGRA-GLUE 连接判定（多层栈 = 空白已由
   type_expr_space 发射；单层栈 = 需补一个空白）
 - `push_type_end_opt` — printc.cc:313 `pushTypeEnd`（含 PTR-under-ARRAY/CODE
-  的括号闭合 + `[N]`/`(params)` 后缀走；无 proto 匿名 CODE 的
-  上游死循环见函数内 DIVERGENCE 注记）
+  的括号闭合 + `[N]`/`(params)` 后缀走；无 proto CODE 层现恒为栈 base
+  （build_type_stack 折叠），按 oracle 命名 break 语义不发后缀——
+  旧 `"()"` DIVERGENCE 臂随之不可达）
 - `push_prototype_inputs` — printc.cc:169 `pushPrototypeInputs`（类型表达式
   内的参数表；与顶层 `emit_prototype_inputs` printc.cc:2222 相对）
 - `debug_render_type_decl` / `debug_render_type_start_only` —
@@ -3056,3 +3068,46 @@ canon 锚定语句位**（9 块的 next-stmt 文本带预存语料残差——`p
 cast 与 `my_get_token::save` 限定名，默认脸同位同文，非本改动引入）；
 skeleton **577→520（−57）**、defects=0、numbering=0；投影 bank 391/391；
 双跑 cmp 恒等。
+
+## 2026-09-25（Lane BADJT）：PRINTC-BADJT-PARAMSYM-0001 —— 参数 backing-Symbol 渲染通道 + 匿名 code base 折叠
+
+**根因**（UNREFFIX 双侧 fixture `tests/oracle/namevars_badjumptable_1204` 亲证）：
+bad-jump-table 改名链（truncate→旗标→`lookForBadJumpTables` 改名
+`UNRECOVERED_JUMPTABLE`）全活、双侧 ScopeLocal 存储键一致，断点在渲染层不读
+改名后的后端符号。oracle 签名经 printc.cc:2222-2250 `emitPrototypeInputs` 的
+`param->getSymbol()`→`emitVarDecl(sym)` 印**符号 dtype+符号 displayName**；
+调用点经 `pushVnExplicit`→`pushSymbolDetail`（printlanguage.cc:218-262）的
+whole-map `pushSymbol` 印符号 displayName。Rugra 两处印 proto 自带名/类型。
+
+**四处改动**（判定序照 oracle）：
+
+1. `param_backing_symbol(slot)` / `param_backing_symbol_for_vn(vn)`（新，
+   RUGRA-GLUE）：print 侧投影 `ProtoStoreSymbol::getInput` 的
+   `getCategorySymbol(function_parameter,i)` 现读（fspec.cc:3244-3255）。
+   `emit_prototype_inputs` 命中走 `emit_local_symbol_decl`（emitVarDecl）；
+   未命中保留 else 形态（proto 类型+名）。
+2. `get_varnode_display_name_inner` P0.4 前插 category 门符号优先（**P0.4
+   保留**为无符号/未同步流的回退）：Register INPUT 的 function_parameter
+   category 符号（storage 全覆盖、非动态）先于 proto 名——category 门天然
+   排除 linkSymbol 桥的 `in_register_` 未同步自动名（no_category 造物），
+   P0.4 的补偿语义不受影响。
+3. `build_type_stack`/`push_type_start_opt`/`push_type_end_opt`/
+   `cast_type_string`：匿名无 proto CODE 层折叠为命名 base `code`——
+   oracle `findNoName`（type.cc:3454-3476）把 `getTypeCode()` 折到 spec
+   coretype `code`，代码指针栈形 `[Ptr, Code("code")]` 命名 break；
+   `void (*x)()`/`(BADTYPE *)` 旧形态换成 `code *x`/`(code *)`。旧
+   pushTypeEnd `"()"` DIVERGENCE 臂不可达化。
+4. `op_callind` 直发/内联/RPN 三处的 `(code *)` cast transport 按
+   `castStandard` 恒等判定门控（cast.cc:303）：target 读面类型已是代码
+   指针（Pointer→无 proto Code）→ 印 `(*sym)(...)` 无 cast；其余
+   （GOT-slot、LOAD 链）保留 `(*(code *)...)`。
+
+**验证**（oracle=12.0.4 e40ed130）：ap_vhost_iterate_given_conn 签名位 2 +
+两调用点 == canon（ghidra_httpd_1204.c:4914/:4927/:4934）与 direct-runner
+（:4781 起）双 golden——函数块逐字节（除预存 Oppen 行尾空白 2 行）；
+httpd **949→940**（−9 全为 `void (*pVarN)()`→`code *pVarN` 声明族 +
+`(BADTYPE *)`→`(code *)` + UNRECOVERED 三点，canon 同形收敛）、
+defects=0、numbering=0；curl **577/0/0**（`(BADTYPE *)` 双重 cast 1 行
+转 canon 精确形，skeleton 不动）；bank 391/391；双跑 cmp 恒等；
+cargo test --lib 1713 通过 + 1 预存 master 失败
+（fspec::test_nonzeromask_pipeline_wiring，master 上同败，非本改动）。
