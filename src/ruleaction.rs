@@ -12792,11 +12792,9 @@ impl Rule for RuleAddUnsigned {
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SUB);
         let cvn = fd.new_constant(size, negated_val);
         // Ghidra: cvn->copySymbol(constvn); propagate the constant's symbol/type
-        // + lock flags into the new constant (ruleaction.cc:7211).
-        {
-            let cvn_lock = constvn.read().unwrap();
-            cvn.write().unwrap().copy_symbol(&cvn_lock);
-        }
+        // + lock flags AND high bookkeeping (typeDirty/setSymbol, cc:500-504)
+        // into the new constant (ruleaction.cc:7211 → varnode.cc:493-505).
+        crate::varnode::Varnode::copy_symbol_arc(&cvn, &constvn.read().unwrap());
         fd.op_set_input(&op_ref, cvn, 1);
         Ok(action_status::CHANGE)
     }

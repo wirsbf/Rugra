@@ -1356,7 +1356,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - RulePtrsubCharConstant: push_const_further 加 outtype 参数 + update_type（cc:7351）
 - RuleExpandLoad: modify_and_comparison 加 dt 参数 + update_type ×2（cc:10915）
 - RuleExpandLoad apply: new_out update_type（cc:10994）
-- RuleAddUnsigned: copy_symbol（cc:7211）
+- RuleAddUnsigned: copy_symbol（cc:7211）——2026-09-26（RASWEEP 车道，RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001，取材 wt/globvars 1a04cbec）升级为 copy_symbol_arc 完整移植：含 varnode.cc:500-504 high 记账（typeDirty/setSymbol(this)），原字段半拷贝在 cvn 已挂 HighVariable 时漏掉 high 侧同步
 - RulePullsubIndirect: indirect-creation 分支完整移植 new_indirect_creation（cc:998-1002）
 - RuleIndirectCollapse: STORE guard 完整移植 get_store_guard + is_guarded（cc:3223-3236）
 - RuleSwitchSingle: 完整 applyOp（find_jump_table + jt 判断 + BRANCH 改写 + remove_jump_table + structure clear，cc:5430-5477）
