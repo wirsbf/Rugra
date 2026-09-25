@@ -3676,3 +3676,9 @@ RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲
 - 本模块 9 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+## 2026-09-26：try_resolution_adjustment build_resolve 工厂写 guard（UNIONRESOLVE-PKG-G-0001 调用点 ripple，Lane PKGG）
+`build_resolve` 闭包（cc:2447-2457 臂，`ResolvedUnion::with_field` 调用点）
+由工厂**读** guard 改为**写** guard：`with_field` 签名随本票改为
+`&mut TypeFactory`，指针臂执行 oracle unionresolve.cc:54 的
+`typegrp.getTypePointer` interning（type.cc:3867）。本文件仅此一处
+guard 翻转，无其他逻辑变化；调用方不持工厂 guard，无重入面。

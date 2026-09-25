@@ -2948,3 +2948,19 @@ oracle drill（mapglobals_drill_1204，锁定 e40ed130 git-archive +
 - 本模块 24 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+## 2026-09-26：force_facing_type / apply_union_facet 工厂写 guard（UNIONRESOLVE-PKG-G-0001，Lane PKGG）
+`force_facing_type`（funcdata.cc:974）与 `apply_union_facet`
+（funcdata_varnode.cc:1637）构造 `ResolvedUnion` 时原持 `arch.types` 的
+**读** guard，`with_field` 因此无法执行 oracle cc:51-55 的
+`typegrp.getTypePointer` 工厂 interning，指针臂退化为结构化
+`Arc::new(Datatype::Pointer(..))` 非规范 Arc——cast.cc:303
+`castStandard` 的 `curtype == reqtype` 指针恒等短路与 `Arc::ptr_eq`
+恒等比较族对 with_field 铸造的指针永不命中。两处（连同
+unionresolve.rs `resolve_in_flow` Array/Struct 臂与 coreaction.rs
+`try_resolution_adjustment` 的 `build_resolve` 调用点 ripple）统一改为
+**写** guard，指针臂经 `TypeFactory::get_type_pointer`
+（type.cc:3867 findAdd 规范化 + pointee 一步 getStripped）取回
+工厂规范 Arc。锁纪律与 union 臂 ScoreUnionFields 的既有 interning
+（getTypePointerStripArray/downChain/getTypePointer）一致；调用方
+（castInput/cc:2714 与 castOutput/cc:2571 族）均不持工厂 guard，
+无重入死锁面。

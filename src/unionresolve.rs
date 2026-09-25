@@ -17,14 +17,19 @@
 //! [`score_trial_up`](ScoreUnionFields::score_trial_up) are 1:1 with
 //! unionresolve.cc:305-833.
 //!
-//! NOTE (wiring gap, UNIONRESOLVE-PIPELINE-WIRING-0001): no pipeline
-//! producer invokes this scorer yet. The oracle entry points are
+//! Pipeline producers (wired 2026-09-23, UNIONRESOLVE-PIPELINE-WIRING-0001):
+//! four call sites populate `Funcdata::union_map` via `setUnionField`, all
+//! routing through `resolve_in_flow` below — `ActionSetCasts::resolveUnion`
+//! (coreaction.cc:2499 → coreaction.rs `resolve_union`), `castOutput`
+//! (coreaction.cc:2556 → coreaction.rs), the typeprop driver
+//! (coreaction.cc:5083 → coreaction.rs), and `RulePieceStructure`
+//! (ruleaction.cc:7678 → ruleaction.rs). The oracle entry points
 //! `TypePointer::resolveInFlow`/`TypeUnion::resolveInFlow` (type.cc:1177 /
-//! type.cc:2125) called from the read-facing paths
-//! (`ActionSetCasts::resolveUnion` coreaction.cc:2499, `castOutput`
-//! coreaction.cc:2556, the typeprop driver coreaction.cc:5083, and
-//! `RulePtrsubUndo` ruleaction.cc:7678), which populate
-//! `Funcdata::union_map` via `setUnionField`.
+//! type.cc:2125) are mirrored as the fd-aware free functions in the
+//! "Pipeline wiring" section below; `varnode.rs` keeps the degenerate
+//! map-miss forms of varnode.cc:626-672 (EJ2 write-domain lease), with the
+//! fd-aware twins `vn_type_read_facing`/`vn_type_def_facing`/
+//! `vn_high_type_read_facing`/`vn_high_type_def_facing` living here.
 //!
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/unionresolve.{hh,cc}.
@@ -71,16 +76,15 @@ impl ResolvedUnion {
     /// `ResolvedUnion::ResolvedUnion(Datatype *parent,int4 fldNum,
     /// TypeFactory &typegrp)` (unionresolve.hh:47), including the cc:43-44
     /// PARTIALUNION unwrap and the cc:51-55 pointer-parent arm (resolve is a
-    /// POINTER to the field, sized by the parent pointer).
-    ///
-    /// Ghidra interns the pointer through `typegrp.getTypePointer`; Rugra's
-    /// `with_field` only receives `&TypeFactory` (funcdata.rs
-    /// force_facing_type holds a read guard), so the pointer is constructed
-    /// structurally. Canonical interning lands with the pipeline wiring
-    /// (UNIONRESOLVE-PIPELINE-WIRING-0001); the structure/field_num are
-    /// already faithful.
-    pub fn with_field(parent: Arc<Datatype>, fld_num: i32, typegrp: &TypeFactory) -> Self {
-        let _ = typegrp;
+    /// POINTER to the field, sized by the parent pointer). The pointer is
+    /// interned through [`TypeFactory::get_type_pointer`] (type.cc:3867
+    /// `findAdd` canonicalization + one `getStripped` step on the pointee),
+    /// so the resolve Arc is factory-owned exactly as Ghidra's returned
+    /// `Datatype*` is: downstream `Arc::ptr_eq` identity comparisons —
+    /// cast.cc:303-304 `castStandard`'s `curtype == reqtype` no-cast
+    /// short-circuit and the facing/lock identity family — hit against
+    /// pointers minted by any other `get_type_pointer` call site.
+    pub fn with_field(parent: Arc<Datatype>, fld_num: i32, typegrp: &mut TypeFactory) -> Self {
         // cc:43-44: a partial-union parent resolves within its container.
         let unwrapped;
         let parent = match parent.as_ref() {
@@ -99,13 +103,7 @@ impl ResolvedUnion {
                 // typegrp.getTypePointer(parent.size, field, wordSize).
                 Datatype::Pointer(pointer) => {
                     let field = get_depend(pointer.ptr_to.as_ref(), fld_num as usize);
-                    Arc::new(Datatype::Pointer(
-                        crate::type_system::datatype::TypePointer::new(
-                            parent.get_size(),
-                            field,
-                            pointer.wordsize,
-                        ),
-                    ))
+                    typegrp.get_type_pointer(parent.get_size(), field, pointer.wordsize)
                 }
                 _ => get_depend(parent.as_ref(), fld_num as usize),
             }
@@ -1624,8 +1622,12 @@ pub fn resolve_in_flow(
                 slot,
             );
             let comp_fill = {
-                let tg = typegrp_arc.read().unwrap();
-                ResolvedUnion::with_field(ct.clone(), field_num, &tg)
+                // cc:1293 ResolvedUnion(this,fieldNum,*types): the factory
+                // interns the pointer arm (unionresolve.cc:54), so this is a
+                // write guard — same lock discipline as the union arms'
+                // ScoreUnionFields interning (cc:1185).
+                let mut tg = typegrp_arc.write().unwrap();
+                ResolvedUnion::with_field(ct.clone(), field_num, &mut tg)
             };
             fd.set_union_field(ct.as_ref(), op, slot, comp_fill.clone());
             comp_fill.get_datatype().clone()
@@ -2363,9 +2365,10 @@ mod tests {
         }));
         let parent = Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
             8, union_dt, 1)));
-        let factory = TypeFactory::new(8);
+        let mut factory = TypeFactory::new(8);
+        factory.set_default_alignment_map();
         // cc:51-55: pointer parent resolves to a POINTER to the field.
-        let r = ResolvedUnion::with_field(parent.clone(), 0, &factory);
+        let r = ResolvedUnion::with_field(parent.clone(), 0, &mut factory);
         assert_eq!(r.get_field_num(), 0);
         let resolve = r.get_datatype();
         assert!(matches!(resolve.as_ref(), Datatype::Pointer(_)));
@@ -2375,9 +2378,18 @@ mod tests {
             _ => unreachable!(),
         }
         // fldNum < 0 resolves to the parent itself (cc:48-49).
-        let r_self = ResolvedUnion::with_field(parent.clone(), -1, &factory);
+        let r_self = ResolvedUnion::with_field(parent.clone(), -1, &mut factory);
         assert_eq!(r_self.get_field_num(), -1);
         assert!(Arc::ptr_eq(r_self.get_datatype(), &parent));
+        // UNIONRESOLVE-PKG-G-0001: the pointer arm interns through the
+        // factory (cc:54 typegrp.getTypePointer) — a second mint of the same
+        // (size, field, wordsize) pointer returns the identical Arc, which
+        // is what cast.cc:303's `curtype == reqtype` short-circuit rides on.
+        let again = factory.get_type_pointer(8, set_struct.clone(), 1);
+        assert!(
+            Arc::ptr_eq(r.get_datatype(), &again),
+            "with_field pointer arm must be factory-interned"
+        );
     }
 
     #[test]
@@ -2393,9 +2405,9 @@ mod tests {
         let union_dt = union_field;
         let pu = Arc::new(Datatype::PartialUnion(
             crate::type_system::datatype::TypePartialUnion::new(union_dt.clone(), 0, 4, None)));
-        let factory = TypeFactory::new(8);
+        let mut factory = TypeFactory::new(8);
         // cc:43-44: the partial-union parent resolves within the container.
-        let r = ResolvedUnion::with_field(pu, 0, &factory);
+        let r = ResolvedUnion::with_field(pu, 0, &mut factory);
         assert!(Arc::ptr_eq(r.get_base(), &union_dt));
         assert!(Arc::ptr_eq(r.get_datatype(), &int_t));
     }

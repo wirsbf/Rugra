@@ -508,3 +508,13 @@ PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+### 2026-09-26：TypePartialUnion 方法形 resolve_in_flow/find_resolve 删除（UNIONRESOLVE-PKG-G-0001）
+`TypePartialUnion::resolve_in_flow(_op,_slot)` 与
+`TypePartialUnion::find_resolve(_op,_slot)`（原 type.cc:2498/2517 的
+方法形镜像）已删除：零生产/测试调用方；且为无 Funcdata union-field
+缓存的退化实现（oracle type.cc:2505 走 `resolveTruncation`、:2524 走
+`findResolve` 缓存），与 unionresolve.rs 的 fd-aware 自由函数
+`resolve_in_flow` / `find_resolve` / `union_resolve_truncation` 重名，
+构成误用陷阱。基类 `Datatype::find_resolve`（type.cc:586，return
+self）保留不变。PartialUnion 的流内解析一律走 unionresolve.rs 自由
+函数。
