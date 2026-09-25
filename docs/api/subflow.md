@@ -1,5 +1,38 @@
 # `subflow.rs` API Reference
 
+## 2026-09-26：UNIONRESOLVE-PKG-E-0001 — 10 处 union facing 退化调用换 fd-aware 孪生
+
+`SplitDatatype`/`RootPointer`/`RuleSplit*` 的 10 处 union facing 读取（原退化形
+`Varnode::get_type_read_facing_op`/`get_type_read_facing`/`get_type_def_facing`
+恒走 map-miss 臂）换为 fd-aware 孪生
+（`crate::unionresolve::vn_type_read_facing`/`vn_type_def_facing`，
+unionresolve.rs:1898-1970，consult `fd.union_map`）。oracle 的
+`TypeUnion::findResolve` 从 `op->getParent()->getFuncdata()`（type.cc:2138）取
+包含函数并 consult `fd->getUnionField`；Rugra 的 `PcodeOp` 无反向指针，故
+`Funcdata` 通道显式穿参。签名变化：
+
+- `RootPointer::back_up_pointer(fd, implied_base)`（cc:2118 consult
+  `tmpPointer->getTypeReadFacing(addOp)`，slot 0）
+- `RootPointer::find(fd, op, value_type)`（cc:2157 consult
+  `pointer->getTypeReadFacing(op)`，slot 1；两处 `back_up_pointer` 跳同传 fd）
+- `SplitDatatype::get_value_datatype(fd, load_store, size, types)`（cc:2914
+  consult `loadStore->getIn(1)->getTypeReadFacing(loadStore)`，slot 1；三调用方
+  `split_store`/`RuleSplitLoad::apply_op`/`RuleSplitStore::apply_op` 同步）
+- `split_copy` 内联双读（cc:2950/2951 键：COPY op slot 0 / def-facing）——oracle
+  在 `RuleSplitCopy::applyOp` 读取后作参数传入，Rugra 保留内联重读（两次读之间
+  `test_copy_constraints` 不写 union_map，语义等价）
+- `split_load`（cc:2772 `outVn->getTypeDefFacing()`，def-facing）
+- `split_store` 双读（cc:2822/2828 `inVn->getTypeReadFacing(storeOp)`，slot 2，
+  含去 LOAD 重试臂）
+- `RuleSplitCopy::apply_op` metatype 门双读（cc:2950/2951，同键）
+
+slot 键逐处对照 oracle 实参（`op->getSlot(this)` 推导）：2118→0（addOp in(0)）、
+2157→1（LOAD/STORE in(1)）、2822/2828→2（STORE in(2)）、2914→1、2950→0。
+行为变化面：规则期 union_map 仅 typeprop 填充；map-miss 臂对 union/ptr-to-union
+返回 `this`（与退化形同），但 size-1 数组→元素、单字段满幅 struct→field[0]、
+partial-union→stripped（type.cc:1298/1944/2517 虚分派），与退化形的 `this`
+不同——这正是 oracle 行为。差分验收见车道终报。
+
 ## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
 
 剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
@@ -157,7 +190,7 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 ### cleanup pool split 族 Rule (coreaction.cc:5706-5708)
 - `RuleSplitCopy` / `RuleSplitLoad` / `RuleSplitStore` (2941/2964/2985) + `SplitDatatype`
 - `SplitDatatype::new` — 从 Architecture 读取 `split_datatype_config` 与工厂 (subflow.cc:2701-2709)
-- `SplitDatatype::get_value_datatype(op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938)
+- `SplitDatatype::get_value_datatype(fd, op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938);fd 通道=cc:2914 read-facing consult（2026-09-26 UNIONRESOLVE-PKG-E-0001）
 - `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
 - `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
 - `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)。`split_copy` 按 cc:2730-2744 分派到四个 builder:
@@ -170,7 +203,7 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
   非 addr-tied 时全部分片 `setProtoPartial`, 大端/小端各自 most→least significant 建 PIECE 栈,
   中间输出 `newVarnodeOut` 于分片地址、非 addr-tied 时 `setProtoPartial`, 末位 PIECE
   `setPartialRoot` 且输出绑回 root, 非 addr-tied 时向 `Merge` `registerProtoPartialRoot(root)`)。
-- `RootPointer::find` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203)
+- `RootPointer::find(fd, op, value_type)` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer(fd, implied_base)`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203);fd 通道=cc:2118/2157 read-facing consult（2026-09-26 UNIONRESOLVE-PKG-E-0001）
 - `test_copy_constraints` — COPY 约束（函数输入/同地址 addrTied/LOAD 单读者）(subflow.cc:2370-2384)
 - 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` / `load_store_space` — arithmetic sanity / LOAD·STORE 空间常量解码 (subflow.cc:2673-2696, typeop.hh:140, varnode.hh:426)
 
