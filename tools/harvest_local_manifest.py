@@ -24,6 +24,7 @@ Usage (C4 DWARF-struct mode):
   harvest_local_manifest.py --struct BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json
 Usage (V3 callee-siglock mode):
   harvest_local_manifest.py --callee GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--targets main,ap_fini]
+                                               [--dwarf-types BINARY]
 """
 import hashlib
 import json
@@ -61,7 +62,10 @@ KNOWN_BASES = {
 
 
 def base_of(type_expr):
-    return type_expr.split("[")[0].rstrip("*").strip()
+    # strip ALL stars (multi-pointer spellings normalize as `char * *` —
+    # rstrip("*") leaves the inner star and the servable-base gate then
+    # misrejects `char **` evidence; CURLPREP double-pointer casts)
+    return " ".join(type_expr.split("[")[0].replace("*", " ").split())
 
 
 def parse_type_expr(type_text, stars, arr):
@@ -292,7 +296,7 @@ CALLEE_CALL = re.compile(
     r"(?P<callee>[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 # Simple value casts on arguments: (int)x, (int)x, (char *)x, (long *)x ...
-CALLEE_ARG_CAST = re.compile(r"^\(\s*(?P<t>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<ptr>\*?)\s*\)\s*")
+CALLEE_ARG_CAST = re.compile(r"^\(\s*(?P<t>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<ptr>\*+)\s*\)\s*")
 IDENT_EXPR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NUMERIC = re.compile(r"^(?:0x[0-9a-fA-F]+|\d+)$")
 
@@ -317,7 +321,11 @@ def _elem_type(spelling):
 
 
 def _ptr_type(spelling):
-    return _norm_type(spelling) + " *"
+    # append one star INSIDE the normalization: `_norm_type(sp) + " *"`
+    # would emit `char * *` for a pointer input, whose base_of() misparse
+    # (`char *`) then fails the servable-base gate (CURLPREP: &::global
+    # member evidence feeds pointer-typed spellings here)
+    return _norm_type(spelling + "*")
 
 
 def _pointee_type(spelling):
@@ -368,6 +376,19 @@ def _parse_signature_params(sig_line):
     return params
 
 
+# Curl-corpus extension (CURLPREP lane): the V3 evidence domain grows two
+# corpus-conditioned surfaces when --dwarf-types BINARY is given. Default
+# (httpd form): _SERVABLE_BASES == KNOWN_BASES, empty global table — the
+# original behavior, byte-for-byte.
+_SERVABLE_BASES = set(KNOWN_BASES)
+# canon-global spelling table: "::config" / "&::config.useragent" arg forms
+# -> DWARF-derived type spellings (globals + struct member chains).
+_DWARF_GLOBALS = {}
+# the corpus's DWARF-named composite/typedef set (CURLPREP --dwarf-types
+# extension; stays empty in the default httpd form).
+_dwarf_named_types = set()
+
+
 def _arg_evidence(arg, decls):
     """(spelling|None) — the canon call-site param type this arg exhibits."""
     arg = arg.strip()
@@ -378,11 +399,29 @@ def _arg_evidence(arg, decls):
     cast = CALLEE_ARG_CAST.match(arg)
     if cast is not None:
         base = cast.group("t")
-        if base not in KNOWN_BASES:
+        if base not in _SERVABLE_BASES:
             return None
         if cast.group("ptr"):
-            return _ptr_type(base)
+            # preserve the FULL star count: `(char **)x` is char**, not
+            # _ptr_type(base)'s single star
+            return _norm_type(base + " " + cast.group("ptr"))
         return base
+    # ::global / ::global.field / &-prefixed forms (curl canon: GetStr's
+    # `&::config.useragent`, fopen's `::config.outfile`): spelling from the
+    # DWARF global/member table; the empty table (httpd default) never hits.
+    m = re.match(r"^&(::[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$", arg)
+    if m is not None:
+        spelled = _DWARF_GLOBALS.get(m.group(1))
+        return _ptr_type(spelled) if spelled else None
+    m = re.match(r"^(::[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$", arg)
+    if m is not None:
+        spelled = _DWARF_GLOBALS.get(m.group(1))
+        if spelled is None:
+            return None
+        spelling = _norm_type(spelled)
+        if "[" in spelling:
+            return _elem_type(spelling) + " *"
+        return spelling
     # ident[k] element access
     m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*\d+\s*\]$", arg)
     if m is not None and m.group(1) in decls:
@@ -408,6 +447,120 @@ def _arg_evidence(arg, decls):
     if m is not None and m.group(1) in decls:
         return _pointee_type(decls[m.group(1)])
     return None
+
+
+def _type_spell_dwarf(unit, tattr, named, depth=0):
+    """DW_AT_type -> spelling in the extended servable domain: KNOWN_BASES
+    bases, pointers, arrays, and DWARF-named composites/typedefs (the
+    corpus's parse_type_names tree — FILE/Configurable/... resolve there,
+    which is exactly the surface the curl driver's parse_c_type uses)."""
+    if depth > 12 or tattr is None:
+        return None
+    tdir = unit.get_DIE_from_refaddr(_ref_abs(unit, tattr))
+    if tdir is None:
+        return None
+    if tdir.tag == "DW_TAG_base_type":
+        name = _attr_str(_die_attr(tdir, "DW_AT_name")) or ""
+        return name if name in KNOWN_BASES else None
+    if tdir.tag in ("DW_TAG_const_type", "DW_TAG_volatile_type"):
+        return _type_spell_dwarf(unit, _die_attr(tdir, "DW_AT_type"), named, depth + 1)
+    if tdir.tag == "DW_TAG_typedef":
+        name = _attr_str(_die_attr(tdir, "DW_AT_name")) or ""
+        return name if name in named else None
+    if tdir.tag == "DW_TAG_pointer_type":
+        inner = _type_spell_dwarf(unit, _die_attr(tdir, "DW_AT_type"), named, depth + 1)
+        return (inner + " *") if inner else None
+    if tdir.tag == "DW_TAG_array_type":
+        count = None
+        for child in tdir.iter_children():
+            if child.tag == "DW_TAG_subrange_type":
+                ub = _die_attr(child, "DW_AT_upper_bound")
+                if ub is not None and isinstance(ub.value, int):
+                    count = ub.value + 1
+        inner = _type_spell_dwarf(unit, _die_attr(tdir, "DW_AT_type"), named, depth + 1)
+        if inner is None or count is None:
+            return None
+        return "%s[%d]" % (inner, count)
+    if tdir.tag in (
+        "DW_TAG_structure_type",
+        "DW_TAG_union_type",
+        "DW_TAG_class_type",
+        "DW_TAG_enumeration_type",
+    ):
+        name = _attr_str(_die_attr(tdir, "DW_AT_name"))
+        return name if name and name in named else None
+    return None
+
+
+def load_dwarf_evidence_domain(binary):
+    """Populate the curl extension surfaces: _SERVABLE_BASES grows the
+    corpus's DWARF-named composites/typedefs-with-size, and _DWARF_GLOBALS
+    maps '::name' / '::name.member[.member...]' spellings (file-scope
+    variables with static storage + struct member chains) to servable type
+    spellings. Called only behind --dwarf-types; the default domain stays
+    the httpd form."""
+    from elftools.elf.elffile import ELFFile
+
+    with open(binary, "rb") as fh:
+        elf = ELFFile(fh)
+        if not any(s.name == ".debug_info" for s in elf.iter_sections()):
+            sys.stderr.write(
+                "WARNING: %s carries no .debug_info: --dwarf-types is "
+                "corpus-inapplicable\n" % binary
+            )
+            return
+        dw = elf.get_dwarf_info()
+        # named set: sized composites + typedefs over them (the factory
+        # name-lookup surface, shared shape with the C4 channel)
+        _dwarf_named_types.update(_named_composite_set(dw))
+        members_by_type = {}
+        globals_ = {}
+        for unit in dw.iter_CUs():
+            for die in unit.iter_DIEs():
+                if die.tag in (
+                    "DW_TAG_structure_type",
+                    "DW_TAG_union_type",
+                ):
+                    tname = _attr_str(_die_attr(die, "DW_AT_name"))
+                    if not tname:
+                        continue
+                    for child in die.iter_children():
+                        if child.tag != "DW_TAG_member":
+                            continue
+                        mname = _attr_str(_die_attr(child, "DW_AT_name"))
+                        if not mname:
+                            continue
+                        spell = _type_spell_dwarf(
+                            unit, _die_attr(child, "DW_AT_type"), _dwarf_named_types
+                        )
+                        if spell:
+                            members_by_type.setdefault(tname, {})[mname] = spell
+                elif die.tag == "DW_TAG_variable":
+                    vname = _attr_str(_die_attr(die, "DW_AT_name"))
+                    loc = _die_attr(die, "DW_AT_location")
+                    # file-scope statics only (DW_OP_addr form): the
+                    # canon '::global' spelling domain
+                    if not vname or loc is None:
+                        continue
+                    if loc.form != "DW_FORM_exprloc":
+                        continue
+                    blob = bytes(loc.value)
+                    if len(blob) < 2 or blob[0] != 0x03:  # DW_OP_addr
+                        continue
+                    spell = _type_spell_dwarf(
+                        unit, _die_attr(die, "DW_AT_type"), _dwarf_named_types
+                    )
+                    if spell:
+                        globals_[vname] = spell
+        _SERVABLE_BASES.update(_dwarf_named_types)
+        for gname, gspell in sorted(globals_.items()):
+            _DWARF_GLOBALS["::" + gname] = gspell
+            base = gspell.split("[")[0].rstrip("*").strip()
+            # member chains one level deep (the canon arg forms observed:
+            # &::config.useragent / ::config.outfile); deeper chains would
+            # need union member resolution, left unharvested (no evidence)
+            for member, mspell in sorted(members_by_type.get(base, {}).items()):
+                _DWARF_GLOBALS["::%s.%s" % (gname, member)] = mspell
 
 
 def harvest_callee(path, target_names):
@@ -455,8 +608,16 @@ def harvest_callee(path, target_names):
                 continue
             if _in_string(body, m.start()):
                 continue
-            # balanced argument extraction
-            start = body.find("(", m.start())
+            # balanced argument extraction. The argument list's opening
+            # paren is the LAST paren before the match end (the callee
+            # group's trailing `\s*\(`), NOT the first paren from the match
+            # start: a cast-result site `x = (FILE *)fopen(a,b)` has the
+            # result cast's paren between the lhs and the callee, and
+            # finding from m.start() would extract `(FILE *)` as a bogus
+            # 1-argument list (curl's fopen: 8 sites, 5 casted -> spurious
+            # arity conflict drop; same latent defect for any httpd
+            # cast-result site).
+            start = body.rfind("(", 0, m.end())
             depth = 0
             end = start
             for i in range(start, len(body)):
@@ -507,7 +668,7 @@ def harvest_callee(path, target_names):
                 ev = _arg_evidence(arg, decls)
                 if ev is None:
                     continue
-                if base_of(ev) not in KNOWN_BASES:
+                if base_of(ev) not in _SERVABLE_BASES:
                     entry["slot_conflict"].add(slot)
                     continue
                 prior = entry["slot_evidence"].get(slot)
@@ -519,7 +680,7 @@ def harvest_callee(path, target_names):
                 entry["return_cast"] = True
             elif lhs and lhs in decls:
                 rt = _norm_type(decls[lhs])
-                if base_of(rt) in KNOWN_BASES:
+                if base_of(rt) in _SERVABLE_BASES:
                     prior = entry["return_evidence"].get(rt)
                     entry["return_evidence"][rt] = prior + 1 if prior else 1
     # finalize
@@ -1210,17 +1371,22 @@ def main():
         golden, corpus, oracle_commit, out = sys.argv[2:6]
         argv_rest = sys.argv[6:]
         target_names = None
+        dwarf_types = None
         for arg in argv_rest:
             if arg.startswith("--targets="):
                 target_names = set(
                     name for name in arg[len("--targets=") :].split(",") if name
                 )
+            elif arg.startswith("--dwarf-types="):
+                dwarf_types = arg[len("--dwarf-types=") :]
         if target_names is None:
             target_names = {
                 "main",
                 "ap_fini_vhost_config",
                 "ap_vhost_iterate_given_conn",
             }
+        if dwarf_types is not None:
+            load_dwarf_evidence_domain(dwarf_types)
         funcs, drops, _addresses = harvest_callee(golden, target_names)
         manifest = {
             "oracle_commit": oracle_commit,
@@ -1232,6 +1398,21 @@ def main():
             "callees": funcs,
             "harvest_drops": drops,
         }
+        if dwarf_types is not None:
+            manifest["dwarf_types_source"] = dwarf_types
+            manifest["dwarf_types_sha256"] = hashlib.sha256(
+                open(dwarf_types, "rb").read()
+            ).hexdigest()
+            manifest["harvest_rule"] = (
+                CALLEE_SIGLOCK_RULE
+                + "; CURLPREP --dwarf-types extension: servable bases grow "
+                "the corpus's DWARF-named composites/typedefs (the "
+                "parse_type_names factory surface the driver's parse_c_type "
+                "resolves FILE/Configurable against), casts carry multiple "
+                "pointer stars ((char **)0x0), and ::global / "
+                "&::global.member arg forms evidence from the DWARF "
+                "file-scope static + struct member table (one member level)"
+            )
         with open(out, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=1)
         n_input = sum(1 for c in funcs.values() if c["input_lock"])

@@ -951,3 +951,130 @@ oracle env-flip 154/156 为其子集——本通道额外收返回消费形 int 
   （逐函数归因见 16.2/16.3）。
 - curl 侧（SIG 418+PARAM-NAME 146 hunk、C7 NAME-NORM）与转正评估（opt-in →
   默认）维持 TODO 行排队，依赖本验证轮结论。
+
+### 16.5 CURLPREP 交付记录（Lane CURLPREP，2026-09-25，基=亲父 59ce2cd3=master V3FLIP 后）
+
+> curl 侧被调原型 harvest 预制（tools 域 only）：manifest + oracle 预验证 +
+> 量化判决。**驱动接线（examples/curl_decompile.rs 的 V3SIG 装载）不在本车道**
+> ——CMTFILL 释放 curl 驱动后另派（见 16.5.5 任务书）。
+
+#### 16.5.1 量化（curl 577 的三族普查，skeleton 归一后行对分类）
+
+curl 577/0/0 的函数级分布（本 lane 亲测）：getparameter 156、main 120、
+glob_set 44、file2string 35、parseconfig 33、helpf 31、glob_range 38、
+my_get_token 24、match_url 22、next_url 20、my_get_line 12、myprogress 11、
+其余 7 函数 ≤10。三族（V3SIG 在 httpd 收掉的形状/返回消费/cast 实参）普查
+（classify 工具按行对分类，/dev/shm/rugra-tests/curlprep/classify_curl.py）：
+**cast 实参/返回消费 ≈45 行对（≈90 原始行）+ 形状 ≈5 行对（≈10 行）≈ 100/577
+（17%）**；其余大族为 canon-only `/* Unresolved local var */` 注释块（45）、
+cf/结构（29）、decl 层差（23）、DAT_LAB（6）、纯重编号与混合 OTHER（147）。
+**判决：不满足 <30 行的降优先级条件，但依赖关系与 httpd 相反（见 16.5.3）**。
+
+#### 16.5.2 harvest（curl 适配）
+
+`tools/harvest_local_manifest.py --callee ... --dwarf-types BINARY`（curl 适配，
+全部在 --dwarf-types 门后；缺省= httpd 形态逐字节不变）：
+
+1. **cast 括号提取修复**：cast-结果站点 `x = (FILE *)fopen(a,b)` 的实参表
+   起点此前取 cast 的开括号（argstr=`FILE *` → 元数 1）——改为匹配尾的
+   被调开括号（`body.rfind("(", 0, m.end())`）。该缺陷同时潜伏于 httpd
+   （再生成 diff：5 条目变化，apr_palloc 元数 1→2、apr_getopt_init/memcmp
+   的假槽证据消失、apr_dynamic_fn_retrieve 新增 char* 锁——已提交的
+   httpd manifest 未动，再生成+重验登记为后续项，不属本车道写域）。
+2. **多星 cast 证据**：`(char **)0x0` 此前正则只收单星——`(\*+)` 保留星数。
+3. **`_ptr_type`/`base_of` 多指针拼写修复**：`char **` 归一为 `char * *`，
+   `base_of` 的 rstrip("*") 留内层星导致 servable-base 门误杀——改为全星
+   剥离。
+4. **--dwarf-types 证据域扩展**：servable 基名并入语料 DWARF 命名组合体/
+   typedef 集（FILE/Configurable/URLGlob/...，= 驱动 parse_type_names 的
+   find_by_name 面）；`::global` / `&::global.member` 实参形态从 DWARF
+   文件域静态变量+一层成员表取证（GetStr 的 17 站点 `&::config.<char*域>`
+   → char** 一致证据）。
+5. **manifest**：`tests/golden/manifests/callee_siglock_curl_1204.json`
+   （oracle_commit e40ed130 + golden sha256 + dwarf_types sha256 指纹齐备；
+   双跑字节恒等）——**55 被调：30 全输入锁 + 26 返回锁**，7 drops
+   （CARRY1/CONCAT44=伪 op 无 golden 头；__printf_chk/__fprintf_chk/
+   __sprintf_chk/helpf/strequal=varargs 元数冲突——canon 自身未锁，弃收
+   即方向）。GetStr(char**,char*)、getparameter(char*,char*,bool*,
+   Configurable*)、parseconfig(char*,Configurable*)、fopen(char*,char*)、
+   fclose(FILE*)、file2string(FILE*)、my_get_line(FILE*)、my_get_token(char*)
+   等全输入锁；strtol/fgets/strchr 等槽证据不全（数字槽无证据）保持
+   返回锁。
+
+#### 16.5.3 oracle 预验证（锁定库 e40ed130 直跑，不可跳项）
+
+stage_shape_diag harness 扩 `STAGE_CALLSITE_PROTOS=<hexaddr>=<doc>[,...]`
+（followFlow 后、action 前，按入口地址把锁定 `<prototype>` decode 进
+callspec——FuncProto::decode 需内部 store，经 scratch proto + FuncProto::copy
+= coreaction.cc:2322-2330 的 queryCall 运输镜像；PLT 桩在 BFD harness 无
+Funcdata，callspec 直装是唯一通路）。curl 内部静态符号带优化后缀
+（parseconfig.constprop.0）——补地址查询回退。三函数 A0（种子+own 原型，
+无被调原型）/ B（A0+manifest 全量 callsite 原型）双向实验：
+
+| 实验 | my_get_token 空参 | GetStr 17 站点 | fgets 站点 |
+|---|---|---|---|
+| A0（无原型） | `my_get_token(0)` 裸 | `GetStr(0x175d0,nextarg)` 无 cast | `(&_Stack,0x100,p)` 裸 |
+| B（manifest） | **`my_get_token((char *)0x0)` = canon 逐字** | **`GetStr((char **)0x17520,(char *)pCStack_5b8)`——(char*) 槽 cast 族全翻** | 返回锁 only，槽 cast 不出（证据保守） |
+| C（canon 全真值上限） | — | — | **`(char *)&_Stack_148` 槽 cast 出现** |
+| Rugra 现脸 | `(const char *)0x0`（DWARF const 漂移） | 无 cast | 无 cast |
+| canon | `(char *)0x0` | `(&::config.useragent,(char *)local_5b8)` | `(char *,0x100,(FILE *)file)` |
+
+A0→B 翻转普查：parseconfig 60 / getparameter 254 / file2string 55 原始行。
+**判决：manifest 内容经锁定 oracle 验证有效（B 态的 cast 族=canon 形）；但
+curl 的运输缺口与 httpd 相反**——curl 驱动的 link_call_specs 早已把 libc 表
++DWARF 原型装上 callspecs（getparameter 15 libc+28 DWARF 亲见 stderr），canon
+cast 族在 Rugra 仍不显形，缺口在**消费侧**：`ActionSetCasts::cast_input` 的
+opcode 分派表无 CALL 臂（src/coreaction.rs:5912 落 `input_metatype(opc)`→None
+→reqtype=通用基型；Ghidra 的 TypeOp::getInputCast→`op->inputTypeLocal(slot)`
+→TypeOpCall::getInputLocal（typeop.cc:687-718）→callspec 参型 typelock 锚，
+cast.cc:310-337 指针剥层+尺寸差→cast 插入）。httpd 的 manifest 翻转经
+implied 变量 typeprop 路线（strcmp((char*)plVar12[3])族）不触此臂；curl 的
+主力族是**typelock 符号实参**（local_5b8: Configurable*）——必须走 cast_input
+CALL 臂。**接线车道若只挂 manifest 不补该臂，curl cast 族近零翻转**。
+
+#### 16.5.4 验证矩阵
+
+| 门 | 结果 |
+|---|---|
+| harvest 双跑 | cmp 字节恒等 |
+| manifest JSON | 有效；指纹=golden sha256 aca37988…/dwarf sha256 8af50bca… |
+| curl 默认脸 | **577/0/0**（tools-only 构造性恒等，亲跑复证） |
+| httpd 默认脸 | **951/0/0**（驱动未触，manifest 未装新面——callee_siglock_curl 仅 curl 键） |
+| 投影银行 | **391/391 MATCH**（verify_projection_bank.sh exit 0 亲验） |
+| src/ | 零触碰（git diff 亲父=tools+manifest+docs） |
+
+#### 16.5.5 接线车道任务书要点（CURLWIRE，预留给下一车道）
+
+1. **写域**：examples/curl_decompile.rs（CMTFILL 释放后）+ 可选 src/
+   coreaction.rs cast_input CALL 臂。**顺序建议：先臂后 manifest**——臂单独
+   即可翻 DWARF/libc 已在位的主族（GetStr 17 站点等）；manifest 的增量=
+   const 漂移修正（my_get_token char* vs DWARF const char*）+ 无 DWARF/libc
+   条目的被调 + canon 真值参型。
+2. **cast_input CALL 臂移植**（铁律 1.2：先读 coreaction.cc:2655-2720 +
+   typeop.cc:293-300 + typeop.cc:687-718 + cast.cc:300-390）：CALL 落
+   TypeOp::getInputCast 基臂 = castStandard(getInputLocal(slot), highReadFacing,
+   false, true)；机制 C 强制独立复核（coreaction 白名单）。
+3. **manifest 装载**：照抄 httpd install_v3sig_callee_protos（canon 地址键
+   entry+0x100000；resolve 用 find_by_name，FILE/Configurable 在 curl 驱动的
+   parse_type_names 名树上）。转正评估（opt-out 极性）与 env 矩阵照抄
+   V3FLIP 形态。
+4. **httpd manifest 再生成**：括号修复后的 5 条目变化（16.5.2.1）需再生成
+   +差分门禁重验（apr_getopt_init 假槽 int 消失、memcmp 假槽 long 消失、
+   apr_dynamic_fn_retrieve 新增 char* 锁、apr_palloc 元数 2、
+   apr_app_initialize slot2 undefined8**）——预期 httpd 脸无回退（变化条目
+   原为 inert 或修复向），需亲测。
+5. **PLT 全真值上限决策**：canon 的 PLT 桩头（golden 自印
+   `char * fgets(char *__s,int __n,FILE *__stream)`）与调用点形一致
+   （generic_clib 稳定源，无 Parameter ID 漂移）——harvest 可选扩展：PLT
+   被调接受桩头全参型（C 实验判决：`(FILE *)`/`(char *)` 槽 cast 族上限）。
+   方法论注意：仅限 dynsym 导入桩（内部被调仍守调用点形规矩）。
+
+#### 16.5.6 产物
+
+- 证据：/dev/shm/rugra-tests/curlprep/（oracle_{parseconfig,getparameter,
+  file2string}_{A0,B}.c/.err + oracle_file2string_C.c 上限证 + xml/ 全部
+  种子/原型文档 + gen_curlprep_xml.py + run_curlprep_oracle.sh +
+  classify_curl.py + callee_run2.json 确定性对照）。
+- harness：stage_shape_diag.cc 增 STAGE_CALLSITE_PROTOS + 地址查询回退
+  （/dev/shm/rugra-tests/shapefix/，随 lane 证据保留）。
+- 回收：/dev/shm/rugra-targets/sb-curlprep 留 root 集成后回收。
