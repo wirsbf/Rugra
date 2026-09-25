@@ -676,6 +676,14 @@ pub struct PrintC {
     /// the `dup_` arm of the same hasSpecialLabel gate.
     /// PRINTC-LABSPELL-LABSYMS-0001.
     dup_label_addrs: std::collections::HashSet<u64>,
+    /// Suffix appended to an integer constant flagged `longprint`
+    /// (`push_integer` printc.cc:1364-1365 `t << sizeSuffix`), set by
+    /// `PrintC::initializeFromArchitecture` (printc.cc:2332-2340): `"LL"`
+    /// when the type factory's long size equals the int size, `"L"`
+    /// otherwise. Rugra's corpus is x86-64 gcc (long=8, int=4), so the
+    /// constructor pins `"L"`; re-pin when the printlanguage-side
+    /// architecture hookup lands.
+    size_suffix: &'static str,
     /// Function address range for local label detection
     func_start: u64,
     func_end: u64,
@@ -1079,6 +1087,9 @@ impl PrintC {
             code_label_base: 0,
             joined_label_addrs: std::collections::HashSet::new(),
             dup_label_addrs: std::collections::HashSet::new(),
+            // printc.cc:2336-2339: long(8) != int(4) on the x86-64 gcc
+            // corpus, so the sized-constant suffix is "L" (see field doc).
+            size_suffix: "L",
             union_resolutions: std::collections::BTreeMap::new(),
             func_start: 0,
             func_end: 0,
@@ -1844,6 +1855,11 @@ impl PrintC {
     fn constant_leaf_text(&mut self, vn: &Varnode, op: Option<&PcodeOp>) -> String {
         use crate::type_system::TypeMetatype;
         let val = vn.get_offset();
+        // printc.cc:1296-1312: the explicit-print suffix flags travel with
+        // the varnode into every push_integer leaf dispatch below
+        // (unsignedprint/longprint, set by ActionSetCasts via
+        // cast.cc:38-108; annotation constants never read them).
+        let (force_unsigned, force_sized) = Self::constant_print_flags(vn);
         let read_facing = op.and_then(|read_op| {
             let slot = vn
                 .self_arc()
@@ -1873,7 +1889,12 @@ impl PrintC {
             if let Some(name) = self.code_entry_constant_text(val) {
                 return name;
             }
-            return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
+            // printc.cc:1766-1768 TYPE_UNKNOWN: push_integer(val, sz,
+            // false, tag, vn, op) — the vn flags still reach the suffix.
+            return self.integer_text_flagged(
+                val, vn.get_size(), false, display_format::DEFAULT,
+                force_unsigned, force_sized,
+            );
         };
         let sz = ct.get_size();
         match ct.get_metatype() {
@@ -1883,7 +1904,10 @@ impl PrintC {
                 } else if ct.is_enum_type() {
                     self.enum_constant_text(val, &ct)
                 } else {
-                    self.integer_text(val, sz, false, display_format::DEFAULT)
+                    self.integer_text_flagged(
+                        val, sz, false, display_format::DEFAULT,
+                        force_unsigned, force_sized,
+                    )
                 }
             }
             TypeMetatype::Int => {
@@ -1892,7 +1916,10 @@ impl PrintC {
                 } else if ct.is_enum_type() {
                     self.enum_constant_text(val, &ct)
                 } else {
-                    self.integer_text(val, sz, true, display_format::DEFAULT)
+                    self.integer_text_flagged(
+                        val, sz, true, display_format::DEFAULT,
+                        force_unsigned, force_sized,
+                    )
                 }
             }
             // Ghidra stores enums as TYPE_INT/TYPE_UINT + the enumtype flag
@@ -1920,7 +1947,11 @@ impl PrintC {
                 if let Some(name) = self.code_entry_constant_text(val) {
                     return name;
                 }
-                self.integer_text(val, sz, false, display_format::DEFAULT)
+                // printc.cc:1766-1768: push_integer carries the vn flags.
+                self.integer_text_flagged(
+                    val, sz, false, display_format::DEFAULT,
+                    force_unsigned, force_sized,
+                )
             }
             ,
             TypeMetatype::Bool => {
@@ -1960,12 +1991,19 @@ impl PrintC {
                         }
                     }
                 }
-                // break; -> default cast (printc.cc:1790 + 1806-1815).
-                self.default_cast_constant_text(val, &ct)
+                // break; -> default cast (printc.cc:1790 + 1806-1815);
+                // cc:1814's push_integer passes vn, so the suffix flags
+                // apply on this arm too.
+                self.default_cast_constant_text_flagged(
+                    val, &ct, force_unsigned, force_sized,
+                )
             }
             _ => {
-                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
-                self.default_cast_constant_text(val, &ct)
+                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast
+                // (cc:1814 push_integer with vn — flags apply).
+                self.default_cast_constant_text_flagged(
+                    val, &ct, force_unsigned, force_sized,
+                )
             }
         }
     }
@@ -12450,9 +12488,13 @@ impl PrintLanguage for PrintC {
                                 == crate::type_system::TypeMetatype::Int;
                             if !ct.is_char_print() {
                                 if !self.discovery_pass {
-                                    self.emit.print(&self.integer_text(
+                                    // printc.cc:1750-1764 push_integer with
+                                    // the vn's explicit-print flags
+                                    // (cc:1296-1312/1362-1365).
+                                    let (fu, fs) = Self::constant_print_flags(vn);
+                                    self.emit.print(&self.integer_text_flagged(
                                         val, ct.get_size(), signed,
-                                        display_format::DEFAULT,
+                                        display_format::DEFAULT, fu, fs,
                                     ));
                                 }
                                 return;
@@ -13936,10 +13978,13 @@ impl PrintC {
             match ct.get_metatype() {
                 crate::type_system::TypeMetatype::Int
                 | crate::type_system::TypeMetatype::Uint if !ct.is_char_print() => {
-                    self.emit.print(&self.integer_text(
+                    // printc.cc:1750-1764 push_integer with the vn's
+                    // explicit-print flags (cc:1296-1312/1362-1365).
+                    let (fu, fs) = Self::constant_print_flags(vn);
+                    self.emit.print(&self.integer_text_flagged(
                         val, ct.get_size(),
                         ct.get_metatype() == crate::type_system::TypeMetatype::Int,
-                        display_format::DEFAULT,
+                        display_format::DEFAULT, fu, fs,
                     ));
                     return;
                 }
@@ -13949,9 +13994,13 @@ impl PrintC {
             // printc.cc:1766-1768: TYPE_UNKNOWN → push_integer(val,
             // ct->getSize(), false, ...) — an untyped constant NEVER takes
             // a character literal; 0x26 renders as `0x26` (hex via
-            // mostNaturalBase, printc.cc:1325-1337).
+            // mostNaturalBase, printc.cc:1325-1337). The vn flags still
+            // reach push_integer's suffix decision.
             // STUBLEAK-CHARPRINT-LOOPCONST-0001.
-            self.emit.print(&self.integer_text(val, sz, false, display_format::DEFAULT));
+            let (fu, fs) = Self::constant_print_flags(vn);
+            self.emit.print(&self.integer_text_flagged(
+                val, sz, false, display_format::DEFAULT, fu, fs,
+            ));
             return;
         }
         if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
@@ -16613,10 +16662,46 @@ impl PrintC {
     /// builds them into its ostringstream before pushing the atom. Shared
     /// by the direct-emit helper and the RPN constant leaf
     /// (make_atom_for_vn's pushConstant dispatch) so both paths print one
-    /// form.
+    /// form. This vn-less form corresponds to the oracle call sites that
+    /// pass `vn == 0` (e.g. printc.cc:327/1054/1127) or whose types can
+    /// never carry the explicit-print flags (charPrint/enum constants —
+    /// cast.cc:50-51 rejects both in markExplicitUnsigned), so the
+    /// unsigned/long suffixes are provably absent and default to false.
     fn integer_text(&self, val: u64, sz: usize, sign: bool,
                     display_format: u32) -> String {
-        self.integer_text_with_mods(val, sz, sign, display_format, self.mods)
+        self.integer_text_flagged(val, sz, sign, display_format, false, false)
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// The vn-bearing form of [`Self::integer_text`]: `force_unsigned`/
+    /// `force_sized` are the constant varnode's `unsignedprint`/`longprint`
+    /// addlflags as read by push_integer at printc.cc:1296-1312 (null/annotation
+    /// vn ⇒ false). Only non-char, non-enum integer constants reach here with
+    /// a live flag (cast.cc:38-108 admission).
+    fn integer_text_flagged(&self, val: u64, sz: usize, sign: bool,
+                            display_format: u32,
+                            force_unsigned: bool, force_sized: bool) -> String {
+        self.integer_text_with_mods(
+            val, sz, sign, display_format, self.mods,
+            force_unsigned, force_sized,
+        )
+    }
+
+    // Ghidra: printc.cc:1296-1312 PrintC::push_integer
+    /// Read the explicit-print flags off a constant varnode:
+    /// `force_unsigned_token = vn->isUnsignedPrint()` /
+    /// `force_sized_token = vn->isLongPrint()` behind the
+    /// `vn != 0 && !vn->isAnnotation()` gate. ActionSetCasts is the only
+    /// writer (cast.cc:69/101 setUnsignedPrint/setLongPrint).
+    fn constant_print_flags(vn: &Varnode) -> (bool, bool) {
+        use crate::varnode::addl_flags;
+        if vn.is_annotation() {
+            return (false, false);
+        }
+        (
+            vn.addlflags & addl_flags::UNSIGNED_PRINT != 0,
+            vn.addlflags & addl_flags::LONG_PRINT != 0,
+        )
     }
 
     // Ghidra: printc.cc:1288 PrintC::push_integer
@@ -16624,14 +16709,25 @@ impl PrintC {
     /// the scoped modifier view (printlanguage.hh:283-289 pushMod/popMod
     /// semantics, e.g. the `force_hex unless force_dec` view the default
     /// cast arm of `pushConstant` installs at printc.cc:1810-1813).
+    /// `force_unsigned`/`force_sized` carry the varnode's
+    /// `unsignedprint`/`longprint` addlflags (printc.cc:1296-1297
+    /// `force_unsigned_token = vn->isUnsignedPrint()` /
+    /// `force_sized_token = vn->isLongPrint()`), which
+    /// `ActionSetCasts` set via `CastStrategy::markExplicitUnsigned` /
+    /// `markExplicitLongSize` (cast.cc:38-108 through coreaction.cc:2664-2665).
     fn integer_text_with_mods(
         &self, val: u64, sz: usize, sign: bool,
                               display_format: u32, mods: u32,
+                              force_unsigned: bool, force_sized: bool,
     ) -> String {
         use crate::printlanguage::{format_binary, most_natural_base};
         let mut v = val;
         let mut print_negsign = false;
-        if sign && display_format != display_format::CHAR {
+        // printc.cc:1313-1320: the signed print branch, whose closing
+        // statement resets force_unsigned_token to false — a signed
+        // rendering never carries the U suffix (the flip itself is
+        // cc:1314-1318).
+        let force_unsigned = if sign && display_format != display_format::CHAR {
             // uintb mask = calc_mask(sz);  (printc.cc:1314)
             let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
             let flip = v ^ mask;
@@ -16639,7 +16735,10 @@ impl PrintC {
             if print_negsign {
                 v = flip.wrapping_add(1);
             }
-        }
+            false
+        } else {
+            force_unsigned
+        };
         // displayFormat decision (printc.cc:1325-1337).
         let fmt = if display_format != display_format::DEFAULT {
             display_format
@@ -16675,6 +16774,15 @@ impl PrintC {
                 t.push_str("0b");
                 t.push_str(&format_binary(v));
             }
+        }
+        // printc.cc:1362-1365: the explicit-print suffixes, appended after
+        // the numeric/character text — 'U' for unsignedprint, sizeSuffix
+        // ("L" here, see the field doc) for longprint.
+        if force_unsigned {
+            t.push('U');
+        }
+        if force_sized {
+            t.push_str(self.size_suffix);
         }
         t
     }
@@ -16764,6 +16872,21 @@ impl PrintC {
     ) {
         let mt = ct.get_metatype();
         let sz = ct.get_size();
+        // printc.cc:1296-1312: the vn's explicit-print flags feed every
+        // push_integer dispatch in this function (vn==0 ⇒ false).
+        let (force_unsigned, force_sized) = vn
+            .map(Self::constant_print_flags)
+            .unwrap_or((false, false));
+        // push_integer's mut emitter body (integer_text + emit.print) with
+        // the flags threaded (cc:1362-1365 suffixes).
+        macro_rules! push_int_flagged {
+            ($sgn:expr) => {
+                self.emit.print(&self.integer_text_flagged(
+                    val, sz, $sgn, display_format::DEFAULT,
+                    force_unsigned, force_sized,
+                ))
+            };
+        }
         match mt {
             TypeMetatype::Uint => {
                 if ct.is_char_print() {
@@ -16772,10 +16895,10 @@ impl PrintC {
                     if let Datatype::Enum(e) = ct {
                         self.push_enum_constant_named(val, e);
                     } else {
-                        self.push_integer(val, sz, false, display_format::DEFAULT);
+                        push_int_flagged!(false);
                     }
                 } else {
-                    self.push_integer(val, sz, false, display_format::DEFAULT);
+                    push_int_flagged!(false);
                 }
             }
             TypeMetatype::Int => {
@@ -16785,14 +16908,14 @@ impl PrintC {
                     if let Datatype::Enum(e) = ct {
                         self.push_enum_constant_named(val, e);
                     } else {
-                        self.push_integer(val, sz, true, display_format::DEFAULT);
+                        push_int_flagged!(true);
                     }
                 } else {
-                    self.push_integer(val, sz, true, display_format::DEFAULT);
+                    push_int_flagged!(true);
                 }
             }
             TypeMetatype::Unknown => {
-                self.push_integer(val, sz, false, display_format::DEFAULT);
+                push_int_flagged!(false);
             }
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
@@ -16826,8 +16949,12 @@ impl PrintC {
                         }
                     }
                 }
-                // break; -> default cast (printc.cc:1790 + 1806-1815).
-                self.emit_default_cast_constant(val, ct);
+                // break; -> default cast (printc.cc:1790 + 1806-1815);
+                // cc:1814's push_integer passes vn — flags apply.
+                let t = self.default_cast_constant_text_flagged(
+                    val, ct, force_unsigned, force_sized,
+                );
+                self.emit.print(&t);
             }
             TypeMetatype::Float => {
                 // push_float (printc.cc:1380-1424): Rugra has no FloatFormat;
@@ -16850,9 +16977,11 @@ impl PrintC {
             }
             _ => {
                 // Struct/Union/Array/Code/Spacebase/PartialEnum-meta:
-                // default cast.
-                // Struct/Union/Array/Code/Spacebase: default cast.
-                self.emit_default_cast_constant(val, ct);
+                // default cast (cc:1814 push_integer with vn — flags apply).
+                let t = self.default_cast_constant_text_flagged(
+                    val, ct, force_unsigned, force_sized,
+                );
+                self.emit.print(&t);
             }
         }
     }
@@ -16868,7 +16997,20 @@ impl PrintC {
     /// The text core of [`Self::emit_default_cast_constant`]: the optional
     /// `(type)` cast prefix (1807-1809) and the force-hex integer literal
     /// (1810-1815, `pushMod`/`force_hex` unless `force_dec` is set).
+    /// vn-less callers map to the oracle's `vn == 0` push_integer sites;
+    /// the vn-bearing leaf passes the explicit-print flags
+    /// (`push_integer(val, ct->getSize(), false, tag, vn, op)` at cc:1814
+    /// reads unsignedprint/longprint the same way).
     fn default_cast_constant_text(&self, val: u64, ct: &Datatype) -> String {
+        self.default_cast_constant_text_flagged(val, ct, false, false)
+    }
+
+    // Ghidra: printc.cc:1806-1815 PrintC::pushConstant default arm
+    /// The vn-bearing form of [`Self::default_cast_constant_text`].
+    fn default_cast_constant_text_flagged(
+        &self, val: u64, ct: &Datatype,
+        force_unsigned: bool, force_sized: bool,
+    ) -> String {
         let mut t = String::new();
         if !self.option_nocasts {
             // pushOp(&typecast,op); pushType(ct);
@@ -16887,7 +17029,10 @@ impl PrintC {
             mods |= crate::printlanguage::modifiers::FORCE_HEX;
         }
         // The scoped-mods view for the nested integer_text decision.
-        let text = self.integer_text_with_mods(val, ct.get_size(), false, display_format::DEFAULT, mods);
+        let text = self.integer_text_with_mods(
+            val, ct.get_size(), false, display_format::DEFAULT, mods,
+            force_unsigned, force_sized,
+        );
         t.push_str(&text);
         t
     }
@@ -18723,6 +18868,87 @@ mod tests {
         assert_eq!(
             PrintC::print_raw_zero_pad_digits(sz, ws, 0x102020),
             "00081010"
+        );
+    }
+
+    #[test]
+    fn test_integer_text_explicit_suffixes() {
+        // PRINTC-INTSUFFIX-0001: push_integer's trailing explicit-print
+        // suffixes (printc.cc:1362-1365) — 'U' for unsignedprint, "L"
+        // (sizeSuffix, cc:2336-2339 long!=int) for longprint — and the
+        // cc:1319 reset: the signed branch (sign && format != force_char)
+        // clears force_unsigned even when the two's-complement flip does
+        // not print a minus.
+        let printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        use crate::printc::display_format;
+
+        // Unsigned flag on an unsigned print: suffix present.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, true, false),
+            "0x23U"
+        );
+        // Decimal small constant keeps the suffix too (val<=10 dec arm).
+        assert_eq!(
+            printer.integer_text_flagged(
+                2, 4, false, display_format::DEFAULT, true, false),
+            "2U"
+        );
+        // cc:1319: signed print never carries the U suffix, even when the
+        // flag was set and the value does not flip to a negative.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, true, display_format::HEX, true, false),
+            "0x23"
+        );
+        // longprint suffix rides alongside (cc:1364-1365 sizeSuffix="L").
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, false, true),
+            "0x23L"
+        );
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, true, true),
+            "0x23UL"
+        );
+        // Flagless default: byte-identical to the legacy scalar form.
+        assert_eq!(
+            printer.integer_text_flagged(
+                0x23, 4, false, display_format::HEX, false, false),
+            "0x23"
+        );
+    }
+
+    #[test]
+    fn test_constant_print_flags_annotation_gate() {
+        // cc:1298: flags are read only behind vn != 0 &&
+        // !vn->isAnnotation(). Annotation constants return (false,false)
+        // regardless of the addlflags bits.
+        use crate::varnode::addl_flags;
+        use crate::varnode::varnode_flags;
+        let vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x23, 4)));
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (false, false)
+        );
+        {
+            let mut w = vn.write().unwrap();
+            w.addlflags |= addl_flags::UNSIGNED_PRINT | addl_flags::LONG_PRINT;
+        }
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (true, true)
+        );
+        {
+            let mut w = vn.write().unwrap();
+            w.flags |= varnode_flags::ANNOTATION;
+        }
+        // The annotation gate suppresses the read (cc:1298).
+        assert_eq!(
+            PrintC::constant_print_flags(&vn.read().unwrap()),
+            (false, false)
         );
     }
 }

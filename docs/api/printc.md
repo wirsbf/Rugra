@@ -1,5 +1,19 @@
 # `printc.rs` API Reference
 
+## 2026-09-25：常量叶显式后缀 U/L 通道（PRINTC-INTSUFFIX-0001 / Lane STRLIT）
+
+`PrintC::push_integer`（Ghidra: printc.cc:1288）的显式打印后缀补全——`force_unsigned_token = vn->isUnsignedPrint()` / `force_sized_token = vn->isLongPrint()`（cc:1296-1297，`vn != 0 && !isAnnotation()` 门内读取）与尾部 `t << 'U'` / `t << sizeSuffix`（cc:1362-1365）。旗标由 `ActionSetCasts` 经 `CastStrategy::markExplicitUnsigned`/`markExplicitLongSize`（cast.cc:38-108，coreaction.cc:2664-2665 调用）写入 varnode `addlflags`（Rugra 的 `UNSIGNED_PRINT`/`LONG_PRINT` 已在 coreaction 落地），此前打印侧从不读取——常量恒无后缀。
+
+实现：
+
+- `PrintC::constant_print_flags(vn)`（`// Ghidra: printc.cc:1296`）——annotation 守卫 + 旗标读取；
+- `integer_text_with_mods` 增 `force_unsigned/force_sized` 参数——**cc:1319 语义**：`sign && displayFormat != force_char` 分支（符号两补数翻转 cc:1314-1318）收尾把 `force_unsigned_token` 复位 false（有符号渲染永不带 U），随后 match 尾部追加 `'U'` / `size_suffix`；
+- `integer_text_flagged`（vn 承载形）+ `default_cast_constant_text_flagged`（cc:1814 default-cast 臂的 push_integer 同样携带 vn）；
+- 接线点：RPN 叶片 `constant_leaf_text` 全臂（Uint/Int/Unknown/None-ct/default-cast）、直接发射 `push_constant_typed`（Option vn）、`push_varnode` 常量梯级与 `push_constant`（vn 恒在域）。无 vn 的 scalar 形（enum/char 臂与 `vn==0` 调用点，cast.cc:50-51 对 charPrint/enum 恒拒）保持 false——与 oracle 观测恒等。
+- `size_suffix` 字段（`// Ghidra: printc.cc:2332`，`initializeFromArchitecture` cc:2336-2339）："LL" 当 sizeof(long)==sizeof(int)，否则 "L"；x86-64 gcc 语料（8≠4）构造器钉 "L"。
+
+**E2E（curl 124 / httpd 34，fast-release 亲测，基=master 5ec78f22 干净重建 A/B）**：curl 369→**361**/0/0（main 100→94、getparameter 45→43，其余 122 函数零变化）；`0x4000U/0x2004000U/0x10000400U/0x23U` 四位与 golden 清单逐一对应，Rugra U-行骨架无 golden 之外形态（0 处 overshoot）。httpd 872→**866**/0/0（六处 `iVar10 + 1U/2U`；golden 115 U-行中 Rugra 现 6——其余为 coreaction `mark_explicit_unsigned` 在 httpd 的点火不足，登记移交）；双跑 cmp 恒等；gcc 审计 curl 104/20、httpd 15/14 双侧恒等；bank 391/391；lib 1730P/1F==亲父集（nonzeromask 预存）。
+
 ## 2026-09-25：无名被调者两兜底的拼写/space 通道（PRINTC-FUN-PAD-0001 / PRINTC-OPCALL-ENTRYSPACE-0001 / Lane NAMFIX）
 
 RPN `opCall`（Ghidra: printc.cc:596）的无名被调者兜底两处正确化，均为**未触发兜底**（现语料 golden 全有符号名或 driver 预拼 `FUN_{:08x}` 数据库名——curl_cur 0 处、httpd_cur 全 8 位，均不经此臂），双差分预期字节恒等：
