@@ -476,3 +476,18 @@ double_precis RuleDoubleIn/Out attemptMarking 的 typelock 守卫
 PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 终报），
 激活面现语料 0 触发；旧白名单 TRUE 集是 oracle TRUE 集的真子集，修复
 方向单调扩 TRUE（Pointer/Unknown/退化 wrapper 族由 FALSE→TRUE）。
+
+## 2026-09-25（Lane MIRROR2）：spacebase/untyped-symbol miss 臂改走工厂命名 1 字节 unknown（MIRROR2-UNKBYTE-0001）
+
+- `TypeSpacebase::get_sub_type`/`get_sub_type_in_map`/`query_container_in_map`
+  的 miss 臂与 `spacebase_local_query_container`/全局臂的 untyped-symbol
+  fallback，此前构造裸匿名 `TypeBase::new(String::new(), 1, Unknown)`，
+  输出面拼成 `unkbyte1 *`（printc.cc:3383 genericTypeName）。oracle 对应
+  臂全部经 `glb->types->getBase(1,TYPE_UNKNOWN)`（type.cc:2965-2967；
+  database.cc:629/681/731）返回命名核心类型。六处改调
+  `TypeFactory::canonical_unknown_base_1()`（锁安全设计见 typefactory.md
+  同日条目：OnceLock 无租约急切填充 + 零锁读取；死锁根因=down_chain_pointer
+  写租约重入，eu-stack 亲证）。
+- 效果：镜面口径 `(unkbyte1 *)`/`unkbyte1 *` 拼写族清零；canon 档
+  undefined1 命名通道同步受益；AVERSE 档位行为不变（explicit new_flavor
+  oracle fixtures 不经过这些 miss 臂）。

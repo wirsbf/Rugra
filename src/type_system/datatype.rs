@@ -4127,8 +4127,11 @@ fn spacebase_local_query_container(
     let entry = &sl.mapentry_log[i];
     let dtype = sl.symbols[entry.sym].dtype.clone().unwrap_or_else(|| {
         // Ghidra Symbol::getType() never returns null: untyped varmap
-        // symbols correspond to the 1-byte TYPE_UNKNOWN base.
-        Arc::new(Datatype::Base(TypeBase::new(String::new(), 1, TypeMetatype::Unknown)))
+        // symbols correspond to the factory-mediated 1-byte TYPE_UNKNOWN
+        // base (database.cc:629/681/731 `types->getBase(1,TYPE_UNKNOWN)`) —
+        // the named core entry (xunknown1/undefined1 per tier), not a raw
+        // anonymous TypeBase that would print `unkbyte1`.
+        crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()
     });
     Some(MapContainerHit { dtype, addr: entry.start, offset: entry.offset, size: entry.size })
 }
@@ -4401,11 +4404,9 @@ impl TypeSpacebase {
         let addr_off = (off as u64).wrapping_div(wordsize as u64);
         match self.get_map() {
             None => (
-                Some(Arc::new(Datatype::Base(TypeBase::new(
-                    String::new(),
-                    1,
-                    TypeMetatype::Unknown,
-                )))),
+                // type.cc:2964-2966 miss arm: `glb->types->getBase(1,
+                // TYPE_UNKNOWN)` — factory-mediated named core entry.
+                Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
                 0,
             ),
             Some(LiveSpacebaseMap::Local(local)) => {
@@ -4420,11 +4421,9 @@ impl TypeSpacebase {
                         (symbol.dtype.clone(), newoff)
                     }
                     None => (
-                        Some(Arc::new(Datatype::Base(TypeBase::new(
-                            String::new(),
-                            1,
-                            TypeMetatype::Unknown,
-                        )))),
+                        // type.cc:2964-2966 miss arm: factory-mediated
+                        // 1-byte unknown base (glb->types->getBase).
+                        Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
                         0,
                     ),
                 }
@@ -4443,15 +4442,12 @@ impl TypeSpacebase {
                         (entry.symbol.read().unwrap().get_type(), newoff)
                     }
                     // type.cc:2964-2966 — no container: `*newoff = 0; return
-                    // glb->types->getBase(1,TYPE_UNKNOWN);`. The structural
-                    // anonymous 1-byte unknown base matches the factory's
-                    // getBase(1,Unknown) product for the no-core-entry shape.
+                    // glb->types->getBase(1,TYPE_UNKNOWN);` — the
+                    // factory-mediated named core entry (xunknown1 /
+                    // undefined1 per tier), never a raw anonymous TypeBase
+                    // (whose genericTypeName spelling is `unkbyte1`).
                     None => (
-                        Some(Arc::new(Datatype::Base(TypeBase::new(
-                            String::new(),
-                            1,
-                            TypeMetatype::Unknown,
-                        )))),
+                        Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
                         0,
                     ),
                 }
@@ -4479,8 +4475,9 @@ impl TypeSpacebase {
                 let entry = &scope.entries[entry_idx];
                 let dtype = entry.symbol.read().unwrap().get_type().unwrap_or_else(|| {
                     // Ghidra Symbol::getType() never returns null: an untyped
-                    // symbol corresponds to the 1-byte TYPE_UNKNOWN base.
-                    Arc::new(Datatype::Base(TypeBase::new(String::new(), 1, TypeMetatype::Unknown)))
+                    // symbol corresponds to the factory-mediated 1-byte
+                    // TYPE_UNKNOWN base (database.cc:629/681/731).
+                    crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()
                 });
                 Some(MapContainerHit {
                     dtype,
@@ -4512,12 +4509,10 @@ impl TypeSpacebase {
                 let newoff = (addr_off.wrapping_sub(hit.addr) as i64) + hit.offset as i64;
                 (Some(hit.dtype), newoff)
             }
+            // type.cc:2964-2966 miss arm: factory-mediated
+            // glb->types->getBase(1,TYPE_UNKNOWN) — named core entry.
             None => (
-                Some(Arc::new(Datatype::Base(TypeBase::new(
-                    String::new(),
-                    1,
-                    TypeMetatype::Unknown,
-                )))),
+                Some(crate::type_system::typefactory::TypeFactory::canonical_unknown_base_1()),
                 0,
             ),
         }

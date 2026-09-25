@@ -2669,7 +2669,35 @@ impl PrintC {
                     self.symbol_table
                         .get(&off)
                         .cloned()
-                        .unwrap_or_else(|| format!("FUN_{:x}", off))
+                        .unwrap_or_else(|| {
+                            // printc.cc:596-605 opCall's unnamed-callee arm:
+                            // genericFunctionName(fc->getEntryAddress())
+                            // (cc:3359-3366) = "func_" + addr.printRaw —
+                            // AddrSpace::printRaw (space.cc:206-222) zero-
+                            // pads to 2*addrsize (sz shrunk to 4 below
+                            // 2^32), so the direct-runner golden spells
+                            // `func_0x00003190`. The `FUN_%x` face is the
+                            // headless FRONTEND's database name (analyzeHeadless
+                            // symbol manager), which the decompiler library
+                            // never generates — Rugra's canon-tier fallback
+                            // keeps it for the headless golden, and the
+                            // direct-runner tier (GENSMOKE-S3 /
+                            // MIRROR2-S3 callee-naming family) takes the
+                            // oracle's generic name (tier probe:
+                            // typefactory direct_runner_tier_active, the
+                            // MIRROR-ENVS-CANONICAL-0001 bundle).
+                            if crate::type_system::typefactory::direct_runner_tier_active() {
+                                format!(
+                                    "func_{}",
+                                    Self::addr_space_print_raw(
+                                        crate::space::AddressSpace::Ram,
+                                        off
+                                    )
+                                )
+                            } else {
+                                format!("FUN_{:x}", off)
+                            }
+                        })
                 } else {
                     "FUN_unknown".to_string()
                 };
