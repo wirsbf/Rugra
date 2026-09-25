@@ -1497,11 +1497,23 @@ impl PrintC {
             // of a CAST op, so the same two pushes are transported here —
             // before the implied-def dispatch or the leaf atom — for both
             // the leaf (GOT-slot symbol) and implied (LOAD-chain) forms.
+            // PRINTC-BADJT-PARAMSYM-0001: ActionSetCasts never inserts the
+            // CAST when the target's read-facing type already equals the
+            // code pointer (castStandard identity, cast.cc:303) — the
+            // symbol-backed renamed-param case prints
+            // `(*UNRECOVERED_JUMPTABLE)(...)` with no cast — so the
+            // transport is gated on the same structural condition here.
             let is_callind_target = op_guard.opcode == OpCode::CPUI_CALLIND
                 && op_guard
                     .get_in(0)
                     .is_some_and(|in0| std::sync::Arc::ptr_eq(&in0, &np.vn));
-            if is_callind_target {
+            let callind_target_keeps_cast = is_callind_target && {
+                let curtype = vn_guard
+                    .get_high_type_read_facing(&op_guard, 0)
+                    .or_else(|| vn_guard.v_type.clone());
+                !Self::is_code_pointer_dt(curtype.as_ref())
+            };
+            if callind_target_keeps_cast {
                 self.rpn_push_op(self.rpn_tok_typecast);
                 let type_atom = crate::printlanguage::Atom::with_type(
                     "code *",
@@ -1773,9 +1785,16 @@ impl PrintC {
             }
         }
         // cc:272+280-289: the base type's identifier — displayName when
-        // named, genericTypeName when anonymous.
+        // named, genericTypeName when anonymous. PRINTC-BADJT-PARAMSYM-0001:
+        // the anonymous proto-less Code base spells "code" (the findNoName
+        // coretype fold — see build_type_stack), so a code-pointer cast
+        // spells `(code *)` instead of `(BADTYPE *)`.
         let base_name = if cur.get_name().is_empty() {
-            Self::generic_type_name(cur)
+            if matches!(cur, Datatype::Code(c) if c.proto.is_none()) {
+                "code".to_string()
+            } else {
+                Self::generic_type_name(cur)
+            }
         } else {
             cur.get_display_name().to_string()
         };
@@ -7441,6 +7460,25 @@ impl PrintC {
         // P0.5 ladder below (is_input; a shared-storage phi keeps its own
         // high's name).
         if vn.get_space() == AddressSpace::Register && vn.is_input() {
+            // PRINTC-BADJT-PARAMSYM-0001: the oracle determination order is
+            // symbol-first — pushVnExplicit -> pushSymbolDetail
+            // (printlanguage.cc:218-262) reads the HighVariable's symbol,
+            // which for a param INPUT is the ProtoStoreSymbol category
+            // symbol (attached by linkSymbol -> queryProperties at the
+            // input's entry-1 usepoint), and a whole-map symbol whose type
+            // needs no resolution prints `pushSymbol` displayName
+            // (printlanguage.cc:241-245). Renames through that Symbol
+            // (lookForBadJumpTables -> UNRECOVERED_JUMPTABLE,
+            // coreaction.cc:2799-2801) therefore own the call-site text.
+            // The category gate below is the Rust twin of that channel: it
+            // matches ONLY function_parameter slot symbols (param_N,
+            // platform names, or renames thereof — never the unsynced
+            // `in_register_` auto names, which are no_category creations),
+            // so the P0.4 proto-name compensation below stays authoritative
+            // for every unsynced flow.
+            if let Some(sym) = self.param_backing_symbol_for_vn(vn) {
+                return sym.display_name.clone();
+            }
             if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                 return pname.clone();
             }
@@ -8532,8 +8570,23 @@ impl PrintC {
             // token, then dereference, then the target Varnode (cc:640-650),
             // yielding `(*(code *)target)(args)`. In particular, a GOT-slot
             // target keeps its PTR_ symbol instead of becoming FUN_<offset>.
+            // PRINTC-BADJT-PARAMSYM-0001: the `(code *)` cast transport is
+            // dropped for a target whose read-facing type already IS the
+            // code pointer (castStandard identity outcome, cast.cc:303) —
+            // same gate as op_callind's direct dispatch.
             OpCode::CPUI_CALLIND => {
-                self.emit.print("(*(code *)");
+                let target_is_code_ptr = def_op.get_in(0).is_some_and(|in0| {
+                    let target = in0.read().unwrap();
+                    let curtype = target
+                        .get_high_type_read_facing(def_op, 0)
+                        .or_else(|| target.v_type.clone());
+                    Self::is_code_pointer_dt(curtype.as_ref())
+                });
+                if target_is_code_ptr {
+                    self.emit.print("(*");
+                } else {
+                    self.emit.print("(*(code *)");
+                }
                 if let Some(in0) = def_op.get_in(0) {
                     let target = in0.read().unwrap();
                     if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
@@ -12727,6 +12780,36 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: is_code_pointer_dt (print-side projection of
+    //   ActionSetCasts::castInput's no-cast outcome, coreaction.cc:2655-2671
+    //   + cast.cc:300 castStandard identity check)
+    /// Whether `dt` is the code-pointer type a CALLIND slot-0 expects —
+    /// `Pointer` over a proto-less `Code` base (`TypeOpCallind::getInputLocal`
+    /// builds `getTypePointer(size, getTypeCode(), wordsize)`, typeop.cc:
+    /// 752-756). The oracle inserts the CALLIND CAST unless
+    /// `castStandard(reqtype, curtype)` returns non-null, and its first
+    /// identity check (`curtype == reqtype`, cast.cc:303) holds exactly when
+    /// the target's read-facing type IS the factory code-pointer — the same
+    /// Arc the inputLocal channel mints, which type propagation carries
+    /// whole (both symbol dtype and proto param dtype hold one Arc —
+    /// PRINTC-BADJT-PARAMSYM-0001 probe). A structural match on Rugra's
+    /// alias (anonymous proto-less Code base) reproduces that outcome: the
+    /// code*-typed target prints `(*sym)(...)` with no `(code *)` cast
+    /// (`(*UNRECOVERED_JUMPTABLE)(...)`, ghidra_httpd_1204.c:4927), every
+    /// other target keeps the cast (`(*(code *)PTR_...)()`, canon line 7).
+    fn is_code_pointer_dt(dt: Option<&Arc<Datatype>>) -> bool {
+        dt.is_some_and(|d| {
+            matches!(
+                d.as_ref(),
+                Datatype::Pointer(p)
+                    if matches!(
+                        p.ptr_to.as_ref(),
+                        Datatype::Code(c) if c.proto.is_none()
+                    )
+            )
+        })
+    }
+
     // Ghidra: printc.cc:637 PrintC::opCallind
     /// Emit an indirect CALL op. Faithful port of `PrintC::opCallind(const
     /// PcodeOp*)` (printc.cc:637-671).
@@ -12781,7 +12864,30 @@ impl PrintC {
         let mut count = n_inputs.saturating_sub(1);
         if skip >= 0 { count = count.saturating_sub(1); }
         // printc.cc:649-670: three-way dispatch on count.
-        self.emit.print("(*(code *)");
+        // PRINTC-CALLIND-CODECAST-0001 / PRINTC-BADJT-PARAMSYM-0001: the
+        // `(code *)` text is the transport of the oracle's setcasts CAST on
+        // the CALLIND slot-0 input (TypeOpCallind::getInputLocal types slot
+        // 0 as the code pointer, typeop.cc:752-756; castInput inserts the
+        // CAST, coreaction.cc:2704+). ActionSetCasts SKIPS that CAST when
+        // the target's read-facing type already IS the code pointer
+        // (castStandard's identity check `curtype == reqtype`, cast.cc:303),
+        // which is the symbol-backed renamed-param case — the oracle prints
+        // `(*UNRECOVERED_JUMPTABLE)(...)` (ghidra_httpd_1204.c:4927) with
+        // NO cast. The same structural condition drops the transport here;
+        // every other target (GOT-slot globals, LOAD results) keeps it,
+        // matching the canon `(*(code *)PTR_...)()` sites.
+        let target_is_code_ptr = op.get_in(0).is_some_and(|in0| {
+            let target = in0.read().unwrap();
+            let curtype = target
+                .get_high_type_read_facing(op, 0)
+                .or_else(|| target.v_type.clone());
+            Self::is_code_pointer_dt(curtype.as_ref())
+        });
+        if target_is_code_ptr {
+            self.emit.print("(*");
+        } else {
+            self.emit.print("(*(code *)");
+        }
         if let Some(in0) = op.get_in(0) {
             let target = in0.read().unwrap();
             // A resolved GOT-slot symbol is already the oracle's printable
@@ -15385,6 +15491,70 @@ impl PrintC {
         self.emit.end_return_type();
     }
 
+    // RUGRA-GLUE: param_backing_symbol (print-side projection of
+    //   ProtoStoreSymbol::getInput, fspec.cc:3244-3255)
+    /// Fetch the print-time backing Symbol of prototype input slot `slot`.
+    ///
+    /// The decompiled function's FuncProto carries a ScopeLocal-backed
+    /// ProtoStoreSymbol (`FuncProto::setScope`, fspec.cc:3881-3885, wired at
+    /// funcdata.cc:69), whose `getInput(i)` freshly reads
+    /// `scope->getCategorySymbol(Symbol::function_parameter, i)`
+    /// (fspec.cc:3244-3255) — the SAME Symbol object
+    /// `ActionNameVars::lookForBadJumpTables` renames (coreaction.cc:2799,
+    /// `renameSymbol` mutates name+displayName in place, database.cc:2152),
+    /// so a rename is visible through the proto parameter at print time.
+    /// Rugra's FuncProto keeps only the flat parameter store; the folded
+    /// install (coreaction.rs store_install, fspec.cc:3147-3183) maintains
+    /// the same category slots on `varmap::ScopeLocal`, so this projection
+    /// reads the print snapshot (`self.scope`, cloned in doc_function after
+    /// all Actions) exactly like `ProtoStoreSymbol::getInput` reads the live
+    /// category table.
+    fn param_backing_symbol(
+        &self, slot: usize,
+    ) -> Option<&crate::varmap::LocalSymbol> {
+        let scope = self.scope.as_ref()?;
+        let idx = scope.get_category_symbol(
+            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+            slot as i32,
+        )?;
+        scope.symbols.get(idx)
+    }
+
+    // RUGRA-GLUE: param_backing_symbol_for_vn (storage-keyed twin of
+    //   param_backing_symbol for the leaf-name path)
+    /// Fetch the function_parameter-category Symbol whose static storage
+    /// whole-covers `vn` (same address space, `start <= offset` and
+    /// `offset + size <= start + size`, non-dynamic).
+    ///
+    /// The leaf-name oracle path (`pushVnExplicit` -> `pushSymbolDetail`,
+    /// printlanguage.cc:218-262) resolves through the HighVariable's symbol;
+    /// a register INPUT's high symbol is exactly the ProtoStoreSymbol
+    /// category symbol at that storage (attached via `linkSymbol` ->
+    /// `queryProperties` at the input's entry-1 usepoint). Gating on the
+    /// category (not the raw high->symbol channel) keeps Rugra's unsynced
+    /// auto-name symbols (`in_register_...`, no_category creations of the
+    /// linkSymbol bridge) OUT of this lookup — the P0.4 proto-name fallback
+    /// below still covers them.
+    fn param_backing_symbol_for_vn(
+        &self, vn: &Varnode,
+    ) -> Option<&crate::varmap::LocalSymbol> {
+        let scope = self.scope.as_ref()?;
+        let off = vn.get_offset();
+        let size = vn.get_size() as u64;
+        scope
+            .symbols
+            .iter()
+            .filter(|s| {
+                s.category == crate::varmap::symbol_category::FUNCTION_PARAMETER
+                    && !s.is_dynamic
+                    && s.space == vn.get_space()
+            })
+            .find(|s| {
+                let sym_size = if s.size >= 1 { s.size as u64 } else { 1 };
+                s.start <= off && off.saturating_add(size) <= s.start.saturating_add(sym_size)
+            })
+    }
+
     // Ghidra: printc.cc:2222 PrintC::emitPrototypeInputs
     /// Emit the comma-separated input-parameter list. Faithful to
     /// `PrintC::emitPrototypeInputs(const FuncProto*)` (printc.cc:2222-2255).
@@ -15437,9 +15607,31 @@ impl PrintC {
                 // Symbol *sym = param->getSymbol();
                 // printComma = true;
                 print_comma = true;
-                // Rugra ProtoParameter has no backing Symbol yet; the
-                // sym!=null branch (emitVarDecl) is unreachable. We take the
-                // else branch: pushTypeStart + blank atom + pushTypeEnd.
+                // PRINTC-BADJT-PARAMSYM-0001: the backing-Symbol channel.
+                // ProtoStoreSymbol::getInput(i) reads the ScopeLocal's
+                // function_parameter slot-i Symbol (fspec.cc:3244-3255);
+                // emitPrototypeInputs prints THAT object — emitVarDecl uses
+                // the SYMBOL's type and the SYMBOL's displayName
+                // (printc.cc:2239-2240 -> 2497-2508), so an
+                // ActionNameVars rename (UNRECOVERED_JUMPTABLE,
+                // coreaction.cc:2799-2801) reaches the signature through
+                // the mutated Symbol. Rugra's flat FuncProto parameters
+                // never diverge observationally from the category symbols
+                // except through exactly those renames (the folded install
+                // names both sides param_N from the same commit,
+                // fspec.cc:3147-3215), so this branch changes output only
+                // where the oracle's render also changed — the renamed
+                // param slots.
+                if let Some(sym) = self.param_backing_symbol(i).cloned() {
+                    // emitVarDecl(sym) — pushTypeStart(sym->getType(),false)
+                    // + pushSymbol(sym,null,null) + pushTypeEnd + recurse.
+                    self.emit_local_symbol_decl(&sym);
+                    continue;
+                }
+                // Rugra ProtoParameter has no backing Symbol (no scope
+                // snapshot or empty category slot): the else branch
+                // (printc.cc:2242-2247) emits the proto type with a blank
+                // name atom.
                 // pushTypeStart(param->getType(),true);
                 self.push_type_start_opt(Some(&param.data_type), true);
                 // pushAtom(Atom(EMPTY_STRING,blanktoken,no_color));
@@ -15764,11 +15956,23 @@ impl PrintC {
                     // cc:155-157: ct = proto->getOutputType();
                     Some(proto) => Some(proto.return_type.clone()),
                     // cc:158-159: ct = glb->types->getTypeVoid();
-                    None => Some(Arc::new(Datatype::Void(TypeBase::new(
-                        "void".to_string(),
-                        0,
-                        TypeMetatype::Void,
-                    )))),
+                    // PRINTC-BADJT-PARAMSYM-0001: an ANONYMOUS proto-less
+                    // TypeCode breaks here instead of drilling to void. The
+                    // oracle's `TypeFactory::getTypeCode()` (type.cc:3692)
+                    // builds `TypeCode tmp` nameless, but `findAdd` ->
+                    // `findNoName` (type.cc:3454-3476) folds it onto the
+                    // spec coretype `<type name="code" metatype="code"/>`
+                    // (sleigh_arch.cc buildCoreTypes), so every oracle
+                    // code-pointer carries the NAMED "code" base and
+                    // buildTypeStack's named-break fires at cc:151 — the
+                    // oracle never renders pointer-to-code as
+                    // `void (*x)`. Rugra's factory instances can mint
+                    // anonymous proto-less Code layers (the inputLocal
+                    // code-pointer channel dedupes per-tree, and the fd-side
+                    // factory view bypasses the arch coretype table), so the
+                    // same fold is applied HERE: the anonymous proto-less
+                    // Code layer IS the core "code" base for stack purposes.
+                    None => break,
                 },
                 _ => None,
             };
@@ -15848,7 +16052,22 @@ impl PrintC {
         // printc.cc:280-289: anonymous base types spell genericTypeName;
         // named bases spell getDisplayName.
         let base_text = if base.get_name().is_empty() {
-            Self::generic_type_name(base)
+            // PRINTC-BADJT-PARAMSYM-0001: the anonymous proto-less Code
+            // base is the print alias of the oracle's named coretype
+            // "code" (findNoName fold, type.cc:3454-3476 vs
+            // sleigh_arch.cc buildCoreTypes) — build_type_stack breaks
+            // there, and the oracle base atom spells the coretype name
+            // `code` (e.g. `code *UNRECOVERED_JUMPTABLE`,
+            // ghidra_httpd_1204.c:4914). Every other anonymous metatype
+            // keeps genericTypeName.
+            if matches!(
+                base.as_ref(),
+                Datatype::Code(c) if c.proto.is_none()
+            ) {
+                "code".to_string()
+            } else {
+                Self::generic_type_name(base)
+            }
         } else {
             base.get_display_name().to_string()
         };
@@ -16029,22 +16248,18 @@ impl PrintC {
                         self.push_prototype_inputs(proto);
                         self.emit.print(")");
                     }
-                    // cc:337-339: an empty list of parameters — the
-                    // EMPTY_STRING blank atom prints nothing between the
-                    // function_call parens. DIVERGENCE: Ghidra 12.0.4's loop
-                    // does NOT advance `ct` on this arm, so a proto-less
-                    // ANONYMOUS TypeCode spins forever pushing blank atoms
-                    // (verified: the oracle fixture hangs). Rugra instead
-                    // walks buildTypeStack's stack, whose no-proto CODE layer
-                    // drills to the named `void` (cc:158-159) and terminates.
-                    // Conservative, documented divergence: the oracle has no
-                    // terminating output for this input, so no behavior can
-                    // be matched; production never renders declarations of
-                    // proto-less anonymous code types (function-pointer decls
-                    // always carry prototypes). Fixture coverage of the drill
-                    // itself is stage=startonly
-                    // (printc_anonymous_pointer_decl_1204).
-                    None => self.emit.print("()"),
+                    // cc:337-339 + PRINTC-BADJT-PARAMSYM-0001: a proto-less
+                    // Code layer is now always the stack BASE (the
+                    // findNoName fold in build_type_stack breaks there), so
+                    // this arm fires only in base position, where the
+                    // oracle's named-break at cc:322-324 (`getName().size()`)
+                    // emits NO suffix — `code *UNRECOVERED_JUMPTABLE`, no
+                    // `()`. The old "()" divergence arm (oracle hangs
+                    // spinning blank atoms on the anonymous no-proto Code
+                    // loop, verified by fixture) is unreachable: the
+                    // mid-stack anonymous no-proto Code layer that used to
+                    // reach it no longer exists.
+                    None => {}
                 },
                 _ => break,
             }
