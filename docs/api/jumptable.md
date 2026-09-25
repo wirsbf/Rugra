@@ -689,3 +689,19 @@ docs/api/block.md / blockaction.md。
 - 本模块 61 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — JTDEST 错误路径归真（BINSWEEP-JTDEST-UNLINKED-0001）
+
+- `switch_over`（jumptable.cc:2528-2569）目的地解析失败路径归真：oracle 的
+  `FlowInfo::target`（flow.cc:115-138）对未解码地址**抛出** `"Could not find op
+  at target address: (<spc>,<printRaw>)"`（space.cc:206-216 的 0x+2*addrSize
+  零填充、按 >>32/>>48 前导零裁剪，wordsize=1 恒等映射），而 cc:2545-2546 的
+  `"Jumptable destination not linked"` 只覆盖出边扫描失配。Rugra 侧此前把
+  `flow.target()==None`（未解码地址）也折叠进 not-linked 文本，两条件混淆。
+  现未解码地址按 oracle 原文（含空间名 + printRaw 形态）单独上报；site1/3/4
+  （间接 op 无父块 / 目标 op 无父块 / 出边失配）仍走 not-linked。
+- 本路径仅在跳表目的地从未生成 p-code 时可达（有界流范围契约下）；(0, MAX)
+  oracle 契约下不可达。错误文本 change 是唯一行为差（通道/触发条件零改动）。
+- 根因修复在驱动层：examples/gen_decompile.rs 默认臂改 follow_flow_range(0,
+  u64::MAX)（funcdata.cc:163 startProcessing 恒全空间界），见该文件注释与
+  TODO_BOARD BINSWEEP-JTDEST-UNLINKED-0001 行。
