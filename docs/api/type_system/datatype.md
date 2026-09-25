@@ -1,5 +1,15 @@
 # `type_system/datatype.rs` API Reference
 
+**2026-09-26（UNIONRESOLVE-PKG-A-0001 / lane PKGA）**: `TypeStruct::score_single_component`
+（`// Ghidra: type.cc:1893`）签名改收 `(parent, fd, op_ref, slot)`（原
+`(parent, &PcodeOp, slot)` 视图形）——LOAD/STORE 指针臂 cc:1908
+`vn->getTypeReadFacing(op)` 换 `crate::unionresolve::vn_type_read_facing`
+（fd-aware consult，slot 1 键 = 地址输入真实槽位）。union-ptr 地址 resolved 为
+field 指针时，oracle 比较 FIELD 的 pointee 与 `parent`（指针相等即 -1 整结构），
+退化形比较 raw union-ptr 的 pointee——此臂直接决定 `resolve_in_flow` Array/Struct
+臂的 field 选择正确性。唯一调用点 unionresolve.rs `resolve_in_flow`（Array/Struct
+共享臂）同步传 `(fd, op, slot)`。
+
 **2026-08-23 新增**: `Datatype::type_equal`——Ghidra interned TypeFactory 指针比较（如 castOutput 的 `tokenct == outHighType` coreaction.cc:2544）的 Rust 等价：Base 型按 (name,size,metatype) 结构比较，其余形状退回 Arc 同一性。
 
 
