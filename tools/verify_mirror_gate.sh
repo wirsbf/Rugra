@@ -7,6 +7,9 @@
 #   httpd : RUGRA_MIRROR=1     examples/httpd_decompile vs ghidra_httpd_1204.direct-runner.c --base 0
 #   vsh   : RUGRA_GEN_MIRROR=1 examples/gen_decompile /usr/bin/virt-ssh-helper
 #                                   vs ghidra_vsh_1204.direct-runner.c --base 0
+#   sq    : RUGRA_GEN_MIRROR=1 examples/gen_decompile /usr/local/bin/sasquatch
+#                                   vs ghidra_sq_1204.direct-runner.c --base 0
+#                                   (GEN4 fourth-corpus ratchet face)
 #
 # 判定（阶段一：单向棘轮上限，超出即 FAIL）：
 #   skeleton > ceiling            → FAIL（漂移报警：新残差族或既有族回归）
@@ -16,12 +19,12 @@
 #   skeleton ≤ ceiling 即 PASS（低于上限不算失败；收紧上限须先登记 TODO）
 #
 # 用法：
-#   tools/verify_mirror_gate.sh [--corpus curl|httpd|vsh|all] [--bin-dir DIR] [--keep-dir DIR]
+#   tools/verify_mirror_gate.sh [--corpus curl|httpd|vsh|sq|all] [--bin-dir DIR] [--keep-dir DIR]
 #   tools/verify_mirror_gate.sh --update-baseline <TODO_ID>   # 重钉（须给 TODO ID，写入台账行）
 #   tools/verify_mirror_gate.sh --self-test                   # 无二进制自检（解析/断言逻辑）
 #
-# vsh 面的语料二进制（/usr/bin/virt-ssh-helper）是宿主特定资产：缺失时该面
-# 显式 SKIP（exit 0，输出 SKIP 行），curl/httpd 两面仍照常门禁（CI 形态）。
+# vsh/sq 面的语料二进制（/usr/bin/virt-ssh-helper、/usr/local/bin/sasquatch）是宿主特定资产：
+# 缺失时该面显式 SKIP（exit 0，输出 SKIP 行），curl/httpd 两面仍照常门禁（CI 形态）。
 
 set -u
 
@@ -103,6 +106,14 @@ run_face() {
             fi
             RUGRA_GEN_MIRROR=1 RUGRA_GEN_TIMEOUT_SECS=600 \
                 "$BIN_DIR/gen_decompile" "$vsh_bin" > "$bin_out" 2> "$err_log" || true ;;
+        sq)
+            local sq_bin="${SQ_BINARY:-/usr/local/bin/sasquatch}"
+            if [[ ! -x "$sq_bin" ]]; then
+                echo "MIRROR-GATE[sq] SKIP: corpus binary $sq_bin absent (host-specific asset)"
+                return
+            fi
+            RUGRA_GEN_MIRROR=1 RUGRA_GEN_TIMEOUT_SECS=600 \
+                "$BIN_DIR/gen_decompile" "$sq_bin" > "$bin_out" 2> "$err_log" || true ;;
     esac
 
     # ---- 2. compare 摘要 ----
@@ -140,7 +151,7 @@ run_face() {
                 health="fail"; health_detail="timeout markers=$ntimeouts"
             fi
             ;;
-        vsh)
+        vsh|sq)
             local okline
             okline=$(grep -o '\[GEN\] ok=[0-9]*/[0-9]* functions' "$err_log" | tail -1)
             local ok total
@@ -246,6 +257,7 @@ WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rugra-mirror-gate.XXXXXX")
 run_face curl
 run_face httpd
 run_face vsh
+run_face sq
 
 if [[ "$KEEP" == "1" ]]; then
     echo "artifacts kept in $WORK_DIR"
