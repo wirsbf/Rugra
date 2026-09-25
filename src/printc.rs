@@ -5480,16 +5480,23 @@ impl PrintC {
         // `else {` + condition statements + `if` on its own new line. It is
         // cancelled ONLY when the condition emitted nothing after the
         // parent's `else` (printc.cc:2900-2902), producing the merged
-        // `else if(...)`. MAIN-IVAR4-DUP fix: the previous static emulation
-        // decided the merge from the mod alone, so an else-if child whose
-        // condition block carried statements (main's fopen region) lost
-        // BOTH the brace and the `if` line break. option_brace_ifelse
-        // defaults to same_line (printc.cc:1591).
-        let installed_pending_brace = self.is_set(print_mods::PENDING_BRACE);
-        if installed_pending_brace {
-            self.emit
-                .set_pending_brace(crate::prettyprint::BraceStyle::SameLine);
-        }
+        // option_brace_ifelse defaults to same_line (printc.cc:1591).
+        // SQATTR-PENDINGBRACE-IDENTITY-0001: the oracle installs a FRESH
+        // `PendingBrace pendingBrace(...)` stack object per emitBlockIf
+        // call (printc.cc:2882) and all later questions — the cc:2900
+        // cancel/merge decision and the cc:2946 close — are answered from
+        // THAT object (pointer identity, prettyprint.hh:457; indentId,
+        // printc.hh:347-361). Rugra keeps the install's BraceId in this
+        // frame and asks per id; the inherited PENDING_BRACE mod alone is
+        // only the install trigger, never the fire/close state.
+        let installed_brace_id = if self.is_set(print_mods::PENDING_BRACE) {
+            Some(
+                self.emit
+                    .set_pending_brace(crate::prettyprint::BraceStyle::SameLine),
+            )
+        } else {
+            None
+        };
         self.push_mod();
         self.unset_mod(
             print_mods::NO_BRANCH
@@ -5512,7 +5519,11 @@ impl PrintC {
         // otherwise — the brace fired mid-condition, or none was installed —
         // the `if` starts on a new line.
         self.emit_comment_block_tree(&condition);
-        if self.emit.has_pending_print() {
+        // Identity-gated merge (prettyprint.hh:457 `pendPrint == pend`):
+        // only THIS frame's still-installed brace triggers the
+        // cancel+spaces(1) `else if` merge; a nested frame's leftover slot
+        // content must not (and cannot, post-resolution) be mistaken for it.
+        if installed_brace_id.is_some_and(|id| self.emit.has_pending_print_id(id)) {
             // printc.cc:2900-2902: cancelPendingPrint(); spaces(1);
             self.emit.cancel_pending_print();
             self.emit.spaces(1, 0);
@@ -5546,13 +5557,16 @@ impl PrintC {
             };
             self.emit.print(" ");
             self.emit_goto_statement(target_addr, branch_type);
-            // printc.cc:2917 falls through to popMod + the printc.cc:2946-2948
-            // deferred pending-brace close. Cancel any still-pending
-            // (un-fired) brace first: the oracle's PendPrint slot would
-            // dangle past the emitBlockIf stack frame here (printc.cc:2872),
-            // so an unconditional later fire is not an oracle behavior.
-            self.emit.cancel_pending_print();
-            if installed_pending_brace && self.emit.pending_brace_fired() {
+            // printc.cc:2914-2917 has NO cancelPendingPrint in the goto
+            // arm: the slot was already resolved above (the cc:2900-2905
+            // identity check either fired the brace — slot cleared by
+            // emitPending, prettyprint.hh:1129-1137 — or cancelled it), so
+            // nothing of this frame can remain installed. The cc:2946-2948
+            // close is the frame's own decision: only an install of THIS
+            // frame that FIRED gets a closeBraceIndent (identity-gated;
+            // SQATTR-PENDINGBRACE-IDENTITY-0001 — the old global-flag read
+            // double-closed a nested frame's fired brace here).
+            if installed_brace_id.is_some_and(|id| self.emit.pending_brace_fired_id(id)) {
                 self.emit.close_brace_indent("}");
             }
             self.pop_mod();
@@ -5601,9 +5615,14 @@ impl PrintC {
 
         // printc.cc:2946-2948: if (pendingBrace.getIndentId() >= 0)
         //   emit->closeBraceIndent(CLOSE_CURLY, pendingBrace.getIndentId());
-        // Close the brace a FIRED PendingBrace opened right after the
-        // parent's `else` (the else-arm child consumed it above).
-        if installed_pending_brace && self.emit.pending_brace_fired() {
+        // Close the brace a FIRED PendingBrace of THIS frame opened right
+        // after the parent's `else` (the else-arm child consumed it above).
+        // Identity-gated (the frame's own PendingBrace object, printc.hh:
+        // 347-361) — a nested frame's fire must not produce a second close
+        // here (SQATTR-PENDINGBRACE-IDENTITY-0001: the stale global flag
+        // did exactly that, popping the indentstack empty and panicking
+        // prettyprint.rs print_token's relative-break arm).
+        if installed_brace_id.is_some_and(|id| self.emit.pending_brace_fired_id(id)) {
             self.emit.close_brace_indent("}");
         }
         self.pop_mod();

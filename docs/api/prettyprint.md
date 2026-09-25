@@ -873,13 +873,48 @@ E2E:curl `while( true )` ×3 与 golden 逐字节一致,3 处 if-break 保持,
 
 ### 2026-08-30：PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 配套 — PendPrint 槽 + backfill 签名 `;` 门 + while-if 折叠前缀
 
-**PendPrint 槽（Emit trait 4 新方法）**：`set_pending_brace`/`cancel_pending_print`/
-`has_pending_print`/`pending_brace_fired`。oracle 的 PendPrint 槽是 **Emit 基类**状态
+**PendPrint 槽（Emit trait 4 方法）**：`set_pending_brace`/`cancel_pending_print`/
+`has_pending_print_id`/`pending_brace_fired_id`。oracle 的 PendPrint 槽是 **Emit 基类**状态
 （prettyprint.hh:102/446-457），`emitPending` 触发只在 EmitPrettyPrint/EmitMarkup::tagLine
 （prettyprint.cc:920/930/129/136）；EmitNoMarkup::tagLine（hh:557）不触发，故其路径恒为
 "已安装未触发"→ printc.cc:2900-2902 cancel+spaces(1) 合并 else-if。Rugra 两侧均按此实现：
 EmitNoMarkup 只存槽不触发；EmitPrettyPrint 在 tag_line push 前调用私有 `emit_pending()`
 （`open_brace_indent("{", style)`，PendingBrace::callback printc.cc:2872-2876）。
+
+### 2026-09-26：SQATTR-PENDINGBRACE-IDENTITY-0001 — PendPrint 槽身份化（BraceId）
+
+**根因**（本 lane PFLUSH 仪器复钉，与 SQATTR 归因独立收敛）：oracle 的 `PendingBrace` 是
+**每次 `emitBlockIf` 调用一枚栈对象**（printc.cc:2882，printc.hh:347-361，`indentId` 起始
+-1、callback 置 >=0），装/查/关全走**指针身份**——`hasPendingPrint` 比较 `pendPrint == pend`
+（prettyprint.hh:457），`cc:2946-2948` 只关**自己那枚**已触发 brace。Rugra 旧实现把
+`pending_brace_fired` 做成 **emitter 级全局粘性布尔**（set 时清零、fire 时置位、无人复
+位）：嵌套 else-if 子帧触发后，外层帧的 `installed && fired()` 读到子帧的残火 → 对未开
+过 brace 的帧多发一次 `close_brace_indent` → 函数级 startIndent/stopIndent 计数 21/22 失
+衡 → 尾部多余 `}` 弹掉 func_b 缩进级 → `print_token` 相对断行臂在空 indentstack 上
+`unwrap()` panic（prettyprint.rs:3946 家族；sq 2 索引 + sqlite3 27 索引 3/3 轮确定性复现，
+全部有 oracle golden=同输入跑通）。另证：printc.rs 文本捕获惯用法（temp NoMarkup 换
+`self.emit`，如 :4536）会把 fire/cancel 拆到不同 emitter 对象上，全局布尔进一步失真——
+身份化后每枚 emitter 的 id 空间自洽，该裂缝自然闭合。
+
+**修法（1:1 身份模型）**：`pub type BraceId = u64` 顶替栈对象地址。`set_pending_brace` 铸
+新 id 并入槽（`(BraceId, BraceStyle)`，oracle `pendPrint = pend`）；`has_pending_print_id`
+= 槽内 id 相等（hh:457 指针相等）；EmitPrettyPrint 另置 `fired_braces: Vec<(BraceId,
+bool)>` = 每 install 一行的触发记忆（= 栈对象 `indentId` 的 Rust 化身：ctor 行 push
+`(id,false)`，`emit_pending` 清槽**先于** callback（hh:1129-1137 顺序）后翻位）；
+`pending_brace_fired_id` 只答本 id（cc:2946 `getIndentId()>=0`）。`clear()`（cc:1153 无此
+状态——oracle 状态在帧栈对象里，不可跨函数存活）重置槽+记忆+计数器。EmitNoMarkup 同槽
+结构但无触发（hh:557），`pending_brace_fired_id` 恒 false=trait 默认。printc
+`emit_structured_if` 四处改门：install 持帧内 `Option<BraceId>`、cc:2900 合并门按 id 查
+槽、**goto 臂删掉 oracle 没有的 cancel**（cc:2914-2917 无此项——cc:2900-2905 已保证本帧
+槽必先解决）、cc:2946 尾关按 id 查触发。
+
+**验收**（差分门禁机制 B 全过，A/B 亲测=CARGO_TARGET_DIR 双 target 前后二进制对拍）：sq
+609/620 rc=0 + vs golden defects=0/numbering=0（残差仅 `unaff_100000f8` 3 行=GENSMOKE-S4
+既有族）；sqlite3 27/27 panic 索引全清 + 逐函数 defects=0/numbering=0（骨架差全部归入
+CAST/UNAFF/OPNAME 既有登记族）；**五面 A/B 字节恒等**——canon curl 124/124 267/0/0、
+canon httpd 34/34 285/0/0、镜面 curl 78/275、httpd 208/460、vsh 15/55（修复前后同数同
+字节=非 panic 语料上身份门与旧全局旗标行为等价，唯一可观测变化=29 个 panic 函数转正；
+旧记录 369/211/301 系 master 漂移非本修）；bank 391/391。
 
 **backfill_missing_locals 签名 `;` 门（MAIN-IVAR4-DUP 第 2 层）**：MAIN-RC3 翻门暴露的
 `stmt; if (...) {` 同行形态（`(_IO_FILE *)` 命中 `contains(" *")` 臂）曾被误判为函数签名，

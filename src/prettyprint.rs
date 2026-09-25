@@ -15,6 +15,18 @@ pub enum BraceStyle {
     SkipLine,
 }
 
+/// RUGRA-GLUE: identity of one pending-brace install.
+/// The oracle identifies a pending print by the address of the caller's
+/// `PendingBrace` stack object (`prettyprint.hh:457 hasPendingPrint` compares
+/// `pendPrint == pend`; `printc.cc:2946` closes only when THAT object's
+/// `getIndentId() >= 0`, printc.hh:347-361). Rust has no stable object
+/// address across a `Box<dyn Emit>` boundary, so each `set_pending_brace`
+/// call mints a fresh monotonically increasing id that stands in for the
+/// stack object's identity; `has_pending_print_id` /
+/// `pending_brace_fired_id` answer per-id, exactly the two questions the
+/// oracle asks of its pointer (SQATTR-PENDINGBRACE-IDENTITY-0001).
+pub type BraceId = u64;
+
 /// Trait for emitting decompilation tokens
 ///
 /// This provides a generic interface for "printing" decompiled code,
@@ -146,13 +158,20 @@ pub trait Emit {
     /// PendingBrace). The oracle holds a PendPrint* whose callback runs
     /// `openBraceIndent(OPEN_CURLY, style)` prior to the NEXT tagLine()
     /// (emitPending, prettyprint.hh:1129-1137) unless cancelled first.
-    /// Plain-text emitters other than EmitPrettyPrint have no pending slot
-    /// in the oracle (only EmitMarkup/EmitPrettyPrint call emitPending,
-    /// prettyprint.cc:129/136/920/930), so the trait default is a no-op and
-    /// `has_pending_print` reads false — callers then always take the
-    /// plain tagLine arm, exactly like the oracle's EmitNoMarkup paths.
-    fn set_pending_brace(&mut self, style: BraceStyle) {
+    /// Returns the install's `BraceId` (the oracle's stand-in for the
+    /// `PendingBrace` stack-object identity, prettyprint.hh:457): the
+    /// installing frame passes it back to `has_pending_print_id` /
+    /// `pending_brace_fired_id`, which answer per install — never per
+    /// emitter-global state — so a nested frame's fire cannot be mistaken
+    /// for this frame's (SQATTR-PENDINGBRACE-IDENTITY-0001). Plain-text
+    /// emitters other than EmitPrettyPrint never run the callback in the
+    /// oracle (only EmitMarkup/EmitPrettyPrint call emitPending,
+    /// prettyprint.cc:129/136/920/930), so the trait default mints no slot
+    /// and identity queries read false — callers then always take the plain
+    /// tagLine arm, exactly like the oracle's EmitNoMarkup paths.
+    fn set_pending_brace(&mut self, style: BraceStyle) -> BraceId {
         let _ = style;
+        0
     }
 
     // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
@@ -161,15 +180,25 @@ pub trait Emit {
     fn cancel_pending_print(&mut self) {}
 
     // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
-    /// Is the pending print still installed (un-fired and un-cancelled)?
-    fn has_pending_print(&self) -> bool { false }
+    /// Is THIS install's pending print still in the slot (un-fired and
+    /// un-cancelled)? The oracle compares the caller's object pointer:
+    /// `pendPrint == pend`. A nested install that replaced the slot makes
+    /// this read false for the outer install — the oracle-identical answer.
+    fn has_pending_print_id(&self, id: BraceId) -> bool {
+        let _ = id;
+        false
+    }
 
-    // Ghidra: printc.cc:2877-2879 PendingBrace::getIndentId
-    /// True iff this emitter's installed pending brace HAS fired (the
-    /// oracle exposes indentId, which is >= 0 exactly after the callback
-    /// ran; printc.cc:2946-2948 closes the brace only then). Reads false
-    /// when no pending brace was installed this round.
-    fn pending_brace_fired(&self) -> bool { false }
+    // Ghidra: printc.hh:347-360 PendingBrace::getIndentId
+    /// Did THIS install's pending brace fire? The oracle's frame-owned
+    /// `PendingBrace.indentId` starts -1 and turns >= 0 exactly when the
+    /// callback ran (printc.cc:2872-2876); printc.cc:2946-2948 closes the
+    /// brace only for the frame whose own object fired. Per-id query so a
+    /// sibling/nested frame's fire never leaks into this frame's answer.
+    fn pending_brace_fired_id(&self, id: BraceId) -> bool {
+        let _ = id;
+        false
+    }
 
     // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
     /// Emit an opening brace and start a new indent level. Faithful to
@@ -570,7 +599,10 @@ pub struct EmitNoMarkup {
     /// brace therefore stays installed through the condition block, and
     /// printc.cc:2900-2902 always takes the cancel+spaces(1) merge —
     /// mirroring the oracle byte-for-byte.
-    pending_brace: Option<BraceStyle>,
+    pending_brace: Option<(BraceId, BraceStyle)>,
+    /// RUGRA-GLUE: monotonically increasing install id (stands in for the
+    /// oracle's PendingBrace stack-object identity, prettyprint.hh:457).
+    next_brace_id: BraceId,
 }
 
 impl Default for EmitNoMarkup {
@@ -587,6 +619,7 @@ impl EmitNoMarkup {
             output: String::new(),
             indent: 0,
             pending_brace: None,
+            next_brace_id: 1,
         }
     }
 
@@ -3236,8 +3269,11 @@ impl Emit for EmitNoMarkup {
     }
 
     // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (base-class slot)
-    fn set_pending_brace(&mut self, style: BraceStyle) {
-        self.pending_brace = Some(style);
+    fn set_pending_brace(&mut self, style: BraceStyle) -> BraceId {
+        let id = self.next_brace_id;
+        self.next_brace_id += 1;
+        self.pending_brace = Some((id, style));
+        id
     }
 
     // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
@@ -3246,8 +3282,13 @@ impl Emit for EmitNoMarkup {
     }
 
     // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
-    fn has_pending_print(&self) -> bool {
-        self.pending_brace.is_some()
+    /// Identity query (`pendPrint == pend`): true only while THIS install
+    /// still occupies the slot. This emitter never runs the callback
+    /// (prettyprint.hh:557 EmitNoMarkup::tagLine has no emitPending), so
+    /// the slot is only ever cleared by an explicit cancel — the
+    /// oracle-identical "always merge else-if on this face" behavior.
+    fn has_pending_print_id(&self, id: BraceId) -> bool {
+        matches!(&self.pending_brace, Some((slot_id, _)) if *slot_id == id)
     }
 
     // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
@@ -3754,12 +3795,19 @@ pub struct EmitPrettyPrint {
     lowlevel: EmitNoMarkup,
     /// Ghidra: prettyprint.hh:102 Emit::pendPrint — one PendPrint slot.
     /// Rugra stores the deferred brace style directly (printc.cc:2872-2880
-    /// PendingBrace: callback == openBraceIndent(OPEN_CURLY, style)).
-    pending_brace: Option<BraceStyle>,
-    /// Ghidra: printc.cc:2877-2879 PendingBrace::indentId — starts -1 and
-    /// is set by the callback, so >= 0 iff the brace fired. Used by
-    /// printc.cc:2946-2948 to decide the deferred closeBraceIndent.
-    pending_brace_fired: bool,
+    /// PendingBrace: callback == openBraceIndent(OPEN_CURLY, style)) keyed
+    /// by the install's BraceId (the oracle's stack-object identity).
+    pending_brace: Option<(BraceId, BraceStyle)>,
+    /// RUGRA-GLUE: fire memory per install — the oracle keeps this in the
+    /// caller's `PendingBrace` stack object (`indentId`, printc.hh:347-361:
+    /// -1 until the callback runs, >= 0 after), which survives slot
+    /// clearing and replacement by a nested install. The Vec entry
+    /// `(id, fired)` is that object's lifetime: pushed by set_pending_brace
+    /// (ctor indentId=-1), flipped by the callback in emit_pending, read by
+    /// pending_brace_fired_id (`getIndentId() >= 0`, printc.cc:2946-2948).
+    fired_braces: Vec<(BraceId, bool)>,
+    /// RUGRA-GLUE: monotonically increasing install id minting.
+    next_brace_id: BraceId,
     indentstack: Vec<i32>,
     spaceremain: i32,
     maxlinesize: i32,
@@ -3786,7 +3834,8 @@ impl EmitPrettyPrint {
         let mut e = EmitPrettyPrint {
             lowlevel: EmitNoMarkup::new(),
             pending_brace: None,
-            pending_brace_fired: false,
+            fired_braces: Vec::new(),
+            next_brace_id: 1,
             indentstack: Vec::new(),
             spaceremain: 100,
             maxlinesize: 100,
@@ -4159,6 +4208,13 @@ impl EmitPrettyPrint {
         self.needbreak = false;
         self.commentmode = false;
         self.spaceremain = self.maxlinesize;
+        // PendPrint slot + per-install fire memory are not part of the
+        // oracle printer's clear() (the oracle keeps them in per-call
+        // stack objects that cannot outlive their frame); resetting here
+        // keeps the id-keyed emulation from carrying ids across functions.
+        self.pending_brace = None;
+        self.fired_braces.clear();
+        self.next_brace_id = 1;
     }
 
     // Ghidra: prettyprint.cc:1194 EmitPrettyPrint::flush
@@ -4192,10 +4248,15 @@ impl EmitPrettyPrint {
     /// like the oracle). PendingBrace::callback (printc.cc:2872-2876) is
     /// `indentId = emit->openBraceIndent(OPEN_CURLY, style)`: the space +
     /// '{' tokens enter the queue at this point, ahead of the tagLine that
-    /// triggered the fire.
+    /// triggered the fire. The callback writes into the CALLER's
+    /// PendingBrace object (indentId = the returned level id); the id-keyed
+    /// emulation flips that install's fire memory instead of a global flag,
+    /// so only the owning frame ever observes the fire.
     fn emit_pending(&mut self) {
-        if let Some(style) = self.pending_brace.take() {
-            self.pending_brace_fired = true;
+        if let Some((id, style)) = self.pending_brace.take() {
+            if let Some(entry) = self.fired_braces.iter_mut().rev().find(|e| e.0 == id) {
+                entry.1 = true;
+            }
             self.open_brace_indent("{", style);
         }
     }
@@ -4448,11 +4509,15 @@ impl Emit for EmitPrettyPrint {
     }
 
     // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (via PendingBrace)
-    fn set_pending_brace(&mut self, style: BraceStyle) {
-        self.pending_brace = Some(style);
-        // Fresh PendingBrace stack object: indentId resets to -1
-        // (printc.cc:2872-2875).
-        self.pending_brace_fired = false;
+    fn set_pending_brace(&mut self, style: BraceStyle) -> BraceId {
+        let id = self.next_brace_id;
+        self.next_brace_id += 1;
+        // Fresh PendingBrace stack object: indentId starts -1
+        // (printc.hh:349-351 ctor). The Vec entry is that object; the slot
+        // holds (id, style) the way the oracle slot holds the pointer.
+        self.fired_braces.push((id, false));
+        self.pending_brace = Some((id, style));
+        id
     }
 
     // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
@@ -4461,13 +4526,25 @@ impl Emit for EmitPrettyPrint {
     }
 
     // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
-    fn has_pending_print(&self) -> bool {
-        self.pending_brace.is_some()
+    /// Identity query (`pendPrint == pend`): true only while THIS install
+    /// still occupies the slot. A nested frame's install replaces the slot
+    /// and this reads false for the outer id — exactly the pointer
+    /// comparison's answer.
+    fn has_pending_print_id(&self, id: BraceId) -> bool {
+        matches!(&self.pending_brace, Some((slot_id, _)) if *slot_id == id)
     }
 
-    // Ghidra: printc.cc:2877-2879 PendingBrace::getIndentId >= 0
-    fn pending_brace_fired(&self) -> bool {
-        self.pending_brace_fired
+    // Ghidra: printc.hh:347-360 PendingBrace::getIndentId >= 0
+    /// Per-install fired query: the oracle asks the frame's own object
+    /// (printc.cc:2946-2948); a sibling or nested frame's fire flips a
+    /// different entry and cannot leak into this answer.
+    fn pending_brace_fired_id(&self, id: BraceId) -> bool {
+        self.fired_braces
+            .iter()
+            .rev()
+            .find(|e| e.0 == id)
+            .map(|e| e.1)
+            .unwrap_or(false)
     }
 
     // Ghidra: prettyprint.cc:937 EmitPrettyPrint::beginReturnType

@@ -957,6 +957,13 @@ printc.cc:2260/2518/2497）：
 - **验收**：curl E2E（HEAD `e17b4295` 干净树对照同构 fast-release 构建）：HEAD 输出 **0 个 goto**（16 处裸 `(cond);`/条件丢弃形态）→ 修复后 **22 个 `if (cond) goto <label>;`**（golden 61；缺口=flat opCbranch 完整移植（stash `flatcbr-prev-agent-diff` 中的 FLAT mod + op_cbranch_rpn 全臂，未含本轮）与结构化覆盖域）；skeleton 2927→2923、defects 0→0、numbering 1→1（唯一 match_url numbering 为既有存量，与本改动无关）；多次重跑输出字节一致（一次 main TIMEOUT 为 10s 上限的负载抖动，复跑恢复）。逐行 diff 确认全部变化均为裸条件语句 → if-goto 形态（含 2 处复合条件 `(A) || (B)` 合并恢复：match_url 与 my_get_token 的两条独立条件语句合并回单条复合 if-goto）。样本：`(piVar37 != 0);` → `if (piVar37 != 0) goto code_r0x00002728;`（result/curl_cur.c main）。
 - **表示层残差**（如实登记）：①`if (` 文本直接 print（无 tagOp markup——Rugra EmitNoMarkup 无 markup 通道，文本等价）；②空体/畸形条件仍走 R50 `1` 回退；③goto 目标 label 与 golden 的 `LAB_` 符号名差异属 varmap 符号化域（golden 经 ScopeLocal queryCodeLabel，Rugra 的 `code_label` 已是 emitLabel 兜底形式 cc:3183-3192 的移植）；④golden 的 `file2string`/`parseconfig` 全体 goto 形态还依赖 flat 模式与结构化覆盖的后续 wave。
 
+### PRINTC-PENDINGBRACE-IDENTITY——emit_structured_if 的 PendingBrace 身份门（SQATTR-PENDINGBRACE-IDENTITY-0001，2026-09-26）
+
+- **Ghidra 语义**（printc.cc:2882-2949 `PrintC::emitBlockIf`）：`PendingBrace pendingBrace(option_brace_ifelse)` 是**本帧栈对象**（printc.hh:347-361，`indentId` ctor=-1，callback=cc:2872-2876 `openBraceIndent` 置位）；`isSet(pending_brace)` 时 `emit->setPendingPrint(&pendingBrace)`（cc:2884-2885）装槽；cc:2900 `hasPendingPrint(&pendingBrace)` **指针身份**判定——真则 `cancelPendingPrint()+spaces(1)`（else-if 合并），假则 `tagLine()`（brace 已中途触发或未安装）；cc:2946-2948 `pendingBrace.getIndentId() >= 0` 时**只有 owner 帧**补 `closeBraceIndent`。goto 臂（cc:2914-2917）**无 cancel**——cc:2900-2905 已保证本帧槽必先解决（触发即清槽 hh:1129-1137 / 取消即清槽 hh:451），不存在槽悬挂。
+- **Rugra 缺陷**：旧实现的 `installed_pending_brace=继承 mod 旗标` + emitter 级全局 `pending_brace_fired` 粘性布尔（无人复位）→ 嵌套 else-if 子帧触发后，父帧尾部 `installed && fired()` 读到子帧残火多发一次 `close_brace_indent` → startIndent/stopIndent 21/22 失衡 → 尾部多余 `}` 弹空 indentstack → prettyprint.rs:3946 相对断行 unwrap panic（sq 609/620 + sqlite3 27 索引族；PFLUSH 车道逐 token 台账+双关闭签名仪器独立复钉，与 SQATTR FWDLOG/MiniOppen 归因收敛）。goto 臂多余的 `cancel_pending_print`（oracle 无）在全局槽时代是防悬挂补丁，身份化后按 oracle 删除。
+- **修复**：install 持帧内 `Option<BraceId>`（`set_pending_brace` 返回新铸 id，oracle 栈对象身份的 Rust 化身）；cc:2900 合并门 → `has_pending_print_id(id)`；goto 臂/尾部关 → `pending_brace_fired_id(id)` + 删 cancel。emit 层状态模型详见 docs/api/prettyprint.md「SQATTR-PENDINGBRACE-IDENTITY-0001」节。
+- **验收**：sq 609/620 rc=0、defects=0/numbering=0（残差=unaff 既有族 3 行）；sqlite3 27 panic 索引全清 0/0；五面 A/B 字节恒等（canon curl 267/0/0+httpd 285/0/0、镜面 curl 78/httpd 208/vsh 15 修复前后同数——非 panic 语料行为等价）；bank 391/391；gcc 审计 104/20、15/14 == 常驻基线。
+
 ---
 
 ## 设计边界
