@@ -548,6 +548,7 @@ fn collect_known_entry_shared_return_overrides(
     binary_image: &[u8],
     elf: &goblin::elf::Elf,
     plt_entries: &HashMap<u64, String>,
+    analysis_bodies: &[(u64, u64)],
 ) -> Result<Vec<FlowOverrideRecord>, Box<dyn std::error::Error>> {
     const SHF_EXECINSTR: u64 = 0x4;
     const SHT_PROGBITS: u32 = 1;
@@ -595,21 +596,22 @@ fn collect_known_entry_shared_return_overrides(
     // loader-symbol body, but Ghidra's Program functions carry
     // analysis-derived bodies (the disassembler computed them from the
     // actual instruction stream, not st_size) — Shared Return Calls reads
-    // those. The golden corpus ledger records the analysis result for this
-    // exact binary (frame_dummy = 9 bytes: endbr64 + jmp
-    // register_tm_clones), so ledger sizes stand in for the analysis body
-    // of every entry the loader left bodyless. Without this, frame_dummy's
-    // tail `jmp register_tm_clones` (0x3454 → 0x33d0, both st_size==0)
-    // produced no CALL_RETURN override, the worker followed the jump out
-    // of bounds (flow.cc:534 warning), dropped the body, and emitted the
-    // two spurious header warnings where the oracle prints
+    // those. The analysis-body table stands in for the analysis result of
+    // every entry the loader left bodyless: the locked golden corpus
+    // ledger records it for this exact binary (frame_dummy = 9 bytes:
+    // endbr64 + jmp register_tm_clones), and the DISCOV universe supplies
+    // its next-entry derived bounds the same way. Without this,
+    // frame_dummy's tail `jmp register_tm_clones` (0x3454 → 0x33d0, both
+    // st_size==0) produced no CALL_RETURN override, the worker followed
+    // the jump out of bounds (flow.cc:534 warning), dropped the body, and
+    // emitted the two spurious header warnings where the oracle prints
     // `register_tm_clones(); return;`.
-    for &(ledger_vaddr, _ledger_name, ledger_size) in GOLDEN_CORPUS_LEDGER.iter() {
-        if ledger_size == 0 {
+    for &(body_vaddr, body_size) in analysis_bodies {
+        if body_size == 0 {
             continue;
         }
-        let end = ledger_vaddr + ledger_size as u64;
-        match body_ends.entry(ledger_vaddr) {
+        let end = body_vaddr + body_size;
+        match body_ends.entry(body_vaddr) {
             std::collections::btree_map::Entry::Vacant(slot) => {
                 slot.insert(end);
             }
@@ -1567,6 +1569,402 @@ fn external_block_base(elf: &goblin::elf::Elf) -> u64 {
         .max()
         .unwrap_or(0);
     last_alloc_end.div_ceil(LINKAGE_BLOCK_ALIGNMENT) * LINKAGE_BLOCK_ALIGNMENT
+}
+
+// ============================================================================
+// FULL-CORPUS-0001 discovery layer (RUGRA_DISCOV=1, opt-in)
+// ----------------------------------------------------------------------------
+// The default corpus face takes its 124-entry universe from the locked
+// GOLDEN_CORPUS_LEDGER (the analyzeHeadless provenance record). This layer
+// replaces that hard list with a behavioral reconstruction of the Ghidra
+// loader/analyzer function discovery, so the driver's function universe
+// stands on its own binary-reading legs. Judgment criterion (locked tree
+// carries only the decompile C++ oracle): the discovered address set vs
+// the ledger/canon window — the comparison report below, not a line-by-line
+// Java correspondence.
+//
+//   seeds
+//   * ELF entry point (e_entry) — the entry-point function the ELF
+//     importer + EntryPointAnalyzer create (_start here);
+//   * defined STT_FUNC symbols from every symbol table (.symtab ∪
+//     .dynsym) inside executable sections — the loader's symbol-backed
+//     functions. This fixture's internal functions, main, the crt stubs
+//     and _init/_fini all live in .symtab; .dynsym is the only source on
+//     a stripped binary, which is why both tables are walked;
+//   * PLT slots — the .plt header slot (PLT0; canon witness FUN_00102020
+//     at 0x2020), the relocation-backed .plt.sec entries (16-byte
+//     stride; when .plt.sec is absent the lazy .plt entries after PLT0
+//     take that role), and the 8-byte .plt.got slots validated by their
+//     `endbr64; bnd jmp *disp32(%rip)` encoding (the same shape the
+//     driver's PLT resolution above scans). The lazy .plt entries are
+//     deliberately NOT functions when .plt.sec exists: with BIND_NOW no
+//     call ever reaches them, and the canon ledger records none;
+//   * EXTERNAL-block slots — one per undefined .dynsym import at
+//     external_block_base with stride 8 (getNextExternalBlockEntryAddress
+//     allocation order; the EXTERNAL-STUB-SUPPORT-0001 machinery renders
+//     their halt_baddata sections).
+//
+//   call-graph following
+//   Every seeded body in an executable section is linearly decoded
+//   (iced-x86, the decoder the Shared Return Calls prepass already uses)
+//   and each direct CALL target that lands in an executable section and
+//   outside every known entry/body becomes a new function — the same
+//   "analyzer-discovered callee" channel the httpd driver uses (its
+//   call_targets prepass over `inst.is_call()` branch targets), which is
+//   the front-end universe PARAMID iterates. Newly found bodies are
+//   swept in turn; the loop runs to a fixed point. CALLIND sites carry
+//   no constant target at discovery time — Ghidra resolves those at
+//   decompile time through the thunk/jumptable machinery the worker
+//   already runs — so only direct CALL targets enter the worklist.
+//
+//   body extents
+//   st_size>0 symbols keep st_size; PLT slots take their section stride;
+//   EXTERNAL slots are size 1 (the BadDataError step, flow.cc:446-456).
+//   st_size==0 symbols (_init/_fini, the crt stubs), the entry seed and
+//   call-graph additions take the next-entry bound: [entry, next
+//   discovered entry) capped by the owning section end. That is a
+//   working bound, not Ghidra's flow-derived body — the worker's flow
+//   walk is entry-seeded and range-unbounded, so padding inside the
+//   bound never survives as code; the visible residue is the Funcdata
+//   size metadata (canon headers keep printing the ledger sizes for
+//   ledger-known entries, so the corpus face is unchanged).
+// ============================================================================
+
+/// How one discovery-universe entry was found (diagnostic label for the
+/// census and the ledger comparison report).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiscoveryKind {
+    /// e_entry of the ELF header.
+    Entry,
+    /// Defined STT_FUNC symbol from .symtab/.dynsym.
+    ElfSymbol,
+    /// First 16-byte slot of .plt (PLT0).
+    PltHeader,
+    /// Relocation-backed PLT stub (.plt.sec / lazy .plt / .plt.got).
+    PltStub,
+    /// Direct CALL target reached by the iterative sweep.
+    CallGraph,
+    /// EXTERNAL-block slot for an undefined .dynsym import.
+    External,
+}
+
+/// One discovered function: entry address, working body bound, source.
+#[derive(Clone, Copy, Debug)]
+struct DiscoveredFunction {
+    vaddr: u64,
+    size: u64,
+    kind: DiscoveryKind,
+}
+
+// RUGRA-GLUE: PLT slot body extent — decode the slot's instructions and
+// stop at the first unconditional branch (the thunk's terminal indirect
+// jmp). PLT0 = push + bnd jmp (13 bytes), .plt.sec/.plt.got stubs =
+// endbr64 + bnd jmp (11 bytes) — the same extents the canon analyzer
+// bodies record for every PLT entry. None when the slot does not decode
+// to a terminal branch inside 16 bytes (caller falls back to the stride).
+fn plt_slot_extent(buffer: &[u8], file_offset: usize, vaddr: u64) -> Option<u64> {
+    let bytes = buffer.get(file_offset..file_offset + 16)?;
+    let mut decoder = IcedDecoder::with_ip(64, bytes, vaddr, DecoderOptions::NONE);
+    while decoder.can_decode() {
+        let instruction = decoder.decode();
+        if instruction.is_invalid() {
+            return None;
+        }
+        if matches!(
+            instruction.flow_control(),
+            FlowControl::UnconditionalBranch | FlowControl::IndirectBranch
+        ) {
+            return Some(instruction.next_ip() - vaddr);
+        }
+    }
+    None
+}
+
+// RUGRA-GLUE: driver-side reconstruction of the Java loader/PLT/entry
+// analyzers' function universe (ElfProgramBuilder symbol functions, entry
+// point, PLT thunks, EXTERNAL block, call-following function creation);
+// the decompile C++ side has no discovery counterpart — it consumes the
+// Program's function universe through the transport.
+fn discover_function_corpus(
+    buffer: &[u8],
+    elf: &goblin::elf::Elf,
+) -> Result<Vec<DiscoveredFunction>, Box<dyn std::error::Error>> {
+    const SHF_EXECINSTR: u64 = 0x4;
+    let exec_ranges: Vec<(u64, u64)> = elf
+        .section_headers
+        .iter()
+        .filter(|header| (header.sh_flags & SHF_EXECINSTR) != 0 && header.sh_size > 0)
+        .map(|header| (header.sh_addr, header.sh_addr.saturating_add(header.sh_size)))
+        .collect();
+    let in_exec = |addr: u64| exec_ranges.iter().any(|&(lo, hi)| addr >= lo && addr < hi);
+    let vaddr_to_file = |addr: u64| -> Option<usize> {
+        for header in elf.section_headers.iter() {
+            if addr >= header.sh_addr && addr < header.sh_addr.saturating_add(header.sh_size) {
+                return usize::try_from(header.sh_offset + (addr - header.sh_addr)).ok();
+            }
+        }
+        None
+    };
+
+    let mut entries: BTreeMap<u64, DiscoveredFunction> = BTreeMap::new();
+
+    // (a) ELF entry point.
+    if in_exec(elf.header.e_entry) {
+        entries.insert(
+            elf.header.e_entry,
+            DiscoveredFunction { vaddr: elf.header.e_entry, size: 0, kind: DiscoveryKind::Entry },
+        );
+    }
+
+    // (b) defined STT_FUNC symbols from every symbol table.
+    for symbol in elf.syms.iter().chain(elf.dynsyms.iter()) {
+        if !symbol.is_function() || symbol.st_value == 0 || symbol.st_shndx == 0 {
+            continue;
+        }
+        if !in_exec(symbol.st_value) {
+            continue;
+        }
+        entries.entry(symbol.st_value).or_insert(DiscoveredFunction {
+            vaddr: symbol.st_value,
+            size: symbol.st_size,
+            kind: DiscoveryKind::ElfSymbol,
+        });
+    }
+
+    // (c) PLT slots: PLT0, relocation-backed stubs (.plt.sec preferred,
+    // lazy .plt when absent), .plt.got 8-byte slots.
+    let has_plt_sec = elf
+        .section_headers
+        .iter()
+        .any(|header| elf.shdr_strtab.get_at(header.sh_name) == Some(".plt.sec"));
+    for header in elf.section_headers.iter() {
+        let name = elf.shdr_strtab.get_at(header.sh_name);
+        if name == Some(".plt") && header.sh_size >= 16 {
+            entries.entry(header.sh_addr).or_insert(DiscoveredFunction {
+                vaddr: header.sh_addr,
+                size: plt_slot_extent(buffer, header.sh_offset as usize, header.sh_addr)
+                    .unwrap_or(16),
+                kind: DiscoveryKind::PltHeader,
+            });
+            if !has_plt_sec {
+                for slot in 1..(header.sh_size / 16) {
+                    let vaddr = header.sh_addr + 16 * slot;
+                    entries.entry(vaddr).or_insert(DiscoveredFunction {
+                        vaddr,
+                        size: plt_slot_extent(
+                            buffer,
+                            (header.sh_offset + 16 * slot) as usize,
+                            vaddr,
+                        )
+                        .unwrap_or(16),
+                        kind: DiscoveryKind::PltStub,
+                    });
+                }
+            }
+        } else if name == Some(".plt.sec") {
+            for slot in 0..(header.sh_size / 16) {
+                let vaddr = header.sh_addr + 16 * slot;
+                entries.entry(vaddr).or_insert(DiscoveredFunction {
+                    vaddr,
+                    size: plt_slot_extent(
+                        buffer,
+                        (header.sh_offset + 16 * slot) as usize,
+                        vaddr,
+                    )
+                    .unwrap_or(16),
+                    kind: DiscoveryKind::PltStub,
+                });
+            }
+        } else if name == Some(".plt.got") {
+            for slot in 0..(header.sh_size / 8) {
+                // `endbr64; bnd jmp *disp32(%rip)` at slot+0..+11 — the
+                // same encoding witness the driver's PLT resolution
+                // validates (0x22e0 __cxa_finalize).
+                let start = usize::try_from(header.sh_offset + 8 * slot)
+                    .ok()
+                    .and_then(|off| buffer.get(off..off + 11).map(|insn| insn.to_vec()));
+                let is_stub = start.is_some_and(|insn| {
+                    insn[..4] == [0xf3, 0x0f, 0x1e, 0xfa] && insn[4..7] == [0xf2, 0xff, 0x25]
+                });
+                if is_stub {
+                    let vaddr = header.sh_addr + 8 * slot;
+                    entries.entry(vaddr).or_insert(DiscoveredFunction {
+                        vaddr,
+                        size: plt_slot_extent(
+                            buffer,
+                            (header.sh_offset + 8 * slot) as usize,
+                            vaddr,
+                        )
+                        .unwrap_or(8),
+                        kind: DiscoveryKind::PltStub,
+                    });
+                }
+            }
+        }
+    }
+
+    // (d) EXTERNAL-block slots (allocation order of the importer).
+    let external_base = external_block_base(elf);
+    for (index, _import) in collect_external_imports(elf).iter().enumerate() {
+        let vaddr = external_base + 8 * index as u64;
+        entries.entry(vaddr).or_insert(DiscoveredFunction {
+            vaddr,
+            size: 1,
+            kind: DiscoveryKind::External,
+        });
+    }
+
+    // (e) call-graph following to a fixed point. Each pass decodes every
+    // body-bounded entry (EXTERNAL slots have no code) and adds direct
+    // CALL targets in executable sections that no known entry covers and
+    // that do not fall inside another sized body. Passes repeat until one
+    // adds nothing.
+    loop {
+        let snapshot: Vec<DiscoveredFunction> = entries.values().copied().collect();
+        let mut added = 0usize;
+        for entry in &snapshot {
+            if entry.kind == DiscoveryKind::External || !in_exec(entry.vaddr) {
+                continue;
+            }
+            // Sweep window: the entry's own extent when sized, else up to
+            // the next known entry (section end at the tail).
+            let next_entry = snapshot
+                .iter()
+                .map(|candidate| candidate.vaddr)
+                .filter(|&addr| addr > entry.vaddr)
+                .min()
+                .unwrap_or_else(|| {
+                    exec_ranges
+                        .iter()
+                        .filter(|&&(lo, _)| lo <= entry.vaddr)
+                        .map(|&(_, hi)| hi)
+                        .max()
+                        .unwrap_or(entry.vaddr + 1)
+                });
+            let extent = if entry.size > 0 {
+                entry.vaddr.saturating_add(entry.size).min(next_entry)
+            } else {
+                next_entry
+            };
+            if extent <= entry.vaddr {
+                continue;
+            }
+            let (Some(start), Some(end)) = (vaddr_to_file(entry.vaddr), vaddr_to_file(extent))
+            else {
+                continue;
+            };
+            let Some(bytes) = buffer.get(start..end) else {
+                continue;
+            };
+            let mut decoder = IcedDecoder::with_ip(64, bytes, entry.vaddr, DecoderOptions::NONE);
+            while decoder.can_decode() {
+                let instruction = decoder.decode();
+                if instruction.is_invalid()
+                    || instruction.flow_control() != FlowControl::Call
+                {
+                    continue;
+                }
+                let target = match instruction.op0_kind() {
+                    OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
+                        instruction.near_branch64()
+                    }
+                    _ => continue,
+                };
+                if !in_exec(target) || entries.contains_key(&target) {
+                    continue;
+                }
+                // A target strictly inside another sized body is a
+                // mid-function call, not a new entry.
+                let inside_body = entries.values().any(|known| {
+                    known.size > 0 && target > known.vaddr && target < known.vaddr.saturating_add(known.size)
+                });
+                if inside_body {
+                    continue;
+                }
+                entries.insert(
+                    target,
+                    DiscoveredFunction { vaddr: target, size: 0, kind: DiscoveryKind::CallGraph },
+                );
+                added += 1;
+            }
+        }
+        if added == 0 {
+            break;
+        }
+    }
+
+    // Derive working bounds for size-0 entries (st_size==0 symbols, the
+    // entry seed, call-graph additions): [entry, next discovered entry),
+    // capped by the owning executable section's end.
+    let mut result: Vec<DiscoveredFunction> = entries.values().copied().collect();
+    result.sort_by_key(|entry| entry.vaddr);
+    for index in 0..result.len() {
+        if result[index].size != 0 {
+            continue;
+        }
+        let vaddr = result[index].vaddr;
+        let section_end = exec_ranges
+            .iter()
+            .find(|&&(lo, hi)| vaddr >= lo && vaddr < hi)
+            .map(|&(_, hi)| hi)
+            .unwrap_or(vaddr);
+        let next = result
+            .get(index + 1)
+            .map(|entry| entry.vaddr)
+            .unwrap_or(section_end);
+        result[index].size = next.min(section_end).saturating_sub(vaddr).max(1);
+    }
+    Ok(result)
+}
+
+// RUGRA-GLUE: driver-side discovery-vs-ledger comparison (the lane's
+// precision/recall witness); stderr-only diagnostics, stdout untouched.
+fn report_discovery_vs_ledger(discovered: &[DiscoveredFunction]) {
+    let ledger: BTreeSet<u64> = GOLDEN_CORPUS_LEDGER.iter().map(|&(vaddr, _, _)| vaddr).collect();
+    let found: BTreeSet<u64> = discovered.iter().map(|entry| entry.vaddr).collect();
+    let hits = ledger.intersection(&found).count();
+    let misses: Vec<u64> = ledger.difference(&found).copied().collect();
+    let extras: Vec<DiscoveredFunction> = discovered
+        .iter()
+        .copied()
+        .filter(|entry| !ledger.contains(&entry.vaddr))
+        .collect();
+    eprintln!(
+        "[DISCOV] ledger={} discovered={} hits={} recall={:.1}% precision={:.1}%",
+        ledger.len(),
+        found.len(),
+        hits,
+        100.0 * hits as f64 / ledger.len().max(1) as f64,
+        100.0 * hits as f64 / found.len().max(1) as f64,
+    );
+    // Per-source census of the discovered universe.
+    for (kind, label) in [
+        (DiscoveryKind::Entry, "entry-point"),
+        (DiscoveryKind::ElfSymbol, "elf-func-symbols"),
+        (DiscoveryKind::PltHeader, "plt-header"),
+        (DiscoveryKind::PltStub, "plt-stubs"),
+        (DiscoveryKind::CallGraph, "call-graph"),
+        (DiscoveryKind::External, "external-slots"),
+    ] {
+        let count = discovered.iter().filter(|entry| entry.kind == kind).count();
+        if count > 0 {
+            eprintln!("[DISCOV] census {:>17}: {}", label, count);
+        }
+    }
+    for &miss in &misses {
+        let ledger_name = GOLDEN_CORPUS_LEDGER
+            .iter()
+            .find(|&&(vaddr, _, _)| vaddr == miss)
+            .map(|&(_, name, _)| name)
+            .unwrap_or("?");
+        eprintln!("[DISCOV] MISS  0x{miss:x} {ledger_name} (ledger entry the discovery missed)");
+    }
+    for extra in &extras {
+        eprintln!(
+            "[DISCOV] EXTRA 0x{:x} {:?} (discovery entry absent from the ledger)",
+            extra.vaddr, extra.kind
+        );
+    }
 }
 
 // RUGRA-GLUE: renders the EXTERNAL-block stub section byte-faithfully to the
@@ -6207,6 +6605,34 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // FULL-CORPUS-0001 (DISCOV): opt-in function-discovery layer. Default
+    // keeps the locked ledger corpus (byte-for-byte face); RUGRA_DISCOV=1
+    // rebuilds the corpus universe from the binary itself (see
+    // discover_function_corpus) and reports the ledger comparison
+    // (recall/precision + per-source census, stderr only).
+    let discovered: Option<Vec<DiscoveredFunction>> =
+        if std::env::var("RUGRA_DISCOV").ok().as_deref() == Some("1") {
+            let universe = discover_function_corpus(&buffer, elf)?;
+            eprintln!(
+                "[DISCOV] discovery universe: {} entries (RUGRA_DISCOV corpus face)",
+                universe.len()
+            );
+            report_discovery_vs_ledger(&universe);
+            Some(universe)
+        } else {
+            None
+        };
+    // The analysis-body table feeding the Shared Return Calls projection
+    // below: ledger (vaddr, size) pairs by default; discovery-derived
+    // bounds under RUGRA_DISCOV=1 so the opt-in face stays self-hosted.
+    let analysis_bodies: Vec<(u64, u64)> = match &discovered {
+        Some(universe) => universe.iter().map(|entry| (entry.vaddr, entry.size)).collect(),
+        None => GOLDEN_CORPUS_LEDGER
+            .iter()
+            .map(|&(vaddr, _, size)| (vaddr, size as u64))
+            .collect(),
+    };
+
     // Program source: Ghidra's Java Shared Return Calls analyzer writes
     // Instruction flow overrides into the Program database (captured by the
     // locked program_flow_metadata_1204 fixture). Standalone source: this
@@ -6225,8 +6651,12 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[PREPASS] Shared Return Calls disabled for flow mirror");
         Vec::new()
     } else {
-        let records =
-            collect_known_entry_shared_return_overrides(&buffer, elf, &plt_symbols)?;
+        let records = collect_known_entry_shared_return_overrides(
+            &buffer,
+            elf,
+            &plt_symbols,
+            &analysis_bodies,
+        )?;
         let function_count = records
             .iter()
             .map(|record| record.function_address)
@@ -6247,12 +6677,15 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         records
     };
 
-    // Build the decompilation corpus from the locked golden ledger (124
-    // functions: ELF-named code, PLT stubs, `_init`/`_fini`, zero-sized
-    // symtab functions, and the 48 EXTERNAL-space entries at 0x19000+ that
-    // Ghidra synthesized for undefined imports). ELF symbols win for name
+    // Corpus source (FULL-CORPUS-0001): the locked golden ledger by
+    // default (124 functions: ELF-named code, PLT stubs, `_init`/`_fini`,
+    // zero-sized symtab functions, and the 48 EXTERNAL-space entries at
+    // 0x19000+ that Ghidra synthesized for undefined imports); the
+    // discovery universe under RUGRA_DISCOV=1. ELF symbols win for name
     // and size wherever they exist at the same address, so the previously
-    // ELF-only subset keeps its exact former inputs (FULL-CORPUS-0001).
+    // ELF-only subset keeps its exact former inputs. The merge rules are
+    // source-independent; only the fallback spelling (ledger entry name
+    // vs discovery-kind naming) differs.
     let elf_function_file_offset = |vaddr: u64| -> u64 {
         let mut file_off = 0u64;
         for header in elf.section_headers.iter() {
@@ -6263,8 +6696,51 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
         file_off
     };
-    for &(ledger_vaddr, ledger_name, ledger_size) in GOLDEN_CORPUS_LEDGER.iter() {
-        let ledger_size = ledger_size as usize;
+    // One EXTERNAL-block name lookup shared with the corpus loop (the
+    // import slots the stub projection consumes are built later; the
+    // corpus only needs the names).
+    let external_name_of: HashMap<u64, &str> = {
+        let base = external_block_base(elf);
+        external_imports
+            .iter()
+            .enumerate()
+            .map(|(index, import)| (base + 8 * index as u64, import.name.as_str()))
+            .collect()
+    };
+    let corpus_source: Vec<(u64, usize, Option<DiscoveryKind>, &str)> = match &discovered {
+        Some(universe) => universe
+            .iter()
+            .map(|entry| (entry.vaddr, entry.size as usize, Some(entry.kind), ""))
+            .collect(),
+        None => GOLDEN_CORPUS_LEDGER
+            .iter()
+            .map(|&(vaddr, name, size)| (vaddr, size as usize, None, name))
+            .collect(),
+    };
+    for (ledger_vaddr, ledger_size, entry_kind, ledger_name) in corpus_source {
+        let fallback_name: Option<String> = match entry_kind {
+            None => Some(ledger_name.to_string()),
+            Some(DiscoveryKind::ElfSymbol) | Some(DiscoveryKind::Entry) => {
+                // ELF/DWARF resolution below owns the naming.
+                None
+            }
+            Some(DiscoveryKind::PltStub) => plt_symbols.get(&ledger_vaddr).cloned(),
+            Some(DiscoveryKind::External) => external_name_of
+                .get(&ledger_vaddr)
+                .map(|name| name.to_string()),
+            Some(DiscoveryKind::PltHeader) | Some(DiscoveryKind::CallGraph) => {
+                // Analyzer-created functions default-name FUN_ + image-based
+                // address (canon witness FUN_00102020 = the PLT0 slot). The
+                // same name registers in the symbol table so call-site
+                // naming resolves these entries like any other function.
+                let fun_name = rugra::debugproto::analyze_headless_function_symbol_name(
+                    ledger_vaddr,
+                    ANALYZE_HEADLESS_IMAGE_BASE,
+                );
+                symbol_table.insert(ledger_vaddr, fun_name.clone());
+                Some(fun_name)
+            }
+        };
         // DWARF-NAME-PRECEDENCE-0001: the DWARF analyzer renames the
         // loader's function symbols to the subprogram's DW_AT_name
         // (following DW_AT_abstract_origin — DWARFFunctionImporter.
@@ -6290,7 +6766,13 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 (dwf_name.unwrap_or_else(|| elf_name.clone()), ledger_size, FunctionOrigin::LedgerEntry)
             }
             None => (
-                dwf_name.unwrap_or_else(|| ledger_name.to_string()), ledger_size, FunctionOrigin::LedgerEntry,
+                dwf_name
+                    .or(fallback_name)
+                    .unwrap_or_else(|| {
+                        format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + ledger_vaddr)
+                    }),
+                ledger_size,
+                FunctionOrigin::LedgerEntry,
             ),
         };
         functions.push(FuncInfo {
@@ -6811,7 +7293,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "\n=== Summary: {}/{} golden-corpus functions processed: {} decompiled, {} empty-output, {} timeout, {} panic, {} external-stub(no ELF code), {} external-stub(import-signature declared), {} worker-failure, {} protocol-failure ===",
         stats.attempted(),
-        GOLDEN_CORPUS_LEDGER.len(),
+        functions.len(),
         stats.decompiled,
         stats.empty_output,
         stats.timeouts,
@@ -6823,6 +7305,155 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod discovery_corpus_tests {
+    use super::*;
+
+    /// Loads the locked curl fixture bytes.
+    fn curl_bytes() -> Vec<u8> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/curl");
+        std::fs::read(path).expect("examples/curl fixture readable")
+    }
+
+    /// Runs the discovery layer over the fixture bytes.
+    fn discover_on_fixture() -> Vec<DiscoveredFunction> {
+        let data = curl_bytes();
+        match goblin::Object::parse(&data).expect("curl parses as ELF") {
+            goblin::Object::Elf(elf) => {
+                discover_function_corpus(&data, &elf).expect("discovery builds")
+            }
+            _ => panic!("curl fixture is not an ELF object"),
+        }
+    }
+
+    /// The lane's judgment criterion, locked as a regression: the
+    /// discovery universe equals the 124-entry ledger address set on the
+    /// locked fixture (recall and precision both 100%).
+    #[test]
+    fn discovery_universe_equals_ledger_addresses() {
+        let discovered = discover_on_fixture();
+        let found: BTreeSet<u64> = discovered.iter().map(|entry| entry.vaddr).collect();
+        let ledger: BTreeSet<u64> = GOLDEN_CORPUS_LEDGER
+            .iter()
+            .map(|&(vaddr, _, _)| vaddr)
+            .collect();
+        assert_eq!(found, ledger, "discovery/ledger address sets must agree");
+        assert_eq!(found.len(), 124);
+    }
+
+    /// Per-source census of the locked fixture: 1 entry point (_start),
+    /// 30 ELF symbol functions (31 STT_FUNC minus the entry duplicate),
+    /// 1 PLT header slot, 44 PLT stubs (43 .plt.sec + 1 .plt.got), no
+    /// call-graph additions (every direct call target is already a
+    /// symbol or PLT slot), 48 EXTERNAL-block slots.
+    #[test]
+    fn discovery_census_shape() {
+        let discovered = discover_on_fixture();
+        let census = |kind: DiscoveryKind| {
+            discovered.iter().filter(|entry| entry.kind == kind).count()
+        };
+        assert_eq!(census(DiscoveryKind::Entry), 1);
+        assert_eq!(census(DiscoveryKind::ElfSymbol), 30);
+        assert_eq!(census(DiscoveryKind::PltHeader), 1);
+        assert_eq!(census(DiscoveryKind::PltStub), 44);
+        assert_eq!(census(DiscoveryKind::CallGraph), 0);
+        assert_eq!(census(DiscoveryKind::External), 48);
+        // The PLT header is the canon FUN_00102020 slot; the entry seed
+        // is _start; the .plt.got stub is __cxa_finalize.
+        let kind_at = |vaddr: u64| {
+            discovered
+                .iter()
+                .find(|entry| entry.vaddr == vaddr)
+                .map(|entry| entry.kind)
+        };
+        assert_eq!(kind_at(0x2020), Some(DiscoveryKind::PltHeader));
+        assert_eq!(kind_at(0x3370), Some(DiscoveryKind::Entry));
+        assert_eq!(kind_at(0x22e0), Some(DiscoveryKind::PltStub));
+        assert_eq!(kind_at(0x19000), Some(DiscoveryKind::External));
+    }
+
+    /// Grounded sizes: st_size>0 symbol entries keep st_size (the same
+    /// value the default ledger face uses — the canon header prints the
+    /// analysis body, which can be smaller: main st_size 3531 vs ledger
+    /// 3510); PLT slots carry encoding-derived extents (13/11, exactly
+    /// the canon bodies); EXTERNAL slots are size 1; derived (st_size==0)
+    /// bounds cover the ledger extent and stop at the next entry.
+    #[test]
+    fn discovery_sizes_are_grounded_or_covering() {
+        let discovered = discover_on_fixture();
+        let data = curl_bytes();
+        let elf = match goblin::Object::parse(&data).expect("curl parses as ELF") {
+            goblin::Object::Elf(elf) => elf,
+            _ => panic!("curl fixture is not an ELF object"),
+        };
+        let elf_size_at = |vaddr: u64| {
+            elf.syms
+                .iter()
+                .chain(elf.dynsyms.iter())
+                .find(|symbol| symbol.is_function() && symbol.st_value == vaddr)
+                .map(|symbol| symbol.st_size)
+        };
+        let ledger_size_at = |vaddr: u64| {
+            GOLDEN_CORPUS_LEDGER
+                .iter()
+                .find(|&&(entry, _, _)| entry == vaddr)
+                .map(|&(_, _, size)| size as u64)
+        };
+        let mut checked_grounded = 0usize;
+        for entry in &discovered {
+            match entry.kind {
+                DiscoveryKind::ElfSymbol => match elf_size_at(entry.vaddr) {
+                    Some(st_size) if st_size > 0 => {
+                        // Symbol-backed size = ELF st_size verbatim
+                        // (witness: main 0x25a0 st_size 3531, while the
+                        // canon header prints the smaller analysis body
+                        // 3510).
+                        assert_eq!(
+                            entry.size, st_size,
+                            "st_size-backed entry 0x{:x} must keep the ELF size",
+                            entry.vaddr
+                        );
+                        checked_grounded += 1;
+                    }
+                    _ => {
+                        // st_size == 0: the next-entry/section-end
+                        // working bound took over.
+                    }
+                },
+                DiscoveryKind::External => {
+                    assert_eq!(entry.size, 1);
+                }
+                DiscoveryKind::PltHeader | DiscoveryKind::PltStub => {
+                    // Encoding-derived extents (decode to the terminal
+                    // unconditional branch): PLT0 = 13 (push + bnd jmp),
+                    // stubs = 11 (endbr64 + bnd jmp) — exactly the canon
+                    // analyzer bodies the ledger records.
+                    assert_eq!(
+                        Some(entry.size),
+                        ledger_size_at(entry.vaddr),
+                        "PLT entry 0x{:x} extent must equal the canon body",
+                        entry.vaddr
+                    );
+                }
+                _ => {}
+            }
+        }
+        // 24 = 25 sized STT_FUNC symbols minus _start (Entry kind).
+        assert_eq!(checked_grounded, 24, "sized-symbol bulk");
+        // Derived bound witnesses: _init (0x2000, st_size 0) hits the
+        // .init section end exactly (27, the canon body); _fini
+        // (0x5478) is the tail entry and lands on the .fini section end
+        // (13 bytes).
+        for &(witness, expected) in &[(0x2000u64, 27u64), (0x5478, 13)] {
+            let entry = discovered
+                .iter()
+                .find(|entry| entry.vaddr == witness)
+                .expect("witness discovered");
+            assert_eq!(entry.size, expected);
+        }
+    }
 }
 
 #[cfg(test)]
