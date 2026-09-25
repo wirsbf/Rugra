@@ -719,8 +719,9 @@ varnode.cc:599-601：FSPEC 空间生而 annotation|coverdirty、nzm=~0；Rugra �
 （`add_call_specs_owner`）。followFlow 路径的锚定在 `FlowInfo::setup_call_specs`
 （flow.rs，xref_control_flow 内），本方法只服务无 FlowInfo 的 linear-scan driver 路径
 （httpd 主路径、curl/httpd 原型推断 worker）——两条路径不重叠，不会双重锚定
-（FlowInfo 走 `inject_raw_ops_single`）。CALLIND 不换 in(0)（flow.cc:707-709 无
-opSetInput），本路径的 lifter 不产 CALLIND，FlowInfo 路径由 `setup_callind_specs`
+（FlowInfo 走 `inject_raw_ops_single`）。CALLIND 不换 in(0)（flow.cc:704-723 无
+opSetInput，见下方 2026-09-25 重放节——iced lifter 产 CPUI_CALLIND，锚定环已补
+CALLIND 臂），FlowInfo 路径由 `setup_callind_specs`
 负责。setupCallSpecs 的 FlowInfo 级尾部（applyPrototype/queryCall/循环检查，
 flow.cc:688-693）在 linear-scan 路径无对应物：该路径不种 override，callee 解析是
 driver 侧 pre-flow 原型表。落地后 ActionDeadCode 的 cc:3846 首操作数 consume 由
@@ -768,6 +769,32 @@ examples/httpd_decompile.rs，defaultfp 捕获后清空以维持 CALLSPEC-DRIVER
 姿态）。观测：httpd 门禁面 2225→2221（main −1、ap_fini_vhost_config −1、
 ap_ht_time −2，全部为声明行消除），3 处 BADSPACEBASE 归零，全量 470/470 保持、
 全量 L2 37677→37655/2/0。
+
+2026-09-25 CALLSPEC-0001 重放（CALLIND 锚定臂）：锚定环补 `CPUI_CALLIND` 臂——
+`flow.cc:340-342`（xrefControlFlow CALLIND case）→ `setupCallindSpecs`
+（flow.cc:704-723）的换写镜像：`FuncCallSpecs::new_for_op` 对 CALLIND 不读 in(0)
+（fspec.cc:4931-4938 ctor 仅 CPUI_CALL 分支取 entryaddress，间接调用保持 invalid；
+Rugra `new_for_op` 同语义：非 CALL opcode 即 `direct_target=None`），**无 in(0) 换写**
+（annotation swap 只在 overridden-to-direct 臂 flow.cc:717-721，本 override-free
+driver 路径不可达），`register_specs` 门同 CALL 臂（flow.cc:709 qlst 注册 riding
+CALLSPEC-DRIVER-0002 模型门）。动机：iced lifter 对寄存器间接调用发 CPUI_CALLIND
+（x86_lift.rs:4890-4894），旧注释"lifter 只产 CALL"系 CALLSPEC-DRIVER-0001 时代
+过期声明——lifter 出生 CALLIND 全程无 FuncCallSpecs → ActionFuncLink 不激活 →
+heritage guardCalls 不注册试验 → 间接调用零实参。重放验证（基=master 838f73e2）：
+httpd 默认脸 1257→**1217**（ap_vhost_iterate_given_conn 51→**9**；main 687→689，
++2 为 difflib 对齐回声——归一化差异行多重集对比证实无新缺陷族；主噪声族
+`plVar9[3]=plVar9[3]` 自赋值 5 条、raw 指针存取形、零实参间接调用全部消除，
+`iVar4 = (*(code *)pVar11)((long)plVar12 + 0x34,uVar9);` == canon 逐形）；curl
+**577/0/0 字节恒等**；双跑 cmp 恒等；投影银行 391/391；cargo test --lib
+1712P/1F（预存 test_nonzeromask_pipeline_wiring）。历史注记：2026-09-25 CALLSPEC
+车道在 b708e1cf 上 A/B 时 httpd 1123→1175（main +88，自赋值换形+吸收缺口新表面）
+违门回滚；本重放前实测该吸收缺口已被 master 演进关闭（GETPARAM 的 merge.rs
+inflate_test 现聚合 + check_implied_cover 惰性 cover 修复落在 b708e1cf 之后），
++88 缺口不复现（+2 对齐回声），解锁条件满足。残差归因：`uVar9 = plVar12[0xb];`
+类 LOAD 物化 = GETPARAM-STORECROSS-ALIASGATE-0001（coreaction 保守 alias 门）；
+`void(*)()param_2` vs canon `code *UNRECOVERED_JUMPTABLE` = CALLSPEC 移交
+(b)(c)（flow setter + coreaction lookForBadJumpTables 消费者，coreaction 车道域）；
+LAB_0012bff3 零实参 `strcasecmp()` 为 base 同在的预存残差（非本臂引入）。
 
 #### 它在主链路中的位置
 

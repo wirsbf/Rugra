@@ -7453,10 +7453,15 @@ impl Funcdata {
         // cc:3846 first-operand consume, printc's fc->getName() and the
         // has_callspec flag proxy (typeop.cc:663) all rely on
         // (CALLSPEC-DRIVER-0001). CALLIND (flow.cc:340-342 ->
-        // setupCallindSpecs flow.cc:707-709) creates a spec WITHOUT the
-        // in(0) swap; no CALLIND is born on this path (the linear-scan
-        // lifter emits only CALL), and the FlowInfo path anchors CALLIND
-        // via setup_callind_specs. The FlowInfo-level steps of
+        // setupCallindSpecs flow.cc:704-723) creates a spec WITHOUT the
+        // in(0) swap — the ctor leaves the entry address invalid for
+        // indirect calls (fspec.cc:4931-4938) and the swap lives only on
+        // the overridden-to-direct path (flow.cc:717-721), unreachable on
+        // this override-free driver path. The iced lifter DOES emit
+        // CPUI_CALLIND for register-indirect calls (x86_lift.rs:4890-4894),
+        // so the anchor loop below mirrors the CALLIND arm; the FlowInfo
+        // path anchors CALLIND via setup_call_ind_specs inside
+        // xref_control_flow. The FlowInfo-level steps of
         // setupCallSpecs (applyPrototype/queryCall/cycle check, flow.cc:
         // 688-693) have no linear-scan counterpart here: this path seeds no
         // overrides, and callee resolution is the driver's pre-flow
@@ -7476,11 +7481,9 @@ impl Funcdata {
         // documents above) — carries the guarantee that ActionDeadCode's
         // cc:3846 first-operand consume, printc's fc->getName() and the
         // has_callspec flag proxy (typeop.cc:663) all rely on
-        // (CALLSPEC-DRIVER-0001). CALLIND (flow.cc:340-342 ->
-        // setupCallindSpecs flow.cc:707-709) creates a spec WITHOUT the
-        // in(0) swap; no CALLIND is born on this path (the linear-scan
-        // lifter emits only CALL), and the FlowInfo path anchors CALLIND
-        // via setup_callind_specs.
+        // (CALLSPEC-DRIVER-0001). The CALLIND arm below mirrors flow.cc:
+        // 340-342 -> setupCallindSpecs (flow.cc:704-723): spec without the
+        // in(0) swap, qlst registration gated identically to the CALL arm.
         //
         // CALLSPEC-DRIVER-0002 (registration gate): Ghidra's setupCallSpecs
         // is ATOMIC — flow.cc:686 `qlst.push_back(res)` never happens
@@ -7515,7 +7518,8 @@ impl Funcdata {
         // survive as statements today).
         let register_specs = self.funcp.has_model();
         for op_ref in &op_refs {
-            if op_ref.0.read().unwrap().opcode == OpCode::CPUI_CALL {
+            let op_opcode = op_ref.0.read().unwrap().opcode;
+            if op_opcode == OpCode::CPUI_CALL {
                 let fc = crate::fspec::FuncCallSpecs::new_for_op(
                     op_ref,
                     crate::flow::default_call_spec_proto(),
@@ -7523,6 +7527,25 @@ impl Funcdata {
                 let owner = Arc::new(RwLock::new(fc));
                 let call_spec_vn = self.new_varnode_call_specs(&owner);
                 self.op_set_input(op_ref, call_spec_vn, 0);
+                if register_specs {
+                    self.add_call_specs_owner(owner);
+                }
+            } else if op_opcode == OpCode::CPUI_CALLIND {
+                // Ghidra: flow.cc:340-342 FlowInfo::xrefControlFlow CALLIND arm ->
+                // flow.cc:704-723 setupCallindSpecs. The CALLIND spec mirror has
+                // NO in(0) swap: `res = new FuncCallSpecs(op)` (flow.cc:708)
+                // leaves the entry address invalid for indirect calls
+                // (fspec.cc:4931-4938 ctor reads in(0) only for CPUI_CALL), and
+                // the annotation swap lives exclusively on the
+                // overridden-to-direct path (flow.cc:717-721), which this
+                // override-free driver path cannot take. qlst registration
+                // (flow.cc:709) rides the same CALLSPEC-DRIVER-0002 model gate
+                // as the CALL arm above.
+                let fc = crate::fspec::FuncCallSpecs::new_for_op(
+                    op_ref,
+                    crate::flow::default_call_spec_proto(),
+                );
+                let owner = Arc::new(RwLock::new(fc));
                 if register_specs {
                     self.add_call_specs_owner(owner);
                 }
