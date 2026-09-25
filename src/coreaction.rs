@@ -11075,17 +11075,19 @@ impl Action for ActionConstbase {
 
         for ctx in &trackset {
             // Ghidra: coreaction.cc:697 — Address addr(ctx.loc.space,ctx.loc.offset);
-            // (Funcdata::new_varnode_out pins the Register space for the
-            // defined varnode — correct for every pspec register-resolved
-            // tracked loc like DF register:0x20a; a non-register tracked
-            // loc needs the space-aware vbank create first.)
+            // The tracked loc's storage triple: a pspec <set> resolves either
+            // through the register map (name arm → the register's own space,
+            // x86-64 DF) or an explicit space attribute, so ctx.loc.space IS
+            // the oracle's ctor space; new_varnode_out_full threads it
+            // exactly (the old Register pin only coincided for
+            // register-resolved locs).
             let addr = crate::address::Address::new(ctx.loc.offset);
             // Ghidra: coreaction.cc:698 — PcodeOp *op = data.newOp(1,bb->getStart());
             let op = fd.new_op(
                 1, bb.read().expect("entry block read lock").get_start_addr(),
             );
             // Ghidra: coreaction.cc:699 — data.newVarnodeOut(ctx.loc.size,addr,op);
-            fd.new_varnode_out(ctx.loc.size as usize, addr, &op);
+            fd.new_varnode_out_full(ctx.loc.size as usize, ctx.loc.space, addr, &op);
             // Ghidra: coreaction.cc:700 — Varnode *vnin = data.newConstant(ctx.loc.size,ctx.val);
             let vnin = fd.new_constant(ctx.loc.size as usize, ctx.val);
             // Ghidra: coreaction.cc:701 — data.opSetOpcode(op,CPUI_COPY);
@@ -12631,10 +12633,13 @@ impl ActionFuncLink {
                 return;
             }
             // coreaction.cc:1551: data.newVarnodeOut(sz, addr, callop) —
-            // the return varnode lives at the recorded storage offset
-            // (Rugra's new_varnode_out creates it in the register space,
-            // the registered transitional divergence).
-            fd.new_varnode_out(sz, crate::address::Address::new(off), op);
+            // addr = outparam->getAddress() (cc:1545) is the output
+            // parameter's FULL storage address: RAX/register for scalars,
+            // Join for split-register returns (the trial-commit lock
+            // records the varnode's own space via set_output_parameter).
+            // The space threads through exactly; the old Register pin was
+            // wrong for Join-space locked outputs.
+            fd.new_varnode_out_full(sz, spc, crate::address::Address::new(off), op);
         } else {
             // Transitional no-storage fallback: RAX = register offset 0x0
             // (x86_lift.rs encoding), for locked prototypes whose storage
@@ -13843,10 +13848,19 @@ impl Action for ActionExtraPopSetup {
                 None => continue,
             };
             let op_addr = call_op.0.read().unwrap().get_addr();
-            // cc:1449-1451: op = newOp(2, call addr); out = newVarnodeOut(sb)
-            // — a REGISTER-space varnode at the stack-pointer address.
+            // cc:1443-1451: sb_addr = Address(point.space, point.offset)
+            // from stackspace->getSpacebase(0) — the out varnode lives in
+            // the spacebase point's OWN space. arch.stack_pointer_space IS
+            // point.space (decoded from <stackpointer> register record,
+            // x86-64 RSP in the register space, so the old Register pin
+            // coincided); the space now threads explicitly like cc:1444.
             let op = fd.new_op(2, op_addr);
-            fd.new_varnode_out(sb_size, crate::address::Address::new(sb_offset), &op);
+            fd.new_varnode_out_full(
+                sb_size,
+                sb_space,
+                crate::address::Address::new(sb_offset),
+                &op,
+            );
             // cc:1452: in(0) = newVarnode(sb) — a FREE register-space varnode
             // at the same address; heritage links it to the most recent RSP
             // definition before the call.
