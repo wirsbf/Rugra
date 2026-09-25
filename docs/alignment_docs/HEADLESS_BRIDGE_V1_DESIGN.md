@@ -1078,3 +1078,65 @@ CALL 臂。**接线车道若只挂 manifest 不补该臂，curl cast 族近零�
 - harness：stage_shape_diag.cc 增 STAGE_CALLSITE_PROTOS + 地址查询回退
   （/dev/shm/rugra-tests/shapefix/，随 lane 证据保留）。
 - 回收：/dev/shm/rugra-targets/sb-curlprep 留 root 集成后回收。
+
+### 16.6 MANIFREGEN 交付记录（Lane MANIFREGEN，2026-09-25，基=master 363c9cfd=CVRHOIST 后）
+
+> HTTPD-MANIFEST-REGEN-0001：CURLPREP 的 harvester cast 括号修复（ba732be5）
+> 对 httpd 侧 manifest 的下游重生成。写域=manifest+docs；src/examples/tools 零触碰。
+
+#### 16.6.1 再生成 diff（5 条目，与 CURLPREP 预测逐条吻合）
+
+harvest 命令：`python3 tools/harvest_local_manifest.py --callee
+tests/golden/ghidra_httpd_1204.c httpd e40ed130… OUT.json`（缺省 targets=
+main/ap_fini_vhost_config/ap_vhost_iterate_given_conn；httpd 形态不开
+--dwarf-types 门）。golden sha256 与旧 manifest 逐字节同源（6b4c4f31…）。
+
+| 条目（canon 键） | 旧 | 再生成 | 装载器效应 | 判决 |
+|---|---|---|---|---|
+| apr_palloc 0x12abc0 | 元数 1 无锁 | 元数 2 无锁 | 无（evidence-free 条目跳过；cast-result 括号误取根因） | inert |
+| apr_app_initialize 0x12a6d0 | slot1 无证据 | slot1 `undefined8 * *` | 无（return-only 条目 params 不装载） | inert |
+| apr_getopt_init 0x12a450 | 全锁 (long*,long,int,long) | 无锁 | 全锁→跳过 | 脸恒等（见 16.6.2） |
+| memcmp 0x12acb0 | 全锁 (void*,undefined1*,long)→int | 仅返回锁 int | 输入锁消失 | **+7 回退→旧条目恢复** |
+| apr_dynamic_fn_retrieve 0x12b070 | 无 | 新全锁 (char*) | 新锁装载 | Rugra 脸恒等；oracle 侧 canon 翻转亲证 |
+
+净计数：27→26 全输入锁（−getopt−memcmp+dynfn）→ memcmp 恢复后回到
+27 全输入锁 + 26 返回锁 + 3 drops（__printf_chk/ap_log_error/
+ap_run_post_config，与旧恒等）。
+
+#### 16.6.2 oracle 预验证（锁定库 e40ed130 直跑，stage_shape_diag
+STAGE_CALLSITE_PROTOS；A0 与 SHAPEFIX oracle_main_seeded.c 字节恒等
+=装置复刻亲证）
+
+| 实验 | A0（种子 only） | B | canon | 判决 |
+|---|---|---|---|---|
+| main/dynfn | `func_0x0002b070(0x7a474)` 裸地址 | +char* 全锁→`(code *)func_0x0002b070("ap_signal_server")` | `apr_dynamic_fn_retrieve("ap_signal_server")` | **新锁=canon 翻转** ✓ |
+| main/getopt | `(plVar11+10,plVar11[9],xVar1,xVar5)` | 旧假锁→`(plVar12+10,plVar12[9],iVar1,lVar2)`（canon-long 变量被重定型 int） | `(plVar12+10,plVar12[9],(int)lVar2,lVar9)` | 旧锁偏离 canon 变量定型；移除=修复向 ✓ |
+| ap_fini/memcmp | `*(xunknown8 *)(…)` | 旧全锁→`*(void * *)(…)`+8 字节 cast==canon；return-only→退回 A0 形 | `*(void **)(…)`+`(long)` | **弱化丢 canon slot0 void\*\* 形** ✗ |
+
+Rugra E2E 亲测与 oracle 预测一致：再生成为 manifest 时 ap_fini_vhost_config
+80→87（+7：`*(void **)`→`*(undefined8 *)`、`pvVar5`→`lVar5` 重定型编号级联；
+slot2 `(long)` cast 自然恢复保留=槽证据丢失本身脸中性）。恢复 memcmp 旧条目后
+httpd 默认脸与基线**字节恒等**（908/0/0，env -i 本 worktree 口径；main 503/
+ap_fini 80）。getopt 移除与 dynfn 新锁在 Rugra 脸均恒等（dynfn 字面量形
+Rugra 自然恢复本就产出；新锁=oracle 侧正确的保守加固）。
+
+#### 16.6.3 harvester 侧缺口登记（HARVEST-SCALARCAST-0001，tools 域别修）
+
+CURLPREP ba732be5 把 `CALLEE_ARG_CAST` 的 `\*?` 改为 `\*+`——标量 cast
+（`(int)x`/`(long)x`）不再构成槽证据。canon 调用点的标量 cast 恰是被提交参数
+类型的直接强制证据（memcmp `(long)iVar6` = libc size_t 槽）；该缺口叠加
+"全槽证据才锁输入"的 all-or-nothing 规则，使 memcmp 退化为 return-only 并
+丢 canon slot0 void\*\* 形（16.6.2 第三行）。处置：本车道按"回退=剔除"恢复
+memcmp 旧条目（oracle MOLD 实验=canon 形逐字），harvester 修复（标量 cast
+证据恢复或部分槽锁策略）登记 TODO 另派 tools 车道。
+
+#### 16.6.4 验证矩阵（manifest=再生+memcmp 旧条目）
+
+| 门 | 基线（旧 manifest） | 本车道 | 判定 |
+|---|---|---|---|
+| httpd 默认脸 | 908/0/0 | **908/0/0 字节恒等** | ✓ |
+| curl 默认脸 | 546/0/0 | **546/0/0 字节恒等**（curl 驱动不载 httpd manifest） | ✓ |
+| 双跑确定性 | — | httpd stdout cmp 恒等 ×2 | ✓ |
+| gcc 审计 | curl 104/20、httpd 15/14 | fail 集逐名恒等（tmp 路径除外） | ✓ |
+| 投影银行 | 391/391 | **391/391 MATCH**（exit 0 亲验） | ✓ |
+| manifest 指纹 | — | oracle_commit+golden_sha256 亲核 | ✓ |
