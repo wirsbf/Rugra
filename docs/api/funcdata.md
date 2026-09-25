@@ -1960,6 +1960,14 @@ Rugra 防御性视为 alive，生产不可达已注释）。
 - oracle 的 calcNZMask 唯一生产调用点是 `ActionNonzeroMask::apply`（coreaction.hh:300），注册于 universal mainloop 的 `ActionSpacebase` 之后、`ActionInferTypes` 之前（coreaction.cc:5506-5508）。`newUniqueOut` 等 funcdata_varnode.cc 构造函数 **不** 触发 calcNZMask。
 - Rugra 侧对应注册已存在：src/action.rs:1196（`add!(mainloop, "analysis", ActionNonzeroMask)`，"analysis" 在默认 decompile grouplist 内），无需新增接线。
 - 功能证据：新增单测 `test_nonzeromask_pipeline_wiring`（funcdata.rs）——`u1=EDI&0x3f0; u2=u1/3; STORE` 走完整 `decompile` root 后，INT_DIV 输出 nzm == 0x1ff（coveringmask(0x3f0)=0x3ff >> mostsigbit_set(3)=1），未接线时写 unique 保持构造初值 ~0 不可能得到该值。
+
+### 2026-09-26：TESTFIX——fixture 补 defaultfp 模型（长期 1F 收口）
+- 该单测自落地起长期 FAILED（各车道验收 "NNNNP/1F 预存" 的那 1F）。panic 点=`FuncProto::effect_iter`（fspec.rs）`.expect("requires a prototype model")`，调用链=默认 action 树 `localrecovery` 组 `ActionRestrictLocal::apply`（coreaction.cc:1957）Loop 2 读 `data.getFuncProto().effectBegin()`（coreaction.cc:1983）。
+- **BRANAUDIT 2026-09-26 裁决**（/dev/shm/rugra-reports/LANE_BRANAUDIT_2026-09-26.md）：合成 fixture 缺 proto model，非 nzm 布线缺失（布线随 a770ed10 落地，ruleaction.rs 读 `get_nzm()`）。
+- oracle 亲读定案（本 session 机制 E 回执）：`FuncProto::effectBegin/effectEnd`（fspec.cc:4243-4259）在 prototype-local effectlist 为空时**无条件解引用** `model`——oracle 无优雅路径（null 即段错误）；真实管线里 model 恒被绑定（Funcdata 具名构造尾 `funcp.setScope` funcdata.cc:69 → `FuncProto::setScope` fspec.cc:3879 的 3883-3884 `if (model==(ProtoModel*)0) setModel(s->getArch()->defaultfp)`）。Rugra 生产侧 `effect_iter` 的 `.expect`（带明确 panic 消息）即该无条件解引用的忠实镜像，**不改生产代码**。
+- 修法=测试侧：fixture 在 `Funcdata::new` 后自行绑定 stand-in `defaultfp`（`ProtoModelFull::new(Some(Stack),8)` 默认构造形 fspec.cc:2339、名 "default"、空 effectlist——ActionRestrictLocal Loop 2 为 no-op，被测可观测面保持 nzm 布线）。Rugra canonical 默认 Architecture 是 cspec-less 的（`defaultfp==None`），与 oracle "Architecture 解析后 defaultfp 恒非空" 不变量的差异由 fixture 侧补齐。
+- 验收：`cargo test --lib` **1747P/0F/5I**（基 efc28f4a 上全绿；5 ignored 为既有 `#[ignore]`）；canon 双语料零扰动=纯 `#[cfg(test)]` 改动 + curl E2E 差分保险亲跑。
+
 ## 2026-08-23：`FLOW-TRUNCATED-0001` partial-flow clone
 
 `Funcdata::truncated_flow(source, flow_state)` 对应锁定 Ghidra 12.0.4

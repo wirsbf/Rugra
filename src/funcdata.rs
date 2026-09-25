@@ -16136,6 +16136,29 @@ mod tests {
         use crate::action::ActionDatabase;
 
         let mut fd = Funcdata::new("nzm_wiring", Address::new(0x1000), 0x100);
+        // Oracle invariant (BRANAUDIT 2026-09-26 ruling): every Funcdata
+        // entering the action pipeline has its FuncProto model bound —
+        // the named-ctor tail funcdata.cc:69 `funcp.setScope(localmap,
+        // baseaddr+ -1)` runs fspec.cc:3883-3884 `if (model ==
+        // (ProtoModel *)0) setModel(s->getArch()->defaultfp)` inside
+        // `FuncProto::setScope` (fspec.cc:3879), and `FuncProto::
+        // effectBegin/effectEnd` (fspec.cc:4243-4259) unconditionally
+        // dereference that pointer when the prototype-local effect list is
+        // empty (no graceful path exists in the oracle). Rugra's canonical
+        // default Architecture is cspec-less (`defaultfp == None`), so the
+        // synthetic fixture must bind the stand-in `defaultfp` model itself
+        // — exactly what ActionRestrictLocal (coreaction.cc:1983-1985)
+        // reads through `data.getFuncProto().effectBegin()`. The stand-in
+        // is a default-constructed ProtoModelFull (fspec.cc:2339): empty
+        // effect list, so Loop 2's saved-register walk is a no-op and the
+        // observable under test stays the nzm wiring, not restrict-local.
+        let mut defaultfp = crate::fspec::ProtoModelFull::new(
+            Some(crate::space::AddressSpace::Stack),
+            8,
+        );
+        defaultfp.name = "default".to_string();
+        fd.funcp
+            .set_model(Some(std::sync::Arc::new(defaultfp)));
         let block = fd.create_new_block();
 
         // u1 = INT_AND(EDI, 0x3f0): EDI is an unwritten register read, so
