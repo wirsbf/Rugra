@@ -1240,6 +1240,7 @@ protocol-failure（车道实测）。前言无 oracle 对应物（direct-runner 
 ### 2026-06-23（续）：RETURN 返回值推断
 
 - `op_return()` 当 RETURN op 无显式返回值输入时，扫描同块 RETURN 前最后一个写 RAX/EAX 的 op，emit 其值作为返回值。对齐 Ghidra 把 `xor eax,eax; ret` 重构为 `return 0` 的行为。这是前端语义改进（非后处理 hack），缩小了与 Ghidra 的差距 4（返回值推断缺失）。
+- **〔2026-09-25 PRINTP2 勘误〕**：上述机制已整体移除。oracle `opReturn`（printc.cc:754-766）无此路径——返回值重建全在 IR 层（RuleTrivialArith 折叠 + ActionReturnRecovery 挂值），print 层仅按 `numInput()>1` 门发射；详见 2026-09-25（Lane PRINTP2）节。
 
 ### 2026-06-23（续）：else 分支 seen_return 抑制修复 + is_block_body_empty 控制流感知
 
@@ -1497,6 +1498,7 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **根因**：myprogress 的 `return piVar5 ^ piVar5;`（gcc: invalid operands to binary ^）。RETURN 无显式 in(1) 时，op_return 向上扫描同 block 的 RAX/EAX 写入者，`emit_inline_expr` 渲染其表达式。`xor eax,eax; ret`（标准 zero-return 惯用法）的 RAX 写入者是 COPY(xor_result)，xor_result=INT_XOR(x,x)。该 INT_XOR 在 cleanup-pool 时已 dead（def=None），RuleTrivialArith 无法折叠，emit_inline_expr 经 copy-prop 渲染出 `piVar5 ^ piVar5`（指针自异或，非法 C）。
 - **修复**：op_return RAX 写入者路径改为 capture_inline_expr_text 捕获渲染文本，is_textual_self_xor 检测 `X ^ X` 形式 → 输出 `0`（对齐 Ghidra RuleTrivialArith INT_XOR(x,x)->0，ruleaction.cc:2413；也匹配 op_return 注释承诺的 "xor eax,eax; ret → return 0"）。capture_inline_expr_text 保存/恢复 emit + inline_depth + inlined_ops + is_lhs，避免 dry-run 污染主流。
 - **效果**：myprogress `return piVar5 ^ piVar5` → `return 0`，gcc 审计 myprogress 通过。
+- **〔2026-09-25 PRINTP2 勘误〕**：本机制随 RAX 块扫描重构一并移除（该扫描已由 IR 层挂值取代，print 层不再重构返回值；详见 2026-09-25（Lane PRINTP2）节）。
 
 ### op_call 参数空渲染修复（2026-07-03 续 5）
 - **根因**：main 的 `curl_easy_setopt(, 0x4e2b, ...)` 第一参数为空（gcc: expected expression before ','）。op_call 的参数解析（block_local_reg_defs / value_def_map / COPY-source 追踪 / inline）当 def op 已 dead 或解析到的 varnode 是 inline-candidate Unique（push_varnode 返回 ""）时，emit_inline_expr / push_varnode 不输出任何东西 → `f(, arg)` 非法 C。对照 Ghidra opCall（printc.cc:626-633）：每个参数都经 pushVn，永不空。
@@ -3243,3 +3245,46 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
   httpd 镜 440→412、curl canon 396→388、httpd canon 896→872；
   defects=0/numbering=0 四档全零；bank 1729/1730（1 失败为 master 既有
   fspec `test_nonzeromask_pipeline_wiring`，pristine 复现，非本车道）。
+
+## 2026-09-25（Lane PRINTP2）：签名 tokenbreak 双发恢复 + op_return 打印期 RAX 重构移除
+
+- **根因①（MIRROR3-PROTOWRAP-PRINTC-0001，签名折行断点丢失）**：oracle
+  `PrintC::emitFunctionDeclaration`（printc.cc:2594/2596）在函数名后与
+  `(` 后各发一次 `emit->spaces(function_call.spacing=0, function_call.bump=10)`
+  ——`function_call`（printc.cc:28）= postsurround token，spacing 0、bump 10。
+  在 EmitPrettyPrint 语义下 `spaces(num,bump)` 不是"无空格可省略"：它是
+  TokenSplit spac_t/tokenbreak（prettyprint.hh:914）——零强制空格 + 可选
+  断行缩进 +bump 的**断点**。Rugra 移植时以 spacing==0 为由跳过两次调用，
+  断点丢失后长签名折行退化为参数间 type_expr_space 断（5 参/行、续行缩进
+  0），golden 形态为开括号列续行（my_get_line 19 列、4 参/行）。
+- **修法①**：`emit_function_declaration` 恢复 `open_group`/`close_group(id1)`
+  （cc:2590/2600）、名后 `spaces(fc.spacing, fc.bump)`（cc:2594）、括号后
+  `spaces(0, fc_bump)`（cc:2596）、`close_paren(")", id2)` 传回真实组 id
+  ——全部逐字照 cc 形态；spacing/bump 取自 RPN token 表
+  `rpn_token_table[rpn_tok_function_call]`（printc.cc:28 的镜像条目）。EmitNoMarkup
+  下 spaces(0,·) 仍折为零字节（prettyprint.cc:46），canon/mirror 两脸安全。
+- **根因②（MIRROR3-RETURNVOID-PRINTC-0001，void return 未裁剪）**：oracle
+  `PrintC::opReturn`（printc.cc:754-766）**没有**按输出类型裁剪的分支——
+  返回值仅在 `op->numInput()>1` 时发射；void return 的裁剪发生在 IR 层
+  （`ActionReturnRecovery::buildReturnOutput` 只保留 used trial，
+  coreaction.cc:1836-1906；trial 裁决在 `ParamListStandardOut::fillinMap`，
+  fspec.cc:1721-1758）。探针实证（RUGRA_PROBE_RET 构建）：httpd 镜
+  ap_init_vhost_config 的 RETURN 到达 print 层时 `num_input=2`、in(1)=Register
+  ——残值输入在 IR 中幸存，printc 两运输层（RPN 臂 cc 逐字镜像 + legacy
+  孪生）均忠实打印 IR 给定的输入。**结论：printc 域无可修残差，残根在
+  coreaction/fspec trial 裁决域（本票移交）**。
+- **修法②（清理非 oracle 机制）**：legacy `op_return` 的 RAX/EAX 块扫描
+  重构（commit 5542b507，print 期 IR 恢复，oracle 无对应物——Ghidra 的
+  `xor eax,eax; ret`→`return 0` 全在 IR 层完成：RuleTrivialArith 折叠 +
+  ActionReturnRecovery 挂值）整体移除；其专属 helper
+  `capture_inline_expr_text`/`is_textual_self_xor` 一并退役（零其它调用方；
+  全驱动走 RPN 运输层，legacy 臂探针 0 命中=死码，行为零变化）。本条取代
+  2026-06-23"RETURN 返回值推断"与 2026-07-03 续 4"self-XOR 折叠"两节所述
+  机制。
+- **效果（本 worktree fast-release 亲测，基=master d9fa45a2 基线二进制 A/B）**：
+  curl 镜 my_get_line/helpf 签名折行与 golden 逐字节一致（4 参/行、开括号列
+  续行；my_get_line 45→38、helpf 10→6，残差为 typeprop/decl 族）；curl 镜 211→200；curl canon
+  369→369（中性——canon 签名带 DWARF 类型普遍单行，折行不触发）；
+  httpd 镜 412、httpd canon 872、vsh 镜 51 全部不变；defects=0/numbering=0
+  五档全零；bank 391/391 MATCH；cargo test --lib 1730P/1F（唯一失败=
+  test_nonzeromask_pipeline_wiring，VHOST 在案基线预存）。
