@@ -9108,58 +9108,6 @@ impl PrintC {
             .unwrap_or_default()
     }
 
-    /// Render an op's inline expression (RHS, no `out =`) to a String by
-    /// swapping in a capture emit buffer. Used by op_return's RAX-writer
-    /// reconstruction to inspect the inlined return-value text.
-    // RUGRA-GLUE: Rust-side capture helper (capture-emit-swap pattern).
-    fn capture_inline_expr_text(&mut self, op: &PcodeOp) -> String {
-        // Save the emit buffer AND inline-state that emit_inline_expr mutates
-        // (inline_depth, inlined_ops), so this dry-run capture has no visible
-        // side effects on the main emission pass. Without restoring these, a
-        // capture here would leave inlined_ops populated / inline_depth bumped
-        // and corrupt subsequent varnode rendering (observed: bVarbVar2 name
-        // concatenation in next_url).
-        let orig_emit = std::mem::replace(
-            &mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()),
-        );
-        let saved_depth = self.inline_depth;
-        let saved_inlined_ops = self.inlined_ops.clone();
-        let saved_lhs = self.is_lhs;
-        self.is_lhs = false;
-        self.emit_inline_expr(op);
-        let buf = std::mem::replace(&mut self.emit, orig_emit);
-        self.inline_depth = saved_depth;
-        self.inlined_ops = saved_inlined_ops;
-        self.is_lhs = saved_lhs;
-        buf.into_any()
-            .downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output())
-            .unwrap_or_default()
-    }
-
-    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
-    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
-    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
-    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
-    // because Rugra's late/dead self-XORs escape op-layer folding and reach
-    // print, where text-level detection is the practical equivalent.
-    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
-    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
-    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
-    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
-    // because Rugra's late/dead self-XORs escape op-layer folding and reach
-    // print, where text-level detection is the practical equivalent.
-    fn is_textual_self_xor(text: &str) -> bool {
-        let t = text.trim();
-        if let Some(idx) = t.find(" ^ ") {
-            let lhs = t[..idx].trim();
-            let rhs = t[idx + 3..].trim();
-            return !lhs.is_empty() && lhs == rhs;
-        }
-        false
-    }
-
     /// Detect a degenerate textual self-comparison `X == X`, `X != X`,
     /// `X < X`, `X <= X`, `X > X`, or `X >= X`, where the two operands are
     /// the same identifier token. This is the signature of a CBRANCH whose
@@ -11904,6 +11852,16 @@ impl PrintLanguage for PrintC {
 
 
     // Ghidra: printc.cc:754 PrintC::opReturn
+    /// Legacy direct-emit twin of the RPN CPUI_RETURN arm (dispatch_op_rpn).
+    /// Mirrors the oracle's plain-return arm (printc.cc:758-766): print
+    /// `return`; the value is printed ONLY when numInput()>1 — the oracle
+    /// clips void returns in the IR (ActionReturnRecovery::buildReturnOutput
+    /// strips unused trials, coreaction.cc:1836-1906), never at print time.
+    /// RETURNVOID-PRINTC-0001 audit: oracle opReturn has NO output-type
+    /// branch; the residual `return LIT;` on void functions is the IR-side
+    /// input surviving (upstream trial-verdict domain).
+    /// The halt/noreturn/baddata/missing arms (printc.cc:767-783) are tracked
+    /// by PRINT-RPN-0001 for both transports.
     fn op_return(&mut self, op: &PcodeOp) {
         self.emit.print("return");
         if op.num_input() > 1 {
@@ -11925,52 +11883,13 @@ impl PrintLanguage for PrintC {
                     self.push_varnode(&in1.read().unwrap(), Some(op));
                 }
             }
-        } else {
-            // No explicit return value on the RETURN op. Check if RAX/EAX (offset 0x0)
-            // was written by an op just before this RETURN in the same block. If so,
-            // emit that value as the return — mirrors how Ghidra reconstructs
-            // 'xor eax,eax; ret' into 'return 0'.
-            use crate::space::AddressSpace;
-            if let Some(ref parent_arc) = op.parent {
-                if let Some(ref parent_dyn) = parent_arc.upgrade() {
-                    let block = parent_dyn.read().unwrap();
-                    let ops = block.get_ops();
-                    for op_ref in ops.iter().rev() {
-                        let o = op_ref.0.read().unwrap();
-                        if o.start == op.start { continue; }
-                        if let Some(ref out_arc) = o.output {
-                            let out_vn = out_arc.read().unwrap();
-                            if out_vn.get_space() == AddressSpace::Register
-                                && out_vn.get_offset() == 0x0
-                                && out_vn.get_size() >= 4
-                            {
-                                drop(out_vn);
-                                // `xor eax,eax; ret` is the canonical zero-return
-                                // idiom. The comment above promises to reconstruct
-                                // it as `return 0`. Ghidra's RuleTrivialArith folds
-                                // INT_XOR(x,x)->COPY(0) before print, but Rugra's
-                                // XOR may be dead by cleanup-pool time while its
-                                // expression still inlines here (via COPY chains /
-                                // copy-prop). Capture the inlined return-value text;
-                                // if it is a self-XOR `X ^ X` (syntactically), emit
-                                // 0 — matching Ghidra's fold and avoiding the
-                                // illegal-on-pointers `piVar ^ piVar` gcc error.
-                                let o2 = op_ref.0.read().unwrap();
-                                let inline_text = self.capture_inline_expr_text(&o2);
-                                drop(o2);
-                                self.emit.print(" ");
-                                if Self::is_textual_self_xor(&inline_text) {
-                                    self.emit.print("0");
-                                } else {
-                                    self.emit.print(&inline_text);
-                                }
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
         }
+        // printc.cc:762 `if (op->numInput()>1)` — no else arm exists. The
+        // former RAX-writer block-scan reconstruction (commit 5542b507) was
+        // print-time IR recovery with no oracle counterpart and is removed
+        // (RETURNVOID-PRINTC-0001); Ghidra reconstructs `xor eax,eax; ret`
+        // purely in the IR (RuleTrivialArith fold + ActionReturnRecovery
+        // attach), leaving opReturn to print whatever inputs remain.
     }
 
     // Ghidra: printc.cc:536 PrintC::opCbranch
@@ -15579,16 +15498,23 @@ impl PrintC {
     /// the parameter list (emitPrototypeInputs), closes the paren, closes the
     /// group, ends the func proto.
     ///
-    /// Rugra adaptation: there is no `option_convention` field / no OpToken
-    /// `function_call` spacing struct on the Rust PrintC (the calling-
-    /// convention printing is gated on `option_convention` which defaults to
-    /// false in Ghidra's PrintC::resetDefaultsPrintC). We faithfully preserve
-    /// the branch (it's just unreachable until option_convention is wired),
-    /// and use literal spacing for `function_call.spacing/bump` (0 indent).
+    /// Rugra adaptation: the calling-convention printing is gated on
+    /// `option_convention` (which defaults to true in Ghidra's
+    /// PrintC::resetDefaultsPrintC, printc.cc:1584; `printModelInDecl` is
+    /// false for unknown models, so the token rarely appears). The
+    /// `function_call.spacing/bump` values come from the RPN token-table
+    /// entry mirroring printc.cc:28 (postsurround, spacing 0, bump 10);
+    /// both `emit->spaces` calls (printc.cc:2594/2596) are emitted as
+    /// tokenbreaks exactly as the oracle does — under EmitPrettyPrint they
+    /// carry the signature wrap break points (PROTOWRAP-PRINTC-0001),
+    /// under EmitNoMarkup spaces(0,·) folds to nothing (prettyprint.cc:46).
     ///
     /// Alignment Evidence:
     /// - References/output params: `fd` borrowed read-only (const Funcdata*).
-    ///   `proto` is `&fd.getFuncProto()`. No mutation of fd.
+    ///   `proto` is `&fd.getFuncProto()`. No mutation of fd. `id1`/`id2`
+    ///   group ids flow open→close unmodified (closeParen internally
+    ///   closeGroup(id2), printc.cc:1104-1109; the outer closeGroup(id1)
+    ///   pairs the openGroup at cc:2590).
     /// - Loop bounds/order: parameter list order is `proto.parameters[i]`
     ///   for i in 0..numParams() (emitPrototypeInputs, printc.cc:2222-2255);
     ///   comma-separated, `void` when sz==0, `...` appended if isDotdotdot.
@@ -15619,6 +15545,7 @@ impl PrintC {
             }
         }
         // int4 id1 = emit->openGroup();
+        let id1 = self.emit.open_group();
         // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
         // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
         // The name is emitted VERBATIM (printc.cc:2592) — no identifier
@@ -15626,17 +15553,33 @@ impl PrintC {
         // STUBLEAK-DOTNAME-SANITIZE-0001.
         let display_name = fd.get_name().to_string();
         self.emit.tag_func_name(&display_name, 0);
-        // emit->spaces(function_call.spacing, function_call.bump);
-        // function_call.spacing==0, so no spaces between name and '('.
+        // emit->spaces(function_call.spacing,function_call.bump);
+        // printc.cc:2594: the tokenbreak between funcname and '('.
+        // function_call (printc.cc:28) = { spacing=0, bump=10 }. Under
+        // EmitPrettyPrint spaces(0,10) is NOT a no-op: it is a tokenbreak
+        // (prettyprint.hh:914 spac_t/tokenbreak) — zero mandatory spaces
+        // with an optional line break indenting +10. Reading spacing==0 as
+        // "no spaces, skip" dropped the break point and let signature wrap
+        // collapse onto the parameter type_expr_space breaks (5 params/line,
+        // continuation indent 0) instead of the golden form (break at the
+        // open-paren column) — PROTOWRAP-PRINTC-0001.
+        let (fc_spacing, fc_bump) = {
+            let fc = &self.rpn_token_table[self.rpn_tok_function_call];
+            (fc.spacing, fc.bump)
+        };
+        self.emit.spaces(fc_spacing, fc_bump);
         // int4 id2 = emit->openParen(OPEN_PAREN);
-        self.emit.open_paren("(");
-        // emit->spaces(0, function_call.bump);
+        let id2 = self.emit.open_paren("(");
+        // emit->spaces(0,function_call.bump);
+        // printc.cc:2596: the tokenbreak after '(' — same bump=10 form.
+        self.emit.spaces(0, fc_bump);
         // pushScope(fd->getScopeLocal());   // enter function's scope
         // emitPrototypeInputs(proto);
         self.emit_prototype_inputs(proto);
         // emit->closeParen(CLOSE_PAREN,id2);
-        self.emit.close_paren(")", 0);
+        self.emit.close_paren(")", id2);
         // emit->closeGroup(id1);
+        self.emit.close_group(id1);
         // emit->endFuncProto(id);
         self.emit.end_func_proto();
     }
