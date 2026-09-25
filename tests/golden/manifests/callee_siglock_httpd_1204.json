@@ -486,8 +486,8 @@
      "locked": true
     },
     {
-     "type": null,
-     "locked": false
+     "type": "undefined8 * *",
+     "locked": true
     },
     {
      "type": null,
@@ -551,11 +551,11 @@
    "name": "apr_dynamic_fn_retrieve",
    "sites": 1,
    "arity": 1,
-   "input_lock": false,
+   "input_lock": true,
    "params": [
     {
-     "type": null,
-     "locked": false
+     "type": "char *",
+     "locked": true
     }
    ],
    "return": null
@@ -657,7 +657,7 @@
    "name": "apr_getopt_init",
    "sites": 1,
    "arity": 4,
-   "input_lock": true,
+   "input_lock": false,
    "params": [
     {
      "type": "long *",
@@ -668,8 +668,8 @@
      "locked": true
     },
     {
-     "type": "int",
-     "locked": true
+     "type": null,
+     "locked": false
     },
     {
      "type": "long",
@@ -697,9 +697,13 @@
   "0x12abc0": {
    "name": "apr_palloc",
    "sites": 4,
-   "arity": 1,
+   "arity": 2,
    "input_lock": false,
    "params": [
+    {
+     "type": null,
+     "locked": false
+    },
     {
      "type": null,
      "locked": false
