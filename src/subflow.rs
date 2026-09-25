@@ -4693,10 +4693,16 @@ impl Rule for RuleSplitFlow {
 /// (subflow.cc:2616-2672), `buildInConstants` (subflow.cc:2474-2488), the
 /// splitStore LOAD-value trace (subflow.cc:2812-2835) and the splitLoad
 /// COPY-follow (subflow.cc:2761-2771) are ported 1:1 as of
-/// SUBFLOW-ROOTPOINTER-PORT-0001. Remaining structural gap (see module
-/// docs): the `buildInSubpieces`/`buildOutVarnodes`/`buildOutConcats` raw
-/// op-DAG shapes (address-placed outputs, protoPartial PIECE stacks,
-/// generateConstants folding) keep the stand-in forms.
+/// SUBFLOW-ROOTPOINTER-PORT-0001. The ten union facing consults
+/// (cc:2118/2157/2772/2822/2828/2914/2950/2951) run through the fd-aware
+/// twins (`vn_type_read_facing`/`vn_type_def_facing`, unionresolve.rs) as of
+/// UNIONRESOLVE-PKG-E-0001: the oracle derives the containing Funcdata inside
+/// `TypeUnion::findResolve` (type.cc:2138) and consults `fd->getUnionField`;
+/// Rugra threads the `SplitDatatype::data`/`Funcdata` channel explicitly.
+/// Remaining structural gap (see module docs): the
+/// `buildInSubpieces`/`buildOutVarnodes`/`buildOutConcats` raw op-DAG shapes
+/// (address-placed outputs, protoPartial PIECE stacks, generateConstants
+/// folding) keep the stand-in forms.
 pub struct SplitDatatype<'a> {
     /// The containing function. Faithful to `data`.
     pub data: &'a mut Funcdata,
@@ -4767,7 +4773,20 @@ impl RootPointer {
     /// (funcdata_varnode.cc:69/88) whose metatype is not TYPE_PTR, so the
     /// `None` read-facing result rejects exactly like the oracle's non-ptr
     /// metatype check (cc:2119-2120).
-    fn back_up_pointer(&mut self, implied_base: Option<&Arc<crate::type_system::Datatype>>) -> bool {
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2118 consult
+    /// `tmpPointer->getTypeReadFacing(addOp)`: the oracle's
+    /// `TypeUnion::findResolve` derives the Funcdata from
+    /// `op->getParent()->getFuncdata()` (type.cc:2138) and consults
+    /// `fd->getUnionField`; Rugra's `PcodeOp` carries no back-pointer, so the
+    /// containing function is threaded through explicitly and the consult
+    /// goes through [`crate::unionresolve::vn_type_read_facing`]
+    /// (slot 0: `tmpPointer` is `addOp->getIn(0)`).
+    fn back_up_pointer(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        implied_base: Option<&Arc<crate::type_system::Datatype>>,
+    ) -> bool {
         use crate::type_system::{Datatype, TypeMetatype};
 
         let pointer = match &self.pointer {
@@ -4795,13 +4814,14 @@ impl RootPointer {
             return false;
         }
         let tmp_pointer = add_op.read().unwrap().get_in(0).cloned().unwrap();
-        let ct = {
-            let add_guard = add_op.read().unwrap();
-            tmp_pointer
-                .read()
-                .unwrap()
-                .get_type_read_facing_op(&add_guard, 0)
-        };
+        // cc:2118: tmpPointer->getTypeReadFacing(addOp) — slot 0 consult
+        // through fd.union_map (see the fd channel note above).
+        let ct = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &tmp_pointer,
+            &crate::op::PcodeOpRef(add_op.clone()),
+            0,
+        );
         let ct = match ct {
             Some(ct) => ct,
             None => return false, // untyped == undefinedN, not TYPE_PTR (cc:2119)
@@ -4851,8 +4871,14 @@ impl RootPointer {
     /// point at the value-type; then back up through at most 3 hops of
     /// nested struct/array pointers that have a lone descendant, accumulating
     /// the offset in `base_offset`.
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2157 consult
+    /// `pointer->getTypeReadFacing(op)` (slot 1: `pointer` is the LOAD/STORE
+    /// `in(1)`) and for the `backUpPointer` hops — see the channel note on
+    /// [`Self::back_up_pointer`].
     pub fn find(
         &mut self,
+        fd: &crate::funcdata::Funcdata,
         op: &Arc<RwLock<PcodeOp>>,
         value_type: &Arc<crate::type_system::Datatype>,
     ) -> bool {
@@ -4878,10 +4904,14 @@ impl RootPointer {
         let pointer = op.read().unwrap().get_in(1).cloned().unwrap();
         self.first_pointer = Some(pointer.clone());
         self.pointer = Some(pointer.clone());
-        let ct = {
-            let op_guard = op.read().unwrap();
-            pointer.read().unwrap().get_type_read_facing_op(&op_guard, 1)
-        };
+        // cc:2157: pointer->getTypeReadFacing(op) — slot 1 consult through
+        // fd.union_map (see the fd channel note above).
+        let ct = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &pointer,
+            &crate::op::PcodeOpRef(op.clone()),
+            1,
+        );
         let ct = match ct {
             Some(ct) => ct,
             None => return false,
@@ -4895,7 +4925,7 @@ impl RootPointer {
             if implied_base.is_some() {
                 return false;
             }
-            if !self.back_up_pointer(implied_base.as_ref()) {
+            if !self.back_up_pointer(fd, implied_base.as_ref()) {
                 return false;
             }
             let ptr_to = match self.ptr_type.as_ref().unwrap().as_ref() {
@@ -4916,7 +4946,7 @@ impl RootPointer {
             if addr_tied || lone {
                 break;
             }
-            if !self.back_up_pointer(implied_base.as_ref()) {
+            if !self.back_up_pointer(fd, implied_base.as_ref()) {
                 break;
             }
         }
@@ -5007,7 +5037,14 @@ impl<'a> SplitDatatype<'a> {
     /// the canonical `TypeFactory::getExactPiece` (type.cc:4090-4117), which
     /// can produce `TypePartialStruct`/`TypePartialUnion`/`TypePartialEnum`
     /// pieces. Returns `None` when no splittable interpretation exists.
+    ///
+    /// `fd` is the RUGRA-GLUE channel for the cc:2914 consult
+    /// `loadStore->getIn(1)->getTypeReadFacing(loadStore)` (slot 1): the
+    /// oracle derives the Funcdata inside `TypeUnion::findResolve`
+    /// (type.cc:2138); Rugra threads it explicitly into
+    /// [`crate::unionresolve::vn_type_read_facing`].
     pub fn get_value_datatype(
+        fd: &crate::funcdata::Funcdata,
         load_store: &Arc<RwLock<PcodeOp>>,
         size: usize,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
@@ -5016,13 +5053,14 @@ impl<'a> SplitDatatype<'a> {
         use crate::type_system::{Datatype, TypeMetatype};
 
         let ptr_vn = load_store.read().unwrap().get_in(1).cloned()?;
-        let ptr_type = {
-            let op_guard = load_store.read().unwrap();
-            ptr_vn
-                .read()
-                .unwrap()
-                .get_type_read_facing_op(&op_guard, 1)
-        }?;
+        // cc:2914: loadStore->getIn(1)->getTypeReadFacing(loadStore) —
+        // slot 1 consult through fd.union_map.
+        let ptr_type = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &ptr_vn,
+            &crate::op::PcodeOpRef(load_store.clone()),
+            1,
+        )?;
         // if (ptrType->getMetatype() != TYPE_PTR) return 0; (cc:2917-2918)
         let pointer = match ptr_type.as_ref() {
             Datatype::Pointer(pointer) => pointer,
@@ -5364,6 +5402,13 @@ impl<'a> SplitDatatype<'a> {
     /// per-component COPY (with SUBPIECE extraction and PIECE reassembly),
     /// destroying the original COPY.
     ///
+    /// Structural note: the oracle reads the in/out facing types in
+    /// `RuleSplitCopy::applyOp` (cc:2950/2951) and passes them in as
+    /// parameters; Rugra re-reads them inline here with the identical
+    /// consult keys (COPY op, slot 0 / def) — `testCopyConstraints` between
+    /// the two reads writes nothing to `fd.union_map`, so the values are
+    /// the same and the inline form is kept.
+    ///
     /// Returns `true` if the split was performed. Returns `false` (no change)
     /// if either side is not a composite type that should be split, or if the
     /// in/out component layouts do not match.
@@ -5382,8 +5427,16 @@ impl<'a> SplitDatatype<'a> {
         if !self.test_copy_constraints(copy_op, &in_vn, &out_vn) {
             return Ok(false);
         }
-        let in_type = in_vn.read().unwrap().get_type_read_facing();
-        let out_type = out_vn.read().unwrap().get_type_def_facing();
+        // cc:2950/2951 (read in RuleSplitCopy::applyOp, re-read here — see the
+        // structural note in the doc comment): in(0) read-facing the COPY at
+        // slot 0, out def-facing — both consult fd.union_map.
+        let in_type = crate::unionresolve::vn_type_read_facing(
+            self.data,
+            &in_vn,
+            &crate::op::PcodeOpRef(copy_op.clone()),
+            0,
+        );
+        let out_type = crate::unionresolve::vn_type_def_facing(self.data, &out_vn);
         let (in_type, out_type) = match (in_type, out_type) {
             (Some(i), Some(o)) => (i, o),
             _ => return Ok(false),
@@ -5923,10 +5976,10 @@ impl<'a> SplitDatatype<'a> {
             None => out_vn_initial,
         };
         let out_size = out_vn.read().unwrap().get_size();
-        let out_type = out_vn
-            .read()
-            .unwrap()
-            .get_type_def_facing()
+        // cc:2772: outVn->getTypeDefFacing() — def-facing consult through
+        // fd.union_map; the untyped fallback mirrors the oracle's `undefined`
+        // bank type (see unknown_of).
+        let out_type = crate::unionresolve::vn_type_def_facing(self.data, &out_vn)
             .or_else(|| self.unknown_of(out_size));
         let out_type = match out_type {
             Some(t) => t,
@@ -5939,7 +5992,7 @@ impl<'a> SplitDatatype<'a> {
             return Ok(false); // Sanity check on output (cc:2774-2776)
         }
         let mut root = RootPointer::new();
-        if !root.find(load_op, in_type) {
+        if !root.find(self.data, load_op, in_type) {
             return Ok(false);
         }
         let insert_point = match &copy_op {
@@ -6038,20 +6091,22 @@ impl<'a> SplitDatatype<'a> {
         if let Some(lo) = &load_op {
             let size = in_vn.read().unwrap().get_size();
             if let Some(types) = self.types.as_ref() {
-                in_type = SplitDatatype::get_value_datatype(lo, size, types);
+                in_type = SplitDatatype::get_value_datatype(self.data, lo, size, types);
             }
             if in_type.is_none() {
                 load_op = None;
             }
         }
         if in_type.is_none() {
-            let read_facing = {
-                let store_guard = store_op.read().unwrap();
-                in_vn
-                    .read()
-                    .unwrap()
-                    .get_type_read_facing_op(&store_guard, 2)
-            };
+            // cc:2822: inVn->getTypeReadFacing(storeOp) — slot 2 consult
+            // through fd.union_map; untyped fallback mirrors the oracle's
+            // `undefined` bank type (see unknown_of).
+            let read_facing = crate::unionresolve::vn_type_read_facing(
+                self.data,
+                &in_vn,
+                &crate::op::PcodeOpRef(store_op.clone()),
+                2,
+            );
             in_type = read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
         }
         let in_constant = in_vn.read().unwrap().is_constant();
@@ -6064,13 +6119,14 @@ impl<'a> SplitDatatype<'a> {
                 // If not compatible while considering the LOAD, check again,
                 // but without the LOAD (cc:2825-2832).
                 load_op = None;
-                let read_facing = {
-                    let store_guard = store_op.read().unwrap();
-                    in_vn
-                        .read()
-                        .unwrap()
-                        .get_type_read_facing_op(&store_guard, 2)
-                };
+                // cc:2828: inVn->getTypeReadFacing(storeOp) retry — same
+                // slot 2 consult through fd.union_map.
+                let read_facing = crate::unionresolve::vn_type_read_facing(
+                    self.data,
+                    &in_vn,
+                    &crate::op::PcodeOpRef(store_op.clone()),
+                    2,
+                );
                 let retry_type =
                     read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
                 let Some(retry_type) = retry_type else {
@@ -6089,12 +6145,12 @@ impl<'a> SplitDatatype<'a> {
             return Ok(false); // Sanity check (cc:2837)
         }
         let mut store_root = RootPointer::new();
-        if !store_root.find(store_op, out_type) {
+        if !store_root.find(self.data, store_op, out_type) {
             return Ok(false);
         }
         let mut load_root = RootPointer::new();
         if let Some(lo) = &load_op {
-            if !load_root.find(lo, &in_type) {
+            if !load_root.find(self.data, lo, &in_type) {
                 return Ok(false);
             }
         }
@@ -6383,14 +6439,24 @@ impl Rule for RuleSplitCopy {
         // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out
         // data-types and only proceed when one side is
         // PARTIALSTRUCT/ARRAY/STRUCT. Rugra's TypeMetatype covers all three.
+        // cc:2950/2951: in(0) read-facing the COPY at slot 0, out def-facing —
+        // both consult fd.union_map via the fd-aware twins.
         use crate::type_system::TypeMetatype;
-        let (in_type, out_type) = {
+        let (in_vn, out_vn) = {
             let o = op_arc.read().unwrap();
-            (
-                o.get_in(0).and_then(|v| v.read().unwrap().get_type_read_facing()),
-                o.get_out().and_then(|v| v.read().unwrap().get_type_def_facing()),
-            )
+            (o.get_in(0).cloned(), o.get_out().cloned())
         };
+        let in_type = in_vn.as_ref().and_then(|v| {
+            crate::unionresolve::vn_type_read_facing(
+                fd,
+                v,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                0,
+            )
+        });
+        let out_type = out_vn
+            .as_ref()
+            .and_then(|v| crate::unionresolve::vn_type_def_facing(fd, v));
         let in_meta = in_type.as_ref().map(|t| t.get_metatype());
         let out_meta = out_type.as_ref().map(|t| t.get_metatype());
         let is_composite = |m: Option<TypeMetatype>| {
@@ -6447,7 +6513,7 @@ impl Rule for RuleSplitLoad {
             Some(output) => output.read().unwrap().get_size(),
             None => return Ok(action_status::NO_CHANGE),
         };
-        let in_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+        let in_type = match SplitDatatype::get_value_datatype(fd, op_arc, size, &types) {
             Some(in_type) => in_type,
             None => return Ok(action_status::NO_CHANGE),
         };
@@ -6500,7 +6566,7 @@ impl Rule for RuleSplitStore {
             Some(value) => value.read().unwrap().get_size(),
             None => return Ok(action_status::NO_CHANGE),
         };
-        let out_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+        let out_type = match SplitDatatype::get_value_datatype(fd, op_arc, size, &types) {
             Some(out_type) => out_type,
             None => return Ok(action_status::NO_CHANGE),
         };
