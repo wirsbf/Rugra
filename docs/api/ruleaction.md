@@ -1,5 +1,55 @@
 # `ruleaction.rs` API Reference
 
+## 2026-09-26：ruleaction 14 处 union facing 退化读换 fd-aware 孪生（UNIONRESOLVE-PKG-D-0001）
+
+审计底稿 `docs/alignment_audit/UNION_CONSUMER_AUDIT_2026-09-26.md` §一 ruleaction 表判定的
+14 处 divergent 消费点全部换 `crate::unionresolve` 的 fd-aware 孪生
+（`vn_type_read_facing`/`vn_type_def_facing`，unionresolve.rs:1898-1929，consult
+`fd.union_map`）。oracle 依据 = varnode.cc:626-672 四 facing 方法
+（`needsResolution() ? findResolve(op,slot) : this`）+ type.cc findResolve 虚分派
+（Pointer/Union map-miss 返 this；**Array 返 element、Struct 返 field[0]、PartialUnion
+返 stripped**——零参退化形 varnode.rs:1547 恒返 raw `v_type`，连 needsResolution 检查都无）。
+
+逐站点（slot 键逐一对照 oracle `op->getSlot(this)`）：
+
+- `RuleAddUnsigned::apply_op`（cc:7188）——op 读 constvn（op->getIn(1)）slot 1；
+  **12760-63 注释陈述错误一并修正**（原文称零参形"returns the varnode's resolved
+  base type"——实为 raw；现读孪生后注释改为描述 consult 语义）；
+- `RuleSubRight::apply_op` isPieceStructured 门（cc:7256）——slot 0，SPECIAL_PRINT 标记；
+- `RulePtrsubCharConstant::apply_op` 双读（cc:7358/7366）——sb slot 0 read-facing +
+  outvn def-facing（`_fd` 参数更名 `fd` 以供孪生穿参）；
+- `RuleExpandLoad::apply_op` 三读+outVn（cc:10937/10940/10943/10964）——**defOp 与 op
+  两键分派**：10937 用 defOp 读 real_root（=def->getIn(0)）slot 0，10940/10943 用
+  LOAD op 读 root_ptr（=op->getIn(1)）slot 1，10964 outVn def-facing；
+- `RulePushPtr::apply_op`（cc:6854）——op 读 in(s) slot s；
+- `RulePtrArith::verify_preferred_pointer`（cc:6548/6550）——preOp 读 in(preslot)
+  slot preslot，**加 fd 参数**；
+- `RulePtrArith::evaluate_pointer_expression`（cc:6576/6588）——op 读 in(1-slot)
+  slot other_slot + decOp 读 otherVn slot other_idx，**加 fd 参数**（调用点
+  RulePushPtr/RulePtrArith apply_op 及 4 个单测同步穿参）；
+- `RulePtrArith::apply_op` 输入扫描（cc:6645）——op 读 in(s) slot s；
+- `AddTreeState::build_degenerate` 双读（cc:6426/6430）——wordsize 改读 **ctor 缓存的
+  `self.ct`**（cc 侧读 `ct` 成员，其来源=cc:6025 consult；Rust ctor 已走孪生，消除了
+  原实现 ctor-consult vs buildDegenerate-raw 的不一致）+ out 门换
+  `vn_type_def_facing`（原为裸 `v_type`）。
+
+**验证（CARGO_TARGET_DIR=/dev/shm/rugra-targets/pkgd，基=master 46db1767 亲测 A/B）**：
+canon curl（3154 行）与 httpd（2026 行）双语料 **字节恒等**（cmp=0；compare
+curl 267/0/0、httpd 862/0/0 == 基线，零回退）；镜面棘轮三面 PASS
+（curl 110/275、httpd 258/460、vsh 15/55，defects=0/numbering=0，matched 74/29/71，
+无重钉）；投影银行 391/391；gcc 审计 104OK/20FAIL、15OK/14FAIL == 常驻基线；
+cargo test --lib 1735P/1F（1F=nonzeromask 预存）。**零行为变化的实证机理**：临时
+[DBG-PKGD] 探针（20 个孪生调用点全量埋点，提交前剥离）在 httpd 全程记录到
+**0 次**孪生结果 ≠ raw 型的 consult——规则期 union map 在活语料的这 14 个站点无
+命中（审计"规则期 map 稀疏"预判的实证）；行为等价由 A/B 字节恒等钉死，map-hit
+路径（resolved field 型改判 PTR/UINT/piece-structured 门）由 oracle 行为对齐保证。
+sq 面（GEN4 第四语料，票外）numbering=7 经真基 A/B 证实为 46db1767 **预存漂移**
+（非本车道引入），登记移交 GEN4-GATE4-SQFACE-0001 归因。
+
+机制 C：ruleaction.rs = 主管线 Rule 白名单模块，本改动**待独立复核**（reviewer 须亲读
+varnode.cc:626-672、type.cc:586/1192/1298/1944/2137/2517 findResolve 虚分派、
+ruleaction.cc 上述九函数，再对四类决定性语义独立核对）。
+
 ## 2026-09-23：RuleSubRight lump 臂改用 `fd.op_unlink`（RULEACTION-SUBRIGHT-UNLINK-0001 / ER）
 
 `RuleSubRight::apply_op` 的 lump 臂（ruleaction.rs `// Ghidra: ruleaction.cc:7269` 函数内，
