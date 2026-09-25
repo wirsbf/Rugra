@@ -439,7 +439,18 @@ impl RangeHint {
         if self.high_ind < 0 {
             return false;
         }
-        let settype = match &self.dtype {
+        // Datatype *settype = type; (varmap.cc:180) — a LOCAL stand-in for
+        // this range's type. The oracle commits `type = settype` only at
+        // varmap.cc:208, AFTER the `diffsz > highind` bounds check rejects
+        // an out-of-limits absorb. Writing self.dtype before that check
+        // (the old `self.dtype = Some(b_dt)` at the keep_b arm) leaked b's
+        // type into this range even when the join was rejected — the
+        // GENSMOKE-S2-TYPEINFER-METATYPE-0001 poison entry: the -0x40 int8
+        // canary hint rejected at diffsz=4 > highind=3 still flipped the
+        // -0x60 open range from xunknown8 to int8, and the caller's
+        // `cur.size = next->sstart - cur.sstart` + createEntry stamped
+        // int8[4] into the symbol layer, seeding the whole feedback loop.
+        let mut settype = match &self.dtype {
             Some(t) => t.clone(),
             None => return false,
         };
@@ -485,7 +496,12 @@ impl RangeHint {
                 }
             };
             if keep_b {
-                self.dtype = Some(b_dt);
+                // settype = b->type; (varmap.cc:192) — local reassignment
+                // only; self.dtype is NOT touched here. The diffsz modulo
+                // below then uses the (possibly new) settype's align size,
+                // exactly as the oracle reads settype->getAlignSize() at
+                // varmap.cc:205 after the reassignment.
+                settype = b_dt;
             }
         }
         if self.is_type_lock() {
@@ -503,6 +519,9 @@ impl RangeHint {
         if diffsz > self.high_ind as i64 {
             return false;
         }
+        // type = settype; (varmap.cc:208) — commit the (possibly replaced)
+        // type only now that every check has passed.
+        self.dtype = Some(settype);
         self.absorb(b);
         true
     }
