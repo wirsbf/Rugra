@@ -1495,6 +1495,12 @@ calculated-bool 与完整 prototype consumer 仍为 `CALLSPEC-0001`/`UNTESTED`�
 - ActionFuncLink::apply（coreaction.cc:1575-1586）：遍历 callspecs，func_link_input + func_link_output
 - func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
 - func_link_output（1521-1572）：unlocked→init_active_output；locked 非 void→
+  `sz==1 && TYPE_BOOL && is_type_recovery_on()` 先标记 `op_mark_calculated_bool`
+  （cc:1543-1544，2026-09-25 FUNCLINK-BOOLMARK-0001 补臂——标记在存储读取前
+  发生，spacebase 延迟臂与立即输出臂均保留该标记；`is_type_recovery_on` 通道
+  由 per-run 根 reset 经 ActionStartTypes::reset（coreaction.hh:77）置 true，
+  生产管线在 funclink 时为 on，同 oracle 默认；语料休眠：curl/httpd 锁定
+  bool-1 返回探针为 0）；
   Stack 存储走 cc:1546-1550 延迟臂（set_stack_output_lock），
   其余 `new_varnode_out_full(sz, spc, off, callop)`（cc:1551 输出参数完整
   存储空间，2026-09-25 第五波）；extension（cc:1552-1568）仍绑定 `CALLSPEC-0001`
