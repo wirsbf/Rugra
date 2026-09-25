@@ -473,6 +473,21 @@ pub struct Funcdata {
 
     /// Address → function/symbol name mapping (populated from ELF symtab)
     pub symbol_table: HashMap<u64, String>,
+    /// Address → entry size for the mapGlobals proxy symbols
+    /// (`symbol_table` names this lane's `map_globals` inserts for
+    /// symbol-less persist groups). FUNCDATA-MAPGLOBALS-PROXYSIZE-0001:
+    /// Ghidra's `Scope::addSymbol` → `addMap` records the mapping size
+    /// (`ct->getSize()`, database.cc:1126-1151), so a re-run of
+    /// `mapGlobals` (RULE_REPEATAPPLY restart) finds the entry WITH its
+    /// size and the cc:1711 extension test `(addr+ct->getSize())-1 >
+    /// (entry->getAddr().getOffset()+entry->getSize())-1` is false —
+    /// no `inconsistentuse`, no warning. The name-only proxy previously
+    /// modeled the entry as size 0, making the test always-true and
+    /// re-arming the "Globals starting with '_' overlap smaller
+    /// symbols" warning on every restart. Driver-seeded entries (ELF
+    /// function names via `add_symbol`) carry no size here and keep the
+    /// historical size-0 comparison form.
+    pub symbol_table_sizes: HashMap<u64, i32>,
     /// Address → string literal mapping (populated from ELF .rodata)
     pub string_table: HashMap<u64, String>,
     /// Address → struct-pointer Datatype for known global variables derived
@@ -640,6 +655,7 @@ impl Funcdata {
             merge_state: crate::merge::MergePersistentState::default(),
             self_ref: None,
             symbol_table: HashMap::new(),
+            symbol_table_sizes: HashMap::new(),
             string_table: HashMap::new(),
             global_struct_ptrs: HashMap::new(),
             funcp: FuncProto::new(
@@ -9178,6 +9194,12 @@ impl Funcdata {
                 if !added {
                     // Legacy fallback: the symbol_table name proxy.
                     self.symbol_table.insert(vn_addr.as_u64(), sym_name);
+                    // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: coverVarnodes'
+                    // addSymbol goes through Scope::addMap like any other
+                    // (database.cc:1126-1151) — record the entry size (the
+                    // TYPE's size per addMapPoint) so mapGlobals' cc:1711
+                    // extension test sees the true entry end on re-runs.
+                    self.symbol_table_sizes.insert(vn_addr.as_u64(), sym_size);
                     vn.write()
                         .unwrap()
                         .set_flags(crate::varnode::varnode_flags::MAPPED);
@@ -11605,7 +11627,14 @@ impl Funcdata {
                         .unwrap_or(false);
                     if !added {
                         // Legacy no-channel fallback: the symbol_table proxy.
-                        self.symbol_table.insert(addr.as_u64(), symbolname);
+                        self.symbol_table.insert(addr.as_u64(), symbolname.clone());
+                        // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: Scope::addMap
+                        // records the mapping size (database.cc:1126-1151);
+                        // the proxy records it alongside the name so the
+                        // cc:1711 extension test below can compare against
+                        // the entry's true end on restart re-runs.
+                        self.symbol_table_sizes
+                            .insert(addr.as_u64(), ct_size as i32);
                     }
                 }
                 Some((Some(hit), _fl)) => {
@@ -11654,14 +11683,31 @@ impl Funcdata {
                             })
                             .unwrap_or_else(|| format!("{:?}{:016x}", base_space, addr.as_u64()));
                         self.symbol_table.insert(addr.as_u64(), name);
-                    } else if (addr.as_u64() + max_size as u64).saturating_sub(1)
+                        // FUNCDATA-MAPGLOBALS-PROXYSIZE-0001: the proxy
+                        // entry's recorded size — the addMap ct_size the
+                        // oracle's re-runs read back through queryProperties.
+                        self.symbol_table_sizes
+                            .insert(addr.as_u64(), ct_size as i32);
+                    } else if (addr.as_u64() + ct_size as u64).saturating_sub(1)
                         > self
-                            .symbol_table
+                            .symbol_table_sizes
                             .get(&addr.as_u64())
-                            .map(|_| addr.as_u64())
+                            .map(|sz| addr.as_u64() + *sz as u64)
+                            // Driver-seeded proxy entries (ELF function
+                            // names) carry no recorded size: keep the
+                            // historical size-0 entry-end form for them.
+                            .or_else(|| {
+                                self.symbol_table
+                                    .contains_key(&addr.as_u64())
+                                    .then_some(addr.as_u64())
+                            })
+                            // has_symbol came from a scope overlap only:
+                            // no proxy entry to extend past.
                             .unwrap_or(u64::MAX)
+                            .saturating_sub(1)
                     {
-                        // cc:1711-1715 proxy form.
+                        // cc:1711-1715 proxy form: the group's ct extends
+                        // past the recorded entry's end — inconsistent use.
                         inconsistent = true;
                         if !uncovered.is_empty() {
                             let entry_name = self

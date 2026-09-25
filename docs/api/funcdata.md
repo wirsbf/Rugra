@@ -2858,3 +2858,86 @@ Rugra 未接线=既有 INJECT-0001 登记域，不在本票范围。验收：cur
 与亲父同值）、bank 391/391、触发普查（7321 常量站点全 highlevel_on=false、
 尺寸 1/2/4/8 无一达 16 字节 laned 门）与正控制（16B 常量 const space
 lanedMap 记入、post-highlevel 即时 HighVariable）见 lane 终报。
+
+## 2026-09-26：map_globals 代理臂 entry 尺寸记录（FUNCDATA-MAPGLOBALS-PROXYSIZE-0001，Lane PIRAM2 + FWARN 移交）
+
+FWARN 车道证伪改道喂料（已并入 master 的票据）：httpd 镜面
+"Globals starting with '_' overlap smaller symbols" 7 警（30 函数门禁面）
+/212 警（500 函数全语料面）的真根因在 `map_globals` 的 legacy 代理臂——
+本 lane 逐行对照（funcdata_varnode.cc:1653-1719，机制 E 亲读）确认两处偏差：
+
+1. **无尺寸自插名**：oracle 的 `discover->addSymbol(symbolname,ct,addr,usepoint)`
+   （cc:1709）经 `Scope::addSymbol` → `addMap`（database.cc:1126-1151）把
+   mapping 尺寸（`ct->getSize()`）记进 SymbolEntry——RULE_REPEATAPPLY
+   restart 重跑 mapGlobals 时，`queryProperties`（cc:1701）读回**带尺寸**
+   entry，cc:1711 扩展测试
+   `(addr+ct->getSize())-1 > (entry->getAddr().getOffset()+entry->getSize())-1`
+   为 false → 无 inconsistentuse、无警告。Rugra 的 `symbol_table`
+   `HashMap<u64,String>` 名称代理只有名字无尺寸——cc:1711 的代理形态把
+   entry 末端当 `addr` 本身（等价 size-0 entry），测试恒真 → 每次 restart
+   重跑都重臂警告（FWARN 插桩：19 触发点全命中自插回退名，触发计数
+   30/22/16…=restart 重跑）。
+2. **比较用 max_size**：代理臂 else-if 用了组的 `max_size` 而非 `ct_size`
+   （oracle cc:1711 比较的是 `ct->getSize()`）。
+
+修复（funcdata.rs，本 lane）：
+- 新字段 `symbol_table_sizes: HashMap<u64,i32>`（与 `symbol_table` 平行，
+  不改其类型——printc/driver 消费面零扰动）：`map_globals` 代理臂的
+  create 分支与 `cover_varnodes` 的代理回退分支插入时同步记录
+  entry 尺寸（cc:1126-1151 addMap 的 ct_size/addMapPoint 类型尺寸语义）。
+- else-if 改 `ct_size` 对**记录尺寸**的 entry 末端
+  （`addr+recorded_size`）；driver 播种项（ELF 函数名，无尺寸记录）保持
+  历史 size-0 形态；has_sym 仅来自 scope overlap 时保持 `u64::MAX`
+  （无代理 entry 可扩展）。
+
+验收（亲测，基=本 worktree 9d027a33）：
+- httpd MIRROR 门禁面：警告 7→**0**，skeleton 265→**258**（−7，FWARN
+  预测值精确命中），defects=0/numbering=0/matched 29/29；
+- httpd MIRROR 全语料（500 函数）：警告 212→**0**，输出 diff 逐行核对=
+  仅警告行及其尾随空行（212+198），**零其它行变化**；ram0x 回退
+  169→169（逐地址 diff 空）；
+- canon 双零回退：curl 301/0/0、httpd 862/0/0 == 基线逐值；curl MIRROR
+  132/275、vsh 15/55、bank 391/391、`cargo test --lib` 1733P/1F
+  （唯一失败 test_nonzeromask_pipeline_wiring=VHOST 在案预存）、gcc 审计
+  curl 104/20 == STRLIT 基线。
+
+机制 C：funcdata map_globals 实现域——CR 请求随 lane 终报（复核点=
+cc:1711 比较键 ct_size/entry 尺寸、addMap 尺寸记录语义、driver 播种项
+size-0 历史形态的保持理由）。
+
+### 同轮 drill 诊断移交（FUNCDATA-PIRAM-MAPGLOBALS-0001 残差两类，均越出 funcdata 写域）
+
+oracle drill（mapglobals_drill_1204，锁定 e40ed130 git-archive +
+-DOPACTION_DEBUG，direct-runner 协议逐函数）+ Rugra 侧 RUGRA_PIRAM_PROBE
+插桩（已撤）双侧对照定分：
+
+1. **direct-runner golden 的 per-function fresh scope 事实**：
+   `tools/regen_ghidra_golden.py` 的 `direct_runner_results` 走 `one` 模式
+   ——每函数独立进程/独立 BfdArchitecture/global scope。同址多名
+   （0xa1060: ap_calc_scoreboard_size=iRam/ap_init_scoreboard=uRam/
+   ap_create_scoreboard=xRam）= 各函数 mapGlobals 用**各自** maxvn high
+   类型独立发明名（printNameBase 前缀随 ct）。Rugra 的 per-Funcdata
+   `symbol_table` 代理与此模型一致（piRam 6 地址/计数与 oracle 逐位兑平）。
+2. **残差①（类型盲前缀）根因=符号性，非 undefined**：分歧地址
+   （0xa07f0: ap_read_request/ap_recent_ctime/ap_recent_rfc822_date，
+   0xa11cc: ap_add_module）双侧 mapGlobals 时点 high 类型——Rugra
+   **uint4** vs oracle **int4**（probe `[PIRAM-PRE] high=uint4` vs drill
+   `[VN] high=int4` 逐函数实证）→ printNameBase 'u' vs 'i' → uRam vs
+   iRam。登记 `TYPEPROP-PERSIST-SIGNEDNESS-0001`（coreaction/typeprop
+   域，ENVDAT 占用中）。
+3. **残差②（ram0x 回退）根因=消费链，非 map_globals**：map_globals 在
+   全部采样点发明了正确名字（pxRam…a1058/xRam…a88a80/iRam…a1068 逐证）；
+   回退发生在 PTRSUB(ram-spacebase,const) 印刷路径——oracle 链=
+   mapGlobals addSymbol → linkSymbolReference `queryContainer`
+   （funcdata_varnode.cc:1207）→ `vn->setSymbolReference`
+   （varnode.cc:446-452，挂到常量 high）→ `PrintC::opPtrsub` 读
+   `op->getIn(1)->getHigh()->getSymbol()`（printc.cc:1058-1059）→
+   pushSymbol。Rugra MIRROR 断链三处：driver 动作期不挂 symboltab
+   （"bare-BFD parity" 对符号通道不成立——oracle 的 BfdArchitecture 恒有
+   symboltab，mapGlobals 的创建落在真 global scope）；coreaction
+   `link_spacebase_symbol` 丢弃 `link_symbol_reference` 的解析结果
+   （常量 high 永不挂符号）；printc 双 spacebase 臂（RPN 3312/legacy
+   13880）只查 symboltab 通道+栈 scope，不查 `symbol_table` 代理。登记
+   `PRINTC-SPACEBASE-PROXY-CHANNEL-0001`（driver+coreaction+printc 域）。
+   门禁面现存 11 ram0x refs（main×7/ap_fini_vhost_config×3/
+   ap_set_name_virtual_host×1，地址 0xa0820/0xa0830/0xa1198..0xa11b8）。
