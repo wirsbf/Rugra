@@ -8,11 +8,11 @@
 # 首钉测量 @ 5afcc032（wt/mirror3, master）: curl 259/74, httpd 440/29, vsh 51/71
 # （区间带与 MIRROR2 提案一致取向：当前值 + 小回归带，防噪声性抖动 FAIL）。
 # sq 面（GEN4 第四语料棘轮, 2026-09-26 首钉 @ wt/gen4 9d027a33; 同日 DBLHI 修复后重钉 @ wt/dblhi）: 810 单元
-# （776 真身+104 PLT 桩, sasquatch sha 5d1eb6d0…）; 面生而 FAIL 是预期承重状态——
-# health 红（ok=805/810,5 非 ok）绑定 MIRROR3-PRETTYFLUSH-FAILCLOSED-0001（2 panic）+
-# GEN4-SQ-MERGE-FORCEDINTERSECT-0001（2 panic,DBLHI 修复后首暴露）+
-# GEN4-SQ-NULLLOCALTYPE-0001（1 LowlevelError,同上）; numbering 硬断言红（=7）绑定
-# GEN4-SQ-DUPDECL-NUMBERING-0001; 四票收口前本面恒 FAIL=棘轮承重信号,修复车道不得绕过。
+# （776 真身+104 PLT 桩, sasquatch sha 5d1eb6d0…）; 历史"面生而 FAIL"承重态已全部收口——
+# health 红三票（MIRROR3-PRETTYFLUSH-FAILCLOSED-0001 2 panic+GEN4-SQ-MERGE-FORCEDINTERSECT-0001
+# 2 panic+GEN4-SQ-NULLLOCALTYPE-0001 1 LowlevelError）随 PFLUSH 等波次清零（ok 满额 810/810）;
+# 末位承重红 numbering=7 随 GEN4-SQ-DUPDECL-NUMBERING-0001（DUPDECL 车道, 2026-09-26 DONE）
+# 清零——sq 面自 DUPDECL 并入波起转 PASS 全绿（现态注记见下方 MERGEBATCH7 块）。
 # ceiling=22639 是 DBLHI 修复后重钉（GEN4-SQ-CEILING-REPIN-0001）: 实测 15889 +
 # 5 非 ok 函数（golden 共 3375 行）的 worst-case diff 上界 2×3375=6750;
 # floor=805=实测 matched（progress_bar 修复后 +1）。
@@ -22,7 +22,12 @@
 # 上限自冻结基线（275/460/55, 5afcc032 时代）收紧到 65/150/16（实测+安全余量）;
 # sq 面吸收 SLOTDEEP 退役增益——skeleton 7060（8418→7060, −1358）, 上限 22639→7500,
 # floor 805→810（PFLUSH 收口后 ok/matched 满额 810/810, health 全绿）;
-# numbering=7 硬断言保持 runner 内写死不变（承重态, 绑 GEN4-SQ-DUPDECL-NUMBERING-0001）。
+# 时点态: numbering=7 承重红当时保持（绑 GEN4-SQ-DUPDECL-NUMBERING-0001, 次波收口, 见下块）。
+# 2026-09-26 DUPDECL 里程碑（MERGEBATCH7 集成注记, wt/dupdecl 65fc2501 单支并入态）:
+# mirror 面注入臂（backfill_missing_locals/flush_func_remove_unused）mirror 档跳过使 sq 面
+# 首次全绿——官方 gate PASS: skeleton 7029/7500 · defects 0 · numbering 0 · matched 810/810 · health ok。
+# 本波只更新头注释, 表内数字不动: ceiling 7500（实测 7029, 余量 471 合理保持——收紧须先登记
+# TODO 再改本行, 留下一波）; floor 810 = matched 现值保持。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
 curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 httpd	150	29	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
