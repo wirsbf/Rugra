@@ -5,22 +5,22 @@
  "architecture": "synthetic FlowBlock graphs (production BlockGraph newBlock/addEdge on both sides)",
  "comparand_sha256": {
   "cpp_fixture_sha256": "c2f8f38f21c8fb04c62e621fd909ec07e31518975538c5979efeac8ec2547efc",
-  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
-  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615",
-  "runner_sha256": "ef6df87bd7d6487a8ff321046562d31925b65dce1dbd0046b8328d2981548e02",
+  "rugra_blockaction_sha256": "9bd3fd519ad3b2e48328683ae392e176140eb97a16e9df9c6a29bfef8d9a522c",
+  "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
+  "runner_sha256": "b30115d6442afa10c8a10da4f01756bfe2c7b94877f768004f951a25b87b4f38",
   "rust_fixture_sha256": "ebad29436404bdb8fd70a1b3b6d1c0d1cd0c44f4a81eb68b1052e9317f218304"
  },
  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
  "coverage": {
   "canary_if_halt": {
-   "covers": "the __stack_chk_fail shape: both sides form properif{halt-arm, ok-arm} inside one top-level list; consumed-edge retention and the cond flip flag differ (known model divergence)",
+   "covers": "the __stack_chk_fail shape: oracle forms properif{halt-arm, ok-arm} inside one top-level list; Rugra now forms c0(dowhile){basic flip=1 out=2}+2 sibling basics — consumed vertices keep listed=1 out edges (known model divergence, re-observed 2026-09-26; earlier both sides formed properif+list)",
    "residual_todo_ids": [
     "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
    ],
    "status": "MISMATCH"
   },
   "noret_halt_loop_body": {
-   "covers": "termination of collapseAll on the 19-vertex glob_word topology with halt sinks (the previous port never converged); the reachable remainder structures into 2 top-level components vs the oracle's 1 (missing DoWhile wrap of the back-edge chain)",
+   "covers": "termination of collapseAll on the 19-vertex glob_word topology with halt sinks (the previous port never converged); the reachable remainder now forms one flat list of c0(dowhile)+18 sibling basics vs the oracle's single deeply nested list>properif>dowhile chain (re-observed 2026-09-26 after the blockaction 9bd3fd51/tracedag 366fe3f2 re-pin; earlier observations were 2 top-level components before the DoWhile head formed)",
    "residual_todo_ids": [
     "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001",
     "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
@@ -28,7 +28,7 @@
    "status": "MISMATCH"
   },
   "partial_reachable_after_halt": {
-   "covers": "mid-function halt whose trailing region stays reachable through a second entry: both sides form properif + list; consumed-edge retention differs (known model divergence)",
+   "covers": "mid-function halt whose trailing region stays reachable through a second entry: oracle forms properif+list nesting; Rugra now forms c0(dowhile)+4 sibling basics with consumed-edge retention (known model divergence, re-observed 2026-09-26; earlier both sides formed properif+list)",
    "residual_todo_ids": [
     "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
    ],
@@ -56,11 +56,11 @@
  "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
  "residual_diffs": [
   {
-   "note": "case noret_halt_loop_body: oracle collapses to 1 top-level component (list > properif > dowhile chain); Rugra produces 2 components — the back-edge chain never forms the DoWhile (ruleBlockDoWhile needs the cat chain to feed back onto itself; the selectGoto edge-selection order still diverges from TraceDAG's)",
+   "note": "case noret_halt_loop_body: oracle collapses to 1 deeply nested top-level component (list > properif > dowhile chain); Rugra terminates but leaves one flat list of c0(dowhile)+18 sibling basic components (the DoWhile head forms, the cat-chain absorption into nested components does not; selectGoto edge-selection order still diverges from TraceDAG's) — re-observed 2026-09-26 at blockaction 9bd3fd51/tracedag 366fe3f2, runner diff 149 lines (was 185 on 2026-09-22, 110 pre-tracedag-repin)",
    "todo_id": "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001"
   },
   {
-   "note": "consumed vertices keep their out edges (labelled) in Rugra's install-in-place model while the oracle's identifyInternal removes them from the top-level list; cond flip flag on the canary/partial arms",
+   "note": "consumed vertices keep their out edges (labelled) in Rugra's install-in-place model while the oracle's identifyInternal removes them from the top-level list; all three cases now show the Rugra c0(dowhile)-head + flat-siblings shape (canary/partial evolved from properif+list to the dowhile head by the 2026-09-26 re-observation)",
    "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
   }
  ],

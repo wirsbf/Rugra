@@ -8018,6 +8018,61 @@
           "ghidra::JumpTable::foldInNormalization"
         ]
       }
+    },
+    {
+      "id": "debugproto_unknown_model_1204",
+      "description": "seeding-layer unknown-calling-convention identity: generic_clib PLT locks and void-signature DWARF pins versus parameterized DWARF keeping the resolved model, projected through the real ActionPrototypeWarnings channel [PLTSTUB-WARNLOSS-0001] — replayed by content from wt2/debugwarn 5aecd028 (salvage SALVAGE-BRANAUDIT-DEBUGPROTO-FIXTURE-0001)",
+      "runner": [
+        "tools/run_debugproto_unknown_model_oracle.sh"
+      ],
+      "timeout_seconds": 1200,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/debugproto_unknown_model_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_debugproto_unknown_model_oracle.sh"
+        },
+        "inputs": {
+          "cpp_fixture": "tests/oracle/debugproto_unknown_model_1204.cc",
+          "rust_fixture": "tests/oracle/debugproto_unknown_model_1204.rs",
+          "curl_binary": "examples/curl",
+          "sla": "sleigh_specs/x86-64.sla",
+          "processor_spec": "sleigh_specs/x86-64.pspec",
+          "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+          "language_definitions": "sleigh_specs/x86.ldefs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/debugproto.rs",
+          "src/coreaction.rs",
+          "src/fspec.rs",
+          "src/arch.rs",
+          "src/comment.rs",
+          "docs/api/debugproto.md",
+          "docs/api/coreaction.md",
+          "docs/api/fspec.md",
+          "sleigh_specs/**",
+          "examples/curl",
+          "tests/oracle/debugproto_unknown_model_1204.*",
+          "tools/run_debugproto_unknown_model_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-7d3212010e608ec3957e",
+          "RG-F-2a34c9f6095ee64fb93b",
+          "RG-F-1ce28154f6b860b85d1e"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-c0ef8ecfe0a8786b6b11",
+          "GH12-F-693fa9ed3e33b60a59f8",
+          "GH12-F-6cc6ebe4a2e3667a2881",
+          "GH12-F-65687a06a76eaa459f1f"
+        ]
+      }
     }
   ]
 }

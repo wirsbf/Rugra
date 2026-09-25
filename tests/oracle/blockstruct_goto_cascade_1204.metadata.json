@@ -9,8 +9,8 @@
   "cpp_fixture_sha256": "bd188dd9cf15d5c03c483ddb9f394ba0cd7fcf8ee1ee0deb1acf1f820a905149",
   "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
   "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
-  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
-  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615",
+  "rugra_blockaction_sha256": "9bd3fd519ad3b2e48328683ae392e176140eb97a16e9df9c6a29bfef8d9a522c",
+  "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
   "runner_sha256": "dc753041338cec986e33e0389b9babcbd8a80b7b217f6448b4bae65f58e482f4",
   "rust_fixture_sha256": "767dd5752aedf66dc49ec6fdbdbb1232090fa7176b90883971f9172c7802dcdd"
  },
@@ -21,7 +21,7 @@
   "dead_block_determination": "MATCH: consumed blocks leave the top-level list and their edges drop out of rule matching on both sides (Rugra's DEAD sweep == Ghidra's incremental identifyInternal list compaction)",
   "goto_cascade_convergence": "MATCH: the cascade terminates on every case (the previous port spun forever on diamond_if_recovery); selectGoto marks one edge at a time with a full collapseInternal between marks exactly as cc:1889-1892; irreducible_goto_cascade picks the same goto targets (b2, b3) and the same gotoout bits as the oracle",
   "guard_direction": "MATCH: while_guard_direction head flip=1 (cc:1540 negation, previously the negation was computed inverted and then discarded) and dowhile_guard_direction flip=1 (cc:1566-1569, previously omitted) on both sides",
-  "top_level_merge_shape": "MISMATCH → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001: cases 1/3 wrap whiledo in an extra infloop (the WhileDo component's false-exit boundary edge is mis-captured by Rugra's install-in-place identify_internal), case 2 stays split as properif+list where the oracle cat-merges into one list (stale in-edges on the merge block from unconsumed DEAD predecessors), case 6 splits into three properifs where the oracle nests list/dowhile. All are boundary-edge rehoming/dedup gaps in identify_internal (Ghidra block.cc:893-960 selfIdentify+dedup), NOT goto-selection differences",
+  "top_level_merge_shape": "MISMATCH -> BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (re-observed 2026-09-22, unchanged 2026-09-26 at blockaction 9bd3fd51/tracedag 366fe3f2): cases 1/4 oracle list{whiledo{condition{b0,b1}}} vs Rugra c0(condition)+goto basics; case 2/5/6 oracle list{properif/dowhile nesting} vs Rugra c0(dowhile){basic flip=1}+sibling basics with -->c0 goto arms; case 3 oracle list{infloop} vs Rugra c0(infloop)+goto basics",
   "tracedag_select_bad_edge": "MATCH-by-construction on the covered graphs: siblingedge comparison direction (cc:621), common-ancestor distance (cc:524-536), the (exitproto, bp, pathout) group order (cc:635-651), terminal-traces-stay-active (cc:670/844-851), and removeTrace's pathout shift (cc:673-686) are all exercised with zero spurious marks on cases 1-5"
  },
  "covered_projection_status": "MISMATCH",
@@ -59,8 +59,8 @@
  "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
  "residual_diffs": [
   {
-   "evidence": "runner diff (110 lines): cases 1/3 'infloop{whiledo...}' vs 'list{whiledo...}'; case 2 'c0(properif),c1(list)' vs 'c0(list)'; case 6 three top-level properifs vs nested list/dowhile; per-vertex out-edge label lines",
-   "summary": "identify_internal (Rugra) vs identifyInternal+selfIdentify+dedup (Ghidra block.cc:893-960): boundary-edge capture keeps install-block-internal edges out (fixed here) but still mis-homes the install block's false-exit edge into a self-loop (cases 1/3 infloop wrap), leaves stale in-edges on merge blocks (case 2 split), clears consumed vertices' own edges (all cases), and therefore blocks the oracle's cat/dowhile merges over structured components (case 6 split)",
+   "evidence": "runner diff (185 lines, re-observed 2026-09-22 after the tracedag 366fe3f2 re-pin, unchanged 2026-09-26 at blockaction 9bd3fd51): every case oracle 'list=c0(list)' with whiledo/dowhile/properif nesting and t/lb goto-edge labels vs Rugra 'c0(condition|dowhile|infloop)' head plus sibling basic components whose out edges carry explicit -->c0 goto arms; consumed vertices listed=1 keeping out edges (oracle listed=0/empty), case 6 properif gototarget=b2/b3 nesting vs flat dowhile+basics",
+   "summary": "identify_internal (Rugra) vs identifyInternal+selfIdentify+dedup (Ghidra block.cc:893-960): Rugra's install-in-place boundary capture leaves the collapsed head as a condition/dowhile/infloop component with the remaining chain as sibling basics wired by goto arms, while the oracle re-homes those edges into nested whiledo/properif cat merges; consumed vertices keep listed=1 and their out edges instead of leaving the top-level list (all cases)",
    "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
   },
   {

@@ -56,10 +56,13 @@ for key, path in pairs.items():
         )
 PY
 
-# Stage under /home/wirs/.cache (persistent NVMe) rather than /tmp: the
+# Stage under the user's home cache (persistent NVMe) rather than /tmp: the
 # fixture links the full debug librugra rlib, and the shared /tmp tmpfs
-# user quota can EDQUOT/SIGBUS the linker mid-write.
-stage_root=/home/wirs/.cache
+# user quota can EDQUOT/SIGBUS the linker mid-write. 2026-09-26: default
+# moved off the branch-era author home /home/wirs (absent on this machine,
+# mkdir failed) to $HOME; override with RUGRA_DOWHILE_STAGE_ROOT (salvage
+# of wt/sb-fixturehyg 69a8f690, SALVAGE-BRANAUDIT-FIXTUREHYG-PINENV-0001).
+stage_root=${RUGRA_DOWHILE_STAGE_ROOT:-${HOME}/.cache}
 mkdir -p "$stage_root"
 oracle_tmp=$(mktemp -d "$stage_root/rugra-blockstruct-dowhile-1204.XXXXXX")
 cleanup() {
