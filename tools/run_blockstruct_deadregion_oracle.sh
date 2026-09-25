@@ -92,7 +92,12 @@ LD_LIBRARY_PATH="$bfd_runtime" \
 # fixture against the produced rlib (same layout as the goto-cascade
 # runner, but without the git-archive overlay: the fixture pins this
 # branch's blockaction.rs/tracedag.rs hashes directly).
-fixture_target=${RUGRA_DEADREGION_TARGET_DIR:-/home/wirs/.cache/rugra-deadregion-target}
+# Persistent cargo target on the user's home (not /tmp tmpfs: the shared
+# quota can EDQUOT/SIGBUS the linker mid-write). 2026-09-26: default moved
+# off the branch-era author home /home/wirs (absent on this machine) to
+# $HOME; override with RUGRA_DEADREGION_TARGET_DIR (salvage of
+# wt/sb-fixturehyg 69a8f690, SALVAGE-BRANAUDIT-FIXTUREHYG-PINENV-0001).
+fixture_target=${RUGRA_DEADREGION_TARGET_DIR:-${HOME}/.cache/rugra-deadregion-target}
 mkdir -p "$fixture_target"
 TMPDIR=/tmp CARGO_TARGET_DIR="$fixture_target" \
   cargo build --offline --locked --quiet --manifest-path "$repo_root/Cargo.toml" --lib
