@@ -1632,3 +1632,37 @@ addCase 语义一致——default_isexit 捕获侧无缺口；而输出侧 defau
 `goto code_r0x00004c20;`（无 `break;`），且捕获列表含同地址双块（31@0x4c48 与
 22@0x4c48、32@0x4d04 与 23@0x4d04）——结构树基本块重复 + 发射侧 break 缺席的
 组合是后继车道（blockaction+printc 联合）的入口证据。
+
+## 2026-09-26 追加（MSTRUCT-SWITCHGOTO-SELECTGOTO-0001 — multigoto 剥离后槽位镜像 goto 标记残留）
+
+Lane SWGOTO 修复 `new_block_multigoto` 剥离 goto 边后 `GOTO_EDGE_0/GOTO_EDGE_1` 槽位
+镜像块旗标的残留（blockaction.rs）。
+
+**根因（锁定 oracle 仪器化 trace 双侧逐事件对照，/dev/shm/rugra-reports/
+LANE_SWGOTO_2026-09-26.md）**：Ghidra 的 goto 标记住在**边 label** 上
+（`outofthis[i].label |= f_goto_edge`，setGotoBranch block.cc:305-313），removeEdge
+（block.cc:1469-1481）删边时标记随边消失，幸存边的标记不受影响。Rugra 额外把标记
+镜像进**槽位索引的块旗标**（GOTO_EDGE_0=0x400000/GOTO_EDGE_1=0x800000，
+`set_goto_branch_on_block` 写、`out_edge_is_goto`/`BlockBasic::is_goto_out` 读）——
+该镜像不随删边维护：`new_block_multigoto` 的 already-multigoto 臂（cc:1726-1732）
+`removeEdge(ret,targetbl)` 剥离 goto 边后，幸存边左移补位，残留镜像把补位边误标为
+goto → 下一轮 `try_rule_if_goto` 的 2-out switch 臂再剥一条真 case 边 →
+`checkSwitchSkips` 级联把全部 case 边标 goto → switch 退化成 0-case 壳
+（glob_set round-3 / glob_word round-2 实测：oracle 剥 1 条后 ifnoexit+cat 收口成
+1-case switch，Rugra 连剥 3 条退化）。
+
+**修复**：新增 `resync_goto_edge_mirrors`（RUGRA-GLUE）——剥离删除后按幸存出边
+的 F_GOTO_EDGE 边 label 重导出槽位镜像（`clear_flags` 清位 + 按需 `set_flags`
+置位；set_flags 是 OR 语义 block.hh:155，清位必须走 clear_flags block.hh:156）。
+在 `new_block_multigoto` 两个 remove_edge_blocks 位点（already 臂 + 新包臂防御性）
+调用。边 label 通道是权威完备通道（`set_out_edge_flag_all_types` 对所有块类型
+写双侧半边），镜像仅是 BlockBasic 兼容编码——重导出后两通道恒等。
+
+**验证**：glob_set/glob_word 三轮 collapse 的 SELECTGOTO 标记序列与 NEWSWITCH
+形成序列同仪器化 oracle（git archive 锁定 e40ed130 + OTRACE 补丁）逐事件一致；
+curl 镜面 132→110（glob_set 25→3：case 体全部回 switch 内，残 3 行=charprint
+`(char*)LIT` 渲染+printc `code_r` 标号，域外）；vsh 镜面 51→41（同根自愈）；
+httpd 镜面 265==基线逐函数恒等（本基无活位点，零回退）；canon 双语料
+301/0/0、862/0/0==基线；银行 391/391（glob_set 投影 op 级流对结构级修复不变，
+MATCH 366 stages/141943 ops 免重钉）；cargo test --lib 1733P/1F（nonzeromask
+预存）；镜面门禁三面 PASS（110/275、265/460、41/55，棘轮上限未重钉）。

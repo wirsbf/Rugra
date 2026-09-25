@@ -2623,6 +2623,54 @@ impl<'a> CollapseStructure<'a> {
         b.is_goto_out(slot) // BlockBasic block-level mirror flags
     }
 
+    // RUGRA-GLUE: Ghidra's goto mark lives on the edge label itself
+    // (outofthis[i].label, written by setGotoBranch block.cc:305-313), so
+    // removeEdge (block.cc:1469-1481) removes the mark together with the
+    // edge and the surviving edges' marks are untouched. Rugra ADDITIONALLY
+    // mirrors the mark in the slot-indexed GOTO_EDGE_0/GOTO_EDGE_1 block
+    // flags (see set_goto_branch_on_block) for BlockBasic::is_goto_out —
+    // those mirrors are slot-indexed and do NOT follow edge removal: after
+    // newBlockMultiGoto peels a goto edge, the surviving edges shift slots
+    // and a stale mirror falsely marks whichever edge moved into the
+    // vacated slot. Re-derive the mirrors from the authoritative per-edge
+    // F_GOTO_EDGE labels after every peel removal so the two channels stay
+    // equivalent (MSTRUCT-SWITCHGOTO-SELECTGOTO-0001: glob_set/glob_word
+    // round-2/3 collapse — the stale GOTO_EDGE_1 peeled the dispatch's
+    // default edge right after the dispatch→4d04 peel, cascading through
+    // checkSwitchSkips into a degenerate 0-case switch).
+    fn resync_goto_edge_mirrors(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let mut w = bl.write().unwrap();
+        let f = w.get_flags();
+        if f
+            & (crate::block::block_flags::GOTO_EDGE_0
+                | crate::block::block_flags::GOTO_EDGE_1)
+            == 0
+        {
+            return; // no mirrors to resync — edge labels are authoritative
+        }
+        let g0 = w
+            .get_out(0)
+            .map(|e| e.flags & crate::block::edge_flags::F_GOTO_EDGE != 0)
+            .unwrap_or(false);
+        let g1 = w
+            .get_out(1)
+            .map(|e| e.flags & crate::block::edge_flags::F_GOTO_EDGE != 0)
+            .unwrap_or(false);
+        // set_flags is OR-semantics (Ghidra setFlag, block.hh:155
+        // `flags |= fl`), so dropping stale mirror bits requires
+        // clear_flags (Ghidra clearFlag, block.hh:156 `flags &= ~fl`).
+        w.clear_flags(
+            crate::block::block_flags::GOTO_EDGE_0
+                | crate::block::block_flags::GOTO_EDGE_1,
+        );
+        if g0 {
+            w.set_flags(crate::block::block_flags::GOTO_EDGE_0);
+        }
+        if g1 {
+            w.set_flags(crate::block::block_flags::GOTO_EDGE_1);
+        }
+    }
+
     // Ghidra: block.hh:336 FlowBlock::isDecisionOut
     /// Decision edge test (cc:336): the edge is neither irreducible, back,
     /// nor goto. Used by ruleBlockProperIf (cc:1395) and ruleBlockIfElse
@@ -5280,6 +5328,11 @@ impl<'a> CollapseStructure<'a> {
             }
             // cc:1729: removeEdge(ret,targetbl);
             self.graph.remove_edge_blocks(&block, &targetbl);
+            // RUGRA-GLUE: the peeled edge carried the goto mark on its
+            // label (removed with the edge, as in the oracle); the
+            // slot-indexed block mirrors must be re-derived or the edge
+            // that shifts into the vacated slot inherits a false goto.
+            Self::resync_goto_edge_mirrors(&block);
             if isdefaultedge {
                 // cc:1730-1731: ret->setDefaultGoto();
                 let mut mg = block.write().unwrap();
@@ -5346,6 +5399,11 @@ impl<'a> CollapseStructure<'a> {
             // cc:1746: removeEdge(ret,targetbl); — remove the structured edge
             // to the goto target (bilateral, block.cc:1469-1481).
             self.graph.remove_edge_blocks(&mg_block, &targetbl);
+            // RUGRA-GLUE: keep the slot-indexed goto mirrors consistent with
+            // the surviving edge labels after the peel removal (the fresh
+            // wrap starts mirror-free; this is defensive parity with the
+            // already-multigoto path above).
+            Self::resync_goto_edge_mirrors(&mg_block);
         }
         // else — the goto edge is a self edge and was removed by
         // identifyInternal (cc:1748).
