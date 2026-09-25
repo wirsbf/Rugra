@@ -1,10 +1,73 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-09-25（V3FLIP 被调原型通道默认转正快照 + CURLSYM/SEEDFLIP/DFLIP/HSEED 历史快照）
+**日期**: 2026-09-26（W-2026-09-26 波次快照，基=master `efc28f4a`；在飞车道另计）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-25 V3FLIP 被调原型通道默认转正快照（当前事实源）
+## 2026-09-26 W-2026-09-26 波次快照（当前事实源；在飞车道另计）
+
+> 本节基点 = master **efc28f4a**（CI 全绿，见 §门禁与 CI）。已并入 master 的车道给终值；
+> 尚在分支待 root 合并的车道（PRINTCS/SQNULLT/SQMERGE/GEN5/BRANAUDIT 等）单列
+> "在飞待并"小节，数字为车道终报实测，**不代表 master 合成态**——叠加效果待 root 集成复测。
+> 质量数字全部溯源车道终报（/dev/shm/rugra-reports/LANE_*_2026-09-2[56].md）。
+
+### 本 wave 落地清单（已并入 master efc28f4a）
+
+| 车道 | 票 | master commit | 一句话交付 |
+|---|---|---|---|
+| **F5IF** | HTTPDMAIN-F5-IFELSE-RETEST-0001 | `58af028a`+`2ed48430` | ActionPreferComplement BFS 对 Goto/MultiGoto 包裹子树下降（structure_children 两臂补 `[wrapped]`，block.hh:547/573 单组件语义）；httpd canon **590→436**、main **232→78**，其余 33 函数字节恒等 |
+| **F7NAME** | HTTPDMAIN-F7-NAMERECOMMEND-0001 | `09bc75fb`+`b2220069`+`f3d4f32d` | NameRecommend/DynamicRecommend/TypeRecommend 三存储+恢复链（varmap.cc:357/1507/1600/1574）+三接线（coreaction.cc:2984/476/5398）+IMPORTFLIP 数据半（59 条 generic_clib 台账默认装）；httpd canon **590→439**、main 232→196、ap_os_is_path_absolute 全函数字节恒等；CR 三修（entry-keyed first-use 地址/最终唯一名 remap/锚点勘正）+VARMAP-PARAMTYPERECOMM-0001 登记 |
+| **PKGD** | UNIONRESOLVE-PKG-D-0001 | `961b332f`+`a308dbc8` | ruleaction 14 站点换 fd-aware 孪生（vn_type_read/def_facing，slot 键逐一对照 op->getSlot）；canon 双语料字节恒等（探针实证规则期 union map 无命中，map-hit 路径语义由 oracle consult 语义保证） |
+| **REFSDEF** | TOOLS-REFS-DEFSTART-0001 | `9aa565ec`+`ba3f2dc8`+`84872cc2` | `// Ghidra:` 引用定义起始行门禁（check_ghidra_refs.py 解析 114 个 .cc 得 5549 defs；ADDRUNIT 修正模式）+全树 **288 处漂移全修**（白名单 86+非白名单 193）；canon A/B 字节恒等 |
+| **PKGG** | UNIONRESOLVE-PKG-G-0001 | `e94c3640`+`efc28f4a` | ResolvedUnion::with_field 指针臂经 TypeFactory intern（type.cc:3867 findAdd 规范化，castStandard 恒等短路可达）+datatype.rs 死码孪生两枚删除；五面字节恒等 |
+| （背景） | F1NORET/PIRAM/PIRAM2/PKA/DBLHI2/RESIDE/SWGOTO/ENVDAT/ADDRUNIT/STRLIT 等 | 见 git log `1414f6e3`..`efc28f4a` | 更早并入：httpd canon 862→590 的主链（F1 级联 ~272+SWGOTO/PIRAM2 面）、curl 镜 132→94（RESIDE F-RESIDE 清零+compare 第 4 探测去 6 幻影）等，数字见各车道节/终报 |
+
+### 在飞待并（root 合并另计；数字=车道终报实测）
+
+| 车道 | 分支 | 交付 | 数字 |
+|---|---|---|---|
+| **SQNULLT** | wt/sqnullt @ `948974df` | double_precis `set_opcode_and_inputs` 委托既有忠实件 `op_set_all_input`（funcdata_op.cc:276-278 逐槽 opUnsetInput=descend 唯一合法摘除点）；GEN4-SQ-NULLLOCALTYPE-0001 收口 | sq 面 **panic 4→2、ok/matched 808/810、skeleton 16250**（ceiling 22639 承重）；连带消除 MERGE-FORCEDINTERSECT 两 panic 的 repro；curl/httpd/vsh 六面字节恒等 |
+| **SQMERGE** | wt/sqmerge @ `eaa30995`+`4cb7f45d` | S1/S2 引用勘正（merge.rs/cover.cc 定义起始行）+GEN4-SQ-MERGE-FORCEDINTERSECT-0001 **独立确认重复**（与 SQNULLT 收敛同根因，修复本体归 wt/sqnullt）；新票 GEN4-SQ-BYTELANE-STRUCT-0001（字节车道重构形态族） | src 零生产改动 |
+| **PRINTCS** | wt/printcs @ 6 commits（`6ec4e705`..`4688115e`） | printc 六票：①WHILEDO 标签 DONE（curl 镜 110→101）②STRNCPY-CALLOTHER printc 侧交付（vsh 镜 15→14）③F3 双重 cast DONE ④ARRCAST run 语义 DONE（httpd 镜 265→253）⑤UNIONRESOLVE-PKG-C 29 站点快照 DONE（语料中性）⑥CODENAME 判定交付（零 src，移交 GENDRIVER-SYMTAB-DB-0001） | 基 1414f6e3：curl 镜 110→**101**、httpd 镜 265→**253**、vsh 镜 15→**14**、curl canon 269→267、httpd canon 862→860；bank 391/391 |
+| **GEN5** | wt/gen5 @ `ff06b3c7`+`790faa0f` | 第五语料 libsqlite3.so.0（见下节）；记分板+PATHOSLOW P1 票+既有族证据归并 10 条 | — |
+| **BRANAUDIT** | wt/branaudit @ `d4a6dac6` | 14 历史未合并分支复盘（21 个 `+` commit 逐个裁决：4 FORGOTTEN/15 LANDED-DIFFERENTLY/2 ABANDONED）+4 打捞票登记 | 零 src 改动 |
+
+### 质量数字（efc28f4a 可声明面 + 在飞值，均溯源车道终报）
+
+| 门禁 | 数字 | 说明 |
+|---|---|---|
+| curl canon（vs ghidra_curl_1204.c） | **267/0/0**（124 matched） | 多车道共证恒等值（F5IF/PKGD/PKGG/SQNULLT 各自 A/B 亲证） |
+| httpd canon（vs ghidra_httpd_1204.c） | **590→436**（F5IF 后）；F7NAME 平行车道 590→439 | 两车道均基 641994a6 平行推进，master efc28f4a 已含双方——**叠加合成态未单独复测**（root 集成点） |
+| curl 镜（ceiling 275 未重钉） | **94–110**（多车道基线时点） | RESIDE 终态 94（gate `--base 0` 按名配对口径 100=94+6 幻影，见票 MIRROORGATE-BASE-ORAL-0001）；PKGG/SQNULLT/SQMERGE@1f7fe30a 记 78；F5IF/F7NAME@641994a6 记 110；在飞 PRINTCS 终态 101 |
+| httpd 镜（ceiling 460） | F5IF 后 **208**（main 117→67）；F7NAME 面 258 | vsh 镜（ceiling 55）**15** |
+| sq 面（GEN4 第四语料，承重态） | master：ok **805**/810、skeleton 15889、numbering 7 | **在飞 SQNULLT 修复后：808/810、skeleton 16250≤22639、defects 0**；numbering=7+health 双红=在案承重（DUPDECL/PRETTYFLUSH 票） |
+| 投影银行 | **391/391 MATCH** | 全部车道共证（BANK-GLOBSET-REPIN-0001 单点幽灵在账） |
+| cargo test --lib | 1735–1746P / 1F | 唯一失败 `test_nonzeromask_pipeline_wiring`＝在案预存（BRANAUDIT 复核：fspec.rs:385 合成 fixture 缺 proto model，与 nzm 布线无关） |
+| gcc 审计 | curl 104OK/20FAIL、httpd 15OK/14FAIL | fail 函数名集多车道逐名恒等 |
+
+### 第五语料 sqlite3（GEN5，golden 入库待并）
+
+- **靶** `/usr/lib/x86_64-linux-gnu/libsqlite3.so.0`（sha256 `f5a7fc23…`）：首个 stripped 共享库 profile（dynsym-only、库脸无 main、API 导出入口、导出互调图）；SQLite amalgamation 源系与四语料零重叠；sqlite3VdbeExec 3877 行=五语料最大单函数；oracle 自带压力面（327× jumptable 超限+1760× unreachable+12× typeprop 不收敛）Rugra 近 parity 复现（319/1613/10）。
+- **golden**：`tests/golden/ghidra_sqlite_1204.direct-runner.c`（wt/gen5 `ff06b3c7`，1385/1385 OK 30.3s、determinism 12/12、provenance NO_ORACLE 缺项为零）+记分板 `docs/alignment_audit/GEN5_SQLITE_CORPUS_SCOREBOARD_2026-09-26.md`。
+- **Rugra 首份成绩单**（mirror 臂并行分片）：ok **1355/1385**（27 PANICKED+3 TIMEOUT）、skeleton **17652**、defects **0**、numbering **0**（sq 曾破零=7，sqlite 复零）、骨架恒等 874/1355（64.4%）。
+- **panic 族扩容**：27 panic 全部落 MIRROR3-PRETTYFLUSH-FAILCLOSED-0001（sq 2 站点→sqlite 27 站点，半径 ×13.5，含 VdbeExec/RunParser/mprintf 顶梁函数）——原票建议升至 P1/P2 头名。
+- **新族 PATHOSLOW**：GEN5-SQLITE-PATHOSLOW-BITVEC-0001（**P1，首个性能级分歧族**）——sqlite3BitvecSet/Clear/TestNotNull 三函数 oracle 毫秒级 vs Rugra 单函数 100% CPU 燃烧至 600s 墙杀（Bitvec 位图散列子表递归三兄弟同根）。
+- 残差分拣：CAST-SHAPE 3908/SWITCH-GOTO 3779/UNAFF-EXTRAOUT 2235/OPNAME-LEAK 1263/LOOPSHAPE 810 行全归并既有票；链表遍历 for 形 golden 31 处 vs Rugra 0 处（MSTRUCT-FORSPLIT 绝对缺席证据面）。
+
+### 门禁体系四门 + CI（efc28f4a 实态）
+
+| 门 | 入口 | 状态 |
+|---|---|---|
+| ① canon 差分 | `tools/compare_ghidra.py` vs `tests/golden/ghidra_{curl,httpd}_1204.c` | 双语料 defects/numbering 双零 |
+| ② 镜面棘轮 | `tools/verify_mirror_gate.sh` 四面（curl/httpd/vsh/sq）+`mirror_gate_baselines.tsv` ceiling/floor 钉 | 三面 PASS+sq 承重 FAIL（在案四票）；**口径票 MIRROORGATE-BASE-ORAL-0001 在账**（--base 0 vs 0x100000，94+6=100 按名配对幻影差） |
+| ③ 投影银行 | `tools/verify_projection_bank.sh` | 391/391 MATCH |
+| ④ refs 定义起始行 | `tools/check_ghidra_refs.py --all --strict`（REFSDEF 升级后=定义起始行验证，非仅行存在性） | 全树 0 漂移（3772 checked/823 exempt） |
+
+**CI（GitHub Actions `alignment-gates`）**：两 job——`locked-oracle-gates`（gate health/doc-sync/annotations/refs --strict/corpus-markers/evidence self-test 六检查）+`mirror-gate`（锁定 oracle 树 fetch→三驱动 fast-release 构建→镜面门禁+self-test）。`gh run list`：**近 8 run 全绿**；efc28f4a=run `36153938481` completed success（4m6s）、REFSDEF 工具升级笔 adf0a394=run `36153248512` success。
+
+> 全局完成度仍未证明（函数账本分母重建未完成、在飞车道未并、镜面 sq 承重未清）；本节数字为局部差分证据，不构成模块或项目 L3 声明。
+
+## 2026-09-25 V3FLIP 被调原型通道默认转正快照（历史，数字被上节取代）
 
 **callee-siglock 通道默认转正**（Lane V3FLIP，wt/curlsig @ master 535dd91f）：httpd 驱动的
 被调锁定原型通道（HEADLESS-BRIDGE-V3-SIGLOCK-0003，manifest

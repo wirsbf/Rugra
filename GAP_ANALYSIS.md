@@ -1,5 +1,9 @@
 # Rugra vs Ghidra: 差距分析与路线图
 
+> **时效声明（2026-09-26）**：正文第 1-4 节为第 8 阶段历史快照，多数"差距/下一步"已被
+> 后续波次消化（如 uVar 碎片化、while/if 检测、DCE 等）；当前缺口以文末
+> 「2026-09-26 波次缺口增量」节 + `docs/TODO_BOARD.md` 为准。
+
 本文档概述了 Rugra（截至第 8 阶段）与 Ghidra 之间的技术差距，重点关注 C/C++ 反编译质量。虽然 Rugra 已经实现了一个功能性的反编译流水线，但要达到 Ghidra 的行业标准输出，还需要通过几个高级功能来弥补差距。
 
 ## 1. 变量恢复与符号化 (Variable Recovery & Symbolization)
@@ -42,3 +46,44 @@
 1.  **高级控制流结构化**：实现基于区域（Region-based）的结构化算法，以完美恢复 `switch`、`for` 和 `do-while`。
 2.  **库签名匹配**：构建标准库函数签名数据库（libc, winapi），为类型系统提供更强的锚点。
 3.  **C++ 特性支持**：探索 C++ 虚函数表恢复和类继承关系的分析。
+
+---
+
+## 5. 2026-09-26 波次缺口增量（基=master `efc28f4a`；在飞车道另计）
+
+> 记账口径：本节只列 W-2026-09-26 波次内**状态翻转**的缺口（新闭/新开）；
+> 存量未动缺口见 `docs/TODO_BOARD.md` 全账。状态标注"已并"=master efc28f4a 含交付 commit，
+> "在飞"=车道分支交付待 root 合并。
+
+### 5.1 本波次已闭缺口
+
+| 缺口 | 票 | 状态 | 闭法一句话 |
+|---|---|---|---|
+| configtest if/else 取向翻转（~166 行） | HTTPDMAIN-F5-IFELSE-RETEST-0001 | **已并**（58af028a+2ed48430） | ActionPreferComplement BFS 对 Goto/MultiGoto 包裹子树下降；httpd main 232→78 |
+| libc 参数名推荐缺失（`__s1` 名族） | HTTPDMAIN-F7-NAMERECOMMEND-0001 | **已并**（09bc75fb+b2220069+f3d4f32d） | NameRecommend 三存储+恢复链+IMPORTFLIP 台账默认装；httpd 590→439 |
+| 双重强转打印（switch 头双层同型 cast） | HTTPDMAIN-F3-DOUBLECAST-0001 | **在飞**（wt/printcs de36abd3） | legacy LOAD 臂 CAST 包装省略+printlanguage.cc:277 嵌套规则 |
+| 数组指针 cast 非法 C 形 `(t [N]*)` | MIRATTR-F-ARRCAST-0001 | **在飞**（wt/printcs 3f9a10e2） | pushType 链 run 语义重写→`(t (*) [N])`；httpd 镜 265→253 |
+| WhileDo 入口标号缺发（悬空 goto） | MSTRUCT-WHILEDO-LABEL-PRINTC-0001 | **在飞**（wt/printcs 6ec4e705） | 四循环构造入口补 emit_any_label_statement；curl 镜 110→101 |
+| CALLOTHER 语句打印（裸 `;`） | STRNCPY-PRINT-CALLOTHER-0001 | **在飞·printc 半**（wt/printcs e8b6ec5e） | dispatch_op_rpn 补 CPUI_CALLOTHER 臂+四 display 臂+读回链；ap_ht_time 恢复 `builtin_strncpy(...)` 语句。**剩余=输出 token 三级链，拆出 COREACTION-CALLOTHER-OUTTOKEN-0001**（见 5.2） |
+| ruleaction union 消费退化形（14 站点） | UNIONRESOLVE-PKG-D-0001 | **已并**（961b332f+a308dbc8） | fd-aware 孪生+slot 键对照 op->getSlot |
+| with_field 指针臂非工厂形 | UNIONRESOLVE-PKG-G-0001 | **已并**（e94c3640+efc28f4a） | TypeFactory intern（findAdd 规范化） |
+| printc union 消费退化形（29 站点） | UNIONRESOLVE-PKG-C-0001 | **在飞**（wt/printcs 83213b78，语料中性） | find_resolve_snap 快照通道 |
+| `// Ghidra:` 引用行漂移（工具无定义起始行验证） | TOOLS-REFS-DEFSTART-0001 | **已并**（9aa565ec+ba3f2dc8） | 门禁升级+288 处全修 |
+| noreturn 台账缺失→F1 级联（~272 行） | HTTPDMAIN-F1-NORETURN-0001 | **已并**（4455636b+f80763ea，背景） | KNOWN_NO_RETURN 21 名单+canon 传输 |
+| goto 边槽位镜像残留→switch 退化 | MSTRUCT-SWITCHGOTO-SELECTGOTO-0001 | **已并**（1414f6e3，背景） | resync_goto_edge_mirrors |
+| 循环承载值驻留（my_get_line F-RESIDE） | MIRATTR-F-RESIDE-0001 | **已并**（1f7fe30a，背景） | intersection 第二判定臂（testUntiedCallIntersection） |
+| stale descend 泄漏→NULLLOCALTYPE/FORCEDINTERSECT panic | GEN4-SQ-NULLLOCALTYPE-0001 / GEN4-SQ-MERGE-FORCEDINTERSECT-0001 | **在飞**（wt/sqnullt 948974df；SQMERGE 独立确认收敛同根因） | set_opcode_and_inputs 委托 op_set_all_input；sq panic 4→2 |
+
+### 5.2 本波次新开缺口
+
+| 缺口 | 票 | 级 | 域 | 要点 |
+|---|---|---|---|---|
+| CALLOTHER 输出 token 三级链缺失 | COREACTION-CALLOTHER-OUTTOKEN-0001 | P2 | coreaction.rs+userop.rs | TypeOpCallother::getOutputLocal（typeop.cc:866-872）→InternalStringOp 特化（userop.cc:361-364）→默认 TYPE_UNKNOWN 非 Int；修后 STRNCPY 票逐字节验收即达（PRINTCS 车道登记，在 wt/printcs 分支） |
+| checkAddressOfCast 整体未移植 | PRINTC-CHECKADDRESSOFCAST-0001 | P2 | printc.rs | cc:379/381/403 `&` 数组衰减形（PKG-C 伴生） |
+| gen 驱动符号 DB 通道缺失 | GENDRIVER-SYMTAB-DB-0001 | P2 | examples/gen_decompile.rs | BFD 函数符号不喂 Architecture symboltab→ActionConstantPtr queryContainer 恒 miss→vsh `main` 印裸地址（CODENAME 票判定移交） |
+| 字节车道重构形态差 | GEN4-SQ-BYTELANE-STRUCT-0001 | P2 | 待判域（疑 subflow/heritage 交互） | header.1 读改写链 oracle 逐字节 MULTIEQUAL 重构 vs Rugra 寄存器粒度；不 panic、defects=0，SQMERGE 车道登记（在 wt/sqmerge 分支） |
+| 病态慢族（首个性能级分歧） | GEN5-SQLITE-PATHOSLOW-BITVEC-0001 | **P1** | 待探针定位（疑 heritage/merge 活跃性或 blockaction fixpoint） | sqlite3BitvecSet/Clear/TestNotNull：oracle 毫秒级 vs Rugra 600s 墙杀；GEN5 车道登记（在 wt/gen5 分支） |
+
+> 同波次证据扩容（不开新票）：PRETTYFLUSH panic 族半径 ×13.5（sq 2 站点→sqlite 27 站点，
+> MIRROR3-PRETTYFLUSH-FAILCLOSED-0001 建议升 P1/P2 头名）；sqlite 面既有结构族（CAST/SWITCH/
+> UNAFF/STACKSLOT ~1.2 万行级）与链表 for 形 31:0 缺席归并 MSTRUCT-FORSPLIT 等原票。
