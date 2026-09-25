@@ -27,10 +27,12 @@
 //!   cargo run --profile fast-release --example gen_decompile -- <binary> --one <index>
 //!
 //! Env:
-//!   RUGRA_GEN_MIRROR=1       flow range (0, u64::MAX) — the direct-runner
-//!                             oracle contract (followFlow(code:0, code:highest),
-//!                             funcdata_op.cc:756); default keeps the
-//!                             historical driver range [entry, MAX).
+//!   RUGRA_GEN_MIRROR         inert (historical): flow always uses the
+//!                             direct-runner oracle range (0, u64::MAX) —
+//!                             followFlow(code:0, code:highest),
+//!                             funcdata.cc:163 startProcessing. Formerly
+//!                             toggled the driver-bounded [entry, MAX) form
+//!                             (BINSWEEP-JTDEST-UNLINKED-0001 root cause).
 //!   RUGRA_GEN_TIMEOUT_SECS   per-function child timeout in all-mode
 //!                             (default 60; 0 = unlimited)
 //!   RUGRA_GEN_ONLY=<name>    all-mode: decompile only the named function
@@ -483,10 +485,6 @@ fn build_architecture(
     Ok(Arc::new(arch))
 }
 
-fn mirror_flow_enabled() -> bool {
-    std::env::var("RUGRA_GEN_MIRROR").is_ok()
-}
-
 // RUGRA-GLUE: hermetic single-function decompile, the shape the oracle
 // golden_dump_1204 "one" mode drives (BfdArchitecture init, followFlow,
 // universal action, PrintC docFunction) on Rugra's side.
@@ -525,19 +523,18 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
 
     let empty_protos = std::collections::BTreeMap::new();
-    if mirror_flow_enabled() {
-        // Direct-runner oracle contract: followFlow(code:0, code:highest).
-        rugra::flow::follow_flow_range(&mut fd, &mut sleigh, 0, u64::MAX, &empty_protos)
-    } else {
-        rugra::flow::follow_flow_with_callee_protos(
-            &mut fd,
-            &mut sleigh,
-            Address::new(target.vaddr),
-            u64::MAX,
-            &empty_protos,
-        )
-    }
-    .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
+    // Oracle flow contract: followFlow(code:0, code:highest). Every Ghidra
+    // production entry — Funcdata::startProcessing (funcdata.cc:163-164),
+    // the GUI, and the direct-runner golden harness (regen_ghidra_golden.py
+    // :388) — bounds flow at the whole address space, never at the function
+    // body. The historical driver-bounded form (baddr = function entry)
+    // stranded jump-table destinations below the entry as unlinked
+    // (BINSWEEP-JTDEST-UNLINKED-0001: python3.10 string-formatting switches
+    // recover far-away case targets that a lower bound rejects as
+    // out-of-bounds). Both the former mirror and bare arms now run the one
+    // oracle range.
+    rugra::flow::follow_flow_range(&mut fd, &mut sleigh, 0, u64::MAX, &empty_protos)
+        .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
 
     let fd_arc = Arc::new(std::sync::RwLock::new(fd));
     fd_arc
