@@ -1,5 +1,19 @@
 # `printc.rs` API Reference
 
+## 2026-09-25：标签/注释换行走 `tag_line_indent`（PRINTC-EMIT-TAGLINE-ABS-0001）
+
+`emitLabelStatement`（printc.cc:3198-3214）的 `emit->tagLine(0)` 是 Emit 的**带参
+绝对** virtual（prettyprint.hh:180）：标签行 = endl + 0 空格，**列 0 顶格，与嵌套深度
+无关**——canon curl 32 处（29 `LAB_` + 3 `switchD_…_caseD_…:`）全部顶格。Rugra 三个
+标签调用点（`emit_label_statement` 平尾路径、`emit_any_label_statement` 结构臂与
+pending_goto_labels 兜底臂）此前走合并入口 `tag_line(0)`→相对形（当前缩进级），标签
+行带 2-8 空格缩进。现改走 `tag_line_indent(0)`（trait 绝对形，见 prettyprint.md 同日
+条目）。`emit_line_comment` 的两处 fallback（非 EmitNoMarkup emitter）同步改
+`tag_line_indent(indent)`——printlanguage.cc:597 同为带参绝对形（-1 先钳到
+line_commentindent=20，cc:594-596；EmitNoMarkup downcast 臂字节已 oracle 精确，
+不动）。验收：curl 标签族 32 行顶格 ==canon 逐字；httpd 34 行同收敛；双差分/bank/
+gcc 审计零回退（证据见 TODO_BOARD 本行）。
+
 ## 2026-09-24：STORE 地址恢复单发射（PRINTC-STORE-DBLEMIT-0001 / Lane GI）
 
 `PrintC` 的 STORE 发射块（`emit` 的 opStore 分支）在 merge 33418058

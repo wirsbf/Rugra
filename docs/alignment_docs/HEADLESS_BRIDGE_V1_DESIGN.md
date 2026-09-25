@@ -938,6 +938,16 @@ oracle env-flip 154/156 为其子集——本通道额外收返回消费形 int 
    undefined224*（dynsym st_size=224）压过使用流，增量步进印成
    `(undefined224 *)((long)puVar15 + 8)`（canon `ppuVar14 + 1`）——
    typeprop/SYMDB 优先级域残差，登记 `V3SIG-UND224-TYPEORDER-0001`。
+   **收口（2026-09-25 Lane UNDARR，§16.3 项 3 驱动侧根因关闭）**：
+   TYPEORDER 判决（W0–W6 oracle 见证）确认该残差系驱动 DATASYM 输入捏造
+   ——`undefined_t(st_size)` 造出 `TypeFactory::getBase` 结构上产不出的
+   >10 字节 unknown 标量（type.cc:3652-3657 该尺寸恒产 `undefined[size]`
+   数组）。两驱动 DATASYM 构造点已改为 oracle 真实输入形：整_extent 指针槽
+   （reloc 标记或 NULL 尾零槽）→ `undefined*[N]`（W6 oracle 验证形，canon
+   族形零 cast）；其余 8 整除 → `undefined8[N]`（W5 形）；非 8 整除 →
+   `undefined[size]`；≤10 保持标量。main 四行族（decl/init/load/step）翻
+   canon 族：`undefined **ppuVar15`/`*ppuVar15`（零 cast）/`+ 1`；
+   `undefined224` 全文计数=0。
 4. **varargs 3 drops** 与 **ap_run_post_config 元数冲突**：canon 未锁（站点
    元数不一致即证），弃收即对齐方向。
 5. 间接调用拼写（`void(*V)()` vs `code *V`）、canary 物化（local_40 拆分）、
@@ -1438,3 +1448,63 @@ slot0 `undefined1*` vs `undefined8` 两站不一致；FUN_0012cbd0 slot1
    参数恢复本身）。
 - 回收：/dev/shm/rugra-targets/sb-paramid2 留 root 集成后回收；lane 证据
   /dev/shm/rugra-tests/paramid2/。
+
+## §17.7 IMPORTSIG 交付记录（Lane IMPORTSIG，2026-09-25，基=亲父 7090eb8c）
+
+**判决（车道首问：导入函数的原型是否已被 PARAMID 环用上）**：**未在**。
+httpd 驱动从不查询任何导入签名源——callspec 状态只靠
+`external_prototypes`（HashMap<u64,usize> 参数计数，唯一消费者是
+ActionDeindirect 的存在性检查）+ inject-path qlst 注册
+（CALLSPEC-DRIVER-0002）；PARAMID 环在合并步整体弃收 PLT 槽证据；
+binary stripped 无 DWARF。46.6% 恢复内含导入锁为零，§17.6.5 的 ~16 行
+残余正是该缺口。
+
+**通道形态（IMPORTSIG-DRIVER-0001）**：generic_clib 数据等价物 =
+`LibcSignatureTable`（库内 24 条 curl 导向表；httpd 交集 12 条经公共
+`lookup` 消费——首个库表消费者）+ 驱动侧 httpd 扩展 47 条
+（`HTTPD_IMPORT_SIGNATURES`，拼写=锁定 oracle golden 的 thunk 头逐字，
+glibc `__` 保留名含）。数据判据=canon 对拍：golden 内 124 条
+"Unknown calling convention" 横幅锁定 59 个唯一 libc thunk 签名
+（每 thunk 双打印）；7 个导入 canon 不锁（__fprintf_chk/
+__isoc99_sscanf/__printf_chk/__stack_chk_fail/__strncat_chk/__syslog_chk/
+apu_version_string）——不在 ledger（锁它们=发明 canon 没有的签名）。
+装载臂 `install_import_signatures` 与 V3SIG 同位（inject 后、action 管线
+前），走库公开面 `FuncProto::from_model_carrier +
+update_all_types_from_pieces`，完整复刻 `LibcSignatureTable::locked_proto`
+的边界态（per-param NAME_LOCKED fspec.cc:3503-3506/:3564、
+input/output/model 三锁、"unknown" 约定名）。结构基类型
+（FILE/rlimit/sigaction/sigset_t/tms/group/passwd/__compar_fn_t）在
+驱动 TypeFactory 无对应物→逐条跳过+日志（无一在打印窗口被调）。
+
+**门控**：analyzer transport——`RUGRA_PARAMID=1` 时开（本车道验收脸）、
+`RUGRA_IMPORTSIG=1` 独立量具、`RUGRA_IMPORTSIG=0` A/B 断路、mirror/
+`RUGRA_SEEDS=0` 绝对优先。默认脸构造性不动（门全关=死代码）。
+
+**数字（fast-release 亲测，A/B=HEAD 7090eb8c 二进制 cmp 逐字节）**：
+- PARAMID 脸 **999→753/0/0**（−246）；默认脸 **898 字节恒等**；
+  mirror/V3SIG=0/SEEDS=0 三门禁新旧二进制恒等；PARAMID 双跑恒等；
+  `RUGRA_IMPORTSIG=0` 下 PARAMID 脸与改前字节恒等（−246 全归因本通道）。
+- 逐函数 **0 回退**，11 函数改善：main −113、ap_update_vhost −34、
+  ap_pregsub −20、ap_getword −18、ap_make_dirstr_parent −17、
+  ap_fini −13、ap_field_noparam −12、ap_os_is_path_absolute −6、
+  ap_strcasecmp_match −5、ap_matches −4（§17.6.5 登记的 4 行全收）、
+  caseD −4（4→0——strcasecmp 锁使退化站点印出 canon 形）。
+- PARAMID 自产表 49→51（导入锁的参数类型经 typeprop 改善内部 callee
+  证据）；对拍 overlap 19→20/exact 13→14/precision 68.4%→70.0%/
+  slots equal 21→23/different 0。PLT 槽仍从自产表弃收（归因不变：
+  canon 的导入锁来自签名通道而非 Parameter ID）。
+- bank 391/391 exit 0；cargo test --lib 1725P/1F（nonzeromask 预存，
+  lib 未触碰）。
+
+**残余归因更新（§17.6.5 的 16 行收口）**：导入域族 ~16 行**全收**；
+ap_matches 剩 2 行=pRam code* 残差（非导入域）；ap_update 剩 22/
+ap_fini 剩 70=typeprop/pRam 域（V3SIG-UND224-TYPEORDER-0001 同族）。
+新登记 `IMPORTSIG-STRUCTBASES-0001`（P3）：9 条结构基类型 ledger 条目
+惰性（freopen/qsort/sigaction/sigaddset/sigemptyset/times/getgrnam/
+getpwnam/getpwuid/getrlimit——canon 锁、Rugra 工厂无名、窗口外零可观测）。
+另：canon 对 ap_strchr/ap_strrchr/ap_strstr(±_c) 六个内部包装函数也带
+锁+横幅（Parameter ID 提交域，非导入通道——PARAMID 自产表覆盖范围，
+非本车道缺口）。
+
+证据=/dev/shm/rugra-tests/importsig/（含改前后 A/B 双二进制与全部门禁
+输出）；target /dev/shm/rugra-targets/sb-importsig 留 root 集成后回收。

@@ -1,5 +1,27 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-25：PRINTC-EMIT-TAGLINE-ABS-0001 — `tagLine(int4)` 绝对形独立成 `tag_line_indent`
+
+oracle 的 Emit 基类有两个**分离的**换行 virtual（prettyprint.hh:173/180）：无参
+`tagLine()`（相对——当前缩进级：EmitNoMarkup 印 `indentlevel` 个空格，hh:557-558；
+EmitPrettyPrint 发 bump_t 令牌，hh:918-920）与带参 `tagLine(int4 indent)`（**绝对**——
+endl + 恰好 `indent` 个空格：EmitNoMarkup hh:559-560；EmitPrettyPrint 发 line_t 令牌，
+hh:922-924，break 路径 cc:674-676 `spaceremain = maxlinesize - indentbump` 后
+`lowlevel->tagLine(indentbump)`）。Rugra 的单一 `tag_line(indent)` 入口把两者合一：
+`indent==0` 落相对形——而 printc.cc:3211 `emitLabelStatement` 的 `emit->tagLine(0)`
+恰恰是**带参绝对形**（goto 标签 `LAB_…:`/`switchD_…_caseD_…:` 恒列 0 顶格，与嵌套
+深度无关），导致 curl 32 处/httpd 34 处标签行带缩进、canon 全部顶格。
+
+本提交按 oracle 结构拆分：`Emitter` trait 新增 `tag_line_indent(indent)`（带参绝对形，
+默认 no-op 对应 stub emitter），`EmitNoMarkup` 实现为换行 + `indent.max(0)` 个单空格，
+`EmitPrettyPrint` 实现为 emit_pending + checkbreak + line_t 令牌（cc:928-933 顺序）。
+`tag_line(indent)` 收窄为纯相对形（遗留 `indent>0` 绝对臂删除；全部剩余调用点传 0 =
+oracle 无参形态，debug_assert 钉死）。生产调用面：printc.rs 标签三调用点
+（emit_label_statement/emit_any_label_statement 两臂）`tag_line_indent(0)`；
+emit_line_comment 两处 fallback `tag_line_indent(indent)`（printlanguage.cc:597 亦带参
+绝对形——EmitNoMarkup downcast 臂字节原样，非 NoMarkup emitter 走 trait 绝对形）。
+后处理层（死区/P16 标签清除）全部基于 `trim()`，列不敏感，无需改动。
+
 ## 2026-09-25：P9 ` )` trim 豁免扩展到 BlockInfLoop 尾行（GENSMOKE-T6，wt/vshfix）
 
 第九遍结构清理（P9）的引号外 `" )"`→`")"` trim 与双空格折叠自
@@ -1060,7 +1082,7 @@ atom（`-8`），binary_plus 保留 ` + ` 记号 → 输出 `X + -8`。canon gol
 printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过会注入
 `long stack0x00000008;` 与 canon 文本分歧（_start 10→11 回退源）。
 
-## 2026-09-25（Lane MIRROR2）：`tag_line_at` —— oracle 绝对缩进 `Emit::tagLine(int4 indent)` 独立虚函数（MIRROR2-LABELINDENT-0001）
+## 2026-09-25（Lane MIRROR2，merge 去重后与 TAGLINE 车道同条目）：标号绝对缩进统一到 `tag_line_indent`（MIRROR2-LABELINDENT-0001）
 
 - **根因（镜面残差族=label 缩进）**：oracle 的 `PrintC::emitLabelStatement`
   （printc.cc:3211）调用 `emit->tagLine(0)`——这是与 `tagLine()` **不同的
@@ -1074,12 +1096,20 @@ printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过
   实证，golden 0 处）。语句层 `tag_line(0)`（=oracle 平凡 `tagLine()`）
   的传输约定不能改——`close_brace_indent`/`open_brace_indent` 等大量
   站点以 0 表示平凡形式。
-- **修法**：新增 trait 方法 `tag_line_at(indent)` = oracle 绝对形式：
-  `EmitPrettyPrint` 覆写为无条件 `line_t` token（prettyprint.cc:927-934
-  的逐行对齐：emitPending→checkbreak→push→tagLine(indent)→scan）；
-  `EmitNoMarkup` 覆写为 `endl + indent 个字面空格`（prettyprint.hh:
-  558-560）；trait 默认委托旧 `tag_line(indent)`（NullEmit/CaseDetect
-  保持 no-op）。printc 三个标号发射站点（emit_label_statement 与
-  emit_any_label_statement 两臂）改调 `tag_line_at(0)`。
-- **效果**：curl 镜 695→683、httpd 镜 −62（连带 S3 族）、canon 不回退
-  （466=466，canon 无标号面）。
+- **修法与去重**：MIRROR2 原交付（7ced32ff）以 `tag_line_at` 独立 trait
+  方法承载该虚函数；TAGLINE 车道（2e2997f4/cdd66875）独立同发现并以
+  `tag_line_indent` 落地（实现逐行同语义：EmitNoMarkup=endl+`indent.max(0)`
+  字面空格、EmitPrettyPrint=无条件 line_t token）。**merge master 后统一到
+  `tag_line_indent` 单通道**——MIRROR2 的 `tag_line_at` trait 方法+双实现
+  删除，标签站点全改调 `tag_line_indent(0)`；TAGLINE 额外覆盖
+  printlanguage.cc:597/616-617 的注释续行两站点并给合并式 `tag_line` 加
+  debug_assert（indent>0 断言）硬化，oracle 生产调用面（标号 3 站点+注释
+  2 站点）全数走绝对形。
+- **效果**：curl 镜 695→683、httpd 镜 1140→1076、vsh 镜 55→51、canon
+  466==466 不回退（canon 标号面由 TAGLINE 同修覆盖）。
+- **修法（历史记录，7ced32ff 原形）**：新增 trait 方法承载该虚函数
+  （EmitPrettyPrint 覆写为无条件 `line_t` token——prettyprint.cc:927-934
+  的逐行对齐；EmitNoMarkup 覆写为 `endl + indent 个字面空格`——
+  prettyprint.hh:558-560），printc 三个标号发射站点（emit_label_statement
+  与 emit_any_label_statement 两臂）改调绝对形。**merge master 后该方法已
+  由 TAGLINE 的 `tag_line_indent` 统一取代**（见上「修法与去重」）。

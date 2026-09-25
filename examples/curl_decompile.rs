@@ -356,6 +356,305 @@ fn cmtseed_comments() -> Option<&'static Vec<(u64, String)>> {
     CMTSEED_COMMENTS.get_or_init(load_cmt_seed_manifest).as_ref()
 }
 
+// CURLWIRE-SIGLOCK-WIRING-0001: the callee locked-prototype manifest
+// channel (curl port of the httpd driver's V3SIG gate, default-on since
+// the V3FLIP promotion). The canon golden's producer (analyzeHeadless)
+// runs the Decompiler Parameter ID analyzer, which commits recovered
+// callee signatures to the Program database; every later decompilation
+// then sees those callee signatures at its call sites (FlowInfo::queryCall
+// -> FuncCallSpecs::setFuncdata -> ActionDefaultParams'
+// fc->copy(otherfunc->getFuncProto()), coreaction.cc:2322-2330). curl's
+// link_call_specs already carries the libc ABI table + DWARF callee
+// signatures onto the callspecs (GETPARAM-CALLEE-DWARF-0001), but the
+// canon call-site truth still drifts where Parameter ID iterated past
+// the DWARF header (const-qualified pointers like my_get_token's canon
+// `char *` vs the DWARF `const char *`) or where neither source covers
+// the callee (CURLPREP harvest: tools/harvest_local_manifest.py
+// --callee --dwarf-types, 55 callees = 30 full input locks + 26 return
+// locks, locked-oracle pre-verified — B-state flipped my_get_token
+// `(char *)0x0` and GetStr's 17 sites to canon verbatim). This gate
+// loads tests/golden/manifests/callee_siglock_curl_1204.json and
+// installs each entry as a locked FuncProto on the matching call site
+// AFTER link_call_specs (manifest truth wins over the DWARF/libc
+// install) and BEFORE the action pipeline, so the newly wired
+// ActionSetCasts::cast_input CALL arm
+// (TypeOp::getInputCast -> TypeOpCall::getInputLocal, typeop.cc:295-303
+// / 687-718) can consume the locked parameter slots. Gate polarity
+// mirrors SEEDFLIP/V3FLIP: any mirror component keeps the gate closed
+// (five-projection bank purity), RUGRA_SEEDS=0 is the global bare-face
+// escape, RUGRA_V3SIG=0 opts just this channel out,
+// RUGRA_V3SIG_MANIFEST=<path> overrides the manifest location, and a
+// missing/corrupt manifest is a loud no-op so a manifest-less checkout
+// decompiles as the unchanneled face.
+static CALLEE_SIGLOCK_PROTOS: std::sync::OnceLock<Option<HashMap<u64, CalleeSiglockProto>>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: one manifest entry — callee name, per-slot param spellings
+// (None = unlocked slot), return spelling, and whether every slot is
+// locked (full input lock installs parameter pieces; partial entries
+// lock only the return). Same shape as the httpd driver's V3CalleeProto.
+struct CalleeSiglockProto {
+    name: String,
+    params: Vec<Option<String>>,
+    ret: Option<String>,
+    input_lock: bool,
+}
+
+// RUGRA-GLUE: per-process callee-siglock manifest handle (mirrors the
+// httpd load_v3sig_manifest decode walk; isolated workers are one-job
+// processes, the compare-functions direct path reuses the cache).
+fn load_callee_siglock_manifest() -> Option<HashMap<u64, CalleeSiglockProto>> {
+    if mirror_flow_enabled() || mirror_bare_load_enabled() || mirror_fixture_data_enabled() {
+        eprintln!("[V3SIG] callee-siglock gate RUGRA_V3SIG ignored under the mirror gate (projection purity)");
+        return None;
+    }
+    if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        return None;
+    }
+    if std::env::var("RUGRA_V3SIG").ok().as_deref() == Some("0") {
+        return None;
+    }
+    let path = std::env::var("RUGRA_V3SIG_MANIFEST")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "tests/golden/manifests/callee_siglock_curl_1204.json".to_string());
+    let table = match fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Err(err) => {
+                eprintln!("[V3SIG] manifest {} is not valid JSON: {} (gate disabled)", path, err);
+                None
+            }
+            Ok(raw) => {
+                let mut table = HashMap::new();
+                if let Some(serde_json::Value::Object(callees)) = raw.get("callees") {
+                    for (addr, entry) in callees {
+                        let Some(key) = addr
+                            .strip_prefix("0x")
+                            .and_then(|digits| u64::from_str_radix(digits, 16).ok())
+                        else {
+                            continue;
+                        };
+                        let Some(serde_json::Value::String(name)) = entry.get("name") else {
+                            continue;
+                        };
+                        let mut params = Vec::new();
+                        if let Some(serde_json::Value::Array(slots)) = entry.get("params") {
+                            for slot in slots {
+                                let spelling = match slot.get("type") {
+                                    Some(serde_json::Value::String(t))
+                                        if slot.get("locked") == Some(&serde_json::Value::Bool(true)) =>
+                                    {
+                                        Some(t.clone())
+                                    }
+                                    _ => None,
+                                };
+                                params.push(spelling);
+                            }
+                        }
+                        let ret = match entry.get("return") {
+                            Some(serde_json::Value::String(t)) => Some(t.clone()),
+                            _ => None,
+                        };
+                        let input_lock = entry.get("input_lock")
+                            == Some(&serde_json::Value::Bool(true))
+                            && !params.is_empty()
+                            && params.iter().all(|slot| slot.is_some());
+                        table.insert(
+                            key,
+                            CalleeSiglockProto {
+                                name: name.clone(),
+                                params,
+                                ret,
+                                input_lock,
+                            },
+                        );
+                    }
+                }
+                eprintln!(
+                    "[V3SIG] loaded {}: {} callee prototypes ({} input-locked, {} return-locked)",
+                    path,
+                    table.len(),
+                    table.values().filter(|c| c.input_lock).count(),
+                    table.values().filter(|c| c.ret.is_some()).count()
+                );
+                Some(table)
+            }
+        },
+        Err(err) => {
+            eprintln!("[V3SIG] cannot read manifest {}: {} (gate disabled)", path, err);
+            None
+        }
+    };
+    table
+}
+
+// RUGRA-GLUE: cached accessor for the callee-siglock manifest (see
+// load_callee_siglock_manifest above).
+fn callee_siglock_table() -> Option<&'static HashMap<u64, CalleeSiglockProto>> {
+    CALLEE_SIGLOCK_PROTOS
+        .get_or_init(load_callee_siglock_manifest)
+        .as_ref()
+}
+
+// CURLWIRE-SIGLOCK-WIRING-0001: install the manifest's locked FuncProtos
+// onto this function's call sites (httpd install_v3sig_callee_protos
+// form). Canon address key = callspec entry + ANALYZE_HEADLESS_IMAGE_BASE
+// (the ledger rebasing every other seed manifest uses). Types resolve
+// against the worker's TypeFactory by name (FuncProto::decode's
+// findByName path, grammar.cc:2989) — the DWARF-named composites
+// (FILE/Configurable/HttpReq/...) are already in the factory from
+// parse_type_names at this point; multi-star spellings ("char * *")
+// round-trip their pointer depth; "undefined" takes the 1-byte Unknown
+// core construction (the data-org gap). All through the library's public
+// surface: FuncProto::from_model_carrier (the caller's bound defaultfp
+// model) + update_all_types_from_pieces (fspec.cc:3843 setPieces'
+// storage-assignment path) + per-param TYPE_LOCKED + output lock + model
+// lock. Unlocks nothing: partial entries carry no parameter pieces, so
+// active arity recovery keeps running and only the return locks.
+// Returns the number of call sites that received a locked prototype.
+fn install_callee_siglock_protos(
+    fd: &mut rugra::funcdata::Funcdata,
+    table: &HashMap<u64, CalleeSiglockProto>,
+    types: &std::sync::Arc<
+        std::sync::RwLock<rugra::type_system::typefactory::TypeFactory>,
+    >,
+) -> usize {
+    use rugra::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+
+    // Manifest spelling -> canonical factory type (httpd resolve form).
+    let resolve = |spelling: &str| -> Option<std::sync::Arc<Datatype>> {
+        let trimmed = spelling.trim();
+        let stars = trimmed.chars().filter(|ch| *ch == '*').count();
+        let base = trimmed.trim_end_matches('*').trim();
+        let mut resolved = if base == "undefined" {
+            std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "undefined".to_string(),
+                1,
+                TypeMetatype::Unknown,
+            )))
+        } else {
+            types.read().unwrap().find_by_name(base)?
+        };
+        for _ in 0..stars {
+            resolved = types.write().unwrap().get_type_pointer_default(resolved);
+        }
+        Some(resolved)
+    };
+
+    // The model carrier: the CALLER's own funcp already carries the bound
+    // defaultfp (set_arch's setScope tail, fspec.cc:3884) — the same
+    // model both Funcdata objects would share in the oracle.
+    let model_carrier = fd.funcp.clone();
+    let specs: Vec<_> = fd
+        .callspecs
+        .iter()
+        .filter_map(|owner| {
+            let spec = owner.read().unwrap();
+            spec.entry_addr
+                .map(|entry| (owner.clone(), entry.as_u64()))
+        })
+        .collect();
+    let mut installed = 0usize;
+    for (owner, entry) in specs {
+        let Some(entry_proto) = table.get(&(entry + ANALYZE_HEADLESS_IMAGE_BASE)) else {
+            continue;
+        };
+        if !entry_proto.input_lock && entry_proto.ret.is_none() {
+            continue; // evidence-free entry: nothing to lock
+        }
+        // CURLWIRE gap-fill rule: link_call_specs has already installed
+        // the libc ABI table / DWARF callee signatures (and the PLT
+        // import protos before those) onto this callspec; the manifest
+        // is the INCREMENT channel (CURLPREP verdict: canon call-site
+        // truth for callees with no libc/DWARF coverage). Overwriting a
+        // model-carrying install regresses the corpus — the return-only
+        // entries would drop the libc arity (strtol's `strchr()` empty
+        // arg face) and the DWARF protos carry the struct-layout type
+        // identities the manifest spellings cannot rebuild — so the
+        // entry installs only where no authoritative proto is present.
+        // has_model() is the driver's established authoritative-install
+        // predicate (link_call_specs' `installed` flag, line ~1285).
+        if owner.read().unwrap().prototype.has_model() {
+            continue;
+        }
+        // Parameter pieces: only the fully-evidenced shape installs
+        // parameters (arity + types); partial entries install the return
+        // alone and keep active input recovery.
+        let mut in_types = Vec::new();
+        if entry_proto.input_lock {
+            for spelling in &entry_proto.params {
+                let Some(spelling) = spelling else { continue };
+                match resolve(spelling) {
+                    Some(resolved) => in_types.push(resolved),
+                    None => {
+                        eprintln!(
+                            "[V3SIG] {} proto for {}: cannot resolve param type {:?} (skipping entry)",
+                            fd.name, entry_proto.name, spelling
+                        );
+                        in_types.clear();
+                        break;
+                    }
+                }
+            }
+            if in_types.len() != entry_proto.params.len() {
+                continue;
+            }
+        }
+        let return_type = match &entry_proto.ret {
+            Some(spelling) => match resolve(spelling) {
+                Some(resolved) => Some(resolved),
+                None => {
+                    eprintln!(
+                        "[V3SIG] {} proto for {}: cannot resolve return type {:?} (skipping entry)",
+                        fd.name, entry_proto.name, spelling
+                    );
+                    continue;
+                }
+            },
+            None => None,
+        };
+        // from_model_carrier requires a return type; an entry with no
+        // return evidence never reaches here with input_lock=false, so
+        // the void stand-in only serves the unlocked-output input-lock
+        // case.
+        let void_type = types.read().unwrap().get_type_void();
+        let out_type = return_type.clone().unwrap_or_else(|| void_type.clone());
+        let mut proto = rugra::fspec::FuncProto::from_model_carrier(
+            &model_carrier,
+            entry_proto.name.clone(),
+            out_type,
+        );
+        proto.name = entry_proto.name.clone();
+        let pieces = rugra::grammar::PrototypePieces {
+            model: None,
+            name: entry_proto.name.clone(),
+            out_type: return_type.clone().or(Some(void_type)),
+            in_types,
+            in_names: Vec::new(),
+            first_var_arg_slot: -1,
+        };
+        proto.update_all_types_from_pieces(&pieces);
+        if proto.has_input_errors() {
+            eprintln!(
+                "[V3SIG] {} proto for {}: model cannot assign parameter storage (skipping entry)",
+                fd.name, entry_proto.name
+            );
+            continue;
+        }
+        if entry_proto.input_lock {
+            proto.set_input_lock(true);
+        }
+        if return_type.is_some() {
+            proto.set_output_lock(true);
+        }
+        proto.set_model_lock(true);
+        let mut spec = owner.write().unwrap();
+        spec.prototype = proto;
+        installed += 1;
+    }
+    installed
+}
+
 /// The locked 12.0.4 golden corpus for the curl fixture: every function the
 /// canonical Ghidra analyzeHeadless run decompiled
 /// (`tests/golden/ghidra_curl_1204.provenance.json` ledger, 124 entries,
@@ -3028,13 +3327,110 @@ fn build_worker_architecture(
                     } else {
                         sym.st_size as i32
                     };
-                    let dtype = std::sync::Arc::new(rugra::type_system::datatype::Datatype::Base(
-                        rugra::type_system::datatype::TypeBase::new(
-                            format!("undefined{size}"),
-                            size as usize,
-                            rugra::type_system::datatype::TypeMetatype::Unknown,
-                        ),
-                    ));
+                    // DATASYM object typing (V3SIG-UND224-TYPEORDER-0001):
+                    // TypeFactory::getBase never materializes an unknown
+                    // scalar wider than max_basetype_size == 10
+                    // (type.cc:3652-3657 answers such sizes with an
+                    // undefined[size] byte array), so the analyzeHeadless
+                    // transport cannot carry e.g. a 4096-byte
+                    // "undefined4096" scalar — the former undefined{size}
+                    // fabrication here built an input form the locked
+                    // oracle cannot produce. Mirror the oracle's real
+                    // input forms: whole-extent pointer slots (relocated,
+                    // or initialized all-zero NULL terminator tail) ->
+                    // undefined *[size/8] (W6 oracle witness, canon main
+                    // loop family); other 8-divisible sizes ->
+                    // undefined8[size/8] (W5 witness); remaining >10 sizes
+                    // -> undefined[size]; <=10 keeps the named scalar.
+                    let undefined1 = || {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    "undefined".to_string(),
+                                    1,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
+                    let undefined8 = || {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    "undefined8".to_string(),
+                                    8,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
+                    let pointer_reloc_slots: std::collections::HashSet<u64> = elf
+                        .dynrelas
+                        .iter()
+                        .filter(|rel| {
+                            rel.r_type == goblin::elf::reloc::R_X86_64_RELATIVE
+                                || rel.r_type == goblin::elf::reloc::R_X86_64_64
+                                || rel.r_type == goblin::elf::reloc::R_X86_64_GLOB_DAT
+                        })
+                        .map(|rel| rel.r_offset)
+                        .collect();
+                    // Slot-bytes reader over PROGBITS sections (the same
+                    // vaddr->file mapping model the httpd driver uses for
+                    // its DATASYM rule): a slot carries pointer evidence
+                    // when a relocation marks it OR its initialized bytes
+                    // read as the all-zero NULL terminator (trailing-null
+                    // pointer tables). Unmapped slots (.bss) carry none.
+                    let progbits: Vec<(u64, u64, u64)> = elf
+                        .section_headers
+                        .iter()
+                        .filter(|sh| sh.sh_type == 1 && sh.sh_size > 0)
+                        .map(|sh| (sh.sh_addr, sh.sh_offset, sh.sh_size))
+                        .collect();
+                    let byte_at = |vaddr: u64| -> Option<u8> {
+                        progbits
+                            .iter()
+                            .find(|&&(a, _, sz)| vaddr >= a && vaddr < a + sz)
+                            .map(|&(a, off, _)| (off + (vaddr - a)) as usize)
+                            .and_then(|i| image.get(i).copied())
+                    };
+                    let size_usize = size as usize;
+                    let dtype = if size_usize > 10 {
+                        let (element, count) = if size_usize % 8 == 0 {
+                            let slot_is_pointer = |slot: u64| -> bool {
+                                pointer_reloc_slots.contains(&slot)
+                                    || (0..8).all(|k| byte_at(slot + k) == Some(0))
+                            };
+                            let all_pointer_slots = (0..size_usize / 8)
+                                .all(|i| slot_is_pointer(address + (i as u64) * 8));
+                            if all_pointer_slots {
+                                (
+                                    rugra::type_system::typefactory::TypeFactory::shared_default()
+                                        .write()
+                                        .unwrap()
+                                        .get_type_pointer_default(undefined1()),
+                                    size_usize / 8,
+                                )
+                            } else {
+                                (undefined8(), size_usize / 8)
+                            }
+                        } else {
+                            (undefined1(), size_usize)
+                        };
+                        rugra::type_system::typefactory::TypeFactory::shared_default()
+                            .write()
+                            .unwrap()
+                            .get_array(element, count)
+                    } else {
+                        std::sync::Arc::new(
+                            rugra::type_system::datatype::Datatype::Base(
+                                rugra::type_system::datatype::TypeBase::new(
+                                    format!("undefined{size}"),
+                                    size_usize,
+                                    rugra::type_system::datatype::TypeMetatype::Unknown,
+                                ),
+                            ),
+                        )
+                    };
                     let scope = db.global_scope_id;
                     let _ = db.add_symbol_mapped(
                         scope,
@@ -4284,13 +4680,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 };
                 let mut typed = 0usize;
                 // The strings-analyzer split: untyped referenced data gets
-                // the DAT label's undefined8 (pointer-slot width — see the
-                // entry_size note below); string-classified addresses get
-                // char[len+1].
-                let undefined8 = rugra::type_system::typefactory::TypeFactory::shared_default()
+                // the DAT label's undefined (1-byte — see the entry_size
+                // note below for the SPAN width); string-classified
+                // addresses get char[len+1].
+                // CURLWIRE-SIGLOCK-WIRING-0001: the TYPE is the 1-byte
+                // undefined base, matching the oracle's untyped-data
+                // product — canon's `puts(&DAT_00107180)` runs
+                // ActionSetCasts' CALL arm with cur =
+                // pointer-to-undefined1, where castStandard's
+                // pointer-to-unknown rule (cast.cc:374-375) suppresses
+                // the cast; an undefined8 pointee sizes 1 vs 8 against
+                // the locked char* param and cast.cc:337 inserts the
+                // spurious `(char *)&DAT` prefix. The 8-byte ENTRY span
+                // below is unchanged (the pointer-slot-width
+                // mapGlobals/overlap concern is about the span, not the
+                // type).
+                let undefined1 = rugra::type_system::typefactory::TypeFactory::shared_default()
                     .write()
                     .unwrap()
-                    .get_base(8, rugra::type_system::datatype::TypeMetatype::Unknown);
+                    .get_base(1, rugra::type_system::datatype::TypeMetatype::Unknown);
                 // STRCONST-SPANNONOVERLAP: the oracle's Program DB Data layout
                 // is strictly non-overlapping (Ghidra cannot create Data over
                 // bytes another Data covers), and the strings-analyzer
@@ -4340,7 +4748,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     }
                     let is_string = string_addrs.contains_key(address);
                     let dtype =
-                        dtype.or_else(|| undefined8.clone());
+                        dtype.or_else(|| undefined1.clone());
                     if !is_string {
                         // STRCONST-SPANNONOVERLAP: greatest admitted string
                         // start <= address (rodata_dat_entries iterates in
@@ -4443,6 +4851,13 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                         .unwrap()
                         .get_type_pointer_default(base)
                 };
+                // ELF OBJECT symbols take their size-derived undefined width
+                // (8 for this corpus's slots) — distinct from the .rodata
+                // DAT label type above (CURLWIRE: 1-byte undefined).
+                let undefined8 = rugra::type_system::typefactory::TypeFactory::shared_default()
+                    .write()
+                    .unwrap()
+                    .get_base(8, rugra::type_system::datatype::TypeMetatype::Unknown);
                 for &(address, ref name, size, pointer_slot) in &request.db_symbol_entries {
                     if dwarf_display_names.contains_key(&address) {
                         continue;
@@ -5136,6 +5551,28 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         relinked,
         noreturn_marked
     );
+
+    // CURLWIRE-SIGLOCK-WIRING-0001: install the callee locked prototypes
+    // on this function's call sites AFTER link_call_specs (callspecs
+    // exist and carry their fspec varnodes; the manifest's canon
+    // call-site truth wins over the DWARF/libc installs where both cover
+    // a callee) and BEFORE the action pipeline (ActionPrototypeTypes'
+    // locked arms, ActionFuncLink's inputlocked attach, and — the lane's
+    // src half — ActionSetCasts::cast_input's CALL arm consuming
+    // TypeOpCall::getInputLocal all run inside perform_action). Gate
+    // form mirrors the httpd V3SIG install position (post-inject,
+    // pre-pipeline) and rides the same callspec channel switch so
+    // RUGRA_DISABLE_CALLSPEC_LINK stays the full channel kill-switch.
+    if callspec_link_enabled {
+        if let Some(table) = callee_siglock_table() {
+            if let Some(types) = fd.arch.as_ref().and_then(|arch| arch.types.clone()) {
+                let locked = install_callee_siglock_protos(&mut fd, table, &types);
+                if locked > 0 {
+                    eprintln!("[PREPASS] {} v3sig: {} callee protos locked", target.name, locked);
+                }
+            }
+        }
+    }
 
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
     fd_arc

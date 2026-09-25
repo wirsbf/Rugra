@@ -11187,7 +11187,11 @@ impl PrintLanguage for PrintC {
             false
         };
         if !emitted_absolute_indent {
-            self.emit.tag_line(indent);
+            // printlanguage.cc:597 emit->tagLine(indent) — the ONE-ARGUMENT
+            // absolute virtual for every emitter that is not EmitNoMarkup
+            // (the NoMarkup bytes were reproduced in the branch above):
+            // line_t token, column = indent regardless of nesting depth.
+            self.emit.tag_line_indent(indent);
         }
         // cc:598: int4 id = emit->startComment(); — NOT a markup-only call:
         // on the oracle's EmitPrettyPrint (the PrintLanguage emitter,
@@ -11225,7 +11229,8 @@ impl PrintLanguage for PrintC {
                 self.emit.print(&" ".repeat(count));
             } else if tok == '\n' {
                 // cc:616-617: a newline inside the comment body breaks the line.
-                self.emit.tag_line(indent);
+                // (Absolute one-argument virtual, same as the entry break.)
+                self.emit.tag_line_indent(indent);
             } else if tok == '\r' {
                 // cc:618-619: carriage returns are dropped.
             } else if tok == '{' && pos < chars.len() && chars[pos] == '@' {
@@ -14348,12 +14353,10 @@ impl PrintC {
             return;
         }
         // printc.cc:3211-3213: tagLine(0); emitLabel(bl); print(COLON).
-        // tagLine(0) is the ABSOLUTE-indent virtual (line_t): the label
-        // lands at column 0 regardless of the current indent stack
-        // (prettyprint.cc:674-675) — the merged tag_line(0) transport
-        // printed it at the relative indent level (MIRROR2 label-indent
-        // family).
-        self.emit.tag_line_at(0);
+        // tagLine(0) is the ONE-ARGUMENT absolute virtual (hh:180): the
+        // label lands at column 0 regardless of nesting depth — NOT the
+        // relative tagLine() break at the current indent level.
+        self.emit.tag_line_indent(0);
         self.emit.print(&format!("{}:", self.code_label(addr)));
     }
 
@@ -14424,9 +14427,9 @@ impl PrintC {
                     return;
                 }
                 if self.printed_labels.insert(addr) {
-                    // printc.cc:3211: absolute-indent tagLine(0) — column 0
-                    // regardless of nesting (see emit_label_statement).
-                    self.emit.tag_line_at(0);
+                    // printc.cc:3211 tagLine(0) — absolute column 0 (the
+                    // one-argument virtual), not the relative tagLine().
+                    self.emit.tag_line_indent(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             } else if matches!(
@@ -14457,9 +14460,9 @@ impl PrintC {
                     && self.pending_goto_labels.contains(&addr)
                     && self.printed_labels.insert(addr)
                 {
-                    // printc.cc:3211: absolute-indent tagLine(0) — column 0
-                    // regardless of nesting (see emit_label_statement).
-                    self.emit.tag_line_at(0);
+                    // printc.cc:3211 tagLine(0) — absolute column 0 (the
+                    // one-argument virtual), not the relative tagLine().
+                    self.emit.tag_line_indent(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             }

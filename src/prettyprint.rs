@@ -117,28 +117,29 @@ pub trait Emit {
     /// Tag a case label for markup
     fn tag_case_label(&mut self, text: &str);
 
-    // RUGRA-GLUE: tag_line (no Ghidra counterpart found)
-    /// Tag a statement line
+    // Ghidra: prettyprint.hh:173 Emit::tagLine() (relative form transport)
+    /// Tag a statement line — the merged no-argument `tagLine()` virtual:
+    /// a line break at the CURRENT indent level (EmitNoMarkup prints
+    /// `indentlevel` spaces, prettyprint.hh:557-558; EmitPrettyPrint emits
+    /// a bump_t token, prettyprint.hh:918-920). The `indent` parameter is
+    /// vestigial: every oracle no-arg call site maps to 0 here.
     fn tag_line(&mut self, _indent: i32) {}
 
     // Ghidra: prettyprint.hh:180 Emit::tagLine(int4 indent)
-    /// The oracle's DISTINCT `tagLine(int4 indent)` virtual: a forced line
-    /// break whose indent is ABSOLUTE (column `indent`), independent of the
-    /// current indent stack (line_t, prettyprint.hh:922-923; fired in
-    /// EmitPrettyPrint::print's tokenbreak arm, prettyprint.cc:674-675:
-    /// `spaceremain = maxlinesize - tok.getIndentBump()`). The only oracle
-    /// caller is PrintC::emitLabelStatement (printc.cc:3211 `tagLine(0)`) —
-    /// goto labels print at column 0 regardless of nesting. This is NOT the
-    /// same virtual as plain `tagLine()`; Rugra's merged `tag_line(indent)`
-    /// transport could not express indent==0-as-absolute (the `indent > 0`
-    /// split routed 0 to the relative bump_t form, indented labels —
-    /// MIRROR2 label-indent family), hence this separate method. Default
-    /// delegates to the emitter's plain line transport for no-op emitters,
-    /// matching the oracle's per-class overrides (EmitNoMarkup absolute
-    /// spaces, prettyprint.hh:558-560; EmitPrettyPrint line_t).
-    fn tag_line_at(&mut self, indent: i32) {
-        self.tag_line(indent);
-    }
+    /// Absolute-column line break — the one-argument `tagLine(int4)`
+    /// virtual the oracle keeps SEPARATE from the no-argument form:
+    /// endl + exactly `indent` spaces, ignoring the current indent level
+    /// (EmitNoMarkup, prettyprint.hh:559-560) / a line_t token whose
+    /// indentbump is the absolute column (EmitPrettyPrint,
+    /// prettyprint.hh:922-924; break path prettyprint.cc:674-676 sets
+    /// `spaceremain = maxlinesize - indentbump` then
+    /// `lowlevel->tagLine(maxlinesize-spaceremain)`).
+    /// Oracle production call sites: printc.cc:3211 emitLabelStatement
+    /// `emit->tagLine(0)` — goto labels land at column 0 regardless of
+    /// nesting depth — and printlanguage.cc:597 emitLineComment
+    /// `emit->tagLine(indent)` — comment continuation at an absolute
+    /// column. Negative indent clamps to zero spaces (hh:560 `i>0` loop).
+    fn tag_line_indent(&mut self, _indent: i32) {}
 
     // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (PendPrint slot)
     /// Install a cancelable deferred open-brace (printc.cc:2872-2876
@@ -3230,11 +3231,15 @@ impl Emit for EmitNoMarkup {
         self.do_indent();
     }
 
-    // Ghidra: prettyprint.hh:558 EmitNoMarkup::tagLine(int4 indent)
-    /// The absolute-indent form: `*s << endl; for(i=indent;i>0;--i)
-    /// *s << ' ';` — the newline plus exactly `indent` literal spaces,
-    /// ignoring this emitter's indent-level counter.
-    fn tag_line_at(&mut self, indent: i32) {
+    // Ghidra: prettyprint.hh:559 EmitNoMarkup::tagLine(int4 indent)
+    fn tag_line_indent(&mut self, indent: i32) {
+        // hh:559-560: `*s << endl; for(int4 i=indent;i>0;--i) *s << ' ';`
+        // — the indent is the raw ABSOLUTE column (negative clamps to zero
+        // spaces), NOT the current indent level. The at-line-start newline
+        // guard matches this emitter's tag_line adaptation above (no
+        // stacked blank lines); production label sites always follow a
+        // `;`/`}` token so the guard never differs from the unconditional
+        // oracle endl there.
         if !self.output.ends_with('\n') {
             self.output.push('\n');
         }
@@ -4413,36 +4418,41 @@ impl Emit for EmitPrettyPrint {
         self.print(brace);
     }
 
-    // Ghidra: prettyprint.cc:917 EmitPrettyPrint::tagLine /
-    //          prettyprint.cc:927 EmitPrettyPrint::tagLine(int4)
-    /// `indent == 0` is the oracle's plain `tagLine()` (relative break at
-    /// the current indent level); a positive indent is the absolute
-    /// one-line override (line_t, prettyprint.hh:922-923).
+    // Ghidra: prettyprint.cc:917 EmitPrettyPrint::tagLine
+    /// Relative line break — bump_t token (prettyprint.hh:918-920):
+    /// `tagtype=bump_t; numspaces=999999; indentbump=0`, i.e. break at the
+    /// current indentstack level. All remaining callers pass 0 (the merged
+    /// transport of the oracle's no-argument virtual); the absolute
+    /// one-argument form moved to `tag_line_indent`.
     fn tag_line(&mut self, indent: i32) {
-        // prettyprint.cc:920/930: emitPending() runs BEFORE checkbreak —
+        // prettyprint.cc:920: emitPending() runs BEFORE checkbreak —
         // a deferred brace (PendingBrace, printc.cc:2872-2880) fires right
         // here, pushing its space + '{' tokens ahead of this line-break
         // token so the bytes read `... else {`.
         self.emit_pending();
         self.checkbreak();
         let tok = self.tokqueue.push();
-        if indent > 0 {
-            tok.tag_line_indent(indent);
-        } else {
-            tok.tag_line();
-        }
+        debug_assert!(
+            indent == 0,
+            "tag_line(indent>0) is the absolute form; call tag_line_indent"
+        );
+        tok.tag_line();
         self.scan();
     }
 
     // Ghidra: prettyprint.cc:927 EmitPrettyPrint::tagLine(int4 indent)
-    /// The oracle's unconditional absolute-indent line break
-    /// (prettyprint.cc:927-934): the token is ALWAYS line_t with
-    /// indentbump = indent — including indent == 0, which fires at column 0
-    /// regardless of the indent stack (prettyprint.cc:674-675). The merged
-    /// [`Self::tag_line`] transport above cannot express that (its
-    /// `indent > 0` split routes 0 to the relative bump_t form), so
-    /// emitLabelStatement's `tagLine(0)` (printc.cc:3211) lands here.
-    fn tag_line_at(&mut self, indent: i32) {
+    /// Absolute-column line break — line_t token (prettyprint.hh:922-924):
+    /// `tagtype=line_t; numspaces=999999; indentbump=indent`. On the break
+    /// path (print_token TokenBreak) line_t skips the relative-indent and
+    /// suppression arms entirely: `spaceremain = maxlinesize - indentbump`
+    /// then `low_tag_line(indentbump)` — endl + exactly `indent` spaces at
+    /// the lowlevel (prettyprint.cc:674-676). Oracle call sites:
+    /// printc.cc:3211 (label column 0), printlanguage.cc:597 (comment
+    /// continuation).
+    fn tag_line_indent(&mut self, indent: i32) {
+        // prettyprint.cc:930: emitPending() runs BEFORE checkbreak, same
+        // ordering as the relative form — a pending else-brace fires ahead
+        // of the label line break.
         self.emit_pending();
         self.checkbreak();
         let tok = self.tokqueue.push();
