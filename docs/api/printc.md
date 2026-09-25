@@ -1,5 +1,14 @@
 # `printc.rs` API Reference
 
+## 2026-09-25：无名被调者两兜底的拼写/space 通道（PRINTC-FUN-PAD-0001 / PRINTC-OPCALL-ENTRYSPACE-0001 / Lane NAMFIX）
+
+RPN `opCall`（Ghidra: printc.cc:596）的无名被调者兜底两处正确化，均为**未触发兜底**（现语料 golden 全有符号名或 driver 预拼 `FUN_{:08x}` 数据库名——curl_cur 0 处、httpd_cur 全 8 位，均不经此臂），双差分预期字节恒等：
+
+1. **FUN_ 零填充**（PRINTC-FUN-PAD-0001，P3）：canon 兜底此前 `format!("FUN_{:x}", off)` 无填充，golden 拼写为 `FUN_00102020`（8 位）。CR-MIRROR2 核定 digit 规则 = oracle `AddrSpace::printRaw`（space.cc:206-222）的 `setw(2*sz)` 契约（`sz>4` 时 `offset>>32==0` 收缩 4、else `offset>>48==0` 收缩 6；`byteToAddress` 除 wordsize）。新 helper `PrintC::print_raw_zero_pad_digits(addr_size, word_size, offset)`（`// Ghidra: space.cc:206`，digit 核心——无 `0x` 前缀无 `+cut`，即 headless 数据库名 `FUN_<digits>` 的面）；与 `func_0x` 兜底同则不同前缀。单测钉拼写：`FUN_00102020`/`FUN_0012c520` 收缩宽 8、`0x123456789ab` 宽 12、wordsize 4 除法 + 传输面 `+cut`。
+2. **opCall entry space 通道**（PRINTC-OPCALL-ENTRYSPACE-0001，P4）：`func_` 面此前硬编码 `AddressSpace::Ram`。oracle 链 = printc.cc:602 `fc->getEntryAddress()`（fspec.hh:1686）自带 space（fspec.cc:4934 ctor：CALL 注解化**前**的 in(0) varnode 完整地址）。Rugra 的 Iop 注解只镜像 offset（`new_varnode_call_specs` compatibility_offset），space 走 callspec 通道：`get_call_spec() → entry_addr`；锁序按 fspec.rs:2470-2477 快照式（varnode 守卫先释再锁 callspec）。新 helper `PrintC::entry_addr_dims(entry)`（`// Ghidra: fspec.hh:1686`）从 `Address::get_space()` registry 句柄取 `(addrsize, wordsize)`，spaceless legacy 形（`FuncCallSpecs::new_for_op` 现产 `Address::new(offset)`）回退 flat Ram 默认 (8,1)——当前语料全部路径等价。`addr_space_print_raw` base 臂重构为委托新 `addr_space_print_raw_dims`（同规则单一来源）。fspec 侧 space 填充为 fspec 车道工作（见 TODO_BOARD 该 ID 的 fspec 半项）。
+
+休眠/恒等声明：两兜底在 curl/httpd 双语料 0 次触发（FUN_ 名全部由 driver 符号表预拼写 `FUN_{:08x}`，与 digit 规则对所有可达地址逐字节等价）；legacy 孪生 `FUN_{:08x}` 两处（emit 树 + `op_call`）不属两 ID 判例面且对语料地址域（<2³² 或 0x55xx… 自然 12 位）与规则输出恒等，不动。
+
 ## 2026-09-25：标签/注释换行走 `tag_line_indent`（PRINTC-EMIT-TAGLINE-ABS-0001）
 
 `emitLabelStatement`（printc.cc:3198-3214）的 `emit->tagLine(0)` 是 Emit 的**带参
