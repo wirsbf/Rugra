@@ -1810,3 +1810,47 @@ oracle 语义逐行镜像补齐：
 
 验证：glob_word 双投影 MATCH（u:23b00 族 4 个替代 MULTIEQUAL 与 oracle
 逐字节一致）；五银行投影 MATCH 保持；curl/httpd 门禁见 lane 终报。
+
+## 2026-09-25：ruleaction 四位点构造源空间限定（RUFOUR lane，FAMILY-AUDIT-SPACELESS-SITES-0001 第四波）
+
+FAMAUDIT 第三波登记的 ruleaction×4 位点（ruleaction.cc:2035/1011/6770/9151）逐处
+对照 12.0.4 oracle 判决并修复。同族先例（XCORSS/OPZERO/SPACEFIX/FAMAUDIT）同构修法：
+`new_varnode_out`（Register 钉死）→ `new_varnode_out_full`（构造源 varnode 自身空间），
+但每处独立核对 size/space 取值语义：
+
+1. **RuleLeftRight::apply_op**（ruleaction.cc:2029-2035）：新 SUBPIECE 输出地址
+   `addr = shiftin->getAddr()` —— shiftin **自身完整存储地址**（cc:2029 在 unset 前
+   捕获；BE 时 cc:2031 `+isa`；cc:2034 `renormalize(tsz)` 仅 join 空间生效，
+   address.cc:191-194，Rugra 无 JoinRecord 存储=degraded glue）。旧代码钉死
+   Register@0x1000（空间与偏移双错）。→ `new_varnode_out_full(tsz, shiftin_space,
+   newaddr)`。
+2. **RulePullsubIndirect::apply_op**（ruleaction.cc:993-996/1011）：`smalladdr2 =
+   vn->getAddr()+minByte`（LE）—— **INDIRECT 输出 vn 自身空间**；与 creation 分支
+   （`new_indirect_creation_in_space` 已传 vn_space）同源。→ `new_varnode_out_full(
+   new_size, vn_space, smalladdr2)`。
+3. **RulePushPtr::build_varnode_out**（ruleaction.cc:6765-6771）：守卫
+   `vn->getSpace()->getType() == IPTR_INTERNAL` = **Unique** 空间（旧代码误测
+   `AddressSpace::Iop` = IPTR_IOP，2e63227a 移植笔误；ZEXT/SEXT/2COMP/MULT 的
+   duplicated 输出几乎全在 unique 空间，误走 new_varnode_out 会造 Register@unique
+   偏移伪 varnode）；构造臂 `newVarnodeOut(vn->getSize(), vn->getAddr(), op)` =
+   vn 自身空间。→ 守卫 `space.is_unique()` + `new_varnode_out_full(size, space,
+   addr)`。
+4. **RulePtrFlow::truncate_pointer**（ruleaction.cc:9146-9152）：截断指针输出
+   `addr = vn->getAddr()` = vn 自身空间；**cc:9148 `addr.isBigEndian()` 读的是
+   addr 携带空间（=vn 空间）的端序**，旧代码误读指针目标空间 `spc`（源错误；
+   Rugra AddressSpace 端序谓词当前为 LE 枚举 stub，x86-64 oracle 全 LE=行为
+   等价）；`renormalize(addrSize)` 同 join-only。→ `new_varnode_out_full(
+   addr_size, vn_space, addr_val)` + BE 源改 `vn_space`。
+
+注解漂移顺带纠正（触碰函数内）：RuleLeftRight::applyOp cc:2030→**2010**（定义
+起始行）、RulePushPtr::buildVarnodeOut cc:6783→**6765**、RulePtrFlow::
+truncatePointer cc:9154→**9136**。邻接登记（本 lane 不动）：duplicate_need 注解
+`ruleaction.cc:7469` 事实错误（真定义 6809，P4 LINEREF，wave-4 编辑域外）；
+coreaction 三位点（cc:699/1551/1451）为 CSPEC2 并行车道登记项。
+
+验证（亲父 aa4fa7d4 A/B，release 亲测）：curl 探针触发 26 次
+（18×Unique 走守卫翻正的新 fresh-unique 分支 + 8×Register 构造臂=旧钉同值），
+httpd 0 次；位点 1/2/4 双语料休眠。双语料默认态输出与亲父 cmp **字节恒等**
+（=触发位点等价性实证，非休眠）+ 双跑确定性；curl/httpd canon golden 双零；
+三门禁+bank 391/391+cargo test --lib 亲父谱系同败——见 lane 终报
+（/dev/shm/rugra-reports/LANE_RUFOUR_2026-09-25.md）。
