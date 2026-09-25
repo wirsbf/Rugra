@@ -20,7 +20,12 @@
   outvn def-facing（`_fd` 参数更名 `fd` 以供孪生穿参）；
 - `RuleExpandLoad::apply_op` 三读+outVn（cc:10937/10940/10943/10964）——**defOp 与 op
   两键分派**：10937 用 defOp 读 real_root（=def->getIn(0)）slot 0，10940/10943 用
-  LOAD op 读 root_ptr（=op->getIn(1)）slot 1，10964 outVn def-facing；
+  LOAD op 读 root_ptr（=op->getIn(1)）slot 1，10964 outVn def-facing。**2026-09-26
+  （RASWEEP 车道，RULEACTION-EXPANDLOAD-NONCONST-0001）**：arm 门对齐 cc:10927 合取
+  条件 `defOp->code()==CPUI_INT_ADD && defOp->getIn(1)->isConstant()`——defOp 为
+  INT_ADD 但 in(1) 非常量时不再提前 `NO_CHANGE`，而是落入 else 臂：addOp=None、
+  offset=0、elType 以 LOAD op 键从原 root_ptr 读取（cc:10940/10943 路径），规则
+  仍可触发；
 - `RulePushPtr::apply_op`（cc:6854）——op 读 in(s) slot s；
 - `RulePtrArith::verify_preferred_pointer`（cc:6548/6550）——preOp 读 in(preslot)
   slot preslot，**加 fd 参数**；

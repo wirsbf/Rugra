@@ -13552,10 +13552,23 @@ impl Rule for RuleExpandLoad {
             if root_ptr.read().unwrap().is_written() {
                 let def = match root_ptr.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
                 };
-                if def.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+                // cc:10927 conjunctive arm gate: `defOp->code() == CPUI_INT_ADD
+                // && defOp->getIn(1)->isConstant()`. A non-constant addend (or
+                // a non-INT_ADD definer) makes the conjunction false and falls
+                // to the else arm with addOp left None, offset 0, and elType
+                // read from the ORIGINAL rootPtr facing the LOAD op — the rule
+                // can still fire (RULEACTION-EXPANDLOAD-NONCONST-0001).
+                let def_is_const_add = {
+                    let d = def.read().unwrap();
+                    d.opcode == OpCode::CPUI_INT_ADD
+                        && d
+                            .get_in(1)
+                            .map(|v| v.read().unwrap().is_constant())
+                            .unwrap_or(false)
+                };
+                if def_is_const_add {
                     let in1 = match def.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
                     };
-                    if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
                     let off = in1.read().unwrap().get_offset();
                     if off > 16 { return Ok(action_status::NO_CHANGE); } // INT_ADD offset must be small
                     // INT_ADD must be used only once.
