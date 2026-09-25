@@ -284,6 +284,7 @@ fn build_action_data_symbol_db(
 ) -> rugra::database::Database {
     use rugra::database::symbol_flags;
     use rugra::type_system::datatype::{Datatype, TypeArray, TypeBase, TypeMetatype};
+    use rugra::type_system::typefactory::TypeFactory;
     use std::sync::Arc;
 
     let mut db = rugra::database::Database::new(false);
@@ -395,6 +396,81 @@ fn build_action_data_symbol_db(
     }
 
     // (2) Defined dynsym STT_OBJECT data symbols.
+    // DATASYM object typing (V3SIG-UND224-TYPEORDER-0001): TypeFactory's
+    // getBase never materializes an unknown scalar wider than
+    // max_basetype_size == 10 — type.cc:3652-3657 answers sizes above that
+    // with undefined[size], a byte array. The analyzeHeadless transport
+    // therefore cannot carry a 224-byte "undefined224" scalar, and the
+    // driver's former undefined_t(st_size) fabricated an input form the
+    // locked oracle cannot produce (both canon goldens contain zero such
+    // scalars). Mirror the oracle's real input forms instead:
+    //   - a symbol whose whole extent is relocated 8-byte pointer slots
+    //     serializes as undefined *[size/8] — the W6 oracle witness
+    //     (/dev/shm/rugra-tests/typeorder/o_w6_proto_arrayptr.c), whose
+    //     loop output is the canon main family (`ppuVar14 =
+    //     &ap_prelinked_modules; puVar1 = *ppuVar14 ... ppuVar14 = ppuVar14
+    //     + 1`, zero casts);
+    //   - other 8-divisible sizes take undefined8[size/8] (W5 witness);
+    //   - remaining >10 sizes take getBase's own undefined[size] array;
+    //   - sizes <= 10 keep the named scalar (a genuine getBase product).
+    let pointer_reloc_slots: std::collections::HashSet<u64> = elf
+        .dynrelas
+        .iter()
+        .filter(|rel| {
+            rel.r_type == goblin::elf::reloc::R_X86_64_RELATIVE
+                || rel.r_type == goblin::elf::reloc::R_X86_64_64
+                || rel.r_type == goblin::elf::reloc::R_X86_64_GLOB_DAT
+        })
+        .map(|rel| rel.r_offset)
+        .collect();
+    let object_datatype = |addr: u64, size: usize| -> Arc<Datatype> {
+        let undefined1 = || {
+            Arc::new(Datatype::Base(TypeBase::new(
+                "undefined".to_string(),
+                1,
+                TypeMetatype::Unknown,
+            )))
+        };
+        if size > 10 {
+            let (element, count) = if size % 8 == 0 {
+                // A slot carries pointer evidence when a relocation marks
+                // it as a pointer target OR its initialized bytes read as
+                // the all-zero NULL terminator (ap_prelinked_modules is
+                // 27 relocated module pointers + 1 trailing NULL — Ghidra's
+                // address-table analysis extends the pointer array through
+                // the null tail; readelf: 0x9d2c0..0x9d390 RELATIVE,
+                // 0x9d398 zero bytes). Unmapped slots (.bss buffers, no
+                // reloc, no bytes) carry no evidence.
+                let slot_is_pointer = |slot: u64| -> bool {
+                    pointer_reloc_slots.contains(&slot)
+                        || (0..8).all(|k| byte_at(slot + k) == Some(0))
+                };
+                let all_pointer_slots =
+                    (0..size / 8).all(|i| slot_is_pointer(addr + (i as u64) * 8));
+                if all_pointer_slots {
+                    // Whole-extent pointer table -> undefined*[] (W6 form).
+                    (
+                        TypeFactory::shared_default()
+                            .write()
+                            .unwrap()
+                            .get_type_pointer_default(undefined1()),
+                        size / 8,
+                    )
+                } else {
+                    // Integer-slot table -> undefined8[] (W5 form).
+                    (undefined_t(8), size / 8)
+                }
+            } else {
+                // getBase's own >10 auto form: undefined[size] bytes.
+                (undefined1(), size)
+            };
+            return TypeFactory::shared_default()
+                .write()
+                .unwrap()
+                .get_array(element, count);
+        }
+        undefined_t(size)
+    };
     for sym in elf.dynsyms.iter() {
         if sym.st_value == 0 || sym.st_type() != goblin::elf::sym::STT_OBJECT {
             continue;
@@ -407,7 +483,7 @@ fn build_action_data_symbol_db(
         if let Some(sym_id) = db.add_symbol_mapped(
             global_scope_id,
             name,
-            Some(undefined_t(size)),
+            Some(object_datatype(sym.st_value, size)),
             Address::new(sym.st_value),
             size as i32,
         ) {
