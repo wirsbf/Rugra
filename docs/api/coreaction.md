@@ -1407,7 +1407,10 @@ calculated-bool 与完整 prototype consumer 仍为 `CALLSPEC-0001`/`UNTESTED`�
 
 - ActionFuncLink::apply（coreaction.cc:1575-1586）：遍历 callspecs，func_link_input + func_link_output
 - func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
-- func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
+- func_link_output（1521-1572）：unlocked→init_active_output；locked 非 void→
+  Stack 存储走 cc:1546-1550 延迟臂（set_stack_output_lock），
+  其余 `new_varnode_out_full(sz, spc, off, callop)`（cc:1551 输出参数完整
+  存储空间，2026-09-25 第五波）；extension（cc:1552-1568）仍绑定 `CALLSPEC-0001`
 - ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output
 
 ### 2026-06-30（历史声明，2026-08-24 D0 审计已撤回“完整移植”）：func_link_output void 门控 + known_return_type 表
@@ -1961,9 +1964,11 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
     baselist 序全等——见 arch.rs TrackedSetMap 排序 caveat）；快照 `to_vec()`
     结束不可变借用后再进变异循环（Ghidra 引用指向全局 context，循环不触其变异）；
   - cc:694-704 每 tracked ctx：`Address(ctx.loc.space,ctx.loc.offset)` →
-    `Address::new(ctx.loc.offset)`（`new_varnode_out` 钉 Register 空间——DF
-    register:0x20a:1 正确；非 register tracked loc 需 space-aware vbank create，
-    已注释登记）→ `new_op(1, bb.get_start_addr())` → `new_varnode_out(size,addr,op)`
+    `ctx.loc.space` 空间直接穿参 `new_varnode_out_full(size, ctx.loc.space,
+    Address::new(ctx.loc.offset), op)`（2026-09-25 第五波前为 `Address::new
+    (ctx.loc.offset)` + `new_varnode_out` Register 钉——DF register:0x20a:1
+    恰同值，非 register tracked loc 空间现为 exact-general 传递）
+    → `new_op(1, bb.get_start_addr())`
     → `new_constant(size, ctx.val)` → `op_set_opcode(CPUI_COPY)` →
     `op_set_input(op,vnin,0)` → `op_insert_begin(op,&bb)`（多 ctx 时逆序居块头，
     与 opInsertBegin 语义一致）；
@@ -3307,3 +3312,42 @@ golden）**：CALLSPEC ② 桶唯余 `void(*)()param_2` vs
 `code *UNRECOVERED_JUMPTABLE` 命名差——本消费者+FAMAUDIT setter 落地后
 收口；类型前缀族（xunknown8/int8/int2）为全局类型脸残差在案；
 Rugra 侧 `switch() {}` 空体残片为截断路径独立残差（blockaction/printc 域）。
+
+## 2026-09-25：第五波 coreaction 三位点空间穿参（FAMILY-AUDIT-SPACELESS-SITES-0001 ⑧，Lane COREFIVE）
+
+RUFOUR 第四波登记的 coreaction 三位点（锚点 coreaction.cc:695-705 /
+1545-1556 / 1445-1460）逐处判读后，构造源 (space,offset) 三元组全部改为
+与 oracle 同源穿参（先例：XCORSS/OPZERO/SPACEFIX/FAMAUDIT/RUFOUR 同构修法）：
+
+1. **ActionConstbase::apply tracked-restore**（cc:697-699）：`Address
+   addr(ctx.loc.space,ctx.loc.offset)` 的空间=tracked loc 自身空间（pspec
+   `<set>` 经 register map name 臂解析或显式 space 属性）→
+   `new_varnode_out_full(ctx.loc.size, ctx.loc.space, Address::new(offset), op)`；
+   旧 Register 钉在 x86-64 DF（register:0x20a:1）恰同值。
+2. **ActionFuncLink::funcLinkOutput**（cc:1545-1551）：`addr =
+   outparam->getAddress()` 为输出参数完整存储地址（cc:1546 IPTR_SPACEBASE
+   →Stack 延迟臂维持）→ `new_varnode_out_full(sz, spc, Address::new(off),
+   callop)`；trial-commit 锁定路径经 set_output_parameter 记录 varnode 自身
+   空间（可为 Join——SPACEFIX build_return_output 8+8 分裂返回），旧 Register
+   钉对 Join 锁定输出错。无存储回退臂（decode 通道 ADDRESS-0001 残差）维持。
+3. **ActionExtraPopSetup::apply**（cc:1443-1452）：`sb_addr =
+   Address(point.space, point.offset)`，point=`stackspace->getSpacebase(0)`，
+   其空间=栈指针寄存器自身空间 → `new_varnode_out_full(sb_size,
+   arch.stack_pointer_space, Address::new(sb_offset), op)`（输入臂
+   `create_with_space(sb_space,…)` 先已同源）；x86-64 RSP=register:0x20，
+   旧 Register 钉恰为 oracle 真值（RUFOUR 判例警示在此侧成立）。
+
+**触发实证**（release 默认态，探针 `[DBG] COREFIVE` 提交前已删）：三位点
+全热非休眠——curl：site1 constbase 125 次（全 Register，size=1 DF）、
+site2 funclink-output 113 次（73×sz8+40×sz4 全 Register）、site3 extrapop
+342 次（全 Register extrapop=8 INT_ADD 臂）；httpd：site1 36、site3 361
+（同形全 Register）、site2 0。x86-64 全语料空间新旧同值 →
+curl/httpd 默认态输出与亲父 35ac53c8 cmp 字节恒等（92315B/55922B，
+base==probe==final 三态 + 双跑确定性恒等）=等价性实证（非休眠）；
+Join/Stack-delay/无存储回退臂在双语料 0 触发，correct-by-construction。
+
+**门禁**：compare 双门禁双零（curl 124 函数 defects=0/numbering=0；
+httpd 34 函数双零）；投影 bank 391/391 OK；cargo test --lib 1713P/1F
+（test_nonzeromask_pipeline_wiring 预存谱系同败，fspec NZMask 路径与本
+diff 零交集）；annotations/refs 全绿。coreaction 主管线域=机制 B 白名单
+（Differential 块见 commit）；机制 C 单点同构+五波先例声明，独立 CR 待 root。
