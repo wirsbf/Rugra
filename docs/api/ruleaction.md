@@ -2058,3 +2058,10 @@ buildExtra 6408→6390 / findSubpiece 1005→849。
 AddrSpace::byteToAddress（跨文件 space.hh 定义、引 ruleaction.cc:6294 调用
 点，既有风格，checker 有效）；`check_ghidra_refs --all --strict` 绿。
 注释-only 15 行，函数体零改动。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

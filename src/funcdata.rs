@@ -687,7 +687,7 @@ impl Funcdata {
             stack_pointer_size: 8,
             stack_grows_negative: true,
         };
-        // Ghidra: funcdata.cc:48 Funcdata::Funcdata
+        // Ghidra: funcdata.cc:34 Funcdata::Funcdata
         // `glb = scope->getArch();` — construction-time Architecture
         // binding (funcdata.cc:49 `minLanedSize = glb->...` tail runs in
         // set_arch). Canonical default stands in until a caller attaches
@@ -1307,7 +1307,7 @@ impl Funcdata {
     /// mirroring the named-ctor chain so a later locked-prototype overlay
     /// (DWARF/PLT) can never observe `model_locked && !has_model`.
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
-        // Ghidra: funcdata_varnode.cc:69 Funcdata::newConstant
+        // Ghidra: funcdata_varnode.cc:66 Funcdata::newConstant
         // Every newVarnode* caller supplies a Datatype from this Funcdata's
         // Architecture-owned `glb->types`.  Rugra's bank resolves that
         // required argument internally, so attach the identical factory
@@ -1720,7 +1720,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_varnode.cc:1207 Funcdata::linkSymbolReference
+    // Ghidra: funcdata_varnode.cc:1193 Funcdata::linkSymbolReference
     // (scope->queryContainer call site) + coreaction.cc:1151
     // (data.getScopeLocal()->getParent()->queryContainer call site)
     /// The Funcdata query channel into the faithful `Database`/`Scope`
@@ -2265,7 +2265,7 @@ impl Funcdata {
         op.0.write().unwrap().flags |= masked;
     }
 
-    // Ghidra: funcdata_op.cc:21 Funcdata::opSetOpcode
+    // Ghidra: funcdata_op.cc:25 Funcdata::opSetOpcode
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
     pub fn op_set_opcode(&mut self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
@@ -2873,7 +2873,7 @@ impl Funcdata {
     /// Faithful to `BlockGraph::moveOutEdge` (block.cc). This redirects the
     /// edge by updating both the source's outgoing list and the old/new
     /// destinations' incoming lists.
-    // Ghidra: block.cc:1439 BlockGraph::moveOutEdge
+    // Ghidra: block.cc:1502 BlockGraph::moveOutEdge
     /// Move an out-edge of `bb` (at `slot`) to `bbnew`. Faithful to
     /// `BlockGraph::moveOutEdge` (block.cc:1439-1449): capture the target
     /// `outbl` and its in-slot `i` from the edge's reverse_index, then run
@@ -3177,7 +3177,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:328 Funcdata::removeDoNothingBlock
+    // Ghidra: funcdata_block.cc:327 Funcdata::removeDoNothingBlock
     /// Remove a basic block that does nothing (only marker ops + optional
     /// single branch). Faithful to `Funcdata::removeDoNothingBlock`
     /// (funcdata_block.cc:328-337): setDead, blockRemoveInternal(bb,false),
@@ -3547,7 +3547,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:835 Funcdata::nodeSplitBlockEdge
+    // Ghidra: funcdata_block.cc:824 Funcdata::nodeSplitBlockEdge
     /// Create a duplicate block that inherits the same out-edges but only the
     /// one indicated in-edge, which is moved from the original block.
     /// Faithful to `Funcdata::nodeSplitBlockEdge` (funcdata_block.cc:835-848).
@@ -3592,7 +3592,7 @@ impl Funcdata {
         bprime
     }
 
-    // Ghidra: funcdata_block.cc:856 Funcdata::nodeSplit
+    // Ghidra: funcdata_block.cc:845 Funcdata::nodeSplit
     /// Split control-flow into a basic block, duplicating its p-code into a
     /// new block. Faithful to `Funcdata::nodeSplit` (funcdata_block.cc:856-882).
     pub fn node_split(
@@ -8285,7 +8285,7 @@ impl Funcdata {
     // Expression normalization (funcdata_op.cc:1132-1500)
     // =========================================================================
 
-    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
+    // Ghidra: funcdata_op.cc:1130 Funcdata::collapseIntMultMult
     /// Fold two chained constant INT_MULTs into one. Faithful to
     /// `Funcdata::collapseIntMultMult` (funcdata_op.cc:1132-1153). Given
     ///   vn = INT_MULT(A, c1)
@@ -8377,7 +8377,7 @@ impl Funcdata {
         true
     }
 
-    // Ghidra: funcdata_op.cc:1161 Funcdata::buildCopyTemp
+    // Ghidra: funcdata_op.cc:1159 Funcdata::buildCopyTemp
     /// Return a unique-space Varnode defined by a COPY of `vn`, available at
     /// `point`. Faithful to `Funcdata::buildCopyTemp` (funcdata_op.cc:1161-1213).
     /// If a preexisting COPY into unique space exists and is usable at `point`,
@@ -8526,7 +8526,7 @@ impl Funcdata {
         out_vn
     }
 
-    // Ghidra: funcdata_op.cc:1223 Funcdata::opFlipInPlaceTest
+    // Ghidra: funcdata_op.cc:1221 Funcdata::opFlipInPlaceTest
     /// Trace a boolean value to the set of PcodeOps whose opcodes must flip to
     /// negate it. Faithful to `Funcdata::opFlipInPlaceTest`
     /// (funcdata_op.cc:1223-1275). Returns 0 if the flip normalizes, 1 if
@@ -8653,7 +8653,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_op.cc:1282 Funcdata::opFlipInPlaceExecute
+    // Ghidra: funcdata_op.cc:1280 Funcdata::opFlipInPlaceExecute
     /// Apply the precomputed op-code flips to negate a boolean value. Faithful
     /// to `Funcdata::opFlipInPlaceExecute` (funcdata_op.cc:1282-1315). For
     /// each op in `fliplist`: look up its boolean-flip target via
@@ -8716,7 +8716,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_op.cc:1326 Funcdata::cseFindInBlock
+    // Ghidra: funcdata_op.cc:1324 Funcdata::cseFindInBlock
     /// Find a duplicate calculation of `op` that reads `vn` in block `bl`
     /// earlier than `earliest`. Faithful to `Funcdata::cseFindInBlock`
     /// (funcdata_op.cc:1326-1347). Only 1-level matches are considered: the
@@ -8774,7 +8774,7 @@ impl Funcdata {
         None
     }
 
-    // Ghidra: funcdata_op.cc:1459 Funcdata::moveRespectingCover
+    // Ghidra: funcdata_op.cc:1457 Funcdata::moveRespectingCover
     /// Move `op` past COPY/CAST ops toward `lastOp`, within its basic block,
     /// only when no data-flow interference occurs. Faithful to
     /// `Funcdata::moveRespectingCover` (funcdata_op.cc:1459-1500). The move
@@ -9621,7 +9621,7 @@ impl Funcdata {
     // Group 2: Jumptable recovery (funcdata_block.cc:427-686)
     // =========================================================================
 
-    // Ghidra: funcdata_block.cc:427 Funcdata::linkJumpTable
+    // Ghidra: funcdata_block.cc:426 Funcdata::linkJumpTable
     /// Link an existing (possibly override) jump-table to the given BRANCHIND
     /// op by setting its indirect op. Faithful to `Funcdata::linkJumpTable`
     /// (funcdata_block.cc:427-441). Returns the matching table, or `None` if
@@ -9649,7 +9649,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:464 Funcdata::installJumpTable
+    // Ghidra: funcdata_block.cc:463 Funcdata::installJumpTable
     /// Install a fresh (empty) jump-table at the given address, suitable for
     /// an override. Must be called before flow is traced. Faithful to
     /// `Funcdata::installJumpTable` (funcdata_block.cc:464-477). Returns the
@@ -9818,7 +9818,7 @@ impl Funcdata {
         Ok(crate::jumptable::RecoveryMode::Success)
     }
 
-    // Ghidra: funcdata_block.cc:555 Funcdata::earlyJumpTableFail
+    // Ghidra: funcdata_block.cc:554 Funcdata::earlyJumpTableFail
     /// Backtrack from a BRANCHIND looking for ops that might affect the
     /// destination. If an uninjected CALLOTHER is in the flow path, the
     /// jump-table analysis will fail and `FailCallother` is returned.
@@ -10039,7 +10039,7 @@ impl Funcdata {
     // Group 3: Block structure maintenance (funcdata_block.cc:28-321)
     // =========================================================================
 
-    // Ghidra: funcdata_block.cc:28 Funcdata::printBlockTree
+    // Ghidra: funcdata_block.cc:27 Funcdata::printBlockTree
     /// Print the structure tree (composite blocks) to a string. Faithful to
     /// `Funcdata::printBlockTree` (funcdata_block.cc:28-33), which delegates
     /// to `BlockGraph::printTree(s, 0)`. Rugra's `BlockGraph` has no
@@ -10058,7 +10058,7 @@ impl Funcdata {
         out
     }
 
-    // Ghidra: funcdata_block.cc:35 Funcdata::clearBlocks
+    // Ghidra: funcdata_block.cc:34 Funcdata::clearBlocks
     /// Clear both the basic-block graph and the structure tree. Faithful to
     /// `Funcdata::clearBlocks` (funcdata_block.cc:35-40).
     pub fn clear_blocks(&mut self) {
@@ -10066,7 +10066,7 @@ impl Funcdata {
         self.sblocks.clear();
     }
 
-    // Ghidra: funcdata_block.cc:43 Funcdata::clearJumpTables
+    // Ghidra: funcdata_block.cc:42 Funcdata::clearJumpTables
     /// Clear all derived jump-table data, preserving any manually-overridden
     /// tables. Faithful to `Funcdata::clearJumpTables`
     /// (funcdata_block.cc:43-60): for an override the table object survives
@@ -10305,7 +10305,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:178 Funcdata::opZeroMulti
+    // Ghidra: funcdata_block.cc:177 Funcdata::opZeroMulti
     /// If the MULTIEQUAL has no inputs, treat it as a COPY from a new input
     /// Varnode; if it has one input, transform it directly into a COPY.
     /// Faithful to `Funcdata::opZeroMulti` (funcdata_block.cc:178-188).
@@ -10343,7 +10343,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:196 Funcdata::branchRemoveInternal
+    // Ghidra: funcdata_block.cc:195 Funcdata::branchRemoveInternal
     /// Remove an outgoing branch of the given basic block, patching
     /// MULTIEQUAL p-code ops in the target block. Faithful to
     /// `Funcdata::branchRemoveInternal` (funcdata_block.cc:196-216).
@@ -10396,7 +10396,7 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata_block.cc:234 Funcdata::descendantsOutside
+    // Ghidra: funcdata_block.cc:233 Funcdata::descendantsOutside
     /// Assuming a basic block is marked dead, return `true` if any PcodeOp
     /// reading `vn` is outside the dead block (i.e. the varnode still has
     /// live readers). Faithful to `Funcdata::descendantsOutside`
@@ -10431,7 +10431,7 @@ impl Funcdata {
     }
 
 
-    // Ghidra: funcdata_block.cc:255 Funcdata::blockRemoveInternal
+    // Ghidra: funcdata_block.cc:254 Funcdata::blockRemoveInternal
     /// Remove an active basic block from the function: delete its PcodeOps,
     /// patch up data-flow and control-flow (mostly MULTIEQUALs). Faithful to
     /// `Funcdata::blockRemoveInternal` (funcdata_block.cc:255-321).

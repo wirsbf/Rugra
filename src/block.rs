@@ -1021,7 +1021,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         }
     }
 
-    // Ghidra: block.cc:447 FlowBlock::eliminateInDups
+    // Ghidra: block.cc:446 FlowBlock::eliminateInDups
     /// Eliminate duplicate in-edges from the given block, keeping the first
     /// instance and OR-merging edge labels. Faithful to
     /// `FlowBlock::eliminateInDups` (block.cc:447-472): each duplicate is
@@ -1276,7 +1276,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `bbout->intothis[reverse_index].label |= lab` in addition to the out
     /// edge), exposed so the mirrored write can be applied from the target
     /// side without holding both write locks at once.
-    // Ghidra: block.cc:245 FlowBlock::setOutEdgeFlag (mirrored in-edge half)
+    // Ghidra: block.cc:240 FlowBlock::setOutEdgeFlag (mirrored in-edge half)
     fn set_in_edge_flag(&mut self, slot: usize, flag: u32) {
         let ins = self.in_edges_mut();
         if slot < ins.len() {
@@ -1290,7 +1290,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// edge), exposed so the mirrored clear can be applied from the target
     /// side without holding both write locks at once. Consumed by
     /// findIrreducible's cross/forward relabel (block.cc:1182).
-    // Ghidra: block.cc:254 FlowBlock::clearOutEdgeFlag (mirrored in-edge half)
+    // Ghidra: block.cc:250 FlowBlock::clearOutEdgeFlag (mirrored in-edge half)
     fn clear_in_edge_flag(&mut self, slot: usize, flag: u32) {
         let ins = self.in_edges_mut();
         if slot < ins.len() {
@@ -2436,7 +2436,7 @@ impl BlockBasic {
     /// first op — "relies slightly on normal fall-thru semantics" (the
     /// executed entry is the lowest-address chunk of the executed path).
     /// printc emitLabel (printc.cc:3170) uses this, NOT getStart.
-    // Ghidra: block.cc:2291 BlockBasic::getEntryAddr
+    // Ghidra: block.cc:2302 BlockBasic::getEntryAddr
     pub fn get_entry_addr(&self) -> Address {
         if self.cover.num_ranges() == 1 {
             // cc:2297-2298: single range — return the start of the range.
@@ -3956,7 +3956,7 @@ impl BlockGraph {
     /// never for loop backedges or structured-branch targets. This is the
     /// entry point invoked by `ActionFinalStructure::apply`
     /// (blockaction.cc:2194: `graph.markUnstructured()`).
-    // Ghidra: block.cc:1238 BlockGraph::markUnstructured
+    // Ghidra: block.cc:1249 BlockGraph::markUnstructured
     pub fn mark_unstructured(&mut self) {
         // cc:1241-1244: for each child in list, call markUnstructured().
         let n = self.blocks.len();
@@ -5865,7 +5865,7 @@ impl FlowBlock for BlockGoto {
             None
         }
     }
-    // Ghidra: block.cc:1330 BlockGraph::firstOp — getBlock(0)->firstOp()
+    // Ghidra: block.cc:1327 BlockGraph::firstOp — getBlock(0)->firstOp()
     fn first_op(&self) -> Option<PcodeOpRef> {
         self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
     }
@@ -5892,7 +5892,7 @@ impl FlowBlock for BlockGoto {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_goto_type(cur_exit, cur_loop_exit);
     }
-    // Ghidra: block.cc:2811 BlockGoto::markUnstructured — delegate to the
+    // Ghidra: block.cc:2856 BlockGoto::markUnstructured — delegate to the
     // inherent helper (cc:2814 recurses into the wrapped child via
     // BlockGraph::markUnstructured, but Rugra's BlockGoto wraps a BlockBasic
     // with no structured children, so only the target-marking cc:2815-2818
@@ -6177,7 +6177,7 @@ impl FlowBlock for BlockMultiGoto {
             None
         }
     }
-    // Ghidra: block.cc:1330 BlockGraph::firstOp — getBlock(0)->firstOp()
+    // Ghidra: block.cc:1327 BlockGraph::firstOp — getBlock(0)->firstOp()
     fn first_op(&self) -> Option<PcodeOpRef> {
         self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
     }
@@ -6433,7 +6433,7 @@ impl FlowBlock for BlockIf {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_goto_type(cur_exit, cur_loop_exit);
     }
-    // Ghidra: block.cc:3022 BlockIf::markUnstructured — recurse into
+    // Ghidra: block.cc:3067 BlockIf::markUnstructured — recurse into
     // condition/then/else (cc:3025 BlockGraph::markUnstructured), then if this
     // is an if-goto whose goto is still f_goto_goto, mark its target as
     // f_unstructured_targ (cc:3026-3027). Rugra delegates target-marking to
@@ -7959,7 +7959,7 @@ impl FlowBlock for BlockSwitch {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_break_cases(cur_exit, cur_loop_exit);
     }
-    // Ghidra: block.cc:3558 BlockSwitch::markUnstructured — recurse via
+    // Ghidra: block.cc:3603 BlockSwitch::markUnstructured — recurse via
     // BlockGraph::markUnstructured (cc:3561), then mark each case whose
     // gototype is f_goto_goto (cc:3562-3565). Rugra recurses into the control
     // and every case; per-case goto target marking is a conservative no-op

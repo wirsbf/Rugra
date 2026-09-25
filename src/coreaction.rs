@@ -1711,7 +1711,7 @@ impl Action for ActionRestructureVarnode {
                     scope.symbols[idx].typelock = true;
                     scope.symbols[idx].namelock = true;
                 }
-                // Ghidra: varmap.cc:476 ScopeLocal::decode → collectNameRecs
+                // Ghidra: varmap.cc:472 ScopeLocal::decode → collectNameRecs (call at :476)
                 // (HTTPDMAIN-F7-NAMERECOMMEND-0001): the localdb decode
                 // boundary's trailing call — every name-locked-but-not-
                 // type-locked symbol in the decoded local DB is downgraded
@@ -3418,7 +3418,7 @@ fn call_entry_address(fc: &crate::fspec::FuncCallSpecs) -> crate::address::Addre
         .unwrap_or(crate::address::Address::new(0))
 }
 
-// Ghidra: block.cc:3399 BlockWhileDo::finalizePrinting (whole-function sweep)
+// Ghidra: block.cc:3403 BlockWhileDo::finalizePrinting (whole-function sweep)
 /// Extract for-loop header statements from every WhileDo loop: detect the
 /// induction-variable configuration (findLoopVariable, block.cc:3158),
 /// locate the initializer (findInitializer, block.cc:3218), render the two
@@ -7589,7 +7589,7 @@ fn merge_min_type_order(
 // 3-arg overload's `TypePointer tmp(s,pt,ws)` carries an EMPTY name (names
 // attach only via the 4-arg overload, type.cc:3885); see make_pointer_type's
 // note for why the former composed-name spelling diverged from the oracle.
-// Ghidra: type.cc:3785 TypeFactory::getTypePointer (interning constructor)
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer (interning constructor)
 /// Build a pointer type of `base` with Rugra's TypeFactory interning, the
 /// same way `tlst->getTypePointer(sz, pt, ws)` (typeop.cc:538/546 and
 /// parallels) hands the caller an INTERNED Datatype. Interning is load
@@ -7617,7 +7617,7 @@ fn make_ptr(
     ))
 }
 
-// Ghidra: type.cc:3392 TypeFactory::findAdd (canonical interning every propagateType product flows through)
+// Ghidra: type.cc:3412 TypeFactory::findAdd (canonical interning every propagateType product flows through)
 /// Canonicalize a temporary data-type through the architecture TypeFactory.
 ///
 /// In the oracle, every `Datatype*` that ActionInferTypes handles is
@@ -9044,7 +9044,7 @@ impl ActionInferTypes {
     /// COPY/INT_ADD/PTRSUB/PTRADD pointers whose output carries a known
     /// pointer temp-type, propagates the pointee into the varnodes at the
     /// addressed stack range via [`Self::propagate_ref`].
-    // Ghidra: coreaction.cc:5258 ActionInferTypes::propagateSpacebaseRef
+    // Ghidra: coreaction.cc:5265 ActionInferTypes::propagateSpacebaseRef
     fn propagate_spacebase_ref(
         &self,
         fd: &mut Funcdata,
@@ -16241,7 +16241,7 @@ impl ActionPreferComplement {
         }
     }
 
-    // Ghidra: block.cc:2381 BlockBasic::flipInPlaceExecute / block.cc:3007 BlockCondition::flipInPlaceExecute
+    // Ghidra: block.cc:2378 BlockBasic::flipInPlaceExecute / block.cc:3007 BlockCondition::flipInPlaceExecute
     /// Execute the conditional flip on this block: BlockBasic flips the
     /// `fallthru_true` op flag and swaps its outgoing edges; BlockCondition
     /// exchanges AND<->OR and flips both children's split points.
@@ -16616,7 +16616,7 @@ impl ActionStructureTransform {
         Some(format!("{} = {} + {}", lhs, rhs_var, rhs_const))
     }
 
-    // Ghidra: block.cc:3258 BlockWhileDo::testTerminal (explicit/printable half)
+    // Ghidra: block.cc:3256 BlockWhileDo::testTerminal (explicit/printable half)
     /// The testTerminal gates that are checkable without the op-relocation
     /// machinery: the loopDef input at `slot` must be written, its root op
     /// must not already be marked non-printing, the root varnode must be
@@ -16923,7 +16923,7 @@ impl GatherReturnGotosWalk {
     /// the node (cc:2213-2229), record copy leaves under qualifying
     /// ancestors, then recurse into the component list with the
     /// parent-type-aware successors.
-    // Ghidra: blockaction.cc:2210 ActionReturnSplit::gatherReturnGotos (chain walk)
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos (chain walk)
     fn visit(
         &mut self,
         node: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -17016,7 +17016,7 @@ impl GatherReturnGotosWalk {
     /// pointer identity with the RETURN's parent. A broken (componentless)
     /// chain yields false; the oracle cannot express that case (it would
     /// deref null), so this is the same predicate on every non-broken chain.
-    // Ghidra: blockaction.cc:2223 ActionReturnSplit::gatherReturnGotos (target descent)
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos (target descent)
     fn front_basic_hits(
         target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         parent_ptr: usize,
@@ -21152,7 +21152,7 @@ mod tests {
         assert!(!ActionSetCasts::is_op_identical(&td_int8, &int8, None));
     }
 
-    // Ghidra: coreaction.cc:2673 ActionSetCasts::castInput arm order
+    // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput arm order
     /// The double-cast guard is TWO nested levels: the outer arm
     /// `isWritten && def==CAST` (cc:2673) consumes the branch regardless of
     /// implied, and only the inner level tests isImplied (cc:2674). A

@@ -380,7 +380,7 @@ fn find_dup_peers(
     duplist
 }
 
-// Ghidra: block.cc:447 FlowBlock::eliminateInDups / block.cc:475 FlowBlock::eliminateOutDups
+// Ghidra: block.cc:446 FlowBlock::eliminateInDups / block.cc:475 FlowBlock::eliminateOutDups
 /// Eliminate duplicate edges between `bl` and `peer` (`incoming` selects
 /// duplicates in `bl`'s in-list — eliminateInDups — vs its out-list —
 /// eliminateOutDups), keeping the first instance and OR-merging labels, with
@@ -1786,7 +1786,7 @@ impl<'a> CollapseStructure<'a> {
         );
     }
 
-    // Ghidra: blockaction.cc:1889 CollapseStructure::collapseAll selectGoto loop
+    // Ghidra: blockaction.cc:1877 CollapseStructure::collapseAll selectGoto loop
     /// The cc:1889-1892 selectGoto loop as a reusable tail for the legacy
     /// 7-phase path (which previously ended in the invented batch cascade).
     fn select_goto_loop(&mut self) {

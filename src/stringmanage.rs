@@ -465,7 +465,7 @@ impl StringManager {
         }
     }
 
-    // Ghidra: string_ghidra.cc:19 GhidraStringManager::GhidraStringManager
+    // Ghidra: string_ghidra.cc:20 GhidraStringManager::GhidraStringManager
     /// Construct the production manager implementing the declared
     /// **GhidraStringManager/Java contract** (string_ghidra.cc:19; installed
     /// by `ArchitectureGhidra::buildStringManager`, ghidra_arch.cc:368):

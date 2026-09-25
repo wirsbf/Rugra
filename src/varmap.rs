@@ -1081,7 +1081,7 @@ fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)>
     }
 }
 
-// Ghidra: varmap.cc:942 MapState::addFixedType / varmap.cc:1438 ScopeLocal::fakeInputSymbols
+// Ghidra: varmap.cc:926 MapState::addFixedType / varmap.cc:1438 ScopeLocal::fakeInputSymbols
 /// Resolve the unknown base type of `size` bytes for RangeHint typing.
 /// Ghidra draws these from the Architecture TypeFactory
 /// (`types->getBase(size,TYPE_UNKNOWN)`, varmap.cc:942/1031/1438); Rugra
@@ -1279,7 +1279,7 @@ fn param_range_in_range(paramrange: &crate::address::RangeList, offset: u64) -> 
     }
 }
 
-// Ghidra: database.cc:2571 ScopeInternal::makeNameUnique (suffix parsing)
+// Ghidra: database.cc:2553 ScopeInternal::makeNameUnique (suffix parsing)
 /// Parse the `_NN` (2-digit) or `_xNNNNN` (5-digit) uniquifier suffix that
 /// `makeNameUnique` (database.cc:2571-2593) accepts on an existing name:
 /// `bname` must be at least `nm.len()+3` chars, hold '_' at `nm.len()`, and
@@ -3504,7 +3504,7 @@ impl ScopeLocal {
             .collect();
     }
 
-    // Ghidra: varmap.cc:1260 ScopeLocal::restructureVarnode (MapState construction)
+    // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode (MapState construction)
     /// Build the MapState exactly as `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1260-1261) does: the analysis range is the scope's range
     /// tree (the union installed by `reset_local_window`) with every param
@@ -3767,7 +3767,7 @@ impl ScopeLocal {
         }
     }
 
-    // Ghidra: database.cc:2022 ScopeInternal::clearCategory (cat >= 0)
+    // Ghidra: database.cc:2020 ScopeInternal::clearCategory (cat >= 0)
     /// Remove every symbol of the given category, mirroring
     /// `ScopeInternal::clearCategory` (database.cc:2022-2029) for the
     /// `cat >= 0` branch `restructureVarnode` uses with

@@ -930,10 +930,10 @@ INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。
 
 ## 调用实参收敛链（MAINDIFF-CALLPROTO-0001，master 并入）
 
-`FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5668-5741 与
+`FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5685-5741 与
 fspec.hh:310-317/1653-1654：
 
-- `build_input_from_trials(fd, call_op)`（fspec.cc:5668 `buildInputFromTrials`）
+- `build_input_from_trials(fd, call_op)`（fspec.cc:5685 `buildInputFromTrials`）
   完整化：保留 fspec 输入槽 0 → varargs+locked 时 `sort_fixed_position` →
   逐 USED 试验：spacebase 试验按 `stackoffset` 换算 caller 视角、UNREF 试验
   经 `Funcdata::newVarnode`（bank create + assignHigh + queryProperties flag
@@ -1221,3 +1221,10 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   stand-in dims (8,1) == flat Ram 兜底，printc func_ 兜底面 0 触发
   （NAMFIX 已证）——E2E 输出恒等；单测
   `test_new_for_op_entry_addr_carries_in0_space` 钉 ram/const/iop/克隆四臂。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

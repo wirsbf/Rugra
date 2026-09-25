@@ -1840,7 +1840,7 @@ action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个
 - `flip_in_place_test`（block.cc:2368 BlockBasic 经 `op_flip_in_place_test`；block.cc:2990 BlockCondition 双子 splitpoint 递归）。
 - `op_flip_in_place_test`（funcdata_op.cc:1221-1278）：CBRANCH→cond vn loneDescend 递归；EQUAL push+1；BOOL_NEGATE/NOTEQUAL push+0；LESS 家族常量敏感；BOOL_AND/OR 双子递归 push 返回 subtest1。
 - `op_flip_in_place_execute`（funcdata_op.cc:1280-1315）：BOOL_NEGATE 整体删除（输入传播给唯一读者）；BOOL_AND↔OR；其余 get_booleanflip 交换 + swapInput + `replace_lessequal`（funcdata_op.cc:1029-1063，含符号/无符号溢出守卫）。
-- `flip_in_place_execute`（block.cc:2381 BlockBasic：翻 FALLTHRU_TRUE + swapEdges；block.cc:3007 BlockCondition：AND↔OR + 双子执行）。
+- `flip_in_place_execute`（block.cc:2378 BlockBasic：翻 FALLTHRU_TRUE + swapEdges；block.cc:3007 BlockCondition：AND↔OR + 双子执行）。
 测试：test_prefercomplement_flips_if_else_condition（3-child INT_NOTEQUAL 规范化翻转 / 2-child 拒绝 / 已规范化 INT_EQUAL 拒绝）、test_prefercomplement_flip_in_place_execute（INT_LESS→LESSEQUAL swap；BOOL_NEGATE 删除重接）。GetStr 本身不经此路径（其 if 无 else 臂），此修复消除全局极性污染源。
 
 ### 2026-07-01（续 4）：12 个缺失 Action 实现
@@ -2785,7 +2785,7 @@ TypeFactory 的 intern**：`buildLocaltypes` 的种子来自
 myprogress 实证：同名 `old==new` 而 Arc 指针不同）。
 
 修复：新增 `canonicalize_temp_type`（对应 oracle 全类型经
-`TypeFactory::findAdd` 规范化的事实，type.cc:3392），在两个 temp 写入
+`TypeFactory::findAdd` 规范化的事实，type.cc:3412），在两个 temp 写入
 choke point 生效 —— `build_localtypes` 的 `temps.insert`（cc:5035
 setTempType）与 `propagate_type_edge` 的 `temps.insert`（cc:5108）。规范化
 保守：命名 Base 走 `get_base_named`（nametree name+id intern，type.cc:3667），
@@ -3672,3 +3672,7 @@ RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲
 110/258/15==基线（275/460/55 棘轮未重钉）；bank 391/391；cargo test --lib
 1744P/1F（nonzeromask 预存）。机制 C：coreaction/varmap 核心层白名单——CR
 已请求（见车道终报）。
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+- 本模块 9 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

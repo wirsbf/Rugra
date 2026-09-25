@@ -162,3 +162,10 @@ handle is still carried in temporary `AddressSpace::Iop`, not dedicated
 `IPTR_FSPEC` (`TYPEOP-FSPEC-SPACE-0001`), and this phase intentionally does not
 wire TypeOp getter, PrintC, StringManager, or close other callspec/signature
 residuals.
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

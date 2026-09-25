@@ -1522,7 +1522,7 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 
 ### 2026-07-04（续 2）：移植 block-graph 重写 API
 - `install_switch_defaults`（funcdata_block.cc:687）：遍历 jump_tables，按槽位清除旧 default 后，通过 reciprocal reverse index 在 source out-half 与 target in-half 同步标记唯一默认边。
-- `remove_do_nothing_block(bb)`（funcdata_block.cc:328）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
+- `remove_do_nothing_block(bb)`（funcdata_block.cc:327）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
 - `node_join_create_block(...)`（funcdata_block.cc:779）：创建合并块（newBlockBasic + setFlag(f_joined_block) + setInitialRange(addr,addr) + removeEdge + moveOutEdge + addEdge）。
   - 2026-09-23（SB-JOINSTOP，PARSECONFIG-JOINBLOCK-STOPADDR-0001）：补齐 cc:786
     `newblock->setInitialRange(addr, addr)`——原实现误判 informational-only 跳过，join 块
@@ -1533,8 +1533,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 文件级 helper `find_out_index`（对应 FlowBlock::getOutIndex）。
 
 ### 2026-07-04（续 3）：移植 nodeSplit + CloneBlockOps
-- `node_split(b, inedge)`（funcdata_block.cc:856）：分裂基本块，复制 p-code 到新块。
-- `node_split_block_edge`（funcdata_block.cc:835）：创建 DUPLICATE_BLOCK 块，重定向入边。
+- `node_split(b, inedge)`（funcdata_block.cc:845）：分裂基本块，复制 p-code 到新块。
+- `node_split_block_edge`（funcdata_block.cc:824）：创建 DUPLICATE_BLOCK 块，重定向入边。
   - `copyRange(b)`（funcdata_block.cc:832）已接线（2026-09-22，
     SB-HERITAGE50-BLOCKCOVER-0001）：重复块 `copy_range` 继承原块完整
     多范围 cover，getStart/getStop/getEntryAddr 与原块一致（Ghidra 语义）。
@@ -2298,7 +2298,7 @@ Rugra 通道（保真序）：
   undef 返回值控制一次性警告），移除 RUGRA-GAP 注释。
 - `descendants_outside`（funcdata_block.cc:234-241）改查读者 op 的**父块**
   DEAD flag（原查 op 自身 is_dead，删块序中恒 false → 误报）。
-- `move_out_edge` 忠实重写（block.cc:1439 moveOutEdge = replaceInEdge
+- `move_out_edge` 忠实重写（block.cc:1502 moveOutEdge = replaceInEdge
   block.cc:160-173）：捕获目标 in-slot i 后，对源块做
   half_delete_out_edge(rev)（成对协议），目标**保留**槽位 i 重指向新源
   （reverse_index=新源 size_out），新源 append 出边（rev=i）；原实现
@@ -2941,3 +2941,10 @@ oracle drill（mapglobals_drill_1204，锁定 e40ed130 git-archive +
    `PRINTC-SPACEBASE-PROXY-CHANNEL-0001`（driver+coreaction+printc 域）。
    门禁面现存 11 ram0x refs（main×7/ap_fini_vhost_config×3/
    ap_set_name_virtual_host×1，地址 0xa0820/0xa0830/0xa1198..0xa11b8）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 24 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

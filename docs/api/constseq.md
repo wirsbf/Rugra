@@ -151,3 +151,10 @@ still required, so this module remains L2/`NO_ORACLE`.
 - userop.rs：BUILTIN 常量对齐 Ghidra（MEMCPY/STRNCPY/WCSNCPY），register_string_copy_op/register_string_store_op/register_builtin_by_id + builtin_map。
 - constseq.rs：select_string_copy_function（constseq.cc:161）+ build_string_copy（347-372）+ transform（453-461）。RuleStringCopy/Store 现在真正创建 CPUI_CALLOTHER op + op_destroy_recursive。2 新测试。
 <!-- annotation-pass: 2026-07-04 -->
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 1 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

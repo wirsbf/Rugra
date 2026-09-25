@@ -577,7 +577,7 @@ impl TypeFactory {
         self.types.get(name).cloned()
     }
 
-    // Ghidra: sleigh_arch.cc:216 SleighArchitecture::buildCoreTypes
+    // Ghidra: sleigh_arch.cc:204 SleighArchitecture::buildCoreTypes
     /// Resolve a DWARF typedef whose NAME is a conventional boolean spelling
     /// to this factory's registered core boolean type.
     ///
@@ -3701,7 +3701,7 @@ impl TypeFactory {
             }
             TypeMetatype::Array => {
                 let basic = Datatype::decode_basic(decoder)?;
-                // Ghidra: type.cc:1329 TypeArray::decode rewinds attributes
+                // Ghidra: type.cc:1323 TypeArray::decode rewinds attributes
                 // after decodeBasic before re-reading ATTRIB_ARRAYSIZE —
                 // decodeBasic's attribute loop has otherwise consumed the
                 // element's attributes, and arraysize would stay -1.

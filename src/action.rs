@@ -227,7 +227,7 @@ pub trait Action: Send + Sync {
         true
     }
 
-    // Ghidra: action.cc:179 Action::setBreakPoint Rule fallback
+    // Ghidra: action.cc:171 Action::setBreakPoint Rule fallback
     #[doc(hidden)]
     fn mutate_rule_target(&mut self, specify: &str, mutation: RuleTargetMutation) -> bool {
         if self.as_action_group().is_some() {

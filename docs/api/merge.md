@@ -1098,3 +1098,10 @@ parseconfig 三投影 MATCH 保持，myprogress ord399（setcasts，FV2 域）
 2072/0/0，corpus-neutral：该 trim COPY 在下游本会被清掉，差异仅在
 B2 投影可观测维度）；单测 1687/18 == 亲父同 flaky 集。快照 `inputs` vec
 随之删除（唯一消费方即 Phase 1）。
+
+
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+
+- 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。

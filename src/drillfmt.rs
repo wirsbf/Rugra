@@ -62,7 +62,7 @@ fn space_shortcut(space: AddressSpace) -> char {
 /// Address-space print width in BYTES (space.cc:208-215: sz>4 shrinks to
 /// 4/6 when the high bits are zero; x86-64 ram/stack are 8-byte spaces,
 /// unique is 4).
-// Ghidra: space.cc:208 AddrSpace::printRaw (address-size shrink logic)
+// Ghidra: space.cc:206 AddrSpace::printRaw (address-size shrink logic)
 fn raw_width(addr_size: usize, offset: u64) -> usize {
     let mut sz = addr_size;
     if sz > 4 {

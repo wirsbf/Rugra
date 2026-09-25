@@ -5115,7 +5115,7 @@ impl<'a> SplitDatatype<'a> {
         None
     }
 
-    // Ghidra: subflow.cc:2208 SplitDatatype::getComponent
+    // Ghidra: subflow.cc:2215 SplitDatatype::getComponent
     /// Obtain the component of the given data-type at the specified offset.
     /// Faithful to `SplitDatatype::getComponent` (subflow.cc:2208-2234):
     /// descends `getSubType` until the offset lands exactly at a component
@@ -5162,7 +5162,7 @@ impl<'a> SplitDatatype<'a> {
         }
     }
 
-    // Ghidra: subflow.cc:2237 SplitDatatype::categorizeDatatype
+    // Ghidra: subflow.cc:2244 SplitDatatype::categorizeDatatype
     /// Categorize if and how a data-type should be split. Faithful to
     /// `SplitDatatype::categorizeDatatype` (subflow.cc:2237-2274):
     /// -1 = not splittable, 0 = struct-based split, 1 = array-based split,
@@ -5221,7 +5221,7 @@ impl<'a> SplitDatatype<'a> {
         }
     }
 
-    // Ghidra: subflow.cc:2285 SplitDatatype::testDatatypeCompatibility
+    // Ghidra: subflow.cc:2296 SplitDatatype::testDatatypeCompatibility
     /// Can the two given data-types be mutually split into matching logical
     /// components. Faithful to `SplitDatatype::testDatatypeCompatibility`
     /// (subflow.cc:2285-2367): both sides are categorized, the load/store
@@ -6248,7 +6248,7 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
-    // Ghidra: subflow.cc:2370 SplitDatatype::testCopyConstraints
+    // Ghidra: subflow.cc:2386 SplitDatatype::testCopyConstraints
     /// Test specific constraints for splitting the given COPY operation into
     /// pieces. Faithful to `SplitDatatype::testCopyConstraints`
     /// (subflow.cc:2370-2384): don't split function inputs, don't split
@@ -6326,7 +6326,7 @@ fn is_arithmetic_opcode(opc: OpCode) -> bool {
     )
 }
 
-// Ghidra: subflow.cc:2673 SplitDatatype::isArithmeticInput
+// Ghidra: subflow.cc:2677 SplitDatatype::isArithmeticInput
 /// Iterate through descendants of the given Varnode, looking for arithmetic
 /// ops. Faithful to `SplitDatatype::isArithmeticInput` (subflow.cc:2673-2684).
 fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool {
@@ -6336,7 +6336,7 @@ fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool {
         .any(|op| is_arithmetic_opcode(op.read().unwrap().opcode))
 }
 
-// Ghidra: subflow.cc:2690 SplitDatatype::isArithmeticOutput
+// Ghidra: subflow.cc:2693 SplitDatatype::isArithmeticOutput
 /// Check if the defining PcodeOp is arithmetic. Faithful to
 /// `SplitDatatype::isArithmeticOutput` (subflow.cc:2690-2696).
 fn is_arithmetic_output(vn: &Arc<RwLock<Varnode>>) -> bool {

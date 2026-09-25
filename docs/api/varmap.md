@@ -531,3 +531,7 @@ lookForFuncParamNames 的锁定原型参数名通道，非本存储）。9 个�
 降级/移除/nametree 序/参数类目存活/恢复重命名/地址不匹配跳过/无效 usepoint
 臂无尺寸门（oracle 语义文档化）/类型推荐存储/this 指针臂。机制 C：varmap
 核心算法白名单——CR 已请求（见车道终报）。
+### 2026-09-26 — TOOLS-REFS-DEFSTART-0001 citation re-anchor
+- 本模块 4 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
+  的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
+  机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
