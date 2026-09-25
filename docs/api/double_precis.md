@@ -37,6 +37,10 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
     此前漏抄导致 op 保持挂块 → `op_insert_begin` → `block_insert_op` 的
     `parent.is_none()` 断言炸（funcdata.rs:4984）；sasquatch 语料 4 函数
     （progress_bar/read_inode_1/read_inode_3/LzmaEnc_CodeOneBlock.part.0）worker panic。
+    修复后 progress_bar 完整产出（vs golden defects=0/numbering=0）；其余 3 函数越过
+    RuleDoubleIn 后暴露此前被掩盖的下游缺陷（merge 强制合并交集 panic ×2、
+    NULL local type ×1），已登记 GEN4-SQ-MERGE-FORCEDINTERSECT-0001 /
+    GEN4-SQ-NULLLOCALTYPE-0001。
 - `adjacent_offsets` — 指针相邻判断
 - `test_contiguous_pointers` — **核心**：成对 LOAD 指针连续性检测 (double.cc)
 - `is_addr_tied_contiguous` / `is_addr_tied_contiguous_result`
