@@ -1,5 +1,54 @@
 # `constseq.rs` API Reference
 
+## 2026-09-25：STRNCPY 族 IR 层收口（Lane STRNCPY，MIRROR3-STRNCPY-RULE-0001）
+
+`RuleStringStore` 从简化收集器换为完整 HeapSequence 链路（constseq.cc:986-1002 逐行）：
+
+- **interfere_between** 重写为 oracle 语义（constseq.cc:42-56）：`nextOp()`
+  块序游走（op.cc:323-339，跨唯一出边）+ special-eval 五豁免表
+  （INDIRECT/CALLOTHER/SEGMENTOP/CPOOLREF/NEW）。旧实现按 order 窗口扫全函数
+  alivelist 且谓词不同（call/branch/STORE）——foreign-block STORE 落窗内即误判
+  干扰，是规则不触发的第二根因。
+- **check_interference** 重写（constseq.cc:62-96）：按 `SeqNum::order`（块执行
+  序字段，address.hh:124）排序 move_ops，从 root 前后扩展最大无干扰集并截断。
+  旧实现自行重收集 COPY 候选（STORE 路径完全错位）。
+- **form_byte_array(sz, slot, root_off, big_endian)** 忠实签名+语义
+  （constseq.cc:108-155）：used 标记 1/2（数据/NUL）、前导连续计数允许单个
+  NUL 结尾、count != moveOps.size() 时截断越界 op。替换旧的 COPY-only 低字节
+  简化版；`is_valid_string`/`get_string`（Rugra 本地 helper）删除。
+- **select_string_copy_function(fd)** 忠实化（constseq.cc:161-175）：与工厂
+  canonical char/wchar 的 identity 比较（Arc::ptr_eq 直译 C++ 指针等值，回退
+  (name,size,char-print flags) 等值），不再按 size 猜 strncpy/wcsncpy。
+- **HeapSequence::build_string_copy** 新增忠实版（constseq.cc:698-762）：
+  destPtr=basePointer（baseOffset/nonConstAdds≠0 时建 index 链+PTRADD）、
+  srcPtr=`Funcdata::get_internal_string`（funcdata_varnode.cc:1413）、
+  `register_builtin_with_local_types`（userop.cc:449-478 的 DatatypeUserOp 局部
+  类型）、lenVn 经 builtin slot-3 局部类型定型（int4）。旧的共享
+  ArraySequence::build_string_copy/transform（假 ANNOTATION 指针 varnode）删除。
+- **RuleStringStore::apply_op** 接通完整链（cc:986-1002 守卫：in(2) 常量、
+  in(1) TYPE_PTR、pointee isCharPrint 且非 opaque → new_heap → is_valid →
+  transform）。旧 `ptr_shares_base` 简化 helper 删除（只认链式 PTRADD，不认
+  兄弟 PTRADD——同基兄弟形是本语料主形态，是规则不触发的第一根因）。
+- **MAXIMUM_SEQUENCE_LENGTH** 1024→0x20000（constseq.cc:21-22 常量对齐）。
+- gather_indirect_pairs 改走 op.rs 的 `previous_op_in_block`（op.cc:344 忠实
+  版，OP-PREVIOUSOP-ALIVELIST-0001 交付）；本地 alivelist 扫描版与
+  `ArraySequence.fd` raw 指针字段删除。
+- **RuleStringCopy::apply_op** 保持 inert：守卫已逐行（cc:957-962），分析体
+  （StringSequence collectCopyOps/constructTypedPointer）需 ScopeLocal
+  Symbol/SymbolEntry 容器查询，登记 CONSTSEQ-STRINGCOPY-0001。旧简化体从未在
+  语料触发（0 CALLOTHER 输出亲测），行为零变化。
+- 测试 7 个：常量、规则名、form_byte_array 三态（hello/过短/截断）、
+  select 回退、RuleStringStore 类型门。
+
+**验证**：httpd 镜 ap_ht_time 的 "+0000" 五连 STORE → `builtin_strncpy`
+CALLOTHER 对（STRINGDATA+strncpy）在最终 stage projection 中存活（亲采
+`/dev/shm/rugra-tests/strncpy/apht_stage_after.txt`）；httpd 镜 301→297、
+ap_ht_time 13→9、defects/numbering 双零。**残差**：printc.rs 的
+`dispatch_op_rpn` 无 CPUI_CALLOTHER 臂（自述 "everything else is a no-op"）、
+`op_callother` 为零调用死码、display_string 臂硬编码 "badstring"——语句现
+渲染为裸 `;`，STRNCPY-PRINT-CALLOTHER-0001 登记移交 printc 车道（本轮
+printc 写域被 STRLIT 并行持有，禁触）。
+
 ## 2026-08-24：Rule 名对齐锁定 oracle 构造器字符串
 
 `RuleStringCopy::get_name` → `stringcopy`、`RuleStringStore::get_name` →
@@ -31,9 +80,10 @@
 
 ### `pub struct RuleStringCopy` / `pub struct RuleStringStore`
 触发 Rule。对应 Ghidra `RuleStringCopy`/`RuleStringStore`。
-**当前限制**：完整分析需要 Symbol/SymbolEntry + 堆指针分析。
+RuleStringStore 已完整接通（见 2026-09-25 节）；RuleStringCopy 分析体待
+Symbol/SymbolEntry（CONSTSEQ-STRINGCOPY-0001）。
 
-测试：constseq::tests 2 个。
+测试：constseq::tests 7 个。
 
 ## 2026-08-11 ANN-J annotation bootstrap
 
@@ -49,10 +99,12 @@ behavior must not be counted as oracle `MATCH`:
 - `calc_ptradd_offset_inner` maps to
   `constseq.cc:604 HeapSequence::calcPtraddOffset`, but inherits the above
   address-unit and space-model gaps.
-- `previous_op_in_block` maps to `op.cc:344 PcodeOp::previousOp`. Ghidra takes
-  the immediately preceding list iterator in the same block; Rugra scans the
-  global alive bank by mutable order. The current `best_order` comparison does
-  not establish equivalent predecessor selection.
+- `previous_op_in_block` mapped to `op.cc:344 PcodeOp::previousOp`. ~~Ghidra
+  takes the immediately preceding list iterator in the same block; Rugra scans
+  the global alive bank by mutable order.~~ **2026-09-25 STRNCPY lane**: the
+  local alivelist-scan helper was deleted; `gather_indirect_pairs` now uses
+  `PcodeOp::previous_op_in_block` from op.rs (the faithful OP-PREVIOUSOP
+  delivery), removing this gap.
 
 No behavior was changed in ANN-J. A locked 12.0.4 HeapSequence fixture is
 still required, so this module remains L2/`NO_ORACLE`.

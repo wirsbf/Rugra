@@ -8891,16 +8891,13 @@ impl Funcdata {
     /// Build the p-code that displays an encoded string constant. Faithful
     /// to `Funcdata::getInternalString` (funcdata_varnode.cc:1413-1434):
     ///   - reject non-pointer types
-    ///   - register the raw bytes with the StringManager, returning a hash;
-    ///     hash==0 means the encoding is not a legal string → return null
+    ///   - register the raw bytes with the StringManager
+    ///     (`registerInternalStringData`), returning a hash; hash==0 means
+    ///     the encoding is not a legal string → return null
     ///   - register the BUILTIN_STRING_DATA user-op
     ///   - emit `CALLOTHER(string_data_id, hash)` before `readOp`, returning
     ///     its unique output typed as `ptrType`
     /// Returns the new Varnode, or None if the encoding is not a string.
-    /// RUGRA-GAP: Rugra's StringManager has no `registerInternalStringData`;
-    /// we validate the encoding via `check_characters`/`has_char_terminator`
-    /// and synthesize a stable hash from (addr, bytes). When no arch/string
-    /// manager is attached, returns None (caller treats as non-string).
     pub fn get_internal_string(
         &mut self,
         buf: &[u8],
@@ -8917,32 +8914,19 @@ impl Funcdata {
             Datatype::Pointer(p) => p.ptr_to.clone(),
             _ => return None,
         };
-        // cc:1420-1423: hash = glb->stringManager->registerInternalStringData(...).
-        // Rugra: validate + synthesize hash. charsize inferred from char_type size.
-        let charsize = char_type.get_size().max(1) as i32;
+        // cc:1420: const Address &addr(readOp->getAddr()).
         let addr = read_op.0.read().unwrap().get_addr();
+        let charsize = char_type.get_size().max(1) as i32;
+        // cc:1420-1423: hash = glb->stringManager->registerInternalStringData(
+        //   addr, buf, size, charType); hash == 0 (illegal encoding) returns
+        //   null. The ported manager (stringmanage.rs) keys the entry at the
+        //   constant-space address of the hash, which is exactly the address
+        //   PrintC::printCharacterConstant reads back through the
+        //   STRINGDATA CALLOTHER's hash input (printc.cc:701-714).
         let hash = if let Some(arch) = &self.arch {
             if let Some(sm_arc) = &arch.string_manager {
-                let mut sm = sm_arc.write().unwrap();
-                // Validate the encoding (faithful to StringManager logic).
-                let num_chars = crate::stringmanage::check_characters(buf, charsize, false);
-                if num_chars < 0
-                    || !crate::stringmanage::has_char_terminator(buf, charsize as usize)
-                {
-                    return None;
-                }
-                let mut data = crate::stringmanage::StringData::default();
-                crate::stringmanage::assign_string_data(
-                    &mut data,
-                    buf,
-                    charsize,
-                    num_chars,
-                    false,
-                    sm.get_maximum_chars(),
-                );
-                sm.insert_string_data(addr, data);
-                // Synthesize a stable hash from addr (low 56 bits) | charsize<<56.
-                (addr.as_u64() & 0x00ff_ffff_ffff_ffff) | ((charsize as u64) << 56)
+                let sm = sm_arc.write().unwrap();
+                sm.register_internal_string_data(addr, buf, charsize)
             } else {
                 return None;
             }

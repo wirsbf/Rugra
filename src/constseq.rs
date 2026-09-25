@@ -14,9 +14,14 @@
 //! - `RuleStringStore`: rule triggering on STORE ops
 //!
 //! # Status
-//! Skeleton with data structures (WriteNode, ArraySequence, StringSequence,
-//! HeapSequence). The full analysis (collectCopyOps/collectStoreOps/
-//! transform) requires Symbol/SymbolEntry infrastructure.
+//! RuleStringStore is fully wired: the HeapSequence analysis chain
+//! (findBasePointer/findDuplicateBases/findInitialStores/calcPtraddOffset/
+//! collectStoreOps/checkInterference/formByteArray) and the CALLOTHER
+//! transform (buildStringCopy via `Funcdata::get_internal_string` +
+//! typed builtin registration) follow constseq.cc 1:1. RuleStringCopy's
+//! StringSequence analysis (collectCopyOps/constructTypedPointer) still
+//! awaits the ScopeLocal Symbol/SymbolEntry container query — registered as
+//! CONSTSEQ-STRINGCOPY-0001; its guards are ported and the rule stays inert.
 
 use std::sync::{Arc, RwLock};
 use crate::varnode::Varnode;
@@ -27,10 +32,12 @@ use crate::type_system::Datatype;
 use crate::action::{Rule, action_status};
 use crate::error::Result;
 
-/// Minimum number of sequential characters to trigger replacement.
+/// Minimum number of sequential characters to trigger replacement
+/// (constseq.cc:21 `ArraySequence::MINIMUM_SEQUENCE_LENGTH = 4`).
 pub const MINIMUM_SEQUENCE_LENGTH: i32 = 4;
-/// Maximum number of characters in replacement string.
-pub const MAXIMUM_SEQUENCE_LENGTH: i32 = 1024;
+/// Maximum number of characters in replacement string
+/// (constseq.cc:22 `ArraySequence::MAXIMUM_SEQUENCE_LENGTH = 0x20000`).
+pub const MAXIMUM_SEQUENCE_LENGTH: i32 = 0x20000;
 
 /// Helper class holding a data-flow edge and optionally a memory offset.
 /// Corresponds to Ghidra's `ArraySequence::WriteNode` (constseq.hh:34).
@@ -54,8 +61,6 @@ impl WriteNode {
 /// A sequence of PcodeOps that move data into/out of an array data-type.
 /// Corresponds to Ghidra's `ArraySequence` (constseq.hh:29).
 pub struct ArraySequence {
-    /// The function containing the sequence
-    pub fd: *mut Funcdata,
     /// The root PcodeOp
     pub root_op: Arc<RwLock<PcodeOp>>,
     /// Element data-type
@@ -76,106 +81,112 @@ impl ArraySequence {
     }
 
     // Ghidra: constseq.cc:42 ArraySequence::interfereBetween
-    /// Check if there are interfering ops between two ops in the same block.
-    /// Faithful to `ArraySequence::interfereBetween` (constseq.cc:42-58).
-    /// Two ops interfere if there's another op between them that writes to
-    /// the same memory region or is a branch/call.
+    /// Check for interfering ops between the two given ops. Faithful to
+    /// `interfereBetween` (constseq.cc:42-56): walk `nextOp()` from
+    /// `start_op` (exclusive) toward `end_op`; an op interferes iff its eval
+    /// type is `special` AND its opcode is not one of the five exemptions
+    /// (INDIRECT, CALLOTHER, SEGMENTOP, CPOOLREF, NEW). Returns true when
+    /// there is NO interference.
+    ///
+    /// The walk follows block order via `PcodeOp::nextOp()` (op.cc:323-339),
+    /// crossing into the unique out-edge block when the parent has 1 or 2
+    /// exits. If the walk runs off the end (no unique successor) before
+    /// reaching `end_op`, the oracle would dereference null; Rugra returns
+    /// `true` (no interference) as the conservative non-crashing reading —
+    /// this only differs on malformed sequences the oracle never builds.
     pub fn interfere_between(
         fd: &Funcdata,
         start_op: &Arc<RwLock<PcodeOp>>,
         end_op: &Arc<RwLock<PcodeOp>>,
     ) -> bool {
-        let start_order = start_op.read().unwrap().start.get_order();
-        let end_order = end_op.read().unwrap().start.get_order();
-        if start_order == end_order { return false; }
-        // Scan all ops in the same block between start and end.
-        for op_ref in &fd.obank.alivelist {
-            let order = op_ref.0.read().unwrap().start.get_order();
-            if order <= start_order || order >= end_order { continue; }
-            let op = op_ref.0.read().unwrap();
-            // Calls and branches interfere.
-            if op.is_call() { return true; }
-            if matches!(op.opcode,
-                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH
-                | OpCode::CPUI_BRANCHIND | OpCode::CPUI_RETURN) {
-                return true;
+        // cc:45: startOp = startOp->nextOp().
+        let mut cur = {
+            let g = start_op.read().unwrap();
+            g.next_op_in_flow(&fd.obank).map(|n| n.0.clone())
+        };
+        // cc:46: while (startOp != endOp).
+        while let Some(c) = cur {
+            if Arc::ptr_eq(&c, end_op) {
+                break;
             }
-            // STORE ops interfere (they may modify the memory region).
-            if op.opcode == OpCode::CPUI_STORE { return true; }
+            // cc:47-51: special eval-type gate with the five exemptions.
+            let g = c.read().unwrap();
+            if g.get_eval_type() == crate::op::pcodeop_flags::SPECIAL {
+                match g.opcode {
+                    OpCode::CPUI_INDIRECT
+                    | OpCode::CPUI_CALLOTHER
+                    | OpCode::CPUI_SEGMENTOP
+                    | OpCode::CPUI_CPOOLREF
+                    | OpCode::CPUI_NEW => {}
+                    _ => return false,
+                }
+            }
+            cur = g.next_op_in_flow(&fd.obank).map(|n| n.0.clone());
         }
-        false
+        true
     }
 
     // Ghidra: constseq.cc:62 ArraySequence::checkInterference
-    /// Find the maximal set of COPY ops with no interfering ops between them.
-    /// Faithful to `ArraySequence::checkInterference` (constseq.cc:62-103).
-    /// Collects COPYs from the same block writing constants to consecutive
-    /// offsets, expanding from the root op.
-    pub fn check_interference(
-        &mut self,
-        fd: &Funcdata,
-        root_offset: u64,
-        element_size: i32,
-    ) {
-        let root_block = self.root_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-        let root_block = match root_block { Some(b) => b, None => return };
-        let root_order = self.root_op.read().unwrap().start.get_order();
-
-        // Collect all COPY ops in the same block with constant inputs writing
-        // to consecutive offsets starting at root_offset.
-        let mut candidates: Vec<WriteNode> = Vec::new();
-        let mut seen_offsets = std::collections::HashSet::new();
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if op.opcode != OpCode::CPUI_COPY { continue; }
-            // Must be in the same block.
-            let op_block = op.parent.as_ref().and_then(|w| w.upgrade());
-            if op_block.is_none() || !Arc::ptr_eq(&op_block.unwrap(), &root_block) {
-                continue;
+    /// Sort `move_ops` on block order, then walk backward/forward from the
+    /// root op accumulating the maximal set of ops with no interfering gap,
+    /// truncating `move_ops` to that set. Faithful to `checkInterference`
+    /// (constseq.cc:62-96), including the truncation write-back (cc:89-94)
+    /// and the minimum-length gate (cc:87-88). Callers (the StringSequence /
+    /// HeapSequence constructors) pre-populate `move_ops` before calling.
+    pub fn check_interference(&mut self, fd: &Funcdata) -> bool {
+        // cc:65: sort(moveOps) — WriteNode::operator< compares
+        // op->getSeqNum().getOrder(), the block execution-order field.
+        self.move_ops
+            .sort_by_key(|n| n.op.read().unwrap().start.get_order());
+        // cc:66-70: locate the root op.
+        let mut pos = None;
+        for (i, node) in self.move_ops.iter().enumerate() {
+            if Arc::ptr_eq(&node.op, &self.root_op) {
+                pos = Some(i);
+                break;
             }
-            // Input must be a constant (character).
-            let in0 = match op.inrefs.first() { Some(v) => v.clone(), None => continue };
-            if !in0.read().unwrap().is_constant() { continue; }
-            // Output must be in the array region (by offset).
-            let out_vn = match &op.output { Some(o) => o.clone(), None => continue };
-            let out_offset = out_vn.read().unwrap().get_offset();
-            // Check if offset is near root_offset (within element_size steps).
-            let diff = out_offset as i64 - root_offset as i64;
-            if diff < 0 { continue; }
-            let elem_idx = diff / element_size as i64;
-            if elem_idx > MAXIMUM_SEQUENCE_LENGTH as i64 { continue; }
-            let abs_offset = root_offset + elem_idx as u64 * element_size as u64;
-            if abs_offset != out_offset { continue; }
-            if !seen_offsets.insert(elem_idx as u64) { continue; }
-            candidates.push(WriteNode::new(abs_offset, op_ref.0.clone(), -1));
         }
-
-        // Sort by op order.
-        candidates.sort_by_key(|n| n.op.read().unwrap().start.get_order());
-
-        // Find maximal contiguous run from root with no interference.
-        let mut count = 0i32;
-        for (i, node) in candidates.iter().enumerate() {
-            if i > 0 {
-                let prev = &candidates[i - 1];
-                if Self::interfere_between(fd, &prev.op, &node.op) {
-                    break; // Interference found — stop expanding.
-                }
+        let Some(pos) = pos else { return false };
+        // cc:71-78: walk backward from the root.
+        let mut cur_op = self.move_ops[pos].op.clone();
+        let mut starting_pos = pos as isize - 1;
+        while starting_pos >= 0 {
+            let prev_op = self.move_ops[starting_pos as usize].op.clone();
+            if !Self::interfere_between(fd, &prev_op, &cur_op) {
+                break;
             }
-            count += 1;
+            cur_op = prev_op;
+            starting_pos -= 1;
         }
-
-        if count >= MINIMUM_SEQUENCE_LENGTH {
-            self.move_ops = candidates.into_iter().take(count as usize).collect();
-            self.num_elements = count;
+        starting_pos += 1;
+        // cc:79-86: walk forward from the root.
+        let mut cur_op = self.move_ops[pos].op.clone();
+        let mut ending_pos = pos + 1;
+        while ending_pos < self.move_ops.len() {
+            let next_op = self.move_ops[ending_pos].op.clone();
+            if !Self::interfere_between(fd, &cur_op, &next_op) {
+                break;
+            }
+            cur_op = next_op;
+            ending_pos += 1;
         }
+        // cc:87-88: too many truncated ops.
+        if ending_pos as isize - starting_pos < MINIMUM_SEQUENCE_LENGTH as isize {
+            return false;
+        }
+        // cc:89-94: truncate moveOps to [startingPos, endingPos).
+        if starting_pos > 0 {
+            self.move_ops.drain(..starting_pos as usize);
+            ending_pos -= starting_pos as usize;
+        }
+        self.move_ops.truncate(ending_pos);
+        true
     }
 
     // Ghidra: constseq.cc:28 ArraySequence::new
     /// Construct from a root op.
     pub fn new(root_op: Arc<RwLock<PcodeOp>>) -> Self {
         Self {
-            fd: std::ptr::null_mut(),
             root_op,
             char_type: None,
             num_elements: 0,
@@ -194,194 +205,154 @@ impl ArraySequence {
         });
     }
 
+    // Ghidra: constseq.cc:161 ArraySequence::selectStringCopyFunction
+    /// Use the \b charType to select the appropriate string copying
+    /// function. Faithful to `selectStringCopyFunction` (constseq.cc:161-175):
+    /// identity comparison against the factory's canonical char type selects
+    /// BUILTIN_STRNCPY (element count), then the canonical wide-char type
+    /// selects BUILTIN_WCSNCPY (element count); anything else falls back to
+    /// BUILTIN_MEMCPY with the byte length. Rugra compares via factory-canonical
+    /// `Arc` identity (the direct analogue of Ghidra's cached `Datatype *`
+    /// identity), falling back to (size, char-print flag) equality for types
+    /// that flowed through cloned records.
+    pub fn select_string_copy_function(&self, fd: &Funcdata) -> (u32, i32) {
+        use crate::userop::{BUILTIN_MEMCPY, BUILTIN_STRNCPY, BUILTIN_WCSNCPY};
+        let types = fd.arch.as_ref().and_then(|a| a.types.clone());
+        if let Some(types) = types {
+            let factory = types.read().unwrap();
+            let char_size = factory.get_size_of_char().max(0) as usize;
+            if Self::matches_factory_char(self.char_type.as_ref(), &factory, char_size) {
+                return (BUILTIN_STRNCPY, self.num_elements);
+            }
+            let wchar_size = factory.get_size_of_wchar().max(0) as usize;
+            if Self::matches_factory_char(self.char_type.as_ref(), &factory, wchar_size) {
+                return (BUILTIN_WCSNCPY, self.num_elements);
+            }
+        }
+        let align = self
+            .char_type
+            .as_ref()
+            .map(|t| t.get_align_size())
+            .unwrap_or(1) as i32;
+        (BUILTIN_MEMCPY, self.num_elements * align)
+    }
+
+    /// Identity comparison of `candidate` against the factory's canonical
+    /// character type of `size` (the cc:165/169 `charType == types->
+    /// getTypeChar(...)` pointer compare). Rugra's factory hands out
+    /// canonical `Arc`s so `Arc::ptr_eq` is the direct analogue; types that
+    /// flowed through cloned records fall back to (name, size, char-print
+    /// flags) equality.
+    // Ghidra: constseq.cc:165 ArraySequence::selectStringCopyFunction (charType == types->getTypeChar identity test)
+    fn matches_factory_char(
+        candidate: Option<&Arc<Datatype>>,
+        factory: &crate::type_system::typefactory::TypeFactory,
+        size: usize,
+    ) -> bool {
+        use crate::type_system::datatype::type_flags;
+        let Some(candidate) = candidate else { return false };
+        match factory.get_type_char(size) {
+            Ok(canonical) => {
+                if Arc::ptr_eq(candidate, &canonical) {
+                    return true;
+                }
+                let flag_mask = type_flags::CHARTYPE | type_flags::UTF16 | type_flags::UTF32;
+                candidate.get_name() == canonical.get_name()
+                    && candidate.get_size() == canonical.get_size()
+                    && (candidate.get_flags() & flag_mask) == (canonical.get_flags() & flag_mask)
+            }
+            Err(_) => false,
+        }
+    }
+
     // Ghidra: constseq.cc:108 ArraySequence::formByteArray
-    /// Form a byte array from constant COPYs in move_ops.
-    /// Corresponds to `ArraySequence::formByteArray` (constseq.cc).
-    pub fn form_byte_array(&mut self) -> i32 {
-        self.byte_array.clear();
+    /// Put constant values from the collected move ops into a single byte
+    /// array. Faithful to `formByteArray` (constseq.cc:108-155):
+    ///  - each op's input (at `slot`) constant lands at
+    ///    `move_ops[i].offset - root_off`, ops outside the array are skipped;
+    ///  - the `used` marks record 1 (data) / 2 (null terminator) per byte;
+    ///  - the contiguous leading run of full elements is counted, allowing a
+    ///    single trailing null terminator (cc:135-142);
+    ///  - fewer than MINIMUM_SEQUENCE_LENGTH characters returns 0;
+    ///  - when the count does not cover all collected ops, the ops beyond
+    ///    `root_off + count*alignSize` are dropped (cc:145-152).
+    pub fn form_byte_array(
+        &mut self,
+        sz: i32,
+        slot: i32,
+        root_off: u64,
+        big_endian: bool,
+    ) -> i32 {
+        let el_size = self
+            .char_type
+            .as_ref()
+            .map(|t| t.get_size())
+            .unwrap_or(1) as i32;
+        self.byte_array = vec![0u8; sz.max(0) as usize];
+        let mut used = vec![0u8; sz.max(0) as usize];
         for node in &self.move_ops {
-            let op = node.op.read().unwrap();
-            // COPY of a constant into the array region
-            if op.opcode == OpCode::CPUI_COPY {
-                if let Some(in0) = op.inrefs.first() {
-                    let vn = in0.read().unwrap();
-                    if vn.is_constant() {
-                        let val = vn.get_offset();
-                        // Only take the low byte (char type)
-                        self.byte_array.push((val & 0xff) as u8);
-                    } else {
-                        return 0; // Non-constant, can't form byte array
-                    }
+            let byte_pos = node.offset as i64 - root_off as i64;
+            if byte_pos < 0 || byte_pos + el_size as i64 > sz as i64 {
+                continue;
+            }
+            let val = {
+                let op = node.op.read().unwrap();
+                match op.inrefs.get(slot as usize) {
+                    Some(v) => v.read().unwrap().get_offset(),
+                    None => continue,
+                }
+            };
+            let bp = byte_pos as usize;
+            used[bp] = if val == 0 { 2 } else { 1 };
+            if big_endian {
+                for j in 0..el_size as usize {
+                    let b = (val >> ((el_size as usize - 1 - j) * 8)) & 0xff;
+                    self.byte_array[bp + j] = b as u8;
                 }
             } else {
-                return 0; // Non-COPY op, can't form byte array
+                let mut v = val;
+                for j in 0..el_size as usize {
+                    self.byte_array[bp + j] = (v & 0xff) as u8;
+                    v >>= 8;
+                }
             }
         }
-        self.byte_array.len() as i32
-    }
-
-    // Ghidra: constseq.cc:28 ArraySequence::isValidString
-    /// Check if the byte array represents a valid string (null-terminated).
-    pub fn is_valid_string(&self) -> bool {
-        if self.byte_array.is_empty() { return false; }
-        if self.byte_array.len() < MINIMUM_SEQUENCE_LENGTH as usize { return false; }
-        // Must have at least one null terminator
-        self.byte_array.contains(&0)
-    }
-
-    // Ghidra: constseq.cc:28 ArraySequence::getString
-    /// Get the string content (up to first null).
-    pub fn get_string(&self) -> Option<&[u8]> {
-        let pos = self.byte_array.iter().position(|&b| b == 0)?;
-        Some(&self.byte_array[..pos])
-    }
-
-    // Ghidra: constseq.cc:161 ArraySequence::selectStringCopyFunction
-    /// Select the appropriate string copy function based on the element
-    /// (character) size, and pass back the length argument. Faithful to
-    /// `ArraySequence::selectStringCopyFunction` (constseq.cc:161-175).
-    ///
-    /// Returns the built-in CALLOTHER id (one of `UserPcodeOp::BUILTIN_*`)
-    /// and, in `length_index`, either the number of characters (strncpy/
-    /// wcsncpy) or the number of bytes (memcpy) being copied.
-    pub fn select_string_copy_function(&self) -> (u32, i32) {
-        use crate::userop::{BUILTIN_MEMCPY, BUILTIN_STRNCPY, BUILTIN_WCSNCPY};
-        let char_size = self.char_type.as_ref().map(|t| t.get_size()).unwrap_or(1) as i32;
-        let num = self.num_elements;
-        match char_size {
-            1 => (BUILTIN_STRNCPY, num),
-            2 => (BUILTIN_WCSNCPY, num),
-            _ => (BUILTIN_MEMCPY, num * char_size),
-        }
-    }
-
-    // Ghidra: constseq.cc:28 ArraySequence::buildStringCopy
-    /// Build a CPUI_CALLOTHER op that performs the string copy. Faithful to
-    /// `StringSequence::buildStringCopy` (constseq.cc:347-372) and
-    /// `HeapSequence::buildStringCopy` (constseq.cc:698-762).
-    ///
-    /// The CALLOTHER has 4 inputs:
-    ///   input[0] = built-in id constant (strncpy/wcsncpy/memcpy)
-    ///   input[1] = destination pointer (into the array region)
-    ///   input[2] = source pointer (an internal string holding byteArray)
-    ///   input[3] = length constant
-    ///
-    /// `dest_ptr_addr` is the address the destination pointer should name
-    /// (the first element of the sequence). The op is inserted before the
-    /// earliest move op (`move_ops[0]`). The built-in user-op record is
-    /// registered on the architecture's `UserOpManage` when available.
-    ///
-    /// Returns the constructed CALLOTHER op, or `None` if there are no move
-    /// ops to anchor the insertion point.
-    pub fn build_string_copy(
-        &mut self,
-        fd: &mut Funcdata,
-        dest_ptr_addr: u64,
-        is_store: bool,
-    ) -> Option<crate::op::PcodeOpRef> {
-        if self.move_ops.is_empty() {
-            return None;
-        }
-        // Earliest move op is the insertion point (constseq.cc:350/701).
-        let insert_point = self.move_ops[0].op.clone();
-        let insert_addr = insert_point.read().unwrap().get_addr();
-
-        // Select the built-in function id and length argument
-        // (constseq.cc:358-359 / 749-750).
-        let (builtin_id, length_index) = self.select_string_copy_function();
-        if length_index <= 0 {
-            return None;
-        }
-
-        // Register the built-in user-op record on the architecture, when an
-        // Architecture/UserOpManage is attached (constseq.cc:360 / 751:
-        // `glb->userops.registerBuiltin(builtInId)`). This is best-effort; the
-        // CALLOTHER is constructed unconditionally regardless.
-        if let Some(arch) = fd.arch.clone() {
-            if let Some(uo) = &arch.userops {
-                uo.write().unwrap().register_builtin_by_id(builtin_id);
-            }
-        }
-
-        // Source pointer: an internal string built from byteArray. Ghidra
-        // builds this via `getInternalString` (constseq.cc:355 / 705). Rugra
-        // has no internal-string address space, so we materialize a pointer
-        // varnode in Ram whose offset is a unique id and mark it ANNOTATION.
-        // The byte content is recorded on the sequence for later replay.
-        let num_bytes = (self.move_ops.len()
-            * self.char_type.as_ref().map(|t| t.get_size()).unwrap_or(1) as usize)
-            .max(self.byte_array.len());
-        let src_ptr = fd.new_unique(num_bytes.max(1));
-        {
-            let mut v = src_ptr.write().unwrap();
-            v.address_space = crate::space::AddressSpace::Ram;
-            v.set_flags(crate::varnode::varnode_flags::ANNOTATION);
-        }
-
-        // Destination pointer. For a STORE sequence this is the existing base
-        // pointer (HeapSequence::basePointer); for a COPY sequence it is a
-        // pointer to the first written address. We materialize it as a Ram
-        // pointer varnode at `dest_ptr_addr` (faithful in spirit to
-        // constructTypedPointer / HeapSequence::buildStringCopy destPtr). Both
-        // cases produce the same varnode shape here.
-        let _ = is_store; // (kept for API symmetry with Ghidra's two builders)
-        let dest_ptr = fd.new_unique(8);
-        {
-            let mut v = dest_ptr.write().unwrap();
-            v.address_space = crate::space::AddressSpace::Ram;
-            v.loc = crate::address::Address::new(dest_ptr_addr);
-            v.set_flags(crate::varnode::varnode_flags::ANNOTATION);
-        }
-
-        // Build the CALLOTHER op with 4 inputs (constseq.cc:361-369 / 752-759).
-        let copy_op = fd.new_op(4, insert_addr);
-        fd.op_set_opcode(&copy_op, OpCode::CPUI_CALLOTHER);
-        let id_vn = fd.new_constant(4, builtin_id as u64);
-        fd.op_set_input(&copy_op, id_vn, 0);
-        fd.op_set_input(&copy_op, dest_ptr, 1);
-        fd.op_set_input(&copy_op, src_ptr, 2);
-        let len_vn = fd.new_constant(4, length_index as u64);
-        fd.op_set_input(&copy_op, len_vn, 3);
-        fd.op_insert_before(&copy_op, &crate::op::PcodeOpRef(insert_point));
-        Some(copy_op)
-    }
-
-    // Ghidra: constseq.cc:28 ArraySequence::transform
-    /// Replace the collected move ops with a CALLOTHER string copy.
-    /// Faithful to `StringSequence::transform` (constseq.cc:453-461) and
-    /// `HeapSequence::transform` (constseq.cc:927-940).
-    ///
-    /// Builds the CALLOTHER via `build_string_copy`, then destroys the
-    /// original COPY/STORE ops. Returns `true` if the transform succeeded.
-    pub fn transform(
-        &mut self,
-        fd: &mut Funcdata,
-        dest_ptr_addr: u64,
-        is_store: bool,
-    ) -> bool {
-        let callop = match self.build_string_copy(fd, dest_ptr_addr, is_store) {
-            Some(op) => op,
-            None => return false,
+        let big_el_size = self
+            .char_type
+            .as_ref()
+            .map(|t| t.get_align_size())
+            .unwrap_or(1);
+        let max_el = if big_el_size > 0 {
+            used.len() / big_el_size
+        } else {
+            used.len()
         };
-        // Remove the original move ops. Faithful to removeCopyOps
-        // (constseq.cc:443-444) / removeStoreOps (constseq.cc:878-881).
-        // Snapshot the ops first, since op_destroy mutates the bank.
-        let to_remove: Vec<crate::op::PcodeOpRef> = self
-            .move_ops
-            .iter()
-            .map(|n| crate::op::PcodeOpRef(n.op.clone()))
-            .collect();
-        for op in &to_remove {
-            // Use recursive destroy so PTRADD/address-arithmetic feeding the
-            // STORE pointer is removed too (HeapSequence::removeStoreOps uses
-            // opDestroyRecursive). The CALLOTHER is retained (it is not in the
-            // descend set of these ops' outputs).
-            fd.op_destroy_recursive(op);
+        let mut count = 0usize;
+        while count < max_el {
+            let val = used[count * big_el_size];
+            if val != 1 {
+                if val == 2 {
+                    count += 1; // Allow a single null terminator
+                }
+                break;
+            }
+            count += 1;
         }
-        // The CALLOTHER itself is live; reference it so it is not considered
-        // unused (no-op in Rugra, but documents intent).
-        let _ = &callop;
-        true
+        let count = count as i32;
+        if count < MINIMUM_SEQUENCE_LENGTH {
+            return 0;
+        }
+        if count != self.move_ops.len() as i32 {
+            let max_off = root_off.wrapping_add(count as u64 * big_el_size as u64);
+            let mut final_ops: Vec<WriteNode> = Vec::new();
+            for node in &self.move_ops {
+                if node.offset < max_off {
+                    final_ops.push(node.clone());
+                }
+            }
+            self.move_ops = final_ops;
+        }
+        count
     }
 }
 
@@ -579,81 +550,25 @@ impl HeapSequence {
         if !self.collect_store_ops(fd) {
             return false;
         }
-        // cc:916-917: if (!checkInterference()) return.
-        // ArraySequence::check_interference is the Rugra port of Ghidra's
-        // checkInterference; it takes fd/root_offset/element_size which Ghidra
-        // reads from the in-block state. Rugra's variant needs the element size
-        // (== charType->getAlignSize()) and a root offset of 0 (Ghidra's
-        // moveOps store the diff directly).
+        // cc:916-917: if (!checkInterference()) return — the faithful
+        // block-order maximal-set walk (constseq.cc:62-96); a failure leaves
+        // num_elements=0 (isValid=false), mirroring the oracle constructor.
+        if !self.base.check_interference(fd) {
+            return false;
+        }
+        // cc:918-920: numElements = formByteArray(arrSize, 2, 0, bigEndian)
+        // with arrSize = moveOps.size() * charType->getAlignSize().
         let elem_size = self
             .base
             .char_type
             .as_ref()
             .map(|t| t.get_align_size())
             .unwrap_or(1) as i32;
-        self.base.check_interference(fd, 0, elem_size);
-        if !self.base.is_valid() {
-            // Ghidra checkInterference returns false directly; the constructor
-            // leaves numElements=0 in that case. We mirror by not running
-            // form_byte_array.
-            // NOTE: Ghidra's numElements is only set by formByteArray below, so
-            // a checkInterference failure leaves numElements=0 (isValid=false),
-            // matching Rugra's check_interference leaving num_elements=0 when
-            // the run is too short.
-        }
-        // cc:918-920: numElements = formByteArray(arrSize, 2, 0, bigEndian).
         let arr_size = self.base.move_ops.len() as i32 * elem_size;
-        let _big_endian = self.store_space.is_big_endian();
-        // Rugra's form_byte_array pulls COPY input[0] constants (slot -1). For
-        // STORE sequences the value is at input slot 2; Rugra's ArraySequence
-        // currently only has the COPY-slot form_byte_array. We provide the
-        // STORE form here by filling byte_array directly from each STORE's
-        // input[2] constant, mirroring Ghidra formByteArray(slot=2, rootOff=0).
-        self.base.byte_array = vec![0u8; arr_size.max(0) as usize];
-        let mut used = vec![0u8; arr_size.max(0) as usize];
-        for node in &self.base.move_ops {
-            let op = node.op.read().unwrap();
-            let byte_pos = node.offset as i64;
-            if byte_pos < 0 || byte_pos + elem_size as i64 > arr_size as i64 {
-                continue;
-            }
-            let val_vn = match op.inrefs.get(2) {
-                Some(v) => v.clone(),
-                None => continue,
-            };
-            let val_r = val_vn.read().unwrap();
-            if !val_r.is_constant() {
-                continue;
-            }
-            let val = val_r.get_offset();
-            let bp = byte_pos as usize;
-            used[bp] = if val == 0 { 2 } else { 1 };
-            for j in 0..elem_size as usize {
-                if bp + j < self.base.byte_array.len() {
-                    self.base.byte_array[bp + j] =
-                        ((val >> (j * 8)) & 0xff) as u8;
-                }
-            }
-        }
-        // Count leading non-null characters (cc:135-142 of formByteArray).
-        let mut count = 0i32;
-        let max_el = arr_size / elem_size;
-        while count < max_el {
-            let u = used[(count * elem_size) as usize];
-            if u != 1 {
-                if u == 2 {
-                    count += 1; // allow a single null terminator
-                }
-                break;
-            }
-            count += 1;
-        }
-        if count < MINIMUM_SEQUENCE_LENGTH {
-            self.base.num_elements = 0;
-            return false;
-        }
+        let big_endian = self.store_space.is_big_endian();
+        let count = self.base.form_byte_array(arr_size, 2, 0, big_endian);
         self.base.num_elements = count;
-        true
+        count > 0
     }
 
     // Ghidra: constseq.cc:465 HeapSequence::findBasePointer
@@ -1241,16 +1156,21 @@ impl HeapSequence {
     /// produce a pair. Marks each gathered INDIRECT op so descendant scans can
     /// recognize STORE-side INDIRECTs, then clears the marks at the end.
     pub fn gather_indirect_pairs(
-        &mut self,
+        &self,
+        fd: &Funcdata,
         indirects: &mut Vec<Arc<RwLock<PcodeOp>>>,
         pairs: &mut Vec<IndirectPair>,
     ) {
-        // cc:773-781: for each STORE, walk preceding INDIRECT chain.
-        // Ghidra uses op->previousOp(); Rugra finds the previous alive op in
-        // the same block via the op bank ordering. We approximate by scanning
-        // the root STORE's parent block for ops ordered before each move op.
+        // cc:773-781: for each STORE, walk preceding INDIRECT chain via
+        // PcodeOp::previousOp() (op.cc:344-353) — the immediately preceding
+        // op within the same basic block, or None at the block head.
         for node in &self.base.move_ops {
-            let mut prev = self.previous_op_in_block(&node.op);
+            let mut prev = node
+                .op
+                .read()
+                .unwrap()
+                .previous_op_in_block(&fd.obank)
+                .map(|p| p.0.clone());
             while let Some(p) = prev {
                 let is_indirect = p.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
                 if !is_indirect {
@@ -1261,7 +1181,11 @@ impl HeapSequence {
                 // cc:778: indirects.push_back(op).
                 indirects.push(p.clone());
                 // cc:779: continue backward.
-                prev = self.previous_op_in_block(&p);
+                prev = p
+                    .read()
+                    .unwrap()
+                    .previous_op_in_block(&fd.obank)
+                    .map(|n| n.0.clone());
             }
         }
         // cc:782-803: for each INDIRECT, check if its output has a non-INDIRECT use.
@@ -1324,50 +1248,6 @@ impl HeapSequence {
         for op in indirects {
             op.write().unwrap().clear_mark();
         }
-    }
-
-    /// Find the op immediately preceding `op` in the same basic block, or None.
-    /// Rugra helper standing in for Ghidra's `PcodeOp::previousOp()`
-    /// (op.cc:344). Scans the Funcdata op bank for the greatest order less than
-    /// `op`'s order within the same parent block.
-    // Ghidra: op.cc:344 PcodeOp::previousOp
-    fn previous_op_in_block(
-        &self,
-        op: &Arc<RwLock<PcodeOp>>,
-    ) -> Option<Arc<RwLock<PcodeOp>>> {
-        let (my_order, my_block) = {
-            let r = op.read().unwrap();
-            (r.start.get_order(), r.parent.as_ref().and_then(|w| w.upgrade()))
-        };
-        let fd = self.base.fd;
-        if fd.is_null() {
-            return None;
-        }
-        let bank = unsafe { &(*fd).obank };
-        let mut best: Option<Arc<RwLock<PcodeOp>>> = None;
-        let mut best_order: u32 = u32::MAX;
-        for r in &bank.alivelist {
-            let g = r.0.read().unwrap();
-            let ord = g.start.get_order();
-            if ord >= my_order {
-                continue;
-            }
-            let same_block = match (&g.parent, &my_block) {
-                (Some(a), Some(b)) => a.upgrade().map(|x| Arc::ptr_eq(&x, b)).unwrap_or(false),
-                _ => false,
-            };
-            if !same_block {
-                continue;
-            }
-            // First candidate encountered is the greatest order < my_order
-            // because the bank is ordered ascending; but to be safe we keep
-            // the max.
-            if ord < best_order {
-                best_order = ord;
-                best = Some(r.0.clone());
-            }
-        }
-        best
     }
 
     // Ghidra: constseq.cc:827 HeapSequence::deduplicatePairs
@@ -1505,22 +1385,206 @@ impl HeapSequence {
     /// analysis on top of the shared `ArraySequence::build_string_copy` /
     /// `remove_store_ops` machinery. `dest_ptr_addr` is the destination
     /// pointer address passed through to `build_string_copy`.
-    pub fn transform(
-        &mut self,
-        fd: &mut Funcdata,
-        dest_ptr_addr: u64,
-    ) -> bool {
+    // Ghidra: constseq.cc:698 HeapSequence::buildStringCopy
+    /// A built-in user-op that copies string data is created: destination is
+    /// the base pointer (plus an index PTRADD when the root was offset from
+    /// the base or non-constant adds participate), source is an internal
+    /// string built from the byte array, third input the length constant.
+    /// Faithful to `HeapSequence::buildStringCopy` (constseq.cc:698-762),
+    /// including the length varnode typing via the registered user-op's
+    /// input metadata (cc:757-758 `lenVn->updateType(inputTypeLocal(3))`).
+    pub fn build_string_copy(&mut self, fd: &mut Funcdata) -> Option<crate::op::PcodeOpRef> {
+        // cc:701: insertPoint = moveOps[0].op — earliest STORE in block order
+        // (move_ops were sorted by checkInterference).
+        let insert_point = crate::op::PcodeOpRef(self.base.move_ops.first()?.op.clone());
+        let insert_addr = insert_point.0.read().unwrap().get_addr();
+        // cc:702: charPtrType = rootOp->getIn(1)->getTypeReadFacing(rootOp).
+        let char_ptr_type = {
+            let ptr_vn = self.base.root_op.read().unwrap().inrefs.get(1)?.clone();
+            let op_guard = self.base.root_op.read().unwrap();
+            let ct = ptr_vn.read().unwrap().get_type_read_facing_op(&op_guard, 1);
+            ct
+        }?;
+        // cc:703: numBytes = numElements * charType->getSize().
+        let char_size = self
+            .base
+            .char_type
+            .as_ref()
+            .map(|t| t.get_size())
+            .unwrap_or(1);
+        let num_bytes = self.base.num_elements.max(0) as usize * char_size;
+        // cc:705-707: srcPtr = getInternalString(byteArray.data(), numBytes,
+        //   charPtrType, insertPoint); null return aborts the transform.
+        if self.base.byte_array.len() < num_bytes {
+            return None;
+        }
+        let src_ptr = fd.get_internal_string(
+            &self.base.byte_array[..num_bytes],
+            &char_ptr_type,
+            &insert_point,
+        )?;
+        // cc:708-748: destination pointer construction.
+        let mut dest_ptr = self.base_pointer.clone()?;
+        let base_ptr_size = dest_ptr.read().unwrap().get_size();
+        let char_align = self
+            .base
+            .char_type
+            .as_ref()
+            .map(|t| t.get_align_size())
+            .unwrap_or(1) as u64;
+        if self.base_offset != 0 || !self.non_const_adds.is_empty() {
+            // cc:711: intType = types->getBase(basePointer->getSize(), TYPE_INT)
+            let int_type = fd
+                .arch
+                .as_ref()
+                .and_then(|a| a.types.clone())
+                .and_then(|types| {
+                    types
+                        .read()
+                        .unwrap()
+                        .get_base(base_ptr_size, crate::type_system::TypeMetatype::Int)
+                });
+            // cc:712-723: fold the non-constant index varnodes together.
+            let mut index_vn: Option<Arc<RwLock<Varnode>>> = None;
+            if !self.non_const_adds.is_empty() {
+                index_vn = Some(self.non_const_adds[0].clone());
+                for extra in self.non_const_adds.iter().skip(1) {
+                    let add_op = fd.new_op(2, insert_addr);
+                    fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+                    fd.op_set_input(&add_op, index_vn.clone()?, 0);
+                    fd.op_set_input(&add_op, extra.clone(), 1);
+                    let out = fd.new_unique_out(base_ptr_size, &add_op);
+                    if let Some(t) = &int_type {
+                        out.write().unwrap().update_type_lock(t.clone(), true, false);
+                    }
+                    fd.op_insert_before(&add_op, &insert_point);
+                    index_vn = Some(out);
+                }
+            }
+            // cc:724-739: add in the (element-scaled) constant base offset.
+            if self.base_offset != 0 {
+                let num_el = self.base_offset / char_align.max(1);
+                let cvn = fd.new_constant(base_ptr_size, num_el);
+                if let Some(t) = &int_type {
+                    cvn.write().unwrap().update_type_lock(t.clone(), true, false);
+                }
+                index_vn = match index_vn {
+                    None => Some(cvn),
+                    Some(idx) => {
+                        let add_op = fd.new_op(2, insert_addr);
+                        fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+                        fd.op_set_input(&add_op, idx, 0);
+                        fd.op_set_input(&add_op, cvn, 1);
+                        let out = fd.new_unique_out(base_ptr_size, &add_op);
+                        if let Some(t) = &int_type {
+                            out.write().unwrap().update_type_lock(t.clone(), true, false);
+                        }
+                        fd.op_insert_before(&add_op, &insert_point);
+                        Some(out)
+                    }
+                };
+            }
+            // cc:740-747: PTRADD(basePointer, index, alignSize) typed charPtrType.
+            let ptr_add = fd.new_op(3, insert_addr);
+            fd.op_set_opcode(&ptr_add, OpCode::CPUI_PTRADD);
+            let out = fd.new_unique_out(base_ptr_size, &ptr_add);
+            let align_vn = fd.new_constant(base_ptr_size, char_align);
+            fd.op_set_input(&ptr_add, dest_ptr.clone(), 0);
+            fd.op_set_input(&ptr_add, index_vn?, 1);
+            fd.op_set_input(&ptr_add, align_vn, 2);
+            out.write().unwrap().update_type_lock(char_ptr_type.clone(), true, false);
+            fd.op_insert_before(&ptr_add, &insert_point);
+            dest_ptr = out;
+        }
+        // cc:749-751: builtInId = selectStringCopyFunction(index);
+        //   glb->userops.registerBuiltin(builtInId) — with the DatatypeUserOp
+        //   local types from the architecture's factory (userop.cc:449-478).
+        let (builtin_id, length_index) = self.base.select_string_copy_function(fd);
+        Self::register_builtin_typed(fd, builtin_id);
+        // cc:752-760: CALLOTHER with 4 inputs, inserted before insertPoint.
+        let copy_op = fd.new_op(4, insert_addr);
+        fd.op_set_opcode(&copy_op, OpCode::CPUI_CALLOTHER);
+        let id_vn = fd.new_constant(4, builtin_id as u64);
+        fd.op_set_input(&copy_op, id_vn, 0);
+        fd.op_set_input(&copy_op, dest_ptr, 1);
+        fd.op_set_input(&copy_op, src_ptr, 2);
+        let len_vn = fd.new_constant(4, length_index as u64);
+        // cc:757-758: lenVn->updateType(copyOp->inputTypeLocal(3)) — the
+        // registered DatatypeUserOp's slot-3 local type (int4).
+        if let Some(int4) = fd
+            .arch
+            .as_ref()
+            .and_then(|a| a.userops.clone())
+            .and_then(|uo| {
+                uo.read()
+                    .unwrap()
+                    .get_input_local(builtin_id as i32, 3)
+                    .cloned()
+            })
+        {
+            len_vn.write().unwrap().update_type_lock(int4, true, false);
+        }
+        fd.op_set_input(&copy_op, len_vn, 3);
+        fd.op_insert_before(&copy_op, &insert_point);
+        Some(copy_op)
+    }
+
+    /// `glb->userops.registerBuiltin(builtInId)` with the DatatypeUserOp
+    /// local types exactly as userop.cc:449-478 constructs them: STRNCPY →
+    /// char element, WCSNCPY → wide char, MEMCPY → void; pointer/int4
+    /// component types from the architecture's TypeFactory. The default
+    /// data-space word size is 1 for the locked x86 gcc corpus (ram).
+    // Ghidra: userop.cc:432 UserOpManage::registerBuiltin (DatatypeUserOp local-type arms 449-478)
+    fn register_builtin_typed(fd: &Funcdata, builtin_id: u32) {
+        use crate::userop::{
+            BUILTIN_MEMCPY, BUILTIN_STRNCPY, BUILTIN_WCSNCPY,
+        };
+        let Some(arch) = fd.arch.as_ref() else { return };
+        let Some(types_arc) = arch.types.clone() else { return };
+        let Some(userops) = arch.userops.clone() else { return };
+        let mut factory = types_arc.write().unwrap();
+        let ptr_size = factory.get_size_of_pointer().max(0) as usize;
+        let element = match builtin_id {
+            BUILTIN_STRNCPY => {
+                let sz = factory.get_size_of_char().max(0) as usize;
+                factory.get_type_char(sz).ok()
+            }
+            BUILTIN_WCSNCPY => {
+                let sz = factory.get_size_of_wchar().max(0) as usize;
+                factory.get_type_char(sz).ok()
+            }
+            BUILTIN_MEMCPY => Some(factory.get_type_void()),
+            _ => None,
+        };
+        let Some(element) = element else { return };
+        let ptr_type = factory.get_type_pointer(ptr_size, element, 1);
+        let Some(int_type) = factory.get_base(4, crate::type_system::TypeMetatype::Int) else {
+            return;
+        };
+        let _ = userops.write().unwrap().register_builtin_with_local_types(
+            builtin_id,
+            Some(ptr_type.clone()),
+            vec![Some(ptr_type.clone()), Some(ptr_type), Some(int_type)],
+        );
+    }
+
+    // Ghidra: constseq.cc:927 HeapSequence::transform
+    /// The user-op representing the string move is created and all the STORE
+    /// ops are removed. Faithful to `HeapSequence::transform`
+    /// (constseq.cc:927-940): gather INDIRECT pairs, deduplicate (aborting on
+    /// partial overlap / source mismatch), build the string-copy CALLOTHER,
+    /// then remove the STORE ops around it. Returns false if any step fails.
+    pub fn transform(&mut self, fd: &mut Funcdata) -> bool {
         // cc:930-932: gather indirect pairs.
         let mut indirects: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
         let mut indirect_pairs: Vec<IndirectPair> = Vec::new();
-        self.gather_indirect_pairs(&mut indirects, &mut indirect_pairs);
+        self.gather_indirect_pairs(fd, &mut indirects, &mut indirect_pairs);
         // cc:933-934: deduplicate (abort on partial overlap / source mismatch).
         if !self.deduplicate_pairs(fd, &mut indirect_pairs) {
             return false;
         }
-        // cc:935-937: build the CALLOTHER. Uses the shared ArraySequence
-        // builder with is_store=true so the store path's destPtr handling runs.
-        let callop = match self.base.build_string_copy(fd, dest_ptr_addr, true) {
+        // cc:935-937: build the CALLOTHER string copy.
+        let callop = match self.build_string_copy(fd) {
             Some(op) => op,
             None => return false,
         };
@@ -1542,51 +1606,47 @@ impl RuleStringCopy {
 impl Rule for RuleStringCopy {
     // Ghidra: constseq.cc:954 RuleStringCopy::applyOp
     fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleStringCopy::applyOp (constseq.cc:954-1002).
-        // Check if this COPY writes a constant into a character array.
-        let opcode = op.read().unwrap().opcode;
-        if opcode != OpCode::CPUI_COPY { return Ok(action_status::NO_CHANGE); }
-        // Input must be constant.
+        // RuleStringCopy::applyOp (constseq.cc:954-972): guards ported
+        // verbatim; the StringSequence analysis itself is NOT yet ported —
+        // collectCopyOps/constructTypedPointer need the ScopeLocal
+        // Symbol/SymbolEntry container query (constseq.cc:963
+        // `queryContainer`) which Rugra's local-scope layer does not expose
+        // yet. Registered as CONSTSEQ-STRINGCOPY-0001; the rule stays inert
+        // (returns no-change) rather than running a substitute collector.
+        let _ = fd;
+        // cc:957: input must be constant.
         let in0 = match op.read().unwrap().inrefs.first() {
             Some(v) => v.clone(),
             None => return Ok(action_status::NO_CHANGE),
         };
-        if !in0.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-        // Output must exist.
-        let out_vn = match &op.read().unwrap().output {
-            Some(o) => o.clone(),
+        if !in0.read().unwrap().is_constant() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // cc:958-962: output varnode gates — char-printable, non-opaque,
+        // address-tied.
+        let out_vn = match op.read().unwrap().output.clone() {
+            Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
         };
-        let root_offset = out_vn.read().unwrap().get_offset();
-
-        // Build ArraySequence and check for a valid string sequence.
-        let mut seq = ArraySequence::new(op.clone());
-        seq.check_interference(fd, root_offset, 1);
-        if !seq.is_valid() { return Ok(action_status::NO_CHANGE); }
-
-        // Form the byte array and validate.
-        let count = seq.form_byte_array();
-        if count < MINIMUM_SEQUENCE_LENGTH { return Ok(action_status::NO_CHANGE); }
-        if !seq.is_valid_string() { return Ok(action_status::NO_CHANGE); }
-
-        // The destination pointer names the first written element. Ghidra
-        // derives this from the Symbol/spacebase (constructTypedPointer,
-        // constseq.cc:273-339); Rugra uses the address of the earliest move
-        // op's output varnode directly.
-        let dest_ptr_addr = seq
-            .move_ops
-            .first()
-            .and_then(|n| n.op.read().unwrap().output.as_ref().cloned())
-            .map(|v| v.read().unwrap().get_offset())
-            .unwrap_or(root_offset);
-
-        // Replace the COPY sequence with a strncpy/wcsncpy CALLOTHER.
-        // Faithful to StringSequence::transform (constseq.cc:453-461).
-        if seq.transform(fd, dest_ptr_addr, false) {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        let out_type = out_vn.read().unwrap().get_type();
+        let Some(out_type) = out_type else {
+            return Ok(action_status::NO_CHANGE);
+        };
+        if !out_type.is_char_print() {
+            return Ok(action_status::NO_CHANGE);
         }
+        if (out_type.get_flags()
+            & crate::type_system::datatype::type_flags::OPAQUE_STRUCT)
+            != 0
+        {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !out_vn.read().unwrap().is_addr_tied() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // cc:963-972: StringSequence lookup + transform — not ported yet
+        // (CONSTSEQ-STRINGCOPY-0001).
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: constseq.cc:948 RuleStringCopy::getName
@@ -1607,158 +1667,61 @@ impl RuleStringStore {
 impl Rule for RuleStringStore {
     // Ghidra: constseq.cc:986 RuleStringStore::applyOp
     fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleStringStore::applyOp (constseq.cc:986-1002). Given a
-        // root STORE of a constant character, gather sibling STOREs in the
-        // same basic block writing consecutive characters through the same base
-        // pointer, and replace them with a single memcpy CALLOTHER.
+        // Faithful to RuleStringStore::applyOp (constseq.cc:986-1002): given
+        // a root STORE of a constant character through a char-printable
+        // pointer, run the full HeapSequence analysis and replace the STORE
+        // family with a single strncpy/wcsncpy/memcpy CALLOTHER.
         let op_guard = op.read().unwrap();
         if op_guard.opcode != OpCode::CPUI_STORE || op_guard.inrefs.len() < 3 {
             return Ok(action_status::NO_CHANGE);
         }
-        // Value being stored (input[2]) must be a constant character
-        // (constseq.cc:989: `op->getIn(2)->isConstant()`).
+        // cc:989: value being stored (input[2]) must be a constant.
         let val_vn = op_guard.inrefs[2].clone();
         if !val_vn.read().unwrap().is_constant() {
             return Ok(action_status::NO_CHANGE);
         }
-        // The store pointer (input[1]) identifies the destination region. We
-        // use its (space, offset) as the base for collecting consecutive stores.
+        // cc:990-995: pointer type gates — TYPE_PTR whose pointee is a
+        // char-printable, non-opaque string element type.
         let ptr_vn = op_guard.inrefs[1].clone();
-        let (ptr_space, ptr_offset, ptr_size) = {
-            let p = ptr_vn.read().unwrap();
-            (p.get_space(), p.get_offset(), p.get_size())
+        let ptr_type = ptr_vn.read().unwrap().get_type_read_facing_op(&op_guard, 1);
+        let Some(ptr_type) = ptr_type else {
+            return Ok(action_status::NO_CHANGE);
         };
-        let root_block = op_guard.parent.as_ref().and_then(|w| w.upgrade());
-        let root_order = op_guard.start.get_order();
-        drop(op_guard);
-
-        // Collect consecutive STOREs of constants through the same base pointer
-        // in the same block. This is a simplified HeapSequence::collectStoreOps
-        // (constseq.cc:663-697): we follow PTRADD-based address arithmetic by
-        // matching the base pointer varnode, accumulating a byte array.
-        let mut store_ops: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
-        let mut byte_array: Vec<u8> = Vec::new();
-        byte_array.push((val_vn.read().unwrap().get_offset() & 0xff) as u8);
-
-        for op_ref in &fd.obank.alivelist {
-            let cand = op_ref.0.read().unwrap();
-            if cand.opcode != OpCode::CPUI_STORE || cand.inrefs.len() < 3 {
-                continue;
-            }
-            // Same block as the root.
-            let cand_block = cand.parent.as_ref().and_then(|w| w.upgrade());
-            if root_block.is_none() || cand_block.is_none()
-                || !Arc::ptr_eq(&cand_block.unwrap(), &root_block.clone().unwrap())
-            {
-                continue;
-            }
-            // Must come at or after the root in sequence order.
-            if cand.start.get_order() < root_order {
-                continue;
-            }
-            // Skip the root op itself.
-            if Arc::ptr_eq(&op_ref.0, op) {
-                store_ops.push(op_ref.0.clone());
-                continue;
-            }
-            // Stored value must be a constant.
-            let c_val = cand.inrefs[2].clone();
-            if !c_val.read().unwrap().is_constant() {
-                continue;
-            }
-            // Store pointer must derive from the same base pointer. We accept
-            // any store whose pointer shares the base varnode identity (the
-            // full HeapSequence walks PTRADD/COPY chains; this is the common
-            // case where each STORE address is PTRADD(base, index, mult)).
-            let c_ptr = cand.inrefs[1].clone();
-            if !Self::ptr_shares_base(&c_ptr, &ptr_vn, ptr_space, ptr_offset, ptr_size) {
-                continue;
-            }
-            let byte = (c_val.read().unwrap().get_offset() & 0xff) as u8;
-            // Insert ordered by sequence number to keep the byte array ordered.
-            let ord = cand.start.get_order();
-            let pos = store_ops
-                .iter()
-                .position(|s| s.read().unwrap().start.get_order() > ord)
-                .unwrap_or(store_ops.len());
-            store_ops.insert(pos, op_ref.0.clone());
-            byte_array.insert(pos, byte);
-        }
-
-        // Require a minimum run of consecutive characters.
-        if (byte_array.len() as i32) < MINIMUM_SEQUENCE_LENGTH {
+        let pointee = match ptr_type.as_ref() {
+            Datatype::Pointer(p) => p.ptr_to.clone(),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        if !pointee.is_char_print() {
             return Ok(action_status::NO_CHANGE);
         }
-
-        // Build the ArraySequence and run the memcpy transform. The destination
-        // pointer is the root store pointer; element size is 1 byte (char).
-        let dest_ptr_addr = ptr_offset;
-        let mut seq = ArraySequence::new(op.clone());
-        seq.char_type = None; // memcpy (size != 1,2) → BUILTIN_MEMCPY
-        seq.num_elements = byte_array.len() as i32;
-        seq.byte_array = byte_array.clone();
-        seq.move_ops = store_ops
-            .iter()
-            .map(|s| WriteNode::new(0, s.clone(), 2))
-            .collect();
-
-        if seq.transform(fd, dest_ptr_addr, true) {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        if (pointee.get_flags()
+            & crate::type_system::datatype::type_flags::OPAQUE_STRUCT)
+            != 0
+        {
+            return Ok(action_status::NO_CHANGE);
         }
+        drop(op_guard);
+        // cc:996-1001: HeapSequence sequence(data, ct, op); isValid();
+        // transform(). new_heap mirrors the Ghidra constructor body
+        // (constseq.cc:907-921) and leaves num_elements == 0 on failure.
+        let mut sequence = HeapSequence::new(op.clone());
+        sequence.base.char_type = Some(pointee);
+        if !sequence.new_heap(fd) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !sequence.base.is_valid() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !sequence.transform(fd) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        Ok(action_status::CHANGE)
     }
 
     // Ghidra: constseq.cc:980 RuleStringStore::getName
     fn get_name(&self) -> &str { "stringstore" }
     // Ghidra: constseq.cc:974 RuleStringStore::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
-}
-
-impl RuleStringStore {
-    // Ghidra: constseq.cc:980 RuleStringStore::ptrSharesBase
-    /// Check whether a STORE pointer varnode `cand_ptr` derives from the same
-    /// base pointer as `base_ptr`. This is a lightweight stand-in for
-    /// HeapSequence::findBasePointer (constseq.cc:465-480): we accept the
-    /// candidate if its pointer varnode is produced by a PTRADD/COPY chain
-    /// whose input[0] is `base_ptr`, or if it is `base_ptr` itself.
-    fn ptr_shares_base(
-        cand_ptr: &Arc<RwLock<Varnode>>,
-        base_ptr: &Arc<RwLock<Varnode>>,
-        _base_space: crate::space::AddressSpace,
-        _base_offset: u64,
-        _base_size: usize,
-    ) -> bool {
-        // Direct identity.
-        if Arc::ptr_eq(cand_ptr, base_ptr) {
-            return true;
-        }
-        // Walk back through PTRADD/COPY defining ops (constseq.cc:470-478).
-        let mut cur = cand_ptr.clone();
-        for _ in 0..32 {
-            let def = {
-                let g = cur.read().unwrap();
-                if !g.is_written() {
-                    return false;
-                }
-                g.get_def()
-            };
-            let Some(def_op) = def else { return false; };
-            let (opc, in0) = {
-                let d = def_op.read().unwrap();
-                (d.opcode, d.inrefs.first().cloned())
-            };
-            if opc != OpCode::CPUI_PTRADD && opc != OpCode::CPUI_COPY {
-                return false;
-            }
-            let Some(in0) = in0 else { return false; };
-            if Arc::ptr_eq(&in0, base_ptr) {
-                return true;
-            }
-            cur = in0;
-        }
-        false
-    }
 }
 
 #[cfg(test)]
@@ -1768,7 +1731,8 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(MINIMUM_SEQUENCE_LENGTH, 4);
-        assert!(MAXIMUM_SEQUENCE_LENGTH > 100);
+        // constseq.cc:22: MAXIMUM_SEQUENCE_LENGTH = 0x20000.
+        assert_eq!(MAXIMUM_SEQUENCE_LENGTH, 0x20000);
     }
 
     #[test]
@@ -1777,156 +1741,113 @@ mod tests {
         assert_eq!(RuleStringStore::new().get_name(), "stringstore");
     }
 
-    #[test]
-    fn test_array_sequence_byte_array() {
-        use crate::address::{Address, SeqNum};
-        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_COPY,
-        ))));
-        // Add 5 COPY ops with constant inputs "Hello"
-        for (i, &ch) in b"Hello\0".iter().enumerate() {
-            let op = Arc::new(RwLock::new(PcodeOp::new(
-                SeqNum::new(Address::new(0x1000 + i as u64), 0), OpCode::CPUI_COPY,
-            )));
-            let const_vn = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(ch as u64, 1)));
-            op.write().unwrap().inrefs.push(const_vn);
-            seq.move_ops.push(WriteNode::new(i as u64, op, 0));
-        }
-        let count = seq.form_byte_array();
-        assert_eq!(count, 6);
-        assert!(seq.is_valid_string());
-        assert_eq!(seq.get_string().unwrap(), b"Hello");
+    /// One-byte char type helper for the byte-array tests (the factory char
+    /// base shape: size 1, align 1).
+    fn char1_type() -> Arc<Datatype> {
+        Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
+            "char".to_string(),
+            1,
+            crate::type_system::TypeMetatype::Int,
+        )))
     }
 
+    fn push_copy_op(seq: &mut ArraySequence, offset: u64, ch: u8) {
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(
+                crate::address::Address::new(0x1000 + offset),
+                0,
+            ),
+            OpCode::CPUI_COPY,
+        )));
+        let const_vn =
+            Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(ch as u64, 1)));
+        op.write().unwrap().inrefs.push(const_vn);
+        seq.move_ops.push(WriteNode::new(offset, op, 0));
+    }
+
+    /// formByteArray (constseq.cc:108-155) over six COPYs writing "Hello\0":
+    /// the leading full-element run counts 5 characters plus the single null
+    /// terminator, and the byte array holds the written bytes.
     #[test]
-    fn test_select_string_copy_function() {
-        use crate::type_system::{TypeBase, TypeMetatype};
-        use crate::userop::{BUILTIN_MEMCPY, BUILTIN_STRNCPY, BUILTIN_WCSNCPY};
-        // char_type None → default size 1 → strncpy (BUILTIN_STRNCPY).
+    fn test_form_byte_array_hello() {
+        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        ))));
+        seq.char_type = Some(char1_type());
+        for (i, &ch) in b"Hello\0".iter().enumerate() {
+            push_copy_op(&mut seq, i as u64, ch);
+        }
+        let count = seq.form_byte_array(6, 0, 0, false);
+        assert_eq!(count, 6);
+        assert_eq!(&seq.byte_array, b"Hello\0");
+    }
+
+    /// A run shorter than MINIMUM_SEQUENCE_LENGTH returns 0 (cc:143-144).
+    #[test]
+    fn test_form_byte_array_too_short() {
+        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        ))));
+        seq.char_type = Some(char1_type());
+        for (i, &ch) in b"Hi\0".iter().enumerate() {
+            push_copy_op(&mut seq, i as u64, ch);
+        }
+        assert_eq!(seq.form_byte_array(3, 0, 0, false), 0);
+    }
+
+    /// Ops beyond the contiguous run (offset >= count*alignSize) are dropped
+    /// from move_ops (cc:145-152): the null terminator stops the count at 6,
+    /// so an extra op at offset 6 must not survive.
+    #[test]
+    fn test_form_byte_array_truncates_extra_ops() {
+        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        ))));
+        seq.char_type = Some(char1_type());
+        for (i, &ch) in b"Hello\0X".iter().enumerate() {
+            push_copy_op(&mut seq, i as u64, ch);
+        }
+        let count = seq.form_byte_array(7, 0, 0, false);
+        assert_eq!(count, 6);
+        assert_eq!(seq.move_ops.len(), 6);
+        assert_eq!(seq.move_ops.last().unwrap().offset, 5);
+    }
+
+    /// selectStringCopyFunction without an attached Architecture falls to
+    /// BUILTIN_MEMCPY with the byte length (constseq.cc:173-174); with no
+    /// char_type the element align defaults to 1 byte.
+    #[test]
+    fn test_select_string_copy_function_fallback() {
+        use crate::userop::BUILTIN_MEMCPY;
+        let fd = Funcdata::new("testsel", crate::address::Address::new(0x1000), 1);
         let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
             crate::address::SeqNum::new(crate::address::Address::new(0x1000), 0),
             OpCode::CPUI_COPY,
         ))));
         seq.num_elements = 5;
-        let (id, len) = seq.select_string_copy_function();
-        assert_eq!(id, BUILTIN_STRNCPY);
-        assert_eq!(len, 5);
-
-        // wchar_t (size 2) → wcsncpy.
-        seq.char_type = Some(Arc::new(Datatype::Base(TypeBase::new(
-            "wchar_t".to_string(), 2, TypeMetatype::Int,
-        ))));
-        let (id, _len) = seq.select_string_copy_function();
-        assert_eq!(id, BUILTIN_WCSNCPY);
-
-        // Unknown size (3) → memcpy, length in bytes.
-        seq.char_type = Some(Arc::new(Datatype::Base(TypeBase::new(
-            "odd".to_string(), 3, TypeMetatype::Int,
-        ))));
-        let (id, len) = seq.select_string_copy_function();
+        let (id, len) = seq.select_string_copy_function(&fd);
         assert_eq!(id, BUILTIN_MEMCPY);
-        assert_eq!(len, 15); // 5 elements * 3 bytes
+        assert_eq!(len, 5);
     }
 
-    /// `ArraySequence::transform` (the StringCopy path) must build a single
-    /// CPUI_CALLOTHER (strncpy) op and destroy the original COPY ops. Faithful
-    /// to StringSequence::transform / buildStringCopy (constseq.cc:347-461).
+    /// RuleStringStore::applyOp gates (constseq.cc:986-995): a STORE whose
+    /// pointer carries no pointer data-type is rejected without change even
+    /// when the stored value is a constant.
     #[test]
-    fn test_transform_copy_emits_callother() {
-        use crate::address::Address;
-        let mut fd = Funcdata::new("teststr", Address::new(0x1000), 1);
-        // Build an ArraySequence with 6 COPY move_ops writing "Hello\0".
-        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
-            crate::address::SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_COPY,
-        ))));
-        seq.num_elements = 6;
-        seq.char_type = None; // size 1 → strncpy (BUILTIN_STRNCPY)
-        seq.byte_array = b"Hello\0".to_vec();
-        for (i, &ch) in b"Hello\0".iter().enumerate() {
-            let cop = fd.new_op(1, Address::new(0x1000 + i as u64));
-            let const_vn = fd.new_constant(1, ch as u64);
-            fd.op_set_input(&cop, const_vn, 0);
-            fd.obank.alivelist.push(cop.clone());
-            seq.move_ops.push(WriteNode::new(i as u64, cop.0.clone(), 0));
-        }
-        let dest_addr = 0x100u64;
-        assert!(seq.transform(&mut fd, dest_addr, false));
-
-        // A CPUI_CALLOTHER op must now exist in the bank.
-        let callother = fd.obank.alivelist.iter().find_map(|r| {
-            let g = r.0.read().unwrap();
-            if g.opcode == OpCode::CPUI_CALLOTHER { Some(r.clone()) } else { None }
-        });
-        let callop = callother.expect("expected a CPUI_CALLOTHER op after transform");
-        // Verify its 4 inputs: index, dest, src, len.
-        let (id_offset, len_offset, nin) = {
-            let g = callop.0.read().unwrap();
-            let id_offset = g.inrefs[0].read().unwrap().get_offset();
-            let len_offset = g.inrefs[3].read().unwrap().get_offset();
-            (id_offset, len_offset, g.inrefs.len())
-        };
-        assert_eq!(nin, 4);
-        // input[0] is the strncpy builtin id constant.
-        assert_eq!(id_offset, crate::userop::BUILTIN_STRNCPY as u64);
-        // input[3] is the length (6 chars).
-        assert_eq!(len_offset, 6);
-
-        // The original COPY ops must be dead (removed by op_destroy_recursive).
-        let remaining_copies = fd.obank.alivelist.iter().filter(|r| {
-            let g = r.0.read().unwrap();
-            g.opcode == OpCode::CPUI_COPY && !g.is_dead()
-        }).count();
-        assert_eq!(remaining_copies, 0, "COPYs should be removed by the transform");
-    }
-
-    /// `ArraySequence::transform` (the StringStore path) selects memcpy and
-    /// builds a CPUI_CALLOTHER. Faithful to HeapSequence::transform /
-    /// buildStringCopy (constseq.cc:698-940).
-    #[test]
-    fn test_transform_store_emits_callother_memcpy() {
-        use crate::address::Address;
-        let mut fd = Funcdata::new("teststore", Address::new(0x1000), 1);
-        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
-            crate::address::SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_STORE,
-        ))));
-        seq.num_elements = 5;
-        seq.char_type = None; // size 1 → strncpy; store path forces memcpy via is_store
-        seq.byte_array = b"abcd\0".to_vec();
-        for (i, &ch) in b"abcd\0".iter().enumerate() {
-            let store = fd.new_op(3, Address::new(0x3000 + i as u64));
-            fd.op_set_opcode(&store, OpCode::CPUI_STORE);
-            let space_cn = fd.new_constant(8, 0);
-            fd.op_set_input(&store, space_cn, 0);
-            let ptr_cn = fd.new_constant(8, 0x2000);
-            fd.op_set_input(&store, ptr_cn, 1);
-            let val_cn = fd.new_constant(1, ch as u64);
-            fd.op_set_input(&store, val_cn, 2);
-            fd.obank.alivelist.push(store.clone());
-            seq.move_ops.push(WriteNode::new(i as u64, store.0.clone(), 2));
-        }
-        // The STORE path selects memcpy because num_elements * char_size != the
-        // char/wchar sizes. With char_type None → size 1 → strncpy; to exercise
-        // the store path's memcpy selection we force a non-char element size.
-        seq.char_type = Some(Arc::new(Datatype::Base(
-            crate::type_system::TypeBase::new("x".to_string(), 4, crate::type_system::TypeMetatype::Int),
-        )));
-        seq.num_elements = 5; // 5 * 4 = 20 bytes → memcpy
-        assert!(seq.transform(&mut fd, 0x2000, true));
-
-        let callother = fd.obank.alivelist.iter().find_map(|r| {
-            let g = r.0.read().unwrap();
-            if g.opcode == OpCode::CPUI_CALLOTHER { Some(r.clone()) } else { None }
-        });
-        let callop = callother.expect("expected a CPUI_CALLOTHER op after store transform");
-        let (id_offset, len_offset, nin) = {
-            let g = callop.0.read().unwrap();
-            let id_offset = g.inrefs[0].read().unwrap().get_offset();
-            let len_offset = g.inrefs[3].read().unwrap().get_offset();
-            (id_offset, len_offset, g.inrefs.len())
-        };
-        assert_eq!(nin, 4);
-        assert_eq!(id_offset, crate::userop::BUILTIN_MEMCPY as u64);
-        // length in bytes = 5 elements * 4 bytes.
-        assert_eq!(len_offset, 20);
+    fn test_rule_string_store_type_gate() {
+        let mut fd = Funcdata::new("testgate", crate::address::Address::new(0x1000), 1);
+        let store = fd.new_op(3, crate::address::Address::new(0x2000));
+        fd.op_set_opcode(&store, OpCode::CPUI_STORE);
+        let space_vn = fd.new_constant(8, 0);
+        fd.op_set_input(&store, space_vn, 0);
+        let ptr_vn = fd.new_constant(8, 0x3000);
+        fd.op_set_input(&store, ptr_vn, 1);
+        let val_vn = fd.new_constant(1, b'x' as u64);
+        fd.op_set_input(&store, val_vn, 2);
+        let res = RuleStringStore::new().apply_op(&store.0, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
     }
 }
