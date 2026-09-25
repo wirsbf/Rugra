@@ -3248,3 +3248,62 @@ STORE/LOAD 的 spacebase 偏移相等」时无条件拒绝 implied——这是 o
 - 残余 main 609 的形状分量（显式临时件 undefined 型裸指针形渲染+decl
   移位重配对）维持 `GETPARAM-EXPLICIT-TEMP-SHAPE-0001`（typeprop/
   varmap/printc 联合域）登记不变。
+
+## 2026-09-25（CSPEC2 lane）：ActionNameVars 消费 badjumptable 旗标（CALLSPEC-0001 (c) 收口）
+
+CALLSPEC 移交件三消费者之一的 (c) 落地：`lookForBadJumpTables`
+（coreaction.cc:2779-2803）此前是登记 no-op（RUGRA-GAP 注释），本轮
+按锁定 oracle 逐行移植，插回 `ActionNameVars::apply` 的 cc:2985 位置
+（linkSymbols → recoverNameRecommendationsForSymbols(GAP) →
+**lookForBadJumpTables** → lookForFuncParamNames → 默认命名环）。
+
+- **`ActionNameVars::look_for_bad_jump_tables`（Ghidra: coreaction.cc:2779
+  ActionNameVars::lookForBadJumpTables）**：按 callspec 注册序扫描；
+  `fc->bad_jump_table()` 为真时取 `fc->getOp()` 的 in(0)（CALLIND 目标=
+  截断残留的疑似 switch 变量），implied+written 且 def 为 CAST 时剥一层
+  （makeRec cc:2822-2828 同款、单层）；随后五道门：isFree 跳过 / high 无
+  符号跳过 / nameLocked 跳过（只改未锁名）/ 符号不在 ScopeLocal 跳过 /
+  以上全过则 `rename_symbol(make_name_unique("UNRECOVERED_JUMPTABLE"))`。
+  Rugra 侧 local 域符号通道=`fd.high_symbols`（linkSymbol attach 桥填充），
+  缺项同时建模 cc:2795 的 sym==null 与 cc:2798 的 getScope()!=localmap
+  （全局 database 符号走 high.symbol Arc 通道，永不进 ScopeLocal）。
+  两阶段形态（先按注册序收集 sym_idx、再依序 rename）与 Ghidra 单循环
+  逐个 rename 观察等价：读段五道门不读名字状态，makeNameUnique 的
+  nametree 演化只由 rename 段按同序驱动。rename 后的名字经 apply 尾部的
+  symbol→High 写回桥（PRINTC-SYMBOL-DECL-0001 在案）进入打印。
+
+**触发链与休眠声明（OPZERO 判例式亲证）**：
+
+- 生产者=flow.cc:754 `fc->setBadJumpTable(true)`（truncateIndirectJump
+  默认失败臂，BRANCHIND→CALLIND + "Treating indirect jump as call" 警告）。
+  httpd 语料亲证该臂活跳：ap_vhost_iterate_given_conn 0x12daeb 站点输出
+  双警告行（"Could not recover jumptable at 0x0012daeb. Too many
+  branches" + "Treating indirect jump as call"）——正是 golden 里
+  `code *UNRECOVERED_JUMPTABLE` 参数命名的产生位置。
+- **flow setter 移交（本车道未写 flow.rs）**：flow.rs:796-797 的
+  TODO(CALLSPEC-0001) `_` 臂一行 setter（字段与访问器已备，fspec.hh:1701
+  镜像）登记移交 FAMAUDIT 并行车道；落地前生产恒 false。
+- 休眠实证：httpd 默认脸（MAX_FUNCS=30）改动前后**字节恒等**（cmp 零差，
+  UNRECOVERED_JUMPTABLE 零出现）+ 双跑确定性；curl **577/0/0** 恒等
+  基线——旗标恒 false ⇒ 消费者全门空转，与 oracle 构造态同判。
+- 触发实证：单测
+  `test_namevars_look_for_bad_jump_tables_rename_fires_on_flag`
+  构造 CALLIND+spec+in(0) 高变量 ScopeLocal 符号链——旗标 false 时名字
+  不动（生产休眠态），置 true（flow.cc:754 等价）后
+  rename→`UNRECOVERED_JUMPTABLE` 且 high_symbols 通道完好。
+
+**activereturn 接线核验（移交件 (d) 判词：已活跳，无需代码）**：
+`ActionActiveReturn`（coreaction.cc:1773-1792 镜像）在
+action.rs:2403 fullloop:protorecovery 注册位（cc:5688）恒在；stage drill
+亲证 ap_vhost_iterate_given_conn 在 stage 349 `fullloop:activereturn`
+内完成 buildOutputFromTrials 单输出形（CALLIND 获得 RAX 输出、
+`[create]` INDIRECT 销毁、第二遍 empty=1）——返回面已是 8B `uVar3`，
+与 direct-runner golden 的 8B `xVar3` 同判（CALLSPEC 报告的 ③ 桶
+16B join `auVar8._0_8_` 面已被 master 演进+SPACEFIX 关闭）。
+processJoins 存根残差维持 COREACTION-JOINSPACE-0001 原登记。
+
+**ap_vhost_iterate_given_conn 残差现状（vs ghidra_httpd_1204.direct-runner
+golden）**：CALLSPEC ② 桶唯余 `void(*)()param_2` vs
+`code *UNRECOVERED_JUMPTABLE` 命名差——本消费者+FAMAUDIT setter 落地后
+收口；类型前缀族（xunknown8/int8/int2）为全局类型脸残差在案；
+Rugra 侧 `switch() {}` 空体残片为截断路径独立残差（blockaction/printc 域）。
