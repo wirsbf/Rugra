@@ -1350,6 +1350,171 @@ impl PrintC {
         self.union_resolutions = fd.union_map.clone();
     }
 
+    // Ghidra: type.cc:586 Datatype::findResolve (snapshot-backed transport)
+    /// The virtual-dispatch mirror of `crate::unionresolve::find_resolve`,
+    /// consulting the doc_function-time `union_resolutions` snapshot
+    /// instead of a live `Funcdata` (the printer holds no fd back-pointer;
+    /// the snapshot is semantically equivalent to `fd.union_map` because
+    /// the map is frozen once printing starts — UNIONRESOLVE-PKG-C-0001).
+    /// Arm-for-arm faithful to the unionresolve twin (type.cc:1192-1202
+    /// Pointer-to-union, type.cc:2137-2145 Union, type.cc:1298-1306 Array,
+    /// type.cc:1944-1952 Struct, type.cc:2517-2534 PartialUnion, base
+    /// type.cc:586-590): the consult key is the same ResolveEdge
+    /// (parent, op-time, slot) the live map uses.
+    fn find_resolve_snap(
+        &self,
+        ct: &Arc<crate::type_system::datatype::Datatype>,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Arc<crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::Datatype;
+        let consulted = |snap: &Self| -> Option<Arc<Datatype>> {
+            snap.union_resolutions
+                .get(&crate::unionresolve::ResolveEdge::new(ct.as_ref(), op, slot))
+                .map(|res| res.get_datatype().clone())
+        };
+        match ct.as_ref() {
+            // type.cc:1192-1202 TypePointer::findResolve
+            Datatype::Pointer(p)
+                if p.ptr_to.get_metatype() == crate::type_system::TypeMetatype::Union =>
+            {
+                consulted(self).unwrap_or_else(|| ct.clone())
+            }
+            // type.cc:2137-2145 TypeUnion::findResolve
+            Datatype::Union(_) => consulted(self).unwrap_or_else(|| ct.clone()),
+            // type.cc:1298-1306 TypeArray::findResolve
+            Datatype::Array(a) => consulted(self).unwrap_or_else(|| a.array_of.clone()),
+            // type.cc:1944-1952 TypeStruct::findResolve
+            Datatype::Struct(s) => consulted(self).unwrap_or_else(|| {
+                s.fields
+                    .first()
+                    .map(|f| f.type_ptr.clone())
+                    .unwrap_or_else(|| ct.clone())
+            }),
+            // type.cc:2517-2534 TypePartialUnion::findResolve
+            Datatype::PartialUnion(pu) => {
+                let size = pu.base.size;
+                let mut cur_type: Option<Arc<Datatype>> = Some(pu.container.clone());
+                let mut cur_off = pu.offset;
+                while let Some(c) = cur_type.clone() {
+                    if c.get_size() <= size {
+                        break;
+                    }
+                    if c.get_metatype() == crate::type_system::TypeMetatype::Union {
+                        // cc:2524-2525: newType = curType->findResolve(op,slot);
+                        //   curType = (newType == curType) ? null : newType;
+                        let new_type = self.find_resolve_snap(&c, op, slot);
+                        if Arc::ptr_eq(&new_type, &c) {
+                            cur_type = None;
+                        } else {
+                            cur_type = Some(new_type);
+                        }
+                    } else {
+                        let (sub, new_off) = c.get_sub_type(cur_off);
+                        cur_off = new_off;
+                        cur_type = sub;
+                    }
+                }
+                if let Some(c) = cur_type {
+                    if c.get_size() == size {
+                        return c;
+                    }
+                }
+                // cc:2533: return stripped;
+                pu.stripped.clone().unwrap_or_else(|| ct.clone())
+            }
+            // type.cc:586-590 Datatype::findResolve (base): return this.
+            _ => ct.clone(),
+        }
+    }
+
+    // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_type_read_facing_op`
+    /// (varnode.rs degenerate form) and `crate::unionresolve::
+    /// vn_type_read_facing` (fd-aware form): `ct->findResolve(op, slot)`
+    /// when the instance type needs resolution (varnode.cc:639-645),
+    /// consulting `self.union_resolutions` (UNIONRESOLVE-PKG-C-0001).
+    fn vn_type_read_facing_snap(
+        &self,
+        vn: &Varnode,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let ct = vn.get_type()?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(self.find_resolve_snap(&ct, op, slot))
+    }
+
+    // Ghidra: varnode.cc:626 Varnode::getTypeDefFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_type_def_facing`:
+    /// `ct->findResolve(def, -1)` when the instance type needs resolution
+    /// (varnode.cc:626-632). A varnode with no defining op keeps the
+    /// fd-aware twin's None degradation (the oracle would pass a null def
+    /// into findResolve, which is unreachable for the resolution-needing
+    /// types the printer consults).
+    fn vn_type_def_facing_snap(
+        &self,
+        vn: &Varnode,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let (ct, def) = {
+            let rg = vn;
+            (rg.get_type(), rg.get_def())
+        };
+        let ct = ct?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        let def = def?;
+        let def_guard = def.read().unwrap();
+        Some(self.find_resolve_snap(&ct, &def_guard, -1))
+    }
+
+    // Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_high_type_read_facing`:
+    /// `ct->findResolve(op, slot)` when the high type needs resolution
+    /// (varnode.cc:665-672).
+    fn vn_high_type_read_facing_snap(
+        &self,
+        vn: &Varnode,
+        op: &PcodeOp,
+        slot: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let ct = vn
+            .high
+            .as_ref()
+            .map(|h| h.read().unwrap().get_type())?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(self.find_resolve_snap(&ct, op, slot))
+    }
+
+    // Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing (snapshot-backed twin)
+    /// The snapshot-backed twin of `Varnode::get_high_type_def_facing`:
+    /// `ct->findResolve(def, -1)` when the high type needs resolution
+    /// (varnode.cc:651-658).
+    fn vn_high_type_def_facing_snap(
+        &self,
+        vn: &Varnode,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let (ct, def) = {
+            let rg = vn;
+            (
+                rg.high.as_ref().map(|h| h.read().unwrap().get_type()),
+                rg.get_def(),
+            )
+        };
+        let ct = ct?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        let def = def?;
+        let def_guard = def.read().unwrap();
+        Some(self.find_resolve_snap(&ct, &def_guard, -1))
+    }
+
     /// First index of the binary-token block appended by build_rpn_token_table
     /// (indices 11..=30, in optoken::BINARY_TOKENS order — printc.cc:36-55).
     const RPN_TOK_BINARY_BASE: usize = 11;
@@ -1915,7 +2080,7 @@ impl PrintC {
             let slot = vn
                 .self_arc()
                 .and_then(|vn_arc| read_op.slot_of_input(&vn_arc))?;
-            vn.get_high_type_read_facing(read_op, slot as i32)
+            self.vn_high_type_read_facing_snap(vn, read_op, slot as i32)
         });
         // HTTPD-CODEREF-SYMBOLIZE-0001 transport: Ghidra's constants always
         // carry a HighVariable whose type ActionInferTypes seeded
@@ -2862,8 +3027,8 @@ impl PrintC {
                     let in0 = op.get_in(0).map(|a| a.read().unwrap());
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                         ),
                         _ => (None, None),
                     }
@@ -2900,8 +3065,8 @@ impl PrintC {
                     let in0 = op.get_in(0).map(|a| a.read().unwrap());
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                         ),
                         _ => (None, None),
                     }
@@ -2947,7 +3112,7 @@ impl PrintC {
                     // printc.cc:847-848: vn = in(0); ct = read-facing type.
                     if let Some(in0_arc) = op.get_in(0) {
                         let vn = in0_arc.read().unwrap();
-                        if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                        if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
                             if ct.is_piece_structured() {
                                 // printc.cc:851: byte offset into composite.
                                 let mut byte_off = Self::compute_byte_offset_for_composite(op);
@@ -3040,8 +3205,8 @@ impl PrintC {
                         .unwrap_or(0);
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, op, 0),
                             off as u32,
                         ),
                         _ => (None, None, off as u32),
@@ -3143,7 +3308,7 @@ impl PrintC {
                 // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
                 let ptype = op
                     .get_in(0)
-                    .and_then(|a| a.read().unwrap().get_high_type_read_facing(op, 0));
+                    .and_then(|a| self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0));
                 // printc.cc:955-956: valueon = (mods & (load|store value)) != 0.
                 let valueon = self.is_set(
                     print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
@@ -3596,7 +3761,7 @@ impl PrintC {
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
         let out_dt = op
             .get_out()
-            .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+            .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
         // printc.cc:452-458: array-decay address-of shortcut.
         // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
         // does not port; we take the common case where in0 is itself an
@@ -3607,9 +3772,7 @@ impl PrintC {
                 let in0_is_array = op
                     .get_in(0)
                     .map(|a| {
-                    a.read()
-                            .unwrap()
-                            .get_high_type_read_facing(op, 0)
+                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
                 })
@@ -3699,7 +3862,7 @@ impl PrintC {
         // printc.cc:836: dt = op->getOut()->getHighTypeDefFacing().
         let out_dt = op
             .get_out()
-            .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+            .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
         // printc.cc:837-839: pushOp(&typecast,op); pushType(dt).
         if !self.option_nocasts {
             self.rpn_push_op(self.rpn_tok_typecast);
@@ -9064,7 +9227,7 @@ impl PrintC {
                 let out_dt = def_op
                     .output
                     .as_ref()
-                    .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+                    .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
                 let type_name = match out_dt {
                     Some(ref dt) => Self::cast_type_string(dt),
                     None => "long".to_string(),
@@ -9154,8 +9317,8 @@ impl PrintC {
                         .unwrap_or(0);
                     match (out, in0) {
                         (Some(o), Some(i)) => (
-                            o.get_high_type_def_facing(),
-                            i.get_high_type_read_facing(def_op, 0),
+                            self.vn_high_type_def_facing_snap(&o),
+                            self.vn_high_type_read_facing_snap(&i, def_op, 0),
                             off as u32,
                         ),
                         _ => (None, None, off as u32),
@@ -13483,7 +13646,7 @@ impl PrintC {
                 // outvn = newop->getOut(); dt = outvn->getTypeDefFacing().
                 newop
                     .get_out()
-                    .and_then(|o| o.read().unwrap().get_type_def_facing())
+                    .and_then(|o| self.vn_type_def_facing_snap(&o.read().unwrap()))
             } else {
                 None
             }
@@ -13790,7 +13953,7 @@ impl PrintC {
                 .get_out()
                 .and_then(|o| {
                 let o_vn = o.read().unwrap();
-                o_vn.get_type_def_facing().map(|dt| {
+                self.vn_type_def_facing_snap(&o_vn).map(|dt| {
                     let mut cur = dt;
                     while let Datatype::Pointer(p) = &*cur {
                         cur = p.ptr_to.clone();
@@ -13881,7 +14044,7 @@ impl PrintC {
             // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
             let ptype = in0
                 .as_ref()
-                .and_then(|v| v.get_high_type_read_facing(op, 0));
+                .and_then(|v| self.vn_high_type_read_facing_snap(v, op, 0));
             (ptype, in1const)
         };
         // printc.cc:943-946: if (ptype->meta != TYPE_PTR) throw.
@@ -14223,7 +14386,7 @@ impl PrintC {
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing();
         let out_dt = op
             .get_out()
-            .and_then(|a| a.read().unwrap().get_high_type_def_facing());
+            .and_then(|a| self.vn_high_type_def_facing_snap(&a.read().unwrap()));
         // printc.cc:452-458: if (dt->isPointerToArray()) { if (checkAddressOfCast(op)) {...} }
         if let Some(ref dt) = out_dt {
             if Self::is_pointer_to_array(dt) {
@@ -14234,9 +14397,7 @@ impl PrintC {
                 let in0_is_array = op
                     .get_in(0)
                     .map(|a| {
-                    a.read()
-                            .unwrap()
-                            .get_high_type_read_facing(op, 0)
+                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
                 })
@@ -17721,8 +17882,8 @@ impl PrintC {
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                 ),
                 _ => (None, None),
             }
@@ -17759,8 +17920,8 @@ impl PrintC {
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                 ),
                 _ => (None, None),
             }
@@ -17868,7 +18029,7 @@ impl PrintC {
             // Field extraction from a piece-structured composite.
             if let Some(in0) = op.get_in(0) {
                 let vn = in0.read().unwrap();
-                if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
                     if ct.is_piece_structured() {
                         // byteOff = TypeOpSubpiece::computeByteOffsetForComposite(op)
                         // (typeop.cc:2195) — endianness-aware; Rugra's x86/x64
@@ -17966,8 +18127,8 @@ impl PrintC {
                 .unwrap_or(0);
             match (out, in0) {
                 (Some(o), Some(i)) => (
-                    o.get_high_type_def_facing(),
-                    i.get_high_type_read_facing(op, 0),
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
                     offset,
                 ),
                 _ => (None, None, offset),
@@ -18229,8 +18390,8 @@ impl PrintC {
         // cast.cc:253-255: explicit output -> empty branch -> falls to return false
         if out.is_explicit() { return false; }
         // outVn metatype (read-facing, via readOp)
-        let out_meta = out
-            .get_high_type_read_facing(read_op, 0)
+        let out_meta = self
+            .vn_high_type_read_facing_snap(&out, read_op, 0)
             .map(|t| t.get_metatype());
         let out_meta = match out_meta { Some(m) => m, None => return false ,
         };
@@ -18274,8 +18435,8 @@ impl PrintC {
                     return false;
                 }
                 // cast.cc:289-290: other metatype must match output metatype
-                let other_meta = other_vn
-                    .get_high_type_read_facing(read_op, 1 - slot as i32)
+                let other_meta = self
+                    .vn_high_type_read_facing_snap(&other_vn, read_op, 1 - slot as i32)
                     .map(|t| t.get_metatype());
                 match other_meta {
                     Some(m) if m == out_meta => true,

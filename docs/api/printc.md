@@ -3453,3 +3453,41 @@ no-op）；STRINGDATA 字面量臂硬编码 `"badstring"`。
   函数逐函数零变化）；httpd canon 860/curl canon 267/curl 镜 101/vsh 镜
   14 全部不变；defects=0/numbering=0；bank 391/391；lib 1735P/1F
   （nonzeromask 预存）；gcc 审计 15OK/14FAIL==基线比率。
+
+### 2026-09-26：UNIONRESOLVE-PKG-C-0001 — printc 29 站点换 snapshot-backed facing 孪生
+
+**背景**（UNION_CONSUMER_AUDIT_2026-09-26 §一/§三 包 C）：oracle 的四个
+facing 方法（varnode.cc:626-672 getTypeDefFacing/getTypeReadFacing/
+getHighTypeDefFacing/getHighTypeReadFacing = `needsResolution() ?
+findResolve(op,slot) : this`）在打印期经 `fd->unionMap` 活查询；Rugra 的
+打印站点此前用 varnode.rs 退化形（consult 恒走 map-miss 臂 `return
+this`）——union 分歧非潜伏（curl golden 含活 union
+`anon_union_16_3_e2f18bb4_for_content`×8）。
+
+- **新增 4 个 snapshot-backed helper**（printc.rs，
+  `vn_type_read_facing_snap`/`vn_type_def_facing_snap`/
+  `vn_high_type_read_facing_snap`/`vn_high_type_def_facing_snap`）+
+  核心镜像 `find_resolve_snap`：unionresolve::find_resolve 的逐臂复刻
+  （type.cc:1192-1202 Pointer-to-union/2137-2145 Union/1298-1306
+  Array/1944-1952 Struct/2517-2534 PartialUnion/586-590 base），consult
+  键=同一 ResolveEdge(parent, op-time, slot)，查询
+  `self.union_resolutions`——**doc_function 入口快照**
+  （snapshot_union_resolutions，printc.rs:10385 唯一调用点），语义等价
+  打印期冻结的 fd.union_map（审计风险提示「快照时点提前会掩盖回归
+  信号」——时点保持入口不变）。
+- **29 处替换**（RPN/legacy 双运输层，每 oracle 行两处）：
+  pushConstant 入口 read-facing（printlanguage.cc:227）、ZEXT/SEXT
+  isZext/isSextCast 双读（cc:789/802）、SUBPIECE 特印臂+isSubpieceCast
+  双读（cc:848/872-873）、PTRSUB in0（cc:942）、opTypeCast out+decay
+  检查（cc:451）、opFloatInt2Float out（cc:835）、emit_inline_expr
+  CAST/SUBPIECE 孪生、opConstructor/opNew 的 TYPE def-facing
+  （cc:726/1246）、legacy op_ptrsub/op_type_cast/op_int_zext/
+  op_int_sext/op_subpiece 全套、isExtensionCastImplied 双读
+  （cast.cc:259/289）。CALLIND code\* 门三处（aligned-in-practice，
+  审计在案）与 glue 兜名一处保持退化形。
+- **效果（本 worktree fast-release 亲测，基=本 lane 票④后）**：五面全部
+  恒等——curl 镜 101/httpd 镜 253/curl canon 267/httpd canon 860/vsh 镜
+  14；defects=0/numbering=0；bank 391/391；lib 1735P/1F
+  （nonzeromask 预存）。语料中性=当前语料的打印站点无 map-hit 臂触发
+  （union 分歧的消费面在 coreaction 已对齐站点）；快照通道为后续 union
+  语料提供 oracle 等价语义。
