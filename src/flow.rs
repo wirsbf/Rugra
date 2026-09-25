@@ -751,8 +751,11 @@ impl<'a> FlowInfo<'a> {
     /// `fail_callother` no-params internal prototype
     /// (`fc->setInternal(glb->defaultfp, void)` + input/output locks,
     /// flow.cc:757-763) remains CALLSPEC-0001 (needs the architecture
-    /// default model plumbing), and `setBadJumpTable` (flow.cc:754) has no
-    /// FuncCallSpecs field yet (CALLSPEC-0001).
+    /// default model plumbing); `setBadJumpTable` (flow.cc:754) is wired
+    /// since the fspec badjumptable data plane landed (CALLSPEC deb2b09b),
+    /// its output consumer `ActionNameVars::lookForBadJumpTables`
+    /// (coreaction.cc:2779-2803, UNRECOVERED_JUMPTABLE naming) rides the
+    /// CSPEC2 lane.
     // Ghidra: flow.cc:727 FlowInfo::truncateIndirectJump
     pub fn truncate_indirect_jump(
         &mut self,
@@ -793,9 +796,11 @@ impl<'a> FlowInfo<'a> {
             }
             // flow.cc:751-755: default (fail_normal) — consider using a
             // special name for the switch variable.
-            // TODO(CALLSPEC-0001): fc->setBadJumpTable(true) — FuncCallSpecs
-            // has no badjumptable field.
             _ => {
+                // flow.cc:754: fc->setBadJumpTable(true).
+                if let Some(fc) = fc_owner.as_ref() {
+                    fc.write().unwrap().set_bad_jump_table(true);
+                }
                 // flow.cc:755: data.warning("Treating indirect jump as call").
                 self.fd.warning("Treating indirect jump as call", addr);
                 (0u32, false)
