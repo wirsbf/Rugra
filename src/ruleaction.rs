@@ -18250,6 +18250,19 @@ impl<'a> AddTreeState<'a> {
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
     ) -> Option<(i64, std::sync::Arc<crate::type_system::datatype::Datatype>, std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
         if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
+            // ruleaction.cc:6033 gates on ct->isFormalPointerRel()
+            // (type.hh:228: (is_ptrrel|has_stripped)==is_ptrrel): the
+            // ephemeral relative pointers built by propagateAddIn2Out carry
+            // has_stripped (markEphemeral, type.cc:4020) and are EXCLUDED
+            // from the AddTree relative accounting — their parent/offset
+            // bookkeeping is owned by the type-propagation layer.
+            let formal = (p.base.flags
+                & (crate::type_system::datatype::type_flags::IS_PTRREL
+                    | crate::type_system::datatype::type_flags::HAS_STRIPPED))
+                == crate::type_system::datatype::type_flags::IS_PTRREL;
+            if !formal {
+                return None;
+            }
             if (p.base.flags & crate::type_system::datatype::type_flags::IS_PTRREL) != 0 {
                 if let Some(rel) = p.base.pointer_rel.as_ref() {
                     return Some((
