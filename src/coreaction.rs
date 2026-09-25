@@ -5413,16 +5413,23 @@ impl ActionSetCasts {
         // cc:300 reqtype = op->inputTypeLocal(slot): the opcode-specific
         // local lookup. CALL resolves its FuncCallSpecs from the slot-0
         // fspec annotation (typeop.cc:694-699); CALLIND resolves it
-        // through the parent Funcdata (typeop.cc:757). The op read guard
-        // is scoped to this lookup alone — vn_high_type_read_facing below
-        // takes its own guards on the same op (read-read recursion under
-        // a waiting writer is not guaranteed with std RwLock).
+        // through the parent Funcdata (typeop.cc:757). The opcode is read
+        // under a temporary guard released before the dispatch: the
+        // CALLIND arm's get_input_local_in_fd -> Funcdata::
+        // get_call_specs_of_op takes its own read lock on this same op,
+        // and a nested read under a live outer guard deadlocks once a
+        // writer queues on the op (std RwLock; CURLWIRE-CR-F1, probe in
+        // the lane report). Ghidra's virtual dispatch reads the opcode
+        // once from a stable op, lock-free, in this exact order;
+        // vn_high_type_read_facing below takes its own guards for the
+        // same reason.
         let reqtype = {
-            let op = op_ref.0.read().unwrap();
-            if op.opcode == OpCode::CPUI_CALLIND {
+            let opcode = op_ref.0.read().unwrap().opcode;
+            if opcode == OpCode::CPUI_CALLIND {
                 crate::typeop::TypeOpCallind::new(type_factory.clone())
                     .get_input_local_in_fd(op_ref, slot, fd)
             } else {
+                let op = op_ref.0.read().unwrap();
                 crate::typeop::TypeOpCall::new(type_factory.clone()).get_input_local(&op, slot)
             }
         };
@@ -5483,7 +5490,7 @@ impl ActionSetCasts {
         // and the base TypeOp::getInputCast (typeop.cc:293-300) is
         // castStandard(inputTypeLocal(slot), highReadFacing, false, true):
         // a null ct means no cast is needed. Annotations get a null ct
-        // (typeop.cc:295). The op guard is dropped before the dispatch so
+        // (typeop.cc:299). The op guard is dropped before the dispatch so
         // the fd-aware read-facing consults (union_map) can take their own
         // guards on the same op.
         let (in_vn, ct_opt, op_pc, in_size) = {
@@ -6555,7 +6562,16 @@ impl ActionSetCasts {
         // the token is char* while the phi-merged output high is FILE*.
         let tokenct = {
             use crate::typeop::TypeOp as _;
-            let op_rg = op.0.read().unwrap();
+            // The opcode is read under a temporary guard released before
+            // the arm dispatch: the CALL/CALLIND arm resolves its callspec
+            // through Funcdata::get_call_specs_of_op, which takes its own
+            // read lock on this same op — a nested read under a live outer
+            // guard deadlocks once a writer queues (std RwLock;
+            // CURLWIRE-CR-F1 audit). Arms needing the &PcodeOp view
+            // re-acquire a local guard; the oracle's virtual dispatch
+            // reads the opcode once from a stable op, lock-free, in this
+            // same order.
+            let opcode = op.0.read().unwrap().opcode;
             // A Ghidra PcodeOp always owns a TypeOp with a TypeFactory; Rugra
             // can represent a detached Funcdata, whose factory-dependent
             // token arms bail out (no bilateral token semantics).
@@ -6563,26 +6579,28 @@ impl ActionSetCasts {
                 .arch
                 .as_ref()
                 .and_then(|architecture| architecture.types.clone());
-            if op_rg.opcode == OpCode::CPUI_PTRSUB {
+            if opcode == OpCode::CPUI_PTRSUB {
                 // typeop.cc:2349-2364 supplies PTRSUB's field-sensitive token,
                 // and coreaction.cc:2541 consumes it at this exact cast stage.
                 // Type inference continues to use getOutputLocal (INT).
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
+                let op_rg = op.0.read().unwrap();
                 let Some(token) = crate::typeop::TypeOpPtrsub::new(type_factory)
                     .get_output_token(&op_rg)
                 else {
                     return 0;
                 };
                 token
-            } else if op_rg.opcode == OpCode::CPUI_PTRADD {
+            } else if opcode == OpCode::CPUI_PTRADD {
                 // typeop.cc:2244: the PTRADD token is the input-0 HIGH
                 // read-facing type ("cast to the input data-type"), not the
                 // output type.
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
+                let op_rg = op.0.read().unwrap();
                 let Some(token) = crate::typeop::TypeOpPtradd::new(type_factory)
                     .get_output_token(&op_rg)
                 else {
@@ -6590,7 +6608,7 @@ impl ActionSetCasts {
                 };
                 token
             } else if matches!(
-                op_rg.opcode,
+                opcode,
                 OpCode::CPUI_INT_ADD
                     | OpCode::CPUI_INT_SUB
                     | OpCode::CPUI_INT_2COMP
@@ -6607,17 +6625,19 @@ impl ActionSetCasts {
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
+                let op_rg = op.0.read().unwrap();
                 let Some(token) =
                     crate::type_system::cast::arithmetic_output_standard(&op_rg, &type_factory)
                 else {
                     return 0;
                 };
                 token
-            } else if op_rg.opcode == OpCode::CPUI_LOAD {
+            } else if opcode == OpCode::CPUI_LOAD {
                 // typeop.cc:473: in(1)->getHighTypeReadFacing(op) — the
                 // read must observe a same-action updateType on the address
                 // varnode (castInput's cast-adjust arm) through the
                 // HighVariable typedirty re-derivation.
+                let op_rg = op.0.read().unwrap();
                 let in1_high = op_rg.get_in(1).and_then(|a| {
                     let vn = a.read().unwrap();
                     vn.get_high_type_read_facing(&op_rg, 1)
@@ -6647,7 +6667,11 @@ impl ActionSetCasts {
                         None => return 0,
                     },
                 }
-            } else if matches!(op_rg.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+            } else if matches!(opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                // Guard-free arm: fd.get_call_specs_of_op re-locks this op
+                // through its own read guard (Funcdata::get_call_specs_of_op),
+                // so no outer op guard may be live here — see the opcode
+                // hoist above (CURLWIRE-CR-F1 audit).
                 // cc:2541 getOutputToken -> outputTypeLocal ->
                 // TypeOpCall::getOutputLocal (typeop.cc:720-735) /
                 // TypeOpCallind::getOutputLocal (typeop.cc:776-789): the
@@ -6692,13 +6716,14 @@ impl ActionSetCasts {
                     None => unknown_base(),
                 }
             } else if matches!(
-                op_rg.opcode,
+                opcode,
                 OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
             ) {
                 // typeop.cc:1518/1558/1608 TypeOpInt{Left,Right,Sright}
                 // ::getOutputToken: the token is the input-0 HIGH
                 // read-facing type, with bool demoted to the factory int
                 // base of the same size.
+                let op_rg = op.0.read().unwrap();
                 let res = op_rg.get_in(0).and_then(|a| {
                     let vn = a.read().unwrap();
                     vn.get_high_type_read_facing(&op_rg, 0)
@@ -6719,7 +6744,7 @@ impl ActionSetCasts {
                     Some(r) => r,
                     None => return 0,
                 }
-            } else if op_rg.opcode == OpCode::CPUI_SUBPIECE {
+            } else if opcode == OpCode::CPUI_SUBPIECE {
                 // typeop.cc:2142-2159 TypeOpSubpiece::getOutputToken: the
                 // token is (1) the field obtained by findTruncation of the
                 // in0 read-facing high type at the SUBPIECE's composite byte
@@ -6730,13 +6755,14 @@ impl ActionSetCasts {
                 // DEF-facing high type when not UNKNOWN; otherwise (3) the
                 // factory INT base — never the ctor's TypeOpFunc UNKNOWN
                 // base (typeop.cc:2117) the generic arm would produce.
+                let op_rg = op.0.read().unwrap();
                 let Some(subpiece_token) =
                     Self::subpiece_output_token(fd, &op_rg, &outvn, &type_factory)
                 else {
                     return 0;
                 };
                 subpiece_token
-            } else if op_rg.opcode == OpCode::CPUI_PIECE {
+            } else if opcode == OpCode::CPUI_PIECE {
                 // typeop.cc:2063-2072 TypeOpPiece::getOutputToken: PIECE
                 // casts to the output's DEF-facing high type when that is
                 // INT or UINT, else the factory UINT base.
@@ -6771,7 +6797,7 @@ impl ActionSetCasts {
                 // (coreaction.cc:2544) exactly as in the oracle. The raw
                 // base_type_for fallback only serves detached fixtures
                 // without an architecture factory.
-                match Self::output_metatype(op_rg.opcode) {
+                match Self::output_metatype(opcode) {
                     Some(m) => type_factory
                         .as_ref()
                         .and_then(|f| f.read().unwrap().get_base(out_size, m))
@@ -14171,6 +14197,16 @@ impl ActionConditionalConst {
                                 .map(|o| o.read().unwrap().is_addr_tied())
                                 .unwrap_or(false);
                             if out_addr_tied { continue; }
+                            // test_alternate_path takes its own read lock
+                            // on this op (cc:4349 form); release this
+                            // iteration's guard first — a nested read
+                            // under a live guard deadlocks once a writer
+                            // queues (std RwLock; CURLWIRE-CR-F1 audit).
+                            // No op mutation sits inside this window: the
+                            // oracle records phiNodeEdges only (cc:4414),
+                            // the rewiring happens later in
+                            // handle_phi_nodes.
+                            drop(op_r);
                             if Self::test_alternate_path(&var_vn, op_arc, in_slot, 2) { continue; }
                             let op_ptr = Arc::as_ptr(op_arc) as usize;
                             phi_node_edges.push((op_ptr, in_slot as usize));
