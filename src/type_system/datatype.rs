@@ -5152,80 +5152,15 @@ impl TypePartialUnion {
         other.base.size as i32 - self.base.size as i32
     }
 
-    // Ghidra: type.cc:2498 TypePartialUnion::resolveInFlow
-    /// Walk down the container union (and any nested composites) until a
-    /// data-type of this partial's size is reached, then return it; otherwise
-    /// return the stripped data-type. Faithful to `resolveInFlow`
-    /// (type.cc:2498-2515).
-    ///
-    /// NOTE: Ghidra's full implementation consults the Funcdata's
-    /// `unionField` cache (via `resolveTruncation`) to pick a specific union
-    /// field based on the reading PcodeOp. Rugra does not yet thread that
-    /// cache through, so this port walks the structural sub-types only and
-    /// returns the first matching-size component, falling back to `stripped`
-    /// when no match is found. `op`/`slot` are accepted for API alignment.
-    pub fn resolve_in_flow(
-        &self,
-        _op: Option<&crate::op::PcodeOp>,
-        _slot: i32,
-    ) -> Option<Arc<Datatype>> {
-        let mut cur_type: Arc<Datatype> = self.container.clone();
-        let mut cur_off = self.offset;
-        let target_size = self.base.size;
-        while cur_type.get_size() > target_size {
-            if cur_type.get_metatype() == TypeMetatype::Union {
-                // Ghidra calls resolveTruncation here; without the Funcdata
-                // union-field cache we cannot pick a field, so stop walking.
-                break;
-            } else {
-                let (sub, no) = cur_type.get_sub_type(cur_off);
-                match sub {
-                    None => break,
-                    Some(s) => {
-                        cur_type = s;
-                        cur_off = no;
-                    }
-                }
-            }
-        }
-        if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.as_ref().clone()))
-        } else {
-            self.stripped.clone()
-        }
-    }
-
-    // Ghidra: type.cc:2517 TypePartialUnion::findResolve
-    /// The constant version of `resolve_in_flow`. Faithful to `findResolve`
-    /// (type.cc:2517-2534): walks the container like `resolve_in_flow`, but
-    /// for unions consults the cached `findResolve` result instead of
-    /// `resolveTruncation`. As with `resolve_in_flow`, Rugra lacks the
-    /// Funcdata union cache, so the union branch stops walking and we fall
-    /// back to `stripped`.
-    pub fn find_resolve(&self, _op: Option<&crate::op::PcodeOp>, _slot: i32) -> Option<Arc<Datatype>> {
-        let mut cur_type: Arc<Datatype> = self.container.clone();
-        let mut cur_off = self.offset;
-        let target_size = self.base.size;
-        while cur_type.get_size() > target_size {
-            if cur_type.get_metatype() == TypeMetatype::Union {
-                break;
-            } else {
-                let (sub, no) = cur_type.get_sub_type(cur_off);
-                match sub {
-                    None => break,
-                    Some(s) => {
-                        cur_type = s;
-                        cur_off = no;
-                    }
-                }
-            }
-        }
-        if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.as_ref().clone()))
-        } else {
-            self.stripped.clone()
-        }
-    }
+    // NOTE (UNIONRESOLVE-PKG-G-0001, 2026-09-26): the degenerate method-form
+    // twins `TypePartialUnion::resolve_in_flow` / `TypePartialUnion::find_resolve`
+    // (former mirrors of type.cc:2498 / type.cc:2517) were deleted here. They
+    // had no production or test callers, walked the container structurally
+    // WITHOUT the Funcdata union-field cache the oracle consults
+    // (type.cc:2505 resolveTruncation / type.cc:2524 findResolve), and
+    // shared names with the faithful fd-aware free functions in
+    // unionresolve.rs (`resolve_in_flow` / `find_resolve` +
+    // `union_resolve_truncation`) — a misuse trap. Use those free functions.
 
     // Ghidra: type.cc:2536 TypePartialUnion::findCompatibleResolve
     /// Delegate to the container union's `findCompatibleResolve`. Faithful to

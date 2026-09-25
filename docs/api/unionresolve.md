@@ -19,7 +19,9 @@ Ghidra reference:
 A data-type resolved from a TypeUnion/TypeStruct (unionresolve.hh:39).
 Holds `Arc<Datatype>` for `resolve` and `base_type`.
 - `new(parent: Arc<Datatype>)` — resolves to itself (cc:25).
-- `with_field(parent, fld_num, typegrp)` — specific field (cc:40).
+- `with_field(parent, fld_num, typegrp: &mut TypeFactory)` — specific field
+  (cc:40); the pointer-parent arm interns via `TypeFactory::get_type_pointer`
+  (type.cc:3867), callers hold a factory write guard.
 - `new_self(parent_name)`, `new_field(parent_name, field_name, fld_num)` —
   RUGRA-GLUE string ctors for legacy callers.
 - `get_datatype()`, `get_base()`, `get_field_num()`, `is_locked()`,
@@ -250,3 +252,33 @@ CAST-PARTIAL-REQ-NOCAST-0001 (cast.rs missing the cast.cc:341-349
 partial no-cast arms) and UNIONRESOLVE-PIPELINE-WIRING-0001 (read-facing
 resolveInFlow + setUnionField producers) on the TODO board. 21/21 module
 tests; full lib 1655 pass / 18 pre-existing failures unchanged.
+
+## 2026-09-26: with_field canonical interning + header producer census（UNIONRESOLVE-PKG-G-0001 / lane PKGG）
+
+- `ResolvedUnion::with_field` signature: `typegrp: &TypeFactory` →
+  `&mut TypeFactory`. The cc:51-55 pointer-parent arm now interns through
+  `TypeFactory::get_type_pointer(parent.size, field, wordSize)`
+  (type.cc:3867 `findAdd` + pointee `getStripped` step) instead of building
+  a structural `Arc::new(Datatype::Pointer(..))`. The resolve Arc is now
+  factory-canonical, so `Arc::ptr_eq` identity comparisons hit exactly
+  where Ghidra's factory-owned `Datatype*` identity does — most notably
+  cast.cc:303-304 `castStandard`'s `curtype == reqtype` no-cast
+  short-circuit (formerly dead for with_field-minted pointers).
+- Callers flipped to write guards: `resolve_in_flow` Array/Struct arm
+  (unionresolve.rs, same lock discipline as the union arms' scoring
+  interning), `Funcdata::force_facing_type` + `Funcdata::apply_union_facet`
+  (funcdata.rs, formerly read guards), and
+  `ActionSetCasts::try_resolution_adjustment`'s `build_resolve`
+  (coreaction.rs, call-site ripple).
+- Header NOTE rewritten: the stale "wiring gap … no pipeline producer"
+  claim is replaced by the producer census — coreaction.rs `resolve_union`
+  (cc:2499) / `castOutput` (cc:2556) / typeprop (cc:5083) + ruleaction.rs
+  `RulePieceStructure` (cc:7678), all via `resolve_in_flow` →
+  `ScoreUnionFields`.
+- Unit gate: `test_with_field_pointer_parent_builds_field_pointer` now
+  also asserts a second `get_type_pointer(8, field, 1)` mint returns the
+  identical Arc (the interning property castStandard rides on).
+- Dead-twin cleanup companion (type_system/datatype.rs):
+  `TypePartialUnion::resolve_in_flow` / `find_resolve` method forms
+  deleted — zero callers, no fd-cache consult (oracle type.cc:2505/2524
+  do consult), name-clash trap with the fd-aware free functions here.

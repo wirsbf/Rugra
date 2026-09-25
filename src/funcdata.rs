@@ -8217,9 +8217,12 @@ impl Funcdata {
     ///   setUnionField(parent, op, slot, resolve);
     /// Rugra: relative pointers (pointerRel) are not modeled as a distinct
     /// Datatype flag yet; the rewrite to a standard pointer is a no-op until
-    /// that metadata lands. The ResolvedUnion is built via `with_field`, which
-    /// needs a TypeFactory; when no arch is attached we fall back to the
-    /// plain `new(parent)` self-resolution.
+    /// that metadata lands. The ResolvedUnion is built via `with_field`
+    /// under a TypeFactory **write** guard (UNIONRESOLVE-PKG-G-0001): the
+    /// cc:51-55 pointer arm interns through `getTypePointer`, mirroring the
+    /// oracle's `*glb->types` mutation channel, so the resolve Arc is
+    /// factory-canonical for the `Arc::ptr_eq` identity family. When no arch
+    /// is attached we fall back to the plain `new(parent)` self-resolution.
     pub fn force_facing_type(
         &mut self,
         parent: std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -8236,11 +8239,11 @@ impl Funcdata {
         // cc:984-985: ResolvedUnion resolve(parent, fieldNum, *glb->types).
         let resolve = if let Some(arch) = &self.arch {
             if let Some(tg) = &arch.types {
-                let tg_guard = tg.read().unwrap();
+                let mut tg_guard = tg.write().unwrap();
                 crate::unionresolve::ResolvedUnion::with_field(
                     parent.clone(),
                     field_num,
-                    &tg_guard)
+                    &mut tg_guard)
             } else {
                 crate::unionresolve::ResolvedUnion::new(parent.clone())
             }
@@ -9241,11 +9244,13 @@ impl Funcdata {
         // cc:1645-1647: fldNum + ResolvedUnion(parent, fldNum, types); setLock.
         let resolve = if let Some(arch) = &self.arch {
             if let Some(tg) = &arch.types {
-                let tg_guard = tg.read().unwrap();
+                // Write guard: with_field interns the pointer arm through the
+                // factory (unionresolve.cc:54, UNIONRESOLVE-PKG-G-0001).
+                let mut tg_guard = tg.write().unwrap();
                 let mut r = crate::unionresolve::ResolvedUnion::with_field(
                     parent.clone(),
                     field_num,
-                    &tg_guard,
+                    &mut tg_guard,
                 );
                 r.set_lock(true);
                 r

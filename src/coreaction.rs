@@ -6337,8 +6337,11 @@ impl ActionSetCasts {
         let build_resolve = |parent: &Arc<crate::type_system::datatype::Datatype>, fld: i32| {
             match &typegrp {
                 Some(tg) => {
-                    let guard = tg.read().unwrap();
-                    crate::unionresolve::ResolvedUnion::with_field(parent.clone(), fld, &guard)
+                    // Write guard: with_field interns the pointer arm through
+                    // the factory (unionresolve.cc:54,
+                    // UNIONRESOLVE-PKG-G-0001).
+                    let mut guard = tg.write().unwrap();
+                    crate::unionresolve::ResolvedUnion::with_field(parent.clone(), fld, &mut guard)
                 }
                 None => crate::unionresolve::ResolvedUnion::new(parent.clone()),
             }

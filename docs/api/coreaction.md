@@ -3601,3 +3601,11 @@ walk φ → gatherOpen int8 点位 → 符号，oracle 同信道因符号层恒 
 对拍（oracle TYPEPROP_DEBUG 直跑 trace 已建，/dev/shm 证据目录）确认其余
 臂（MULTIEQUAL 重包、INT_EQUAL 横传、LOAD/STORE backedge、metain 表）逐行
 同构。
+
+## 2026-09-26：try_resolution_adjustment build_resolve 工厂写 guard（UNIONRESOLVE-PKG-G-0001 调用点 ripple，Lane PKGG）
+
+`build_resolve` 闭包（cc:2447-2457 臂，`ResolvedUnion::with_field` 调用点）
+由工厂**读** guard 改为**写** guard：`with_field` 签名随本票改为
+`&mut TypeFactory`，指针臂执行 oracle unionresolve.cc:54 的
+`typegrp.getTypePointer` interning（type.cc:3867）。本文件仅此一处
+guard 翻转，无其他逻辑变化；调用方不持工厂 guard，无重入面。

@@ -501,3 +501,15 @@ PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 
 - 效果：镜面口径 `(unkbyte1 *)`/`unkbyte1 *` 拼写族清零；canon 档
   undefined1 命名通道同步受益；AVERSE 档位行为不变（explicit new_flavor
   oracle fixtures 不经过这些 miss 臂）。
+
+### 2026-09-26：TypePartialUnion 方法形 resolve_in_flow/find_resolve 删除（UNIONRESOLVE-PKG-G-0001）
+
+`TypePartialUnion::resolve_in_flow(_op,_slot)` 与
+`TypePartialUnion::find_resolve(_op,_slot)`（原 type.cc:2498/2517 的
+方法形镜像）已删除：零生产/测试调用方；且为无 Funcdata union-field
+缓存的退化实现（oracle type.cc:2505 走 `resolveTruncation`、:2524 走
+`findResolve` 缓存），与 unionresolve.rs 的 fd-aware 自由函数
+`resolve_in_flow` / `find_resolve` / `union_resolve_truncation` 重名，
+构成误用陷阱。基类 `Datatype::find_resolve`（type.cc:586，return
+self）保留不变。PartialUnion 的流内解析一律走 unionresolve.rs 自由
+函数。
