@@ -2801,3 +2801,45 @@ newVarnode 同地址替换臂）。修复：比较改为
 （XCROSS lane）空间限定，本行收口该函数最后一个无空间位点。
 
 - 2026-09-25 (FAMAUDIT integration): constructor sites merged to master; this note records the integration commit touching the module.
+
+## 2026-09-25：inject_raw_ops_single 常量输入臂并轨 newVarnode 单臂（CONST-IMPORT-ASSIGNHIGH-0001 收口）
+
+CURB 登记的残差"dump 期 const 输入 assignHigh 未镜像"经锁定源逐环重验后
+**判决=登记前提不成立（oracle 无行为差），机制层并轨收口**。oracle
+`PcodeEmitFd::dump`（funcdata.cc:904-907）对剩余输入只有**一条臂**：
+`vn = fd->newVarnode(vars[i].size,vars[i].space,vars[i].offset)`——常量也
+走全链。全链在 const space 上的逐环退化：
+
+- **create**：`getConstant(val)` 就是 `Address(常量空间,val)`
+  （translate.hh:532-535），Varnode 构造器按空间类型推导
+  `constant` 旗标与 `nzm=offset`（varnode.cc:592-597）——与
+  `VarnodeBank::create_constant`（=create_with_space(Const,…)）逐位相同；
+- **assignHigh**：`highlevel_on` 门（funcdata_varnode.cc:51）在 dump 期
+  恒关——唯一置位者 `setHighLevel`（cc:598-599）仅经 `ActionAssignHigh`
+  （coreaction.hh:346）在 `ActionStart`（startProcessing→followFlow，即
+  dump 发生地）之后运行；dump 期常量的 HighVariable 由 setHighLevel 的
+  catch-up 循环（cc:603-604）统一补挂，Rugra `set_high_level` 同构镜像
+  （无常量过滤——oracle assignHigh 对非 annotation 常量同样建 HighVariable，
+  hasCover 对 constant 恒 false 只跳过 calcCover）；
+- **laned 探针**：`getLanedRegister` **只按尺寸匹配、从不读空间**
+  （architecture.cc:294-306）——lane 尺寸常量会向 `lanedMap` 记入 const
+  space 存储项（oracle 真机制，`create_constant` 旧臂漏镜像）；x86-64
+  pspec 带 `vector_lane_sizes`（XMM/YMM/ZMM），minLanedSize=16 探针门是
+  **活的**，但语料普查 dump 期常量尺寸仅 1/2/4/8（curl+httpd 共 7321
+  站点，全 highlevel_on=false）——无任何常量输入到达 16 字节门 → 现语料
+  休眠；一旦出现 16B 常量，Rugra 现与 oracle 同样记入 const space
+  lanedMap 项（机制恢复，ActionLaneDivide coreaction.cc:592 消费面）；
+- **符号尾**：`stackContainer` 对常量地址先期返回 null
+  （database.cc:950 `if (addr.isConstant()) return (const Scope *)0;`），
+  flags 塌缩为 `getProperty(const addr)`=0——恒零（varmap.rs
+  `query_properties_ex` 的 const 臂镜像该先期返回；parent 腿对非 Ram
+  直接返回）。
+
+修复=常量臂删除 `create_constant` 特例，与全部空间并轨
+`new_varnode_in_space`（funcdata.cc:904-907 单臂形态）。mid-pipeline 的
+`doLiveInject` 侧（同 emitter、highlevel_on 已开、常量即时建 HighVariable）
+Rugra 未接线=既有 INJECT-0001 登记域，不在本票范围。验收：curl/httpd
+默认态输出对亲父 cmp 字节恒等、三门禁双零（curl 369/0/0、httpd 872/0/0，
+与亲父同值）、bank 391/391、触发普查（7321 常量站点全 highlevel_on=false、
+尺寸 1/2/4/8 无一达 16 字节 laned 门）与正控制（16B 常量 const space
+lanedMap 记入、post-highlevel 即时 HighVariable）见 lane 终报。

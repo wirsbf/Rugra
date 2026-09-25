@@ -7147,33 +7147,53 @@ impl Funcdata {
                 }
             }
             // Remaining inputs: newVarnode (fresh Varnode per reference — no
-            // location dedup for either constants or storage reads).
+            // location dedup for either constants or storage reads: each
+            // reference gets its own Varnode, and opSetInput's
+            // has-no-descend guard (funcdata_op.cc opSetInput) therefore
+            // never triggers for dump-time inputs).
             for input_raw in &raw.inputs()[slot..] {
-                let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
-                    self.vbank.create_constant(input_raw.size, input_raw.offset)
-                } else {
-                    // funcdata.cc:899: vn = fd->newVarnode(vars[i].size,
-                    // vars[i].space, vars[i].offset) — the FULL newVarnode:
-                    // vbank.create + assignHigh + laned probe + the
-                    // queryProperties symbol tail (funcdata_varnode.cc:148-169
-                    // via the explicit-space overload cc:239-246). The
-                    // pre-fix bare create_with_space dropped assignHigh and
-                    // the tail; the tail is the import-time property channel
-                    // (PLTSTUB-THUNKRELRO-0001's Varnode::readonly on `.got`
-                    // free ram varnodes — JumpBasic::findNormalized's
-                    // readonly rescue, jumptable.cc:1212-1230 — and the
-                    // global-scope symbol attach the oracle performs at dump
-                    // time). Constants keep create_constant: the tail's
-                    // property closure is hard-zero for the const space and
-                    // assignHigh for dump-time constants stays a declared
-                    // residual (CONST-IMPORT-ASSIGNHIGH-0001) to avoid
-                    // perturbing the verified constant channels.
-                    self.new_varnode_in_space(
-                        input_raw.size,
-                        input_raw.space,
-                        crate::address::Address::new(input_raw.offset),
-                    )
-                };
+                // funcdata.cc:904-907 has ONE arm for every remaining input
+                // — constants included:
+                //   vn = fd->newVarnode(vars[i].size,vars[i].space,vars[i].offset);
+                //   fd->opSetInput(op,vn,i);
+                // (CONST-IMPORT-ASSIGNHIGH-0001 closure: the const-only
+                // create_constant arm was CURB's registered residual; the
+                // chain specialized to the const space is behavior-identical
+                // to create_constant at dump time on x86-64 —)
+                // - vbank.create(s, Address(constspace,off), base type):
+                //   identical Varnode identity to create_constant
+                //   (getConstant(val) IS Address(constant space,val),
+                //   translate.hh:532-535; the ctor derives constant|nzm from
+                //   the space type alone, varnode.cc:592-597);
+                // - assignHigh is highlevel_on-gated (funcdata_varnode.cc:51)
+                //   and the flag is still off at dump time — its sole setter
+                //   is setHighLevel (cc:598-599) via ActionAssignHigh
+                //   (coreaction.hh:346), which runs after ActionStart's
+                //   followFlow; dump-time constants receive their
+                //   HighVariable later through setHighLevel's catch-up loop
+                //   on both sides (funcdata.rs set_high_level, no constant
+                //   filter);
+                // - the laned probe matches by size only (architecture.cc
+                //   getLanedRegister never reads the space), so a lane-sized
+                //   constant records a const-space lanedMap entry on
+                //   laned-register architectures exactly as the oracle does;
+                //   x86-64.pspec carries vector_lane_sizes (XMM/YMM/ZMM) so
+                //   the gate IS live here (minLanedSize=16), but the corpus
+                //   census shows dump-time constants are sizes 1/2/4/8 only
+                //   — no const input ever reaches the 16-byte gate (probe:
+                //   3597+1253+2468+3 sites, curl+httpd, all minlaned=16,
+                //   all highlevel_on=false);
+                // - the queryProperties tail is hard-zero for constants:
+                //   stackContainer returns null before any scope walk
+                //   (database.cc:950 `if (addr.isConstant()) return 0;`),
+                //   leaving flags = getProperty(const addr) = 0
+                //   (varmap.rs query_properties_ex mirrors the early-out in
+                //   its const arm; the parent leg returns for non-Ram).
+                let in_vn = self.new_varnode_in_space(
+                    input_raw.size,
+                    input_raw.space,
+                    crate::address::Address::new(input_raw.offset),
+                );
                 in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
             }
