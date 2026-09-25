@@ -3203,3 +3203,48 @@ size=两 trial 尺寸和、space/offset=constructJoinAddress 结果。
   SYMDB 1328/0/0 不回退，curl 字节恒等。残余 auVar8[16] 打印本体是
   heritage processJoins 拆分 stub 的既有登记残差（golden 侧 join 读被拆分，
   C 文本无 16 字节 var）。
+
+## 2026-09-25（ALIASGATE）：isPossibleAlias 判定移植接入门内（GETPARAM-STORECROSS-ALIASGATE-0001 收口）
+
+`ActionMarkImplied::check_implied_cover` 的 LOAD 跨 STORE 臂
+（coreaction.cc:3384-3399）此前在「LOAD cover interior 包含 STORE 且
+STORE/LOAD 的 spacebase 偏移相等」时无条件拒绝 implied——这是 oracle
+拒绝集的保守超集：oracle 在 cc:3394 偏移相等后还咨询
+`isPossibleAlias(storeop->getIn(1), op->getIn(1), 2)`（fn :3303），
+指针对**可分辨**（provably distinct）则放行（保持内联形）。
+后果=httpd main canon 内联的 `plVar12[9]/plVar12[10]` 字段读被物化为
+显式临时件（GETPARAM +154 的过度物化族分量）。
+
+新增/接线（均带 `// Ghidra:` 行号注释）：
+
+- **`ActionMarkImplied::is_possible_alias`（Ghidra: coreaction.cc:3303
+  ActionMarkImplied::isPossibleAlias）**：完整逐行移植——vn 同一=确定别名；
+  任一侧 unwritten 走常量偏移比较/`is_possible_alias_step`（oracle 对
+  NEAR 常量的 FIXME 保持原样）；step 门先于 def op 比较；PTRSUB 归一为
+  INT_ADD、PTRADD 归一为 INT_ADD 且乘数取 in(2) 偏移的 int4 截断
+  （cc:3322-3333）；归一后 opcode 不等或 depth==0 → 可能别名
+  （cc:3334-3335）；一元值透传族（COPY/ZEXT/SEXT/2COMP/NEGATE）递归
+  in(0)（cc:3338-3343）；INT_ADD 双常量加数按 `mult*offset` 的 uintb
+  回绕乘比较（等→递归基，不等→`!functionalEquality(基,基)`，
+  cc:3347-3353）；任一加数非常量时 mult 不等→可能别名，否则四个
+  functionalEquality 配对选互补槽递归（cc:3354-3362）。锁纪律镜像
+  `functional_equality_level`：op 读锁在递归前释放，无跨调用 op 守卫。
+- **check(1) 臂接线**（cc:3394-3397）：spacebase 偏移相等后改为
+  `if (is_possible_alias(store_in1, load_in1, 2)) return false;`——
+  仅指对可能同址时拒绝；in(1) 结构性缺失（Ghidra 不可能态）保守拒绝。
+- `is_possible_alias_step` 的 `#[allow(dead_code)]` 预留标记移除。
+
+管线级效应（本车道 A/B 双构建亲测，基=cb759c42）：
+
+- curl 默认脸/裸脸（RUGRA_SEEDS=0）与基线**字节恒等**（577/948
+  skeleton，defects/numbering 全零）——语料无放行路径触发。
+- httpd 默认脸 **1257→1179**（main 687→609，其余 30 函数逐函数恒等，
+  零回退）；裸脸 1376→1298 同款。过度物化族回收：`apr_getopt(uVar9,…)
+  →apr_getopt(plVar12[10],…)`（=golden :3579 canon 形）、
+  `apr_array_make/apr_pool_tag/apr_pstrdup(plVar12[9],…)` 全恢复内联。
+- oracle-判决一致物化族**保持**（不回退）：FS canary 显式对
+  （`lVar2 = *(long *)(in_FS_OFFSET + 0x28)`+出口 compare）、call 交叉
+  物化（ap_vhost_iterate_given_conn `lVar3 = plVar6[2]`，golden 同款）。
+- 残余 main 609 的形状分量（显式临时件 undefined 型裸指针形渲染+decl
+  移位重配对）维持 `GETPARAM-EXPLICIT-TEMP-SHAPE-0001`（typeprop/
+  varmap/printc 联合域）登记不变。

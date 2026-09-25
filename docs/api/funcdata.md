@@ -2755,3 +2755,20 @@ local_seed_httpd_1204.json），ActionRestructureVarnode 在 scope 构造点物�
 rugra-tests/bridge1/oracle_main_seeded.c）复现 canon main 声明层
 `long local_d8; long local_d0; long local_c8[4]; local_80[2]; local_70[6]`
 与下标形族。
+
+## 2026-09-25：push_multiequals cc:118 存储地址比较空间限定（FAMILY-AUDIT-SPACELESS-SITES-0001）
+
+`Funcdata::pushMultiequals` cc:118
+`if ((origvn->getAddr() == op->getOut()->getAddr()) && origvn->isAddrTied())`
+中，`Address::operator==`（address.hh:356-358）比较 **空间与偏移双元组**——
+寄存器空间 origvn 与栈/RAM 空间 MULTIEQUAL out 同偏移**不是**同一存储地址。
+Rugra 侧（funcdata.rs `push_multiequals` dead-edge 臂）原为无空间偏移比较，
+跨空间同偏移时错置 `neednewunique`（oracle：空间不同 → false → 走 cc:135
+newVarnode 同地址替换臂）。修复：比较改为
+`out.address_space == orig.address_space && *out.get_addr() == *orig.get_addr()`
+双条件。探针实证（curl/httpd 默认态）：位点触发 curl 13 次/httpd 115 次，
+其中 off_eq=true 且 addrtied=true 的可翻转子集 **全部同空间**（curl 4：
+2 Ram/Ram+2 Stack/Stack；httpd 74：73 Ram/Ram+1 Stack/Stack），零跨空间翻转
+→ 输出 cmp 字节恒等 = 等价性实证而非休眠；跨空间同偏移一旦出现即按 oracle
+判 false。本文件同函数 cc:135 替换臂已由 HERITAGE-CROSSSPACE-MERGE-0001
+（XCROSS lane）空间限定，本行收口该函数最后一个无空间位点。
