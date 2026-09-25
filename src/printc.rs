@@ -10938,6 +10938,15 @@ impl PrintLanguage for PrintC {
         // fresh `PrintC` per function, so an instance field could not enforce
         // "once per file"; instead a process-wide AtomicBool guarantees the
         // typedefs are emitted exactly once across the whole decompile run.
+        // GENSMOKE-T1 note: the preamble is a canon-tier self-containment
+        // artifact with no oracle counterpart (direct-runner goldens carry
+        // zero typedef lines), but it CANNOT be tier-gated here: the curl
+        // driver's multi-process worker protocol reconstructs the latch at
+        // the process boundary and requires every worker document to start
+        // with this exact preamble (TYPEDEF_PREAMBLE +
+        // normalize_worker_typedefs, examples/curl_decompile.rs:5974-5990).
+        // compare_ghidra.py:109/141 normalizes typedef lines out of every
+        // diff face, so the preamble is invisible to all four gates.
         if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
             // Ghidra: printc.cc:2621-2628 PrintC::docAllGlobals — document-
             // level declarations ride inside beginDocument .. endDocument

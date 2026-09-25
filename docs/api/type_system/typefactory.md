@@ -85,6 +85,44 @@ Create a new TypeFactory and initialize core types
 # Arguments
 * `ptr_size` - Default pointer size for the target architecture (e.g., 4 or 8)
 
+**2026-09-25（GENSMOKE-T1，wt/vshfix）**: `new` 现按进程档位选择核心类型表
+（flavor）。oracle 有两个 harness 档：`SleighArchitecture::buildCoreTypes`
+（sleigh_arch.cc:204-238）在架构描述无 `<coretypes>` 元素时装**控制台/独立**
+表（`xunknownN`/`int4`/`uint1`/`code`）= direct-runner 契约；
+`ArchitectureGhidra` 接收 Java 客户端 `<coretypes>` 流
+（PcodeDataTypeManager.encodeCoreTypes）拼 `undefinedN`/`int`/`long` =
+canon headless 门。Rugra 驱动以环境变量选契约（curl/httpd =
+`RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`，泛化驱动 = `RUGRA_GEN_MIRROR`，
+MIRROR-ENVS-CANONICAL-0001），故 `new` 在这些进程中构造 Standalone 表，
+默认进程保持 DataOrg（canon 脸不变）。探测函数为
+[`direct_runner_tier_active`](#pub-fn-direct_runner_tier_active---bool)。
+显式 `new_flavor` 调用方（oracle fixtures）不受影响。
+
+### `pub fn direct_runner_tier_active() -> bool`
+
+进程级档位探针（RUGRA-GLUE，Ghidra 以架构子类选择 buildCoreTypes 而非
+环境）：`RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`/`RUGRA_GEN_MIRROR` 任一在进程
+环境中即本进程运行 direct-runner（独立 SLEIGH）oracle 契约。当前消费方 =
+`TypeFactory::new` 的表档位选择。（printc.rs 的 typedef 前言**不**消费此
+探针——curl 驱动的 worker 协议要求每个 worker 文档以 TYPEDEF_PREAMBLE
+开头（examples/curl_decompile.rs:5974-5990），档位化会在那里破裂；
+typedef 行被 compare_ghidra.py:109/141 从所有差分面归一化掉。）
+
+### `pub fn get_type_array(num_elements: usize, array_of: Arc<Datatype>) -> Arc<Datatype>`
+
+`TypeFactory::getTypeArray(as,ao)`（type.cc:3902-3909）的移植：先对元素做
+一次虚 `getStripped`（:3905-3906），再按 `TypeArray(int4 n, Datatype *ao)`
+内联构造子（type.hh:937-946）铸**匿名**壳——3 参 `Datatype(size,
+alignment, TYPE_ARRAY)` 基构造（type.hh:215）给出空名/空显示名、
+`size = n × ao->getAlignSize()`、`alignSize = size`、`alignment =
+ao->getAlignment()`、`submeta = base2sub[TYPE_ARRAY]`、零 flag——随后
+`findAdd`（type.cc:3412）findNoName 结构树去重；`n == 1` 时置
+`needs_resolution`（type.hh:944-945）。匿名名对打印承重：buildTypeStack
+（printc.cc:148-151）钻过无名 ARRAY 层，声明拼 `T name [N]`
+（array_expr postsurround，printc.cc:76）。首个消费方 =
+`varmap.rs` `create_entry`（varmap.cc:625，TYPE-WIRING-0001 收口，
+GENSMOKE-T5）。
+
 ### `pub fn find_by_name(&self, name: &str) -> Option<Arc<Datatype>>`
 
 Find a type by name

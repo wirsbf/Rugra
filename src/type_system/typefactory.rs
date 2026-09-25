@@ -138,6 +138,27 @@ pub enum CoreTypeFlavor {
     Standalone,
 }
 
+// RUGRA-GLUE: process-tier probe standing in for Ghidra's architecture-class
+// selection of the core-type table. The oracle has two harness faces:
+// SleighArchitecture::buildCoreTypes (sleigh_arch.cc:204-238) installs the
+// console/standalone table (`xunknownN`/`int4`/`uint1`/`code`) when the
+// architecture description carries no `<coretypes>` element — the direct-
+// runner harness contract; ArchitectureGhidra receives the Java client's
+// `<coretypes>` stream (PcodeDataTypeManager.encodeCoreTypes) and spells
+// `undefinedN`/`int`/`long` — the canonical headless gate. Rugra's drivers
+// select the contract by environment (RUGRA_MIRROR / RUGRA_FLOW_MIRROR for
+// curl/httpd, RUGRA_GEN_MIRROR for the generalization driver; see
+// MIRROR-ENVS-CANONICAL-0001), so every `TypeFactory::new` constructed in
+// such a process must take the standalone table, exactly as the locked
+// direct-runner goldens (tests/golden/*_1204.direct-runner.c) spell it.
+/// Whether this process runs the direct-runner (standalone SLEIGH) oracle
+/// contract instead of the canonical headless contract.
+pub fn direct_runner_tier_active() -> bool {
+    std::env::var_os("RUGRA_MIRROR").is_some()
+        || std::env::var_os("RUGRA_FLOW_MIRROR").is_some()
+        || std::env::var_os("RUGRA_GEN_MIRROR").is_some()
+}
+
 impl TypeFactory {
     // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
     // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
@@ -146,7 +167,12 @@ impl TypeFactory {
     /// # Arguments
     /// * `ptr_size` - Default pointer size for the target architecture (e.g., 4 or 8)
     pub fn new(ptr_size: usize) -> Self {
-        Self::new_flavor(ptr_size, CoreTypeFlavor::DataOrg)
+        let flavor = if direct_runner_tier_active() {
+            CoreTypeFlavor::Standalone
+        } else {
+            CoreTypeFlavor::DataOrg
+        };
+        Self::new_flavor(ptr_size, flavor)
     }
 
     /// Construct with an explicit core-unknown registration flavor; the
@@ -2214,6 +2240,59 @@ impl TypeFactory {
     ) -> Arc<Datatype> {
         self.get_type_pointer_result(size, ptr_to, wordsize, true)
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
+    }
+
+    // Ghidra: type.cc:3902 TypeFactory::getTypeArray(as,ao)
+    /// Find/create an array of `num_elements` elements of `array_of`,
+    /// canonicalized through the factory's structural tree (findAdd /
+    /// findNoName dedup, type.cc:3412/3377). Faithful to the oracle:
+    ///
+    /// - One virtual `getStripped` step on the element type first
+    ///   (type.cc:3905-3906), exactly as `getTypePointer` does.
+    /// - The `TypeArray(int4 n, Datatype *ao)` constructor
+    ///   (type.hh:937-946) builds the ANONYMOUS shell through the 3-arg
+    ///   `Datatype(size, alignment, TYPE_ARRAY)` base constructor
+    ///   (type.hh:215): empty name/display name, `size = n *
+    ///   ao->getAlignSize()`, `alignSize = size`, `alignment =
+    ///   ao->getAlignment()`, `submeta = base2sub[TYPE_ARRAY]`, zero flags —
+    ///   and then sets `needs_resolution` when `n == 1` (a size-1 array
+    ///   should generally be treated as the element data-type).
+    ///
+    /// The anonymous name is load-bearing for printing: `buildTypeStack`
+    /// (printc.cc:148-151) drills an unnamed ARRAY layer, so a declaration
+    /// spells `T name [N]` (array_expr postsurround after the identifier,
+    /// printc.cc:76/294-295) and never bakes the bracket into the type name.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `array_of` moved in; the (possibly
+    ///   stripped) element Arc is stored inside the shell. No caller state
+    ///   mutated beyond the factory trees.
+    /// - Loop bounds/order: none (single construction).
+    /// - Counter/accumulator: none; `num_elements` is the stored arity.
+    /// - Sort/compare key: the findAdd anonymous arm compares through the
+    ///   structural tree key (submeta, dependency pointer, size, id —
+    ///   `DatatypeCompare` type.hh:306), never the name.
+    pub fn get_type_array(&mut self, num_elements: usize, array_of: Arc<Datatype>) -> Arc<Datatype> {
+        let array_of = Datatype::get_stripped_arc(&array_of).unwrap_or(array_of);
+        // type.hh:937: Datatype(n*ao->getAlignSize(), ao->getAlignment(),
+        // TYPE_ARRAY); type.hh:215 sets alignSize = size, id = 0.
+        let size = num_elements * array_of.get_align_size();
+        let mut base =
+            crate::type_system::datatype::TypeBase::new(String::new(), size, TypeMetatype::Array);
+        base.alignment = array_of.get_alignment() as i32;
+        // type.hh:944-945: `if (n == 1) flags |= needs_resolution;`
+        if num_elements == 1 {
+            base.flags |= crate::type_system::datatype::type_flags::NEEDS_RESOLUTION;
+        }
+        self.find_add(
+            Datatype::Array(crate::type_system::datatype::TypeArray {
+                base,
+                array_of,
+                num_elements,
+            }),
+            true,
+        )
+        .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.hh:429 TypePointer::downChain (virtual call site)

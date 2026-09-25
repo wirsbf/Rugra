@@ -1031,7 +1031,15 @@ impl EmitNoMarkup {
             // spaces(1) on each side of `true`), the one Ghidra form whose
             // bytes include ` )`; the trim/collapse would destroy it.
             // `while` is a keyword, so only that form starts with `while(`.
-            if !t.starts_with("while(") {
+            // GENSMOKE-T6: the BlockInfLoop trailer carries the same compact
+            // bytes after its closing brace — `} while( true );`
+            // (printc.cc:3111-3120: closeBraceIndent + spaces(1) +
+            // KEYWORD_WHILE + openParen + spaces(1) + KEYWORD_TRUE +
+            // spaces(1) + closeParen + SEMICOLON). tagLine/closeBrace force
+            // the line boundary, so the form is always line-initial after
+            // trim; the trailer is the second (and only other) Ghidra emit
+            // sequence whose bytes include ` )`.
+            if !(t.starts_with("while(") || t.starts_with("} while( true );")) {
                 let trimmed_start = line.len() - line.trim_start().len();
                 let indent_part = &line[..trimmed_start];
                 let content = &line[trimmed_start..];
