@@ -3480,3 +3480,29 @@ DAG，无环不变量与 oracle 相同；`count += 1`（cc:3434）逐帧累加�
   跨 store 物化族）。
 - ALIASGATE 已恢复的内联族（plVar12[9]/[10] 等）不回退——DFS 只
   影响 cover 延伸形态，可分辨指针对仍由 is_possible_alias 放行。
+
+## 2026-09-25：canonicalize_temp_type 相对指针保形（UNIONRES-RELPTR-SCOREPARITY-0001，wt/unionf2）
+
+无名 Pointer 臂的 `get_ptr` 重建此前对**相对指针**（Ghidra `TypePointerRel`，
+临时形=type.cc:4016-4022 `getTypePointerRel(parentPtr,ptrTo,off)` 经
+`markEphemeral`，正式形=`is_ptrrel` 位）一律执行，把 parent/offset 状态剥掉
+后换成裸指针 —— oracle 的 `propagateTypeEdge`（coreaction.cc:5104-5110）是
+`setTempType(newtype)` 原样落 temp，无任何重建步；`propagateAddIn2Out`
+（typeop.cc:1241）产出的临时 rel 指针因此完整存活到消费端
+（`TypePointerRel::downChain` type.cc:2656 的 parent 重入、
+`TypePointer::resolveInFlow`→`ScoreUnionFields` 的 whole-union trial）。
+Rugra 剥壳后评分链在 (INT_ADD,slot=0) 边收到 plain 指针，whole trial 的
+downChain 对 union pointee 返回 NULL，恒 0 分 —— 正是 match_url/next_url
+sprintf 参数边 oracle [5,5,0,5]（whole 平局胜→不解析，canon 印
+`(int8)&...content + 8`）vs Rugra [0,5,0,5]（Set 胜→过度解析印
+`.content.Set + 8`）的 +5 评分差根因。
+
+修复：Pointer 臂在 `get_ptr` 重建前置守卫 —— `pointer_rel` 状态或
+`IS_PTRREL` 位的指针直接保留原 Arc。安全性论证：临时 rel 形构造即过
+`findAdd` 工厂 intern（`get_type_pointer_rel_ephemeral`），结构等价类型已
+共享单 Arc，本函数存在的「writeBack `Arc::ptr_eq` 收敛」目的对 rel 形自动
+成立，重建是纯信息损失。验收：curl skeleton 396→377（match_url 21→19 即
++2/函数过度解析族归零、glob_set 21→16、glob_range 23→19、getparameter
+53→45，124 函数零回退），httpd 896 字节恒等，defects/numbering 0/0，
+bank 391/391，gcc 审计 104/20 恒等，双跑 cmp 恒等（安静机器；构建窗口内
+首跑有既有 timing 噪声家族）。

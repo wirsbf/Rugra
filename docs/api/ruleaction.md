@@ -1869,3 +1869,21 @@ HERITAGE-PJOINS-UNLINKED-0001 降级：响亮 log + 保持 unique 输出（=orac
 端序分支不变。行为验收：httpd/curl 与亲父 cmp 字节恒等（join 臂两语料
 零触发——Rugra 生产者仅 httpd ap_init_vhost_config 铸 join 且不流经
 MULTIEQUAL→SUBPIECE）。
+
+## 2026-09-25：AddTreeState::ptr_rel_state 正式形闸门（UNIONRES-RELPTR-SCOREPARITY-0001 配套，wt/unionf2）
+
+`AddTreeState` 构造器（ruleaction.cc:6033）对相对指针的 parent/offset 记账
+以 `ct->isFormalPointerRel()`（type.hh:228：
+`(is_ptrrel|has_stripped)==is_ptrrel`）为闸门 —— **临时** rel 形
+（`markEphemeral` type.cc:4020 置 `has_stripped`）被排除，其 parent/offset
+簿记归类型传播层所有；Rugra 的 `ptr_rel_state` 只查 `IS_PTRREL` 位，把临时
+形也计入 `baseType=parent`/`nonmultsum=offset` 记账。
+
+该缺口此前不可见：`canonicalize_temp_type` 把 temp 里的临时 rel 剥成 plain，
+AddTree 从未见过 rel 形。上游保形修复（见 docs/api/coreaction.md 同日条目）
+落地后它立即显形为 RulePtrArith/AddTree 的**无限重写环** —— match_url 单函数
+>180s 不收敛（AddTree 对自己产出的 PTRSUB 后继反复重写，`op_insert_before`
+Vec 搬移为热点，投影卡 401+ stage 不终）。修复：`ptr_rel_state` 头部加正式形判定
+（`IS_PTRREL|HAS_STRIPPED` 组合等于 `IS_PTRREL` 才入记账），临时形落默认
+plain 臂。修复后 match_url 1.1s 收敛，投影终态 340 stage/172 ops ==
+oracle 投影终态（tests/fixtures/projections/curl_match_url 同数）。

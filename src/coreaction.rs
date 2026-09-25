@@ -7677,6 +7677,25 @@ fn canonicalize_temp_type(
             let mut factory = factory
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // A relative pointer (Ghidra TypePointerRel, either the ephemeral
+            // form from TypeFactory::getTypePointerRel type.cc:4016-4022 or
+            // the formal is_ptrrel form) is already factory-interned by
+            // findAdd at construction; the oracle's propagateTypeEdge stores
+            // it verbatim (coreaction.cc:5108 setTempType(newtype) — no
+            // rebuild step). Rebuilding via get_ptr would drop the
+            // parent/offset state that TypePointerRel::downChain (type.cc:
+            // 2656) and the union resolution chain read, so keep the
+            // original Arc: interning already guarantees the shared-Arc
+            // settling this canonicalization step exists for.
+            if let Datatype::Pointer(p) = dt.as_ref() {
+                if p.base.pointer_rel.is_some()
+                    || (p.base.flags
+                        & crate::type_system::datatype::type_flags::IS_PTRREL)
+                        != 0
+                {
+                    return dt.clone();
+                }
+            }
             let canonical = factory.get_ptr(pointee);
             if canonical.get_size() == dt.get_size()
                 && canonical.get_metatype() == TypeMetatype::Pointer
