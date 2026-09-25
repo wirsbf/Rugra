@@ -25,6 +25,8 @@ Usage (C4 DWARF-struct mode):
 Usage (V3 callee-siglock mode):
   harvest_local_manifest.py --callee GOLDEN.c CORPUS ORACLE_COMMIT OUT.json [--targets main,ap_fini]
                                                [--dwarf-types BINARY]
+Usage (CMT warning-comment mode):
+  harvest_local_manifest.py --cmt BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json
 """
 import hashlib
 import json
@@ -1363,7 +1365,330 @@ def harvest_dwarf(binary, golden_path=None, canon_types=True):
     return functions, drops
 
 
+# ---------------------------------------------------------------------------
+# CMT warning-comment mode (CMTSEED lane; CMTFILL hand-over promotion). The
+# canon golden's `/* Unresolved local var: ... */` blocks are the analyzeHead
+# less Java front-end's unresolved-variable warnings stored through the
+# program comment database (type=warning; printlanguage.cc:582 instr_comment
+# _type user2|warning prints them mid-body). The decompiler reads them back
+# through CommentSorter::findPosition (comment.cc:270: the first op at-or-
+# after the anchor whose basic block contains the anchor address, else the
+# spaceless exact-match backup at comment.cc:298-306 which hangs the comment
+# on an op only when op.addr == comm.addr) and PrintC's emitLineComment
+# renders the block (20-col `/* ` first line, 23-col commentfill
+# continuations — the emitter's ` */` closer is never part of the record
+# text). The channel harvests:
+#   - text: verbatim from the canon golden (presence gate: only records
+#     canon itself prints; never re-spelled from DWARF types);
+#   - anchors: .debug_info scope structure (function-domain group ->
+#     concrete subprogram low_pc; lexical-domain group -> scope low_pc or
+#     the scope's DW_AT_ranges FIRST interval begin; group members are
+#     variables whose location is DW_FORM_sec_offset or absent — exprloc
+#     vars resolve to named locals and never join a record);
+#   - matching: per function, exact var-name-sequence equality against the
+#     DWARF groups in canon order, one group consumed per record;
+#   - calibration (curl table below): the backup path's exact-match
+#     requirement means an anchor in a dead-coded entry prologue or a
+#     mid-instruction lexical-block start has no live op and the record is
+#     excised; each calibration re-anchors to the first live op of the
+#     statement canon anchors the block before (RUGRA_DUMP_FUNC dumps;
+#     e40ed130 stage_cmt_diag oracle re-verified: 17 records / 45 lines
+#     byte-exact vs canon).
+# ---------------------------------------------------------------------------
+
+CMT_HARVEST_RULE = (
+    "canon golden text gate (`/* Unresolved local var: ... */` blocks, "
+    "20-col `/* ` first line / 23-col commentfill continuations, emitter "
+    "closer stripped — record text is verbatim canon output, never "
+    "re-spelled from DWARF); anchors from .debug_info: function-domain "
+    "group -> concrete subprogram low_pc, lexical-domain group -> scope "
+    "low_pc | DW_AT_ranges FIRST interval begin, members = variables with "
+    "DW_FORM_sec_offset or absent location (exprloc vars become named "
+    "locals); per-function matching by exact var-name sequence in canon "
+    "order, one group per record; calibration table per corpus (e40ed130 "
+    "stage_cmt_diag oracle-verified): CommentSorter::findPosition backup "
+    "path (comment.cc:298-306) requires op.addr == comm.addr, so "
+    "dead-coded-prologue / mid-instruction anchors re-anchor to the first "
+    "live op of the canon-anchored statement; records keyed by canon "
+    "golden addresses (ELF vaddr + 0x100000)"
+)
+
+# Curl corpus calibrations: raw DWARF anchor -> (live-op anchor, reason).
+# Each target is the first live op of the statement canon anchors the
+# block before; CMTFILL lane oracle evidence (stage_cmt_diag @ e40ed130,
+# /dev/shm/rugra-reports/LANE_CMTFILL_2026-09-25.md).
+CMT_CALIBRATIONS_CURL = {
+    0x3720: (0x3729, "my_get_token INT_EQUAL if((line==0)&&..): entry prologue dead-coded"),
+    0x3840: (0x3850, "my_get_line PTRSUB buf-alias (5 live ops; oracle placement identical to the entry anchor)"),
+    0x3C80: (0x3C91, "parseconfig INT_ADD canary read: entry prologue dead-coded"),
+    0x3F00: (0x3F52, "getparameter first op after the alias-ptr init statements (for-init COPY@0x3f02 sorts below them in the op tree)"),
+    0x4283: (0x428D, "getparameter CALL strchr(...,0x3a): lexical-block start lands mid-instruction"),
+    0x44AF: (0x44BB, "getparameter COPY ';auto' (strstr arg): lexical-block start lands mid-instruction"),
+    0x5220: (0x522E, "match_url LOAD *filename (movzbl (%rdi)): entry prologue dead-coded"),
+}
+
+# canon emitter forms: 20-col `/* ` first line, 23-col commentfill
+# continuation (CMTFILL PRINTC-COMMENTFILL-ARM: 20 indent + 3 fill).
+CMT_FIRST_LINE = re.compile(r"^ {20}/\* (Unresolved local var: .*)$")
+CMT_CONT_LINE = re.compile(r"^ {23}(Unresolved local var: .*)$")
+# golden function header line (column 0 starts the signature)
+CMT_FUNC_HEAD = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*(?:[ \*]+[A-Za-z_][A-Za-z0-9_]*)*)\("
+)
+# record text -> the variable's DWARF name (text spelling is canon's)
+CMT_VAR_NAME = re.compile(r"Unresolved local var: .*?([A-Za-z_][A-Za-z0-9_]*)@\[")
+
+
+def parse_cmt_blocks(path):
+    """canon golden -> [(func_name, [record line, ...])] in file order.
+
+    The text gate: blocks are exactly the emitter's rendered form; the
+    ` */` closer belongs to the emitter and is stripped from the record."""
+    blocks = []
+    cur_func = None
+    pending = None
+
+    def close():
+        nonlocal pending
+        if pending is not None:
+            blocks.append((cur_func, pending))
+            pending = None
+
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if line and not line[0].isspace():
+                m = CMT_FUNC_HEAD.match(line)
+                if m:
+                    cur_func = m.group(1).split()[-1].lstrip("*")
+                close()
+                continue
+            fm = CMT_FIRST_LINE.match(line)
+            if fm:
+                close()
+                rec0 = fm.group(1)
+                if rec0.endswith(" */"):
+                    rec0 = rec0[: -len(" */")]
+                    pending = [rec0]
+                    close()
+                else:
+                    pending = [rec0]
+                continue
+            if pending is not None:
+                cm = CMT_CONT_LINE.match(line)
+                if cm:
+                    rec = cm.group(1)
+                    if rec.endswith(" */"):
+                        pending.append(rec[: -len(" */")])
+                        close()
+                    else:
+                        pending.append(rec)
+                else:
+                    close()
+    close()
+    return blocks
+
+
+def collect_cmt_anchor_groups(binary):
+    """DWARF walk -> {func_name: [(anchor, [var names])]} in DIE order.
+
+    Function-domain variables anchor at the concrete subprogram low_pc;
+    lexical-domain variables at the scope's low_pc or, failing that, the
+    scope's DW_AT_ranges FIRST interval begin. Members are variables with
+    DW_FORM_sec_offset or absent locations only."""
+    from elftools.elf.elffile import ELFFile
+
+    with open(binary, "rb") as fh:
+        elf = ELFFile(fh)
+        _warn_if_no_dwarf(binary, elf)
+        dw = elf.get_dwarf_info()
+        rlists = dw.range_lists()
+        groups = {}
+
+        def var_entry(unit, die):
+            chain = _origin_chain(unit, die)
+            nm = None
+            for cdie in chain:
+                nm = _attr_str(_die_attr(cdie, "DW_AT_name"))
+                if nm:
+                    break
+            if nm is None:
+                return None
+            loc = _chain_attr(chain, "DW_AT_location")
+            if loc is not None and loc.form != "DW_FORM_sec_offset":
+                return None  # exprloc -> named local, never a record member
+            return nm
+
+        def anchor_of(die):
+            low = _die_attr(die, "DW_AT_low_pc")
+            if low is not None:
+                return low.value
+            rng = _die_attr(die, "DW_AT_ranges")
+            if rng is not None:
+                try:
+                    for e in rlists.get_range_list_at_offset(rng.value, die.cu):
+                        if hasattr(e, "begin_offset"):
+                            return e.begin_offset
+                except Exception:
+                    return None
+            return None
+
+        def add(fn, anchor, nm):
+            for anc, names in groups[fn]:
+                if anc == anchor:
+                    names.append(nm)
+                    return
+            groups[fn].append((anchor, [nm]))
+
+        def walk(unit, fn, anchor, node):
+            for child in node.iter_children():
+                if child.tag == "DW_TAG_subprogram":
+                    if _die_attr(child, "DW_AT_low_pc") is not None:
+                        walk(unit, fn, anchor, child)
+                elif child.tag in (
+                    "DW_TAG_lexical_block",
+                    "DW_TAG_inlined_subroutine",
+                ):
+                    sub = anchor_of(child)
+                    walk(unit, fn, sub if sub is not None else anchor, child)
+                elif child.tag == "DW_TAG_variable":
+                    ent = var_entry(unit, child)
+                    if ent is not None:
+                        add(fn, anchor, ent)
+
+        for unit in dw.iter_CUs():
+            for top in unit.iter_DIEs():
+                if top.tag != "DW_TAG_subprogram":
+                    continue
+                low = _die_attr(top, "DW_AT_low_pc")
+                if low is None:
+                    continue
+                fn = None
+                for die in _origin_chain(unit, top):
+                    fn = _attr_str(_die_attr(die, "DW_AT_name"))
+                    if fn:
+                        break
+                if fn is None:
+                    continue
+                groups.setdefault(fn, [])
+                walk(unit, fn, low.value, top)
+    return groups
+
+
+def harvest_cmt(binary, golden_path, corpus):
+    """CMT warning-comment table: canon-text-gated records with DWARF
+    scope anchors plus the corpus calibration table. Returns (functions,
+    applied_calibrations, drops); records are canon-address keyed
+    (ELF vaddr + 0x100000), sorted for byte-deterministic output."""
+    blocks = parse_cmt_blocks(golden_path)
+    per_func = {}
+    for fn, recs in blocks:
+        per_func.setdefault(fn, []).append(recs)
+    groups = collect_cmt_anchor_groups(binary)
+    calibrations = CMT_CALIBRATIONS_CURL if corpus == "curl" else {}
+    golden_text = open(golden_path, "r", encoding="utf-8").read()
+    function_addresses = {}
+    for addr, name, _lines in split_functions(golden_text):
+        function_addresses.setdefault(name, addr)
+    records = []
+    applied = []
+    drops = []
+    for fn, recs_list in per_func.items():
+        cands = [g for g in groups.get(fn, []) if g[0] is not None]
+        used = set()
+        for recs in recs_list:  # canon order
+            names = [CMT_VAR_NAME.search(r).group(1) for r in recs]
+            hit = None
+            for i, (anc, gnames) in enumerate(cands):
+                if i in used:
+                    continue
+                if gnames == names:
+                    hit = (i, anc)
+                    break
+            if hit is None:
+                drops.append(
+                    {
+                        "function": fn,
+                        "names": names,
+                        "reason": "no DWARF scope group with this var sequence",
+                    }
+                )
+                continue
+            used.add(hit[0])
+            dwarf_anchor = hit[1]
+            entry = (fn, dwarf_anchor, None, recs)
+            if dwarf_anchor in calibrations:
+                target, reason = calibrations[dwarf_anchor]
+                applied.append(
+                    {
+                        "function": fn,
+                        "dwarf_anchor": "0x%x" % (dwarf_anchor + 0x100000),
+                        "anchor": "0x%x" % (target + 0x100000),
+                        "reason": reason,
+                    }
+                )
+                entry = (fn, dwarf_anchor, target, recs)
+            records.append(entry)
+    functions = {}
+    for fn, dwarf_anchor, calibrated, recs in sorted(
+        records,
+        key=lambda r: (
+            int(function_addresses.get(r[0], "0x0"), 16),
+            r[1],
+        ),
+    ):
+        fn_addr = function_addresses.get(fn)
+        if fn_addr is None:
+            drops.append(
+                {"function": fn, "names": [], "reason": "no canon golden header address"}
+            )
+            continue
+        anchor = calibrated if calibrated is not None else dwarf_anchor
+        functions.setdefault(
+            fn_addr, {"name": fn, "comments": []}
+        )["comments"].append(
+            {
+                "addr": "0x%x" % (anchor + 0x100000),
+                "dwarf_anchor": "0x%x" % (dwarf_anchor + 0x100000),
+                "text": "\n".join(recs),
+            }
+        )
+    for fn_entry in functions.values():
+        fn_entry["comments"].sort(key=lambda c: int(c["addr"], 16))
+    return functions, applied, drops
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--cmt":
+        if len(sys.argv) < 6:
+            print(__doc__)
+            return 2
+        binary, golden, corpus, oracle_commit, out = sys.argv[2:7]
+        funcs, applied, drops = harvest_cmt(binary, golden, corpus)
+        manifest = {
+            "oracle_commit": oracle_commit,
+            "corpus": corpus,
+            "source": "cmt-warning",
+            "binary_sha256": hashlib.sha256(open(binary, "rb").read()).hexdigest(),
+            "golden_sha256": hashlib.sha256(open(golden, "rb").read()).hexdigest(),
+            "harvest_rule": CMT_HARVEST_RULE,
+            "anchor_calibrations": applied,
+            "functions": funcs,
+            "harvest_drops": drops,
+        }
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=1)
+        nrecords = sum(len(f["comments"]) for f in funcs.values())
+        nlines = sum(
+            len(c["text"].split("\n"))
+            for f in funcs.values()
+            for c in f["comments"]
+        )
+        print(
+            "harvested %d comment records / %d lines (%d calibrations, %d drops) -> %s"
+            % (nrecords, nlines, len(applied), len(drops), out)
+        )
+        return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--callee":
         if len(sys.argv) < 6:
             print(__doc__)
