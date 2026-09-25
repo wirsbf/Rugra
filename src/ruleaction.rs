@@ -15230,21 +15230,27 @@ impl Rule for RulePtraddUndo {
         //   ->getAlignSize()==size && ind!=0 return 0;
         // If the varnode has a pointer type whose pointed-to size matches the
         // PTRADD element size AND the index is non-zero, this is still a valid
-        // pointer arithmetic — leave it alone.
-        let is_correctly_typed_ptr = basevn
-            .read()
-            .unwrap()
-            .get_type()
-            .map(|dt| {
-                use crate::type_system::datatype::{Datatype, TypeMetatype};
-                if dt.get_metatype() != TypeMetatype::Pointer { return false; }
-                if let Datatype::Pointer(tp) = dt.as_ref() {
-                    tp.ptr_to.get_align_size() == size as usize
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false); // no type ⇒ not confirmed ⇒ proceed with undo
+        // pointer arithmetic — leave it alone. ruleaction.cc:6915 is the
+        // READ-FACING consult: a pointer-to-union base resolves to the field
+        // pointer before the alignSize comparison, so a PTRADD AddTree built
+        // from the resolved field is not undone.
+        let is_correctly_typed_ptr = {
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+                .or_else(|| basevn.read().unwrap().get_type())
+                .map(|dt| {
+                    use crate::type_system::datatype::{Datatype, TypeMetatype};
+                    if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+                    if let Datatype::Pointer(tp) = dt.as_ref() {
+                        let ws = tp.wordsize.max(1) as u64;
+                        tp.ptr_to.get_align_size() as u64
+                            == crate::space::AddrSpace::address_to_byte_int(size as i64, ws as u32) as u64
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false) // no type ⇒ not confirmed ⇒ proceed with undo
+        };
         if is_correctly_typed_ptr {
             let ind_is_zero = indvn.read().unwrap().is_constant()
                 && indvn.read().unwrap().get_offset() == 0;
@@ -15826,19 +15832,20 @@ impl Rule for RulePtrsubUndo {
         let mut multiplier: i64 = 0;
         let extra = Self::get_extra_offset(op_arc, &mut multiplier);
         // if (basevn->getTypeReadFacing(op)->isPtrsubMatching(val,extra,multiplier)) return 0;
-        // We approximate isPtrsubMatching (type.cc:1123-1162) for the core
-        // TypePointer cases. wordsize defaults to 1 (addressToByteInt is a no-op).
-        // testForArraySlack and TypePointerRel are not yet modelled.
-        let still_matching = basevn
-            .read()
-            .unwrap()
-            .get_type()
+        // ruleaction.cc:7134: the READ-FACING consult — a PTRSUB whose base
+        // still carries the whole pointer-to-union type resolves to the
+        // field pointer first; the inherited union_map edge (AddTree
+        // buildTree / RS0 rewrites) makes the resolved form match, which is
+        // what keeps RulePtrsubUndo from undoing the freshly built field
+        // PTRSUB (the AddTree↔PtrsubUndo rewrite ping-pong otherwise).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let still_matching = crate::unionresolve::vn_type_read_facing(fd, &basevn, &op_ref, 0)
+            .or_else(|| basevn.read().unwrap().get_type())
             .map(|dt| Self::is_ptrsub_matching(&dt, val, extra, multiplier))
             .unwrap_or(false);
         if still_matching { return Ok(action_status::NO_CHANGE); }
 
         // data.opSetOpcode(op,CPUI_INT_ADD); op->clearStopTypePropagation();
-        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
         op_arc.write().unwrap().clear_stop_type_propagation();
         // removeLocalAdds(op->getOut(), data) — walk the PTRSUB output's

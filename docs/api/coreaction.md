@@ -3512,3 +3512,18 @@ sprintf 参数边 oracle [5,5,0,5]（whole 平局胜→不解析，canon 印
 53→45，124 函数零回退），httpd 896 字节恒等，defects/numbering 0/0，
 bank 391/391，gcc 审计 104/20 恒等，双跑 cmp 恒等（安静机器；构建窗口内
 首跑有既有 timing 噪声家族）。
+
+## 2026-09-26：setcasts 两检查点联合体读面咨询（UNIONRES-FIELDOFF-PTRSUBNORM-0001，Lane FIELDOFF）
+
+ActionSetCasts 主循环的 PTRADD/PTRSUB 健全性检查改 fd-aware 咨询
+（coreaction.cc:2742 `op->getIn(0)->getHighTypeReadFacing(op)` 与
+cc:2748 `op->getIn(0)->getTypeReadFacing(op)->isPtrsubMatching(off,0,0)`）:
+- PTRADD undo 检查（cc:2740-2745）:union 基址先解析成字段指针再做
+  alignSize 比较。
+- PTRSUB demote 检查（cc:2747-2756）:退化形会把 AddTree 刚用解析形建好的
+  PTRSUB 判成 `isPtrsubMatching(union)=false`（type.cc:1167-1171 对 union 恒
+  false,注释明说 union-PTRSUB 由 resolveUnion 创建不可用于字段解析）→ 降级
+  INT_ADD → 与 AddTree 咨询互为重写环的一侧。咨询后解析形 struct pointee
+  走 Struct 臂 offset 匹配 → 不降级。Rust 镜像位 coreaction.rs
+  `ptradd_undo`/`ptrsub demote` 两臂（unionresolve::vn_type_read_facing /
+  vn_high_type_read_facing）。

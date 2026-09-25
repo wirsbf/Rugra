@@ -7343,11 +7343,15 @@ impl Action for ActionSetCasts {
                             // cc:2741: int4 sz = (int4)op->getIn(2)->getOffset()
                             let sz = scale_vn.read().unwrap().get_offset() as u32 as i64;
                             // cc:2742: ct = op->getIn(0)->getHighTypeReadFacing(op)
-                            let ct = base_vn
-                                .read()
-                                .unwrap()
-                                .get_high_type_read_facing(&op, 0)
-                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            // — the fd-aware consult: a union base resolves to
+                            // the field pointer before the alignSize check.
+                            let ct = crate::unionresolve::vn_high_type_read_facing(
+                                fd,
+                                base_vn,
+                                &op_ref,
+                                0,
+                            )
+                            .or_else(|| base_vn.read().unwrap().v_type.clone());
                             match ct.as_deref() {
                                 Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
                                     pt.ptr_to.get_align_size() as i64
@@ -7381,11 +7385,23 @@ impl Action for ActionSetCasts {
                         (Some(base_vn), Some(off_vn)) => {
                             // cc:2748: isPtrsubMatching(in(1) offset, 0, 0)
                             let off = off_vn.read().unwrap().get_offset() as i64;
-                            let t = base_vn
-                                .read()
-                                .unwrap()
-                                .get_type_read_facing_op(&op, 0)
-                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            // cc:2748: op->getIn(0)->getTypeReadFacing(op) —
+                            // the fd-aware consult. With the degenerate form a
+                            // PTRSUB whose base still carries the whole
+                            // pointer-to-union type consults as the union,
+                            // isPtrsubMatching(union)=false (type.cc:1167-1171
+                            // always-false for unions), and setcasts demotes
+                            // the very PTRSUB AddTree just built from the
+                            // resolved field — the AddTree↔setcasts rewrite
+                            // ping-pong. The consult sees the resolved field
+                            // pointer (struct pointee) and the offset matches.
+                            let t = crate::unionresolve::vn_type_read_facing(
+                                fd,
+                                base_vn,
+                                &op_ref,
+                                0,
+                            )
+                            .or_else(|| base_vn.read().unwrap().v_type.clone());
                             let matches = match t.as_deref() {
                                 Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
                                     crate::type_system::datatype::pointer_is_ptrsub_matching(
