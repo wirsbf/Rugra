@@ -5622,13 +5622,28 @@ impl PrintC {
     ) {
         use crate::block::{
             BlockCondition, BlockDoWhile, BlockIf, BlockList, BlockSwitch, BlockType, BlockWhileDo, };
-                // Structured while loop (or for loop if for_init/for_iter set)
+                // Structured while loop (or for loop if iterate_op/for texts set)
                 let block = block_arc.read().unwrap();
                 let while_block = block.as_any().downcast_ref::<BlockWhileDo>();
                 if let Some(while_data) = while_block {
-                    // Check if this was identified as a for-loop by
-                    // ActionStructureTransform (has init + iterate expressions).
-                    let has_for = while_data.for_init.is_some() && while_data.for_iter.is_some();
+                    // Check if this was identified as a for-loop.
+                    // PRIMARY channel (oracle-faithful): `iterate_op` set by
+                    // the BlockWhileDo::finalTransform/finalizePrinting port
+                    // (block.rs, block.cc:3356/3403) — printc.cc:3007
+                    // `if (bl->getIterateOp() != 0) { emitForLoop; return; }`.
+                    // LEGACY channel (transitional): the narrowed text pair
+                    // fed by coreaction.rs `for_loop_finalize_printing`
+                    // (for_init/for_iter rendered strings); kept until that
+                    // renderer is retired by its owning lane. The two
+                    // channels are provably disjoint on detection: the real
+                    // finalizePrinting marks the iterate/initialize ops
+                    // NONPRINTING (block.cc:3421-3423) BEFORE the narrowed
+                    // sweep runs, and the narrowed testTerminal rejects
+                    // non-printing roots — so at most one channel fires per
+                    // loop.
+                    let has_for = while_data.iterate_op.is_some()
+                        || (while_data.for_init.is_some()
+                            && while_data.for_iter.is_some());
                     // Ghidra emitBlockWhileDo (printc.cc:3017): if
                     // hasOverflowSyntax(), emit `while( true ) { <cond body>
                     // if(cond) break; }` instead of `while(cond) { ... }`.
@@ -12832,6 +12847,17 @@ impl PrintC {
         if op.get_out().is_some() && self.option_inplace_ops && self.emit_inplace_op(op) {
             return;
         }
+        // Ghidra typeop.hh:823 TypeOpPtradd::push → lng->opPtradd(op).
+        // Rugra's typeop.rs push dispatch table lacks the PTRADD arm (falls
+        // to the generic op_binary, which has no PTRADD token and prints the
+        // literal " op " placeholder). Route it here at PrintC's expression
+        // channel to the existing op_ptradd emitter — identical routing to
+        // the oracle's per-opcode TypeOp push. (The table gap itself is
+        // registered for the typeop.rs owner lane.)
+        if op.opcode == crate::opcodes::OpCode::CPUI_PTRADD {
+            self.op_ptradd(op);
+            return;
+        }
         // printc.cc:2477-2486: constructor special-printing branch. Not ported
         // (opConstructor / opConstructor nesting requires the NEW-wrapping layer
         // Rugra lacks - audit P0-7). Fall through to the generic dispatch below,
@@ -14592,33 +14618,63 @@ impl PrintC {
         // cc:2970-2971: emit->tagOp(KEYWORD_FOR, ...); emit->spaces(1);
         self.emit.tag_op("for");
         self.emit.print(" ");
-        // cc:2972: openParen(OPEN_PAREN)
-        self.emit.open_paren("(");
+        // cc:2972: id1 = openParen(OPEN_PAREN) — the id MUST be threaded to
+        // the matching closeParen (EmitPrettyPrint pairs paren groups by id;
+        // closing with a foreign id corrupts the group stack and spills
+        // queued tokens at wrong indents).
+        let id1 = self.emit.open_paren("(");
         // cc:2973-2974: pushMod(); setMod(comma_separate);
         self.push_mod();
         self.set_mod(print_mods::COMMA_SEPARATE);
-        // cc:2975-2980: init slot (optional)
+        // cc:2975-2980: init slot (optional). PRIMARY channel: emit the
+        // initializer op through the RPN expression channel — the faithful
+        // printc.cc:2468 emitExpression port (`emit_expression_rpn`: the
+        // beginStatement/emitExpression/endStatement triple of
+        // printc.cc:2977-2979, with the assignment LHS token the oracle's
+        // emitExpression pushes at cc:2470-2472), exactly as the oracle
+        // renders the general expression forms (ZEXT/CAST/LOAD chains).
+        // LEGACY channel: the narrowed text pair (transitional coreaction
+        // renderer).
         self.emit.begin_statement();
-        if let Some(init_text) = bl.get_initialize_op() {
+        if let Some(init_op) = &bl.initialize_op {
+            let op_arc = init_op.0.clone();
+            let op = op_arc.read().unwrap();
+            self.emit_expression_rpn(&op_arc, &op);
+        } else if let Some(init_text) = bl.get_initialize_op() {
             self.emit.print(init_text);
         }
         self.emit.end_statement();
         // cc:2981: emit->print(SEMICOLON); emit->spaces(1);
         self.emit.print("; ");
-        // cc:2983: condBlock->emit(this);  (condition slot)
-        self.emit_block_condition(&bl.condition);
+        // cc:2983: condBlock->emit(this);  (condition slot) — the virtual
+        // dispatch under comma_separate, identical to the while-path's
+        // condition replay (emitBlockWhileDo cc:3055): insert-first so this
+        // visit owns the condition subtree's emission, then the structured
+        // dispatcher (a basic block walks its printed ops comma-separated;
+        // a BlockCondition composes; the CBRANCH's own parens are
+        // suppressed by COMMA_SEPARATE).
+        emitted.insert(
+            std::sync::Arc::as_ptr(&bl.condition) as *const () as usize);
+        self.emit_flow_block(&bl.condition, graph, emitted);
         // cc:2984: emit->print(SEMICOLON); emit->spaces(1);
         self.emit.print("; ");
-        // cc:2986-2989: iterate slot
+        // cc:2986-2989: iterate slot — same two-channel protocol as the
+        // init slot (cc:2987-2989 beginStatement/emitExpression/endStatement,
+        // via the faithful RPN expression path).
         self.emit.begin_statement();
-        if let Some(iter_text) = bl.get_iterate_op() {
+        if let Some(iter_op) = &bl.iterate_op {
+            let op_arc = iter_op.0.clone();
+            let op = op_arc.read().unwrap();
+            self.emit_expression_rpn(&op_arc, &op);
+        } else if let Some(iter_text) = bl.get_iterate_op() {
             self.emit.print(iter_text);
         }
         self.emit.end_statement();
         // cc:2990: popMod();
         self.pop_mod();
-        // cc:2991: closeParen(CLOSE_PAREN, id1)
-        self.emit.close_paren(")", 0);
+        // cc:2991: closeParen(CLOSE_PAREN, id1) — the paired id from the
+        // openParen above.
+        self.emit.close_paren(")", id1);
         // cc:2992: indent = openBraceIndent(OPEN_CURLY, option_brace_loop);
         // cc:2993: setMod(no_branch);
         self.set_mod(print_mods::NO_BRANCH);

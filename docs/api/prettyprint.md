@@ -1136,3 +1136,14 @@ printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过
   该两行变量名/结构本已与 golden 分叉，所属函数整体 45→41 仍净降；
   typed `'&'` 正道是 printc `is_char_print` 类型传播（typeprop 域，
   GENSMOKE-S2 族），非文本层职责。
+
+### 2026-09-26 — 签名判据补 no_assignment 门（HTTPDMAIN-F8-FORLOOP-0001，Lane F8FOR）
+
+`post_process_output_legacy` 的嵌套函数签名判据（补偿层，POSTFIX-RETIRE-0001
+登记域）新增第五道语义门：候选行含 `=` 即非签名（C 函数签名永不含赋值
+operator）。诱因：for 头超行宽折行后，续行形如
+`    puVar11 = (undefined8 *)*puVar11) {` ——带收口 `) {`、赋值 `=`、cast 的
+` *`、比较符留在首行（no_comparison 门不拦），全过旧四门被判为嵌套函数
+签名 → 空声明遍历把循环体自动名局部全部"补声明"回灌（`  long uVar13;`
+等 3 处）。与既有 MAIN-IVAR4-DUP（分号门）/WARN-EMIT2 R4（比较符门）同款
+判据加固模式。canon httpd 293→277（−16 含本门 −8 行回灌）。

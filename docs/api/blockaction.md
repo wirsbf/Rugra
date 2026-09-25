@@ -1673,3 +1673,21 @@ MATCH 366 stages/141943 ops 免重钉）；cargo test --lib 1733P/1F（nonzeroma
 - 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — ActionFinalStructure 接入 for 循环形成两扫描（HTTPDMAIN-F8-FORLOOP-0001，Lane F8FOR）
+
+- `ActionFinalStructure::apply`（blockaction.cc:2186 端口）在 `order_blocks`
+  与原 `finalize_printing` 位之间新增两调用：
+  1. `crate::block::for_loop_final_transform(fd)` — oracle
+     ActionStructureTransform::apply 的 `getStructure().finalTransform(data)`
+     （blockaction.cc:2110-2115；放置偏差与理由见 block.rs
+     `for_loop_final_transform` 头注）；
+  2. `BlockGraph::finalize_printing_graph(fd)` — 原
+     `fd.sblocks.finalize_printing()` 的 fd 感知形态（WhileDo 覆盖需要
+     `&mut Funcdata`），BlockSwitch 递归不变。
+- 6 处 `BlockWhileDo` 构造点（structure_loops_first:3278 / ruleBlockWhileDo
+  族:5668/7116/7223/7368/7486）补 `initialize_op/iterate_op/loop_def = None`
+  初始字段。
+- 残余登记：ap_getparents +2（canon）/curl 镜 +2/vsh 镜 +2 = 同族
+  `moveRespectingCover` 已提交移动 + 后续门拒绝（oracle 同序提交移动；拒绝
+  侧差异归 F8FOR-REJECT 残差票）。

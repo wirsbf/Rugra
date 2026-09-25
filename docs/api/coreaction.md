@@ -3682,3 +3682,8 @@ RUGRA_IMPORTSIG=0 断路==旧默认脸字节恒等（机制半全语料惰性亲
 `&mut TypeFactory`，指针臂执行 oracle unionresolve.cc:54 的
 `typegrp.getTypePointer` interning（type.cc:3867）。本文件仅此一处
 guard 翻转，无其他逻辑变化；调用方不持工厂 guard，无重入面。
+
+### 2026-09-26 — F8FOR 测试夹具字段补齐（HTTPDMAIN-F8-FORLOOP-0001，Lane F8FOR）
+
+`tests::` 内 `BlockWhileDo` 夹具构造补 `initialize_op/iterate_op/loop_def`
+三字段（cfg(test) 编译修复，零行为；字段本体见 docs/api/block.md 同日节）。

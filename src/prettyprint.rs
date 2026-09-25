@@ -2318,8 +2318,21 @@ impl EmitNoMarkup {
                 || trimmed.contains("!=")
                 || trimmed.contains("&&")
                 || trimmed.contains("||"));
+            // HTTPDMAIN-F8-FORLOOP-0001 guard: a for-header that exceeds
+            // the print margin wraps, and its continuation line
+            // (`    puVar11 = (undefined8 *)*puVar11) {`) carries the
+            // closing `) {`, an assignment `=`, a cast's ` *`, and (the
+            // compare stayed on the first header line) no comparison
+            // operator — passing every gate above, so the pass treated
+            // the loop body as a nested function, found the decl walk
+            // empty, and re-injected every auto-named body local
+            // (`  long uVar13;`) inside the loop. A C function signature
+            // never contains an assignment operator, so gate `=` out the
+            // same way the semicolon/comparison gates work.
+            let no_assignment = !trimmed.contains('=');
             let sig_shape = no_semicolon
                 && no_comparison
+                && no_assignment
                 && !control_flow_opener
                 && !cond_continuation
                 && trimmed.contains('(')

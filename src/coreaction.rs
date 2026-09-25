@@ -20169,6 +20169,7 @@ mod tests {
             outgoing: Vec::new(),
             parent: None,
             flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
+            initialize_op: None, iterate_op: None, loop_def: None,
         };
         let wd_arc = std::sync::Arc::new(std::sync::RwLock::new(wd)) as std::sync::Arc<
             std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;

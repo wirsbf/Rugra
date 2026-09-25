@@ -3998,16 +3998,26 @@ impl BlockGraph {
     /// (blockaction.cc:2192: `graph.finalizePrinting(data)`); dispatching is
     /// per child via [`finalize_printing_block`], which runs the
     /// `BlockSwitch::finalizePrinting` override (block.cc:3556) for switch
-    /// components and the inherited graph recursion for every other
-    /// composite. Leaf types inherit the base `FlowBlock::finalizePrinting`
-    /// no-op (block.hh:262).
+    /// components, the `BlockWhileDo::finalizePrinting` override
+    /// (block.cc:3403 — for-loop statement extraction) for while-do loops,
+    /// and the inherited graph recursion for every other composite. Leaf
+    /// types inherit the base `FlowBlock::finalizePrinting` no-op
+    /// (block.hh:262).
+    ///
+    /// Free-function form because the WhileDo override needs `&mut Funcdata`
+    /// (`moveRespectingCover`/`opMarkNonPrinting`), which cannot thread
+    /// through a `&mut self` method on `fd.sblocks` itself.
     // Ghidra: block.cc:1364 BlockGraph::finalizePrinting
-    pub fn finalize_printing(&mut self) {
+    pub fn finalize_printing_graph(fd: &mut crate::funcdata::Funcdata) {
         // cc:1368-1370: for(iter=list.begin();iter!=list.end();++iter)
         //   (*iter)->finalizePrinting(data);
-        let n = self.blocks.len();
-        for i in 0..n {
-            finalize_printing_block(&self.blocks[i]);
+        if fd.sblocks.blocks.is_empty() {
+            return;
+        }
+        let top: Vec<std::sync::Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+            fd.sblocks.blocks.clone();
+        for bl in &top {
+            finalize_printing_block(bl, fd);
         }
     }
 
@@ -5264,10 +5274,14 @@ impl BlockGraph {
 /// the no-entry walk matches the oracle.
 // RUGRA-GLUE: free-function form of the C++ virtual dispatch; Rugra
 // composites implement FlowBlock individually instead of subclassing one
-// BlockGraph vtable.
-pub fn finalize_printing_block(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
-    let is_switch = bl.read().unwrap().get_type() == BlockType::Switch;
-    if is_switch {
+// BlockGraph vtable. `fd` threads the Funcdata the WhileDo override needs
+// (block.cc:3403 `BlockWhileDo::finalizePrinting(Funcdata&)`).
+pub fn finalize_printing_block(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    fd: &mut crate::funcdata::Funcdata,
+) {
+    let ty = bl.read().unwrap().get_type();
+    if ty == BlockType::Switch {
         // cc:3559: BlockGraph::finalizePrinting(data) — recurse into the
         // switch's list before the label passes.
         let children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
@@ -5282,16 +5296,24 @@ pub fn finalize_printing_block(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
             v
         };
         for child in &children {
-            finalize_printing_block(child);
+            finalize_printing_block(child, fd);
         }
         // cc:3562-3591: the label/depth passes + stable sort.
         let mut w = bl.write().unwrap();
         let sw = w.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
         sw.finalize_case_labels();
     } else {
-        // Inherited BlockGraph::finalizePrinting recursion (cc:1364-1371).
+        // Inherited BlockGraph::finalizePrinting recursion (cc:1364-1371):
+        // BlockWhileDo::finalizePrinting (cc:3406) recurses into its own
+        // components FIRST, then runs the for-loop statement extraction.
         for child in BlockGraph::component_list_dyn(bl) {
-            finalize_printing_block(&child);
+            finalize_printing_block(&child, fd);
+        }
+        if ty == BlockType::WhileDo {
+            let mut w = bl.write().unwrap();
+            if let Some(wd) = w.as_any_mut().downcast_mut::<BlockWhileDo>() {
+                while_do_finalize_printing(wd, fd);
+            }
         }
     }
 }
@@ -6643,8 +6665,21 @@ pub struct BlockWhileDo {
     /// Stores the init/iter expression text (rendered at detection time).
     /// printc emits for(init;cond;iter) with the comma_separate mod active,
     /// matching Ghidra emitForLoop (printc.cc:2957-2999).
+    /// LEGACY NARROWED CHANNEL: fed only by the transitional renderer in
+    /// coreaction.rs `for_loop_finalize_printing` (its INT_ADD/COPY-const
+    /// render gates); the oracle-faithful channel is the op triple below.
     pub for_init: Option<String>,
     pub for_iter: Option<String>,
+    /// Ghidra `BlockWhileDo::initializeOp` (block.hh:694): statement used as
+    /// the for-loop initializer. Set by `while_do_final_transform` /
+    /// `while_do_finalize_printing` (block.cc:3356/3403).
+    pub initialize_op: Option<PcodeOpRef>,
+    /// Ghidra `BlockWhileDo::iterateOp` (block.hh:695): statement used as
+    /// the for-loop iterator.
+    pub iterate_op: Option<PcodeOpRef>,
+    /// Ghidra `BlockWhileDo::loopDef` (block.hh:696): the MULTIEQUAL merging
+    /// the loop variable at the head.
+    pub loop_def: Option<PcodeOpRef>,
     /// Overflow-syntax flag (Ghidra `hasOverflowSyntax()`, block.hh:692).
     /// Set by ruleBlockWhileDo when `bl->isComplex()` (blockaction.cc:1538) —
     /// the condition block is too complex to print inline as `while(cond)`.
@@ -6857,6 +6892,598 @@ impl BlockWhileDo {
             s.insert_str(0, "(overflow) ");
         }
         s
+    }
+}
+
+/// Dyn FlowBlock arc alias for the for-loop formation helpers.
+type DynBlockArc = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+
+/// Is `op` a member of `blk`'s op list (Arc identity)?
+// RUGRA-GLUE: Ghidra compares `defOp->getParent() != head` pointers; Rugra
+/// op->parent weak links are the primary channel, with the block's op-list as
+/// a belt-and-suspenders fallback for ops whose parent link is not wired.
+fn op_lives_in_block(op: &Arc<RwLock<crate::op::PcodeOp>>, blk: &DynBlockArc) -> bool {
+    let parent = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+    if let Some(p) = &parent {
+        if Arc::ptr_eq(p, blk) {
+            return true;
+        }
+    }
+    blk.read().unwrap().get_ops().iter().any(|o| Arc::ptr_eq(&o.0, op))
+}
+
+/// Upgrade `op`'s parent block Arc (None when the weak link is absent).
+// RUGRA-GLUE: Rust borrow helper for Ghidra's raw `op->getParent()` pointer
+// read (op.hh:190 PcodeOp::getParent) — the weak-link upgrade has no oracle
+// counterpart to cite as a function definition.
+fn op_parent(op: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<DynBlockArc> {
+    op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade())
+}
+
+// Ghidra: block.cc:3164 BlockWhileDo::findLoopVariable
+/// Try to find a Varnode that represents the controlling \e loop \e variable
+/// for this loop (block.cc:3152-3213). The Varnode must be:
+///   - tested by the exit condition,
+///   - have a MULTIEQUAL in the head block,
+///   - have a modification coming in from the tail block,
+///   - the modification must be the last op or moveable to the last op.
+///
+/// If found, sets `loop_def` and `iterate_op` on `wd`. Faithful port of the
+/// explicit `PcodeOpNode path[4]` DFS: inputs are scanned in slot order; a
+/// MULTIEQUAL def in the head is the loopDef candidate (its tail-slot input's
+/// def must live in the tail and pass the isMoveable(lastOp) gate); any other
+/// written def descends the DFS up to depth 4 (count==3 cap), skipping
+/// calls/markers.
+pub fn while_do_find_loop_variable(
+    wd: &mut BlockWhileDo,
+    fd: &crate::funcdata::Funcdata,
+    cbranch: &PcodeOpRef,
+    head: &DynBlockArc,
+    tail: &DynBlockArc,
+    last_op: &PcodeOpRef,
+) {
+    // cc:3167-3168: vn = cbranch->getIn(1); if (!vn->isWritten()) return;
+    let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
+    let Some(cond_vn) = cond_vn else { return };
+    if !cond_vn.read().unwrap().is_written() {
+        return;
+    }
+    // cc:3169: op = vn->getDef();
+    let Some(op_arc) = cond_vn.read().unwrap().get_def() else {
+        return;
+    };
+    // cc:3170: slot = tail->getOutRevIndex(0);
+    let slot: usize = {
+        let tail_guard = tail.read().unwrap();
+        let Some(edge) = tail_guard.get_out(0) else { return };
+        if edge.reverse_index < 0 {
+            return;
+        }
+        edge.reverse_index as usize
+    };
+    // cc:3174-3176: if (op->isCall() || op->isMarker()) return;
+    {
+        let g = op_arc.read().unwrap();
+        if g.is_call() || g.is_marker() {
+            return;
+        }
+    }
+    // cc:3177-3178: path[0] = (op, 0); count = 0.
+    let mut path: [(PcodeOpRef, usize); 4] = [
+        (PcodeOpRef(op_arc.clone()), 0),
+        (PcodeOpRef(op_arc.clone()), 0),
+        (PcodeOpRef(op_arc.clone()), 0),
+        (PcodeOpRef(op_arc), 0),
+    ];
+    let mut count: i32 = 0;
+    // cc:3179: while(count>=0) { ... }
+    while count >= 0 {
+        let idx = count as usize;
+        // cc:3181: ind = path[count].slot++;
+        let ind = path[idx].1;
+        path[idx].1 += 1;
+        let cur_op = path[idx].0.clone();
+        // cc:3182-3185: if (ind >= curOp->numInput()) { count -= 1; continue; }
+        let incount = cur_op.0.read().unwrap().num_input();
+        if ind >= incount {
+            count -= 1;
+            continue;
+        }
+        // cc:3186-3187: nextVn = curOp->getIn(ind); if (!nextVn->isWritten()) continue;
+        let next_vn = cur_op.0.read().unwrap().get_in(ind).cloned();
+        let Some(next_vn) = next_vn else { continue };
+        if !next_vn.read().unwrap().is_written() {
+            continue;
+        }
+        // cc:3188: defOp = nextVn->getDef();
+        let Some(def_arc) = next_vn.read().unwrap().get_def() else {
+            continue;
+        };
+        let def_ref = PcodeOpRef(def_arc);
+        if def_ref.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL {
+            // cc:3190: if (defOp->getParent() != head) continue;
+            if !op_lives_in_block(&def_ref.0, head) {
+                continue;
+            }
+            // cc:3191-3192: itvn = defOp->getIn(slot); if (!itvn->isWritten()) continue;
+            let itvn = def_ref.0.read().unwrap().get_in(slot).cloned();
+            let Some(itvn) = itvn else { continue };
+            if !itvn.read().unwrap().is_written() {
+                continue;
+            }
+            // cc:3193: possibleIterate = itvn->getDef();
+            let Some(pit_arc) = itvn.read().unwrap().get_def() else {
+                continue;
+            };
+            let pit_ref = PcodeOpRef(pit_arc);
+            // cc:3194: if (possibleIterate->getParent() == tail) {
+            if op_lives_in_block(&pit_ref.0, tail) {
+                // cc:3195-3196: if (possibleIterate->isMarker()) continue;
+                if pit_ref.0.read().unwrap().is_marker() {
+                    continue;
+                }
+                // cc:3197-3198: if (!possibleIterate->isMoveable(lastOp)) continue;
+                let moveable = {
+                    let pit_g = pit_ref.0.read().unwrap();
+                    let last_g = last_op.0.read().unwrap();
+                    pit_g.is_moveable(&last_g, &fd.obank)
+                };
+                if !moveable {
+                    continue;
+                }
+                // cc:3199-3201: loopDef = defOp; iterateOp = possibleIterate; return;
+                wd.loop_def = Some(def_ref);
+                wd.iterate_op = Some(pit_ref);
+                return;
+            }
+        } else {
+            // cc:3205: if (count == 3) continue;
+            if count == 3 {
+                continue;
+            }
+            // cc:3206: if (defOp->isCall() || defOp->isMarker()) continue;
+            {
+                let g = def_ref.0.read().unwrap();
+                if g.is_call() || g.is_marker() {
+                    continue;
+                }
+            }
+            // cc:3207-3209: count += 1; path[count] = (defOp, 0);
+            count += 1;
+            path[count as usize] = (def_ref, 0);
+        }
+    }
+    // cc:3212: return; — no loop variable found
+}
+
+// Ghidra: block.cc:3223 BlockWhileDo::findInitializer
+/// Find the putative initializer op for the loop variable (block.cc:3215-
+/// 3244): the def of `loop_def`'s non-tail input must terminate the block
+/// that flows only into the head. On success sets `wd.initialize_op` and
+/// returns the last (non-branch) op of the initializer block; otherwise
+/// returns None and leaves `initialize_op` untouched (None).
+pub fn while_do_find_initializer(
+    wd: &mut BlockWhileDo,
+    fd: &crate::funcdata::Funcdata,
+    head: &DynBlockArc,
+    slot: usize,
+) -> Option<PcodeOpRef> {
+    // cc:3226: if (head->sizeIn() != 2) return 0;
+    if head.read().unwrap().size_in() != 2 {
+        return None;
+    }
+    // cc:3227: slot = 1 - slot;
+    let slot = 1 - slot;
+    // cc:3228-3229: initVn = loopDef->getIn(slot); if (!initVn->isWritten()) return 0;
+    let loop_def = wd.loop_def.clone()?;
+    let init_vn = loop_def.0.read().unwrap().get_in(slot).cloned()?;
+    if !init_vn.read().unwrap().is_written() {
+        return None;
+    }
+    // cc:3230: res = initVn->getDef();
+    let res_arc = init_vn.read().unwrap().get_def()?;
+    // cc:3231: if (res->isMarker()) return 0;
+    if res_arc.read().unwrap().is_marker() {
+        return None;
+    }
+    // cc:3232-3234: initialBlock = res->getParent(); must equal head->getIn(slot).
+    let Some(initial_block) = op_parent(&res_arc) else {
+        return None;
+    };
+    let Some(entry_edge) = head.read().unwrap().get_in(slot) else {
+        return None;
+    };
+    if !Arc::ptr_eq(&initial_block, &entry_edge.point) {
+        return None; // Statement must terminate in block flowing to head
+    }
+    // cc:3235-3236: lastOp = initialBlock->lastOp(); if (lastOp == 0) return 0;
+    let last_op = initial_block.read().unwrap().last_op()?;
+    // cc:3237: if (initialBlock->sizeOut() != 1) return 0;
+    if initial_block.read().unwrap().size_out() != 1 {
+        return None; // Initializer block must flow only to for loop
+    }
+    // cc:3238-3241: if (lastOp->isBranch()) lastOp = lastOp->previousOp();
+    let resolved_last: Option<PcodeOpRef> = if last_op.0.read().unwrap().is_branch() {
+        last_op.0.read().unwrap().previous_op_in_block(&fd.obank)
+    } else {
+        Some(last_op)
+    };
+    let last_op = resolved_last?;
+    // cc:3242-3243: initializeOp = res; return lastOp;
+    wd.initialize_op = Some(PcodeOpRef(res_arc));
+    Some(last_op)
+}
+
+// Ghidra: block.cc:3256 BlockWhileDo::testTerminal
+/// Test that the statement rooted at `loop_def`'s slot input is terminal and
+/// explicit (block.cc:3246-3283): dig through a non-printing COPY to its
+/// input def (which must live in the slot's block), require the surviving
+/// varnode explicit and the root printable, then require `finalOp` to be
+/// (movable to) the block's last op via `moveRespectingCover`. Returns the
+/// root statement op or None. NOTE: `fd` is `&mut` because the oracle's
+/// `data.moveRespectingCover(finalOp, lastOp)` MOVES the op on success
+/// (funcdata_op.cc:1488-1495).
+pub fn while_do_test_terminal(
+    wd: &BlockWhileDo,
+    fd: &mut crate::funcdata::Funcdata,
+    slot: usize,
+) -> Option<PcodeOpRef> {
+    use crate::op::pcodeop_flags::NONPRINTING;
+    // cc:3259-3260: vn = loopDef->getIn(slot); if (!vn->isWritten()) return 0;
+    let loop_def = wd.loop_def.clone()?;
+    let vn0 = loop_def.0.read().unwrap().get_in(slot).cloned()?;
+    if !vn0.read().unwrap().is_written() {
+        return None;
+    }
+    // cc:3261: finalOp = vn->getDef();
+    let final_op = PcodeOpRef(vn0.read().unwrap().get_def()?);
+    // cc:3262: parentBlock = loopDef->getParent()->getIn(slot);
+    let head = op_parent(&loop_def.0)?;
+    let parent_block = head.read().unwrap().get_in(slot).map(|e| e.point)?;
+    // cc:3263: resOp = finalOp;
+    let mut res_op = final_op.clone();
+    // cc:3264-3269: if (finalOp->code()==COPY && finalOp->notPrinted()) dig
+    // through to finalOp->getIn(0)'s def, which must be in parentBlock.
+    let vn = {
+        let fg = final_op.0.read().unwrap();
+        if fg.opcode == OpCode::CPUI_COPY && (fg.flags & NONPRINTING) != 0 {
+            let vn1 = fg.get_in(0).cloned()?;
+            if !vn1.read().unwrap().is_written() {
+                return None;
+            }
+            res_op = PcodeOpRef(vn1.read().unwrap().get_def()?);
+            let res_parent = op_parent(&res_op.0);
+            let ok = res_parent
+                .map(|p| Arc::ptr_eq(&p, &parent_block))
+                .unwrap_or(false);
+            if !ok {
+                return None;
+            }
+            vn1
+        } else {
+            vn0
+        }
+    };
+    // cc:3271: if (!vn->isExplicit()) return 0;
+    if !vn.read().unwrap().is_explicit() {
+        return None;
+    }
+    // cc:3272-3273: if (resOp->notPrinted()) return 0;  — statement MUST print
+    if (res_op.0.read().unwrap().flags & NONPRINTING) != 0 {
+        return None;
+    }
+    // cc:3276-3278: lastOp = finalOp->getParent()->lastOp(); skip branch.
+    let fparent = op_parent(&final_op.0)?;
+    let resolved_last: Option<PcodeOpRef> = {
+        let l = fparent.read().unwrap().last_op()?;
+        if l.0.read().unwrap().is_branch() {
+            l.0.read().unwrap().previous_op_in_block(&fd.obank)
+        } else {
+            Some(l)
+        }
+    };
+    let last_op = resolved_last?;
+    // cc:3279-3280: if (!data.moveRespectingCover(finalOp, lastOp)) return 0;
+    if !fd.move_respecting_cover(&final_op, &last_op) {
+        return None;
+    }
+    // cc:3282: return resOp;
+    Some(res_op)
+}
+
+// Ghidra: block.cc:3287 BlockWhileDo::testIterateForm
+/// Make sure the loop variable is involved as an input in the iterator
+/// statement (block.cc:3285-3314): DFS from `iterate_op` through non-
+/// annotation, non-explicit, written inputs; true iff some input's HighVariable
+/// is the loopDef output's high.
+pub fn while_do_test_iterate_form(wd: &BlockWhileDo) -> bool {
+    // cc:3290-3291: targetVn = loopDef->getOut(); high = targetVn->getHigh();
+    let Some(loop_def) = wd.loop_def.clone() else {
+        return false;
+    };
+    let Some(target_vn) = loop_def.0.read().unwrap().get_out().cloned() else {
+        return false;
+    };
+    let Some(high) = target_vn.read().unwrap().high.clone() else {
+        return false;
+    };
+    // cc:3293-3295: path = [PcodeOpNode(iterateOp, 0)];
+    let Some(iterate_op) = wd.iterate_op.clone() else {
+        return false;
+    };
+    let mut path: Vec<(PcodeOpRef, usize)> = vec![(iterate_op, 0)];
+    // cc:3296: while(!path.empty()) { ... }
+    while let Some(node) = path.last_mut() {
+        // cc:3298-3300: if (node.op->numInput() <= node.slot) { pop; continue; }
+        let node_op = node.0.clone();
+        let node_slot = node.1;
+        if node_op.0.read().unwrap().num_input() <= node_slot {
+            path.pop();
+            continue;
+        }
+        // cc:3302-3303: vn = node.op->getIn(node.slot); node.slot += 1;
+        let vn = node_op.0.read().unwrap().get_in(node_slot).cloned();
+        path.last_mut().unwrap().1 += 1;
+        let Some(vn) = vn else { continue };
+        // cc:3304: if (vn->isAnnotation()) continue;
+        if vn.read().unwrap().is_annotation() {
+            continue;
+        }
+        // cc:3305-3306: if (vn->getHigh() == high) return true;
+        if let Some(vh) = vn.read().unwrap().high.clone() {
+            if Arc::ptr_eq(&vh, &high) {
+                return true;
+            }
+        }
+        // cc:3308: if (vn->isExplicit()) continue;  — truncate at explicit
+        if vn.read().unwrap().is_explicit() {
+            continue;
+        }
+        // cc:3309: if (!vn->isWritten()) continue;
+        if !vn.read().unwrap().is_written() {
+            continue;
+        }
+        // cc:3310-3311: path.push_back(PcodeOpNode(vn->getDef(), 0));
+        let def_arc = vn.read().unwrap().get_def();
+        if let Some(def) = def_arc {
+            path.push((PcodeOpRef(def), 0));
+        }
+    }
+    false
+}
+
+// Ghidra: block.cc:3356 BlockWhileDo::finalTransform
+/// Determine if this while-do can be printed as a `for` loop (block.cc:3353-
+/// 3397): run `findLoopVariable`; when an iterate op is found, MOVE it to
+/// after the tail's last op (opUninsert/opInsertAfter — the iterateOp
+/// migration), then try `findInitializer` and move the initializer op to its
+/// block's terminal position under the isMoveable gate. `head_arc` is the
+/// resolved `getFrontLeaf()->subBlock(0)` basic block — the dispatcher
+/// resolves it BEFORE taking this block's write guard (front_leaf reads this
+/// block; std RwLock read-while-write on the same lock would deadlock).
+pub fn while_do_final_transform(
+    wd: &mut BlockWhileDo,
+    fd: &mut crate::funcdata::Funcdata,
+    head_arc: &DynBlockArc,
+) {
+    // cc:3359: BlockGraph::finalTransform(data); — done by the tree dispatch.
+    // cc:3360: if (!data.getArch()->analyze_for_loops) return;
+    if !fd.arch.as_ref().map(|a| a.analyze_for_loops).unwrap_or(false) {
+        return;
+    }
+    // cc:3361: if (hasOverflowSyntax()) return;
+    if wd.has_overflow_syntax() {
+        return;
+    }
+    // cc:3362-3365: copyBl = getFrontLeaf(); head = copyBl->subBlock(0);
+    // head->getType() must be t_basic. — resolved by the dispatcher.
+    // cc:3366-3368: lastOp = getBlock(1)->lastOp(); tail = lastOp->getParent();
+    let Some(body_last_op) = wd.body.read().unwrap().last_op() else {
+        return;
+    };
+    let Some(tail_arc) = op_parent(&body_last_op.0) else {
+        return;
+    };
+    // cc:3369: if (tail->sizeOut() != 1) return;
+    if tail_arc.read().unwrap().size_out() != 1 {
+        return;
+    }
+    // cc:3370: if (tail->getOut(0) != head) return;
+    let Some(out_edge) = tail_arc.read().unwrap().get_out(0) else {
+        return;
+    };
+    if !Arc::ptr_eq(&out_edge.point, head_arc) {
+        return;
+    }
+    // cc:3371-3372: cbranch = getBlock(0)->lastOp(); must be CBRANCH.
+    let Some(cbranch) = wd.condition.read().unwrap().last_op() else {
+        return;
+    };
+    if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+        return;
+    }
+    // cc:3373-3376: if (lastOp->isBranch()) lastOp = lastOp->previousOp();
+    let last_op = if body_last_op.0.read().unwrap().is_branch() {
+        match body_last_op
+            .0
+            .read()
+            .unwrap()
+            .previous_op_in_block(&fd.obank)
+        {
+            Some(prev) => prev,
+            None => return,
+        }
+    } else {
+        body_last_op
+    };
+
+    // cc:3378: findLoopVariable(cbranch, head, tail, lastOp);
+    while_do_find_loop_variable(wd, fd, &cbranch, head_arc, &tail_arc, &last_op);
+    // cc:3379: if (iterateOp == 0) return;
+    let Some(iterate_op) = wd.iterate_op.clone() else {
+        return;
+    };
+    // cc:3381-3384: if (iterateOp != lastOp) { opUninsert; opInsertAfter; }
+    if !Arc::ptr_eq(&iterate_op.0, &last_op.0) {
+        fd.op_uninsert(&iterate_op);
+        fd.op_insert_after(&iterate_op, &last_op);
+    }
+    // cc:3387: lastOp = findInitializer(head, tail->getOutRevIndex(0));
+    let tail_rev_slot: usize = {
+        let tail_guard = tail_arc.read().unwrap();
+        let Some(edge) = tail_guard.get_out(0) else { return };
+        if edge.reverse_index < 0 {
+            return;
+        }
+        edge.reverse_index as usize
+    };
+    let Some(init_last_op) = while_do_find_initializer(wd, fd, head_arc, tail_rev_slot) else {
+        // cc:3388: if (lastOp == 0) return;
+        return;
+    };
+    // cc:3389-3392: if (!initializeOp->isMoveable(lastOp)) { initializeOp = 0; return; }
+    let Some(initialize_op) = wd.initialize_op.clone() else {
+        return;
+    };
+    {
+        let init_g = initialize_op.0.read().unwrap();
+        let last_g = init_last_op.0.read().unwrap();
+        if !init_g.is_moveable(&last_g, &fd.obank) {
+            wd.initialize_op = None;
+            return;
+        }
+    }
+    // cc:3393-3396: if (initializeOp != lastOp) { opUninsert; opInsertAfter; }
+    if !Arc::ptr_eq(&initialize_op.0, &init_last_op.0) {
+        fd.op_uninsert(&initialize_op);
+        fd.op_insert_after(&initialize_op, &init_last_op);
+    }
+}
+
+// Ghidra: block.cc:3403 BlockWhileDo::finalizePrinting
+/// Final for-loop checks after HighVariable merging (block.cc:3399-3424):
+/// re-derive the iterate statement via testTerminal (explicitness +
+/// moveRespectingCover), verify testIterateForm, take the last-chance
+/// initializer, re-derive it via testTerminal, then mark BOTH statements
+/// non-printing so the block emitters skip them while printc's for-header
+/// prints them.
+pub fn while_do_finalize_printing(
+    wd: &mut BlockWhileDo,
+    fd: &mut crate::funcdata::Funcdata,
+) {
+    // cc:3406: BlockGraph::finalizePrinting(data); — done by the tree dispatch.
+    // cc:3407: if (iterateOp == 0) return;
+    let iterate_op = match wd.iterate_op.clone() {
+        Some(op) => op,
+        None => return,
+    };
+    // cc:3409-3410: slot = iterateOp->getParent()->getOutRevIndex(0);
+    // iterateOp = testTerminal(data, slot);
+    let slot: Option<usize> = {
+        let parent = op_parent(&iterate_op.0);
+        parent.and_then(|p| {
+            let g = p.read().unwrap();
+            g.get_out(0).map(|e| e.reverse_index).filter(|r| *r >= 0).map(|r| r as usize)
+        })
+    };
+    let Some(slot) = slot else {
+        wd.iterate_op = None;
+        return;
+    };
+    let new_iterate = while_do_test_terminal(wd, fd, slot);
+    // cc:3411: if (iterateOp == 0) return;
+    let Some(new_iterate) = new_iterate else {
+        wd.iterate_op = None;
+        return;
+    };
+    wd.iterate_op = Some(new_iterate.clone());
+    // cc:3412-3415: if (!testIterateForm()) { iterateOp = 0; return; }
+    if !while_do_test_iterate_form(wd) {
+        wd.iterate_op = None;
+        return;
+    }
+    // cc:3416-3417: if (initializeOp == 0) findInitializer(loopDef->getParent(), slot);
+    if wd.initialize_op.is_none() {
+        if let Some(loop_def) = wd.loop_def.clone() {
+            if let Some(head) = op_parent(&loop_def.0) {
+                while_do_find_initializer(wd, fd, &head, slot);
+            }
+        }
+    }
+    // cc:3418-3419: if (initializeOp != 0) initializeOp = testTerminal(data, 1-slot);
+    if wd.initialize_op.is_some() {
+        wd.initialize_op = while_do_test_terminal(wd, fd, 1 - slot);
+    }
+    // cc:3421-3423: opMarkNonPrinting(iterateOp); and initializer if present.
+    fd.op_mark_non_printing(&new_iterate);
+    if let Some(init_op) = &wd.initialize_op {
+        fd.op_mark_non_printing(init_op);
+    }
+}
+
+// Ghidra: block.cc:1355 BlockGraph::finalTransform
+/// Recurse `finalTransform` over the structured tree (block.cc:1355-1362):
+/// child-first (post-order, mirroring BlockWhileDo::finalTransform's own
+/// `BlockGraph::finalTransform(data)` prefix at cc:3359), then run the
+/// WhileDo override (block.cc:3356) on WhileDo nodes. Entry point for the
+/// `ActionStructureTransform` slot (blockaction.cc:2113) — see
+/// `ActionFinalStructure::apply` for the placement note.
+pub fn final_transform_block(
+    bl: &DynBlockArc,
+    fd: &mut crate::funcdata::Funcdata,
+    visited: &mut std::collections::HashSet<usize>,
+) {
+    let bl_id = Arc::as_ptr(bl) as *const () as usize;
+    if !visited.insert(bl_id) {
+        // Shared-child revisit guard: Rugra composites can alias one child
+        // under two parents; the oracle's tree never does. Visiting once
+        // preserves the oracle's per-node-once semantics (a revisit would
+        // re-detect idempotently but re-move ops against moved positions).
+        return;
+    }
+    // cc:1359-1361: recurse into every substructure first
+    for child in BlockGraph::component_list_dyn(bl) {
+        final_transform_block(&child, fd, visited);
+    }
+    // BlockWhileDo::finalTransform override (cc:3356)
+    if bl.read().unwrap().get_type() == BlockType::WhileDo {
+        // cc:3362-3365: copyBl = getFrontLeaf(); head = copyBl->subBlock(0);
+        // must be t_basic. Resolved BEFORE the write guard: front_leaf reads
+        // this block's lock and std RwLock read-while-write from one thread
+        // deadlocks (a null copyBl / non-basic head just skips the override,
+        // matching the oracle early returns).
+        let head = front_leaf(bl)
+            .and_then(|copy_bl| copy_bl.read().unwrap().sub_block(0))
+            .filter(|h| h.read().unwrap().get_type() == BlockType::Basic);
+        if let Some(head_arc) = head {
+            let mut w = bl.write().unwrap();
+            if let Some(wd) = w.as_any_mut().downcast_mut::<BlockWhileDo>() {
+                while_do_final_transform(wd, fd, &head_arc);
+            }
+        }
+    }
+}
+
+
+// Ghidra: blockaction.cc:2110 ActionStructureTransform::apply (graph entry)
+/// `data.getStructure().finalTransform(data)` — top-level graph entry sweep
+/// of the for-loop formation transform (blockaction.cc:2110-2115). PLACEMENT
+/// NOTE: the oracle runs this at pipeline :5715 (ActionStructureTransform,
+/// pre-merge); Rugra's ActionStructureTransform::apply lives in coreaction.rs
+/// (lane-frozen write-set, currently a no-op) so the sweep is dispatched from
+/// ActionFinalStructure::apply in blockaction.rs (:5736 slot) — see the
+/// F8FOR placement registration on the TODO ticket.
+pub fn for_loop_final_transform(fd: &mut crate::funcdata::Funcdata) {
+    if !fd.arch.as_ref().map(|a| a.analyze_for_loops).unwrap_or(false) {
+        return; // block.cc:3360 gate (per-loop, hoisted for the sweep entry)
+    }
+    if fd.sblocks.blocks.is_empty() {
+        return;
+    }
+    let top: Vec<DynBlockArc> = fd.sblocks.blocks.clone();
+    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for bl in &top {
+        final_transform_block(bl, fd, &mut visited);
     }
 }
 

@@ -1852,3 +1852,46 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
 - 本模块 10 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — BlockWhileDo for 循环形成族整体移植（HTTPDMAIN-F8-FORLOOP-0001，Lane F8FOR）
+
+按锁定 oracle (e40ed130) 1:1 移植 `BlockWhileDo` 的 for-loop 形成机制族：
+
+- **结构体字段**（block.hh:694-696）：`BlockWhileDo` 新增 `initialize_op` /
+  `iterate_op` / `loop_def`（`Option<PcodeOpRef>`，对应 oracle `mutable PcodeOp*`
+  三元组）。原 `for_init`/`for_iter` 文本对降级为 legacy 通道（coreaction.rs
+  过渡渲染器专属，见下）。
+- **findLoopVariable**（block.cc:3164-3213）：`while_do_find_loop_variable` —
+  归纳变量检测。CBRANCH 条件 varnode 起锚，显式 `path[4]` 栈 DFS（非
+  MULTIEQUAL def 下探至 4 级、call/marker 剪枝）；head 内 MULTIEQUAL 的
+  tail-槽输入 def 须驻 tail 且过 `isMoveable(lastOp)` 门 → 设
+  `loop_def`+`iterate_op`。
+- **findInitializer**（block.cc:3223-3244）：`while_do_find_initializer` —
+  head 双入边、entry-槽 def 终结于单出边初始化块 → 设 `initialize_op` 并
+  返回该块 lastOp。
+- **testTerminal**（block.cc:3256-3283）：`while_do_test_terminal` —
+  notPrinted COPY 穿透、isExplicit + 可打印根、`moveRespectingCover`
+  （**提交移动**，funcdata_op.cc:1488-1495 语义）。
+- **testIterateForm**（block.cc:3287-3314）：`while_do_test_iterate_form` —
+  迭代语句须以 loopDef 输出 high 为输入（annotation/explicit 截断 DFS）。
+- **finalTransform**（block.cc:3356-3397）：`while_do_final_transform` +
+  `final_transform_block`/`for_loop_final_transform`（树递归 + 顶层入口）—
+  **iterateOp 迁移**：`op_uninsert`/`op_insert_after` 将迭代/初始化语句移至
+  宿主块终端位置（isMoveable 门）。
+- **finalizePrinting**（block.cc:3403-3424）：`while_do_finalize_printing` +
+  `finalize_printing_graph`/`finalize_printing_block`（签名改收 `&mut
+  Funcdata`——WhileDo 覆盖需要 `moveRespectingCover`/`opMarkNonPrinting`）—
+  终检 + `opMarkNonPrinting(iterateOp/initializeOp)` 喂 printc 的 for 头。
+- **锁纪律**（RUGRA 侧）：`final_transform_block` 在持块写锁前解析
+  `front_leaf()->sub_block(0)` 头块——std RwLock 同线程读写在同锁上死锁
+  （实测 main 15s 超时根因）；共享子节点 visited 集防二次处理。
+- **放置偏差登记**：oracle 在 :5715（ActionStructureTransform，merge 组前）
+  跑 finalTransform；Rugra 的该 Action apply 在 coreaction.rs（车道写域
+  冻结，为 no-op），扫描改挂在 blockaction.rs 的 ActionFinalStructure
+  （:5736 槽，紧邻 finalizePrinting 前）——canon 双语料字节级 A/B 验证
+  放置无行为差（间隔 merge/cast 动作只读 observe 迭代 op 原位置 vs 移后
+  位置，语料上不可观察）。coreaction.rs 的过渡渲染器
+  `for_loop_finalize_printing` 与本通道在检测上互斥（真 finalizePrinting
+  先标 NONPRINTING，收窄版 testTerminal 拒 notPrinted 根），至多单通道触发。
+
+行为证据见 TODO_BOARD HTTPDMAIN-F8-FORLOOP-0001 行（canon/mirror A/B 全表）。
