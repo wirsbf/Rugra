@@ -897,34 +897,21 @@ impl EmitNoMarkup {
             // zero on the Rugra side, so every one of those lines was a
             // skeleton diff. The rewrite is not a Ghidra behavior — deleted.
 
-            // 4. Character constants in if comparisons
-            // Pattern: != 0xNN or == 0xNN where NN is printable ASCII
-            let hex_chars = [
-                ("0x2d", "'-'"), ("0x5b", "'['"), ("0x5d", "']'"),
-                ("0x7b", "'{'"), ("0x7d", "'}'"), ("0x2e", "'.'"),
-                ("0x2f", "'/'"), ("0x3a", "':'"), ("0x23", "'#'"),
-                ("0x2a", "'*'"), ("0x3f", "'?'"), ("0x21", "'!'"),
-                ("0x40", "'@'"), ("0x3d", "'='"), ("0x26", "'&'"),
-                ("0x2c", "','"), ("0x3b", "';'"), ("0x22", "'\"'"),
-                ("0x27", "'''"), ("0x28", "'('"), ("0x29", "')'"),
-                ("0x30", "'0'"), ("0x39", "'9'"), ("0x41", "'A'"),
-                ("0x5a", "'Z'"), ("0x61", "'a'"), ("0x7a", "'z'"),
-                ("0x20", "' '"), ("0x09", "'\\t'"), ("0x0a", "'\\n'"),
-
-            ];
-            for (hex, ch) in &hex_chars {
-                // Replace in comparison contexts: == 0xNN, != 0xNN
-                let eq_pattern = format!("== {}", hex);
-                let ne_pattern = format!("!= {}", hex);
-                let eq_replacement = format!("== {}", ch);
-                let ne_replacement = format!("!= {}", ch);
-                s = s.replace(&eq_pattern, &eq_replacement);
-                s = s.replace(&ne_pattern, &ne_replacement);
-                // Also in assignments: = 0xNN; at end
-                let assign_pattern = format!("= {};", hex);
-                let assign_replacement = format!("= {};", ch);
-                s = s.replace(&assign_pattern, &assign_replacement);
-            }
+            // 4. Character constants in if comparisons — RETIRED
+            // (STUBLEAK-CHARPRINT-LOOPCONST-0001). The former table rewrote
+            // `==/!=/= 0xNN` text into `'c'` literals for a hardcoded char
+            // set. The oracle has NO text-level constant rewrite: char vs
+            // integer form is decided per-varnode in PrintC::pushConstant
+            // (printc.cc:1744-1768) from the PROPAGATED datatype
+            // (`isCharPrint()` gates pushCharConstant; TYPE_UNKNOWN and
+            // plain int/uint route to push_integer → `0x26` via
+            // mostNaturalBase, printc.cc:1325-1337). The rewrite therefore
+            // corrupted every untyped/int-typed printable constant: loop
+            // counters like `for (iVar12 = 0x26; ...)` (canon golden curl
+            // :741 and direct-runner golden :494 print `0x26`) were emitted
+            // as `'&'`. Deleted; the typed-char face (httpd canon golden
+            // `cVar2 != '&'`) is printc's is_char_print business, not a
+            // postfix text concern.
 
             cleaned.push(s);
         }

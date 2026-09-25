@@ -299,22 +299,17 @@ pub mod display_format {
     pub const CHAR: u32 = 5;
 }
 
-// RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
-fn sanitize_c_ident(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            // `:` passes through so qualified analyzer names keep the
-            // oracle's namespace spelling: the locked golden prints
-            // `switchD_00154265::default(void)` (httpd 0x12b7fa) — Ghidra's
-            // printer emits the function name string raw via
-            // emit->tagFuncName(fd->getDisplayName(), ...) with no
-            // identifier sanitization, so the scope separator `::` survives.
-            // DRIVER-SWITCHD-DEFFN-0001. No other caller can see a `:` today
-            // (symbol/param names are plain identifiers).
-            if c.is_ascii_alphanumeric() || c == '_' || c == ':' { c } else { '_' }
-        })
-        .collect()
-}
+// RUGRA-GLUE: sanitize_c_ident — RETIRED (STUBLEAK-DOTNAME-SANITIZE-0001).
+// The oracle emits symbol/function names VERBATIM: the declaration site is
+// `emit->tagFuncName(fd->getDisplayName(),...)` (printc.cc:2592) and call
+// sites resolve through the FuncCallSpecs display name — no C-identifier
+// scrubbing exists anywhere in printc.cc. The former `.`→`_` rewrite broke
+// the direct-runner mirror face, where the bare-BFD loader hands the ELF
+// name `parseconfig.constprop.0` (GCC clone suffix) through to the printer
+// and the locked golden prints the dotted form at the header and every
+// call site. Canon faces feed plain DWARF spellings (no dots), so removal
+// is byte-neutral there. The `:` passthrough note (DRIVER-SWITCHD-DEFFN-0001)
+// is superseded by full passthrough.
 
 // Ghidra: printc.cc:1426 PrintC::printUnicode (char-constant escapes)
 /// Escape one char-codepoint body for a character constant, faithful to
@@ -9961,11 +9956,15 @@ impl PrintLanguage for PrintC {
         // findTruncation consults (see field doc).
         self.snapshot_union_resolutions(fd);
 
-        // Load symbol and string tables from Funcdata, sanitizing C identifiers
+        // Load symbol and string tables from Funcdata. Names are kept RAW:
+        // the oracle emits symbol names verbatim (printc.cc:2592 tagFuncName,
+        // call sites via the FuncCallSpecs display name), so ELF names like
+        // `parseconfig.constprop.0` keep their dots in the mirror face.
+        // STUBLEAK-DOTNAME-SANITIZE-0001.
         self.symbol_table = fd
             .symbol_table
             .iter()
-            .map(|(k, v)| (*k, sanitize_c_ident(v)))
+            .map(|(k, v)| (*k, v.clone()))
             .collect();
         self.string_table = fd.string_table.clone();
 
@@ -14027,6 +14026,14 @@ impl PrintC {
                 }
                 _ => {}
             }
+        } else {
+            // printc.cc:1766-1768: TYPE_UNKNOWN → push_integer(val,
+            // ct->getSize(), false, ...) — an untyped constant NEVER takes
+            // a character literal; 0x26 renders as `0x26` (hex via
+            // mostNaturalBase, printc.cc:1325-1337).
+            // STUBLEAK-CHARPRINT-LOOPCONST-0001.
+            self.emit.print(&self.integer_text(val, sz, false, display_format::DEFAULT));
+            return;
         }
         if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else if val > 0x1000 { self.emit.print(&format!("0x{:x}", val)); }
@@ -15614,7 +15621,10 @@ impl PrintC {
         // int4 id1 = emit->openGroup();
         // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
         // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
-        let display_name = sanitize_c_ident(fd.get_name());
+        // The name is emitted VERBATIM (printc.cc:2592) — no identifier
+        // scrubbing, so `parseconfig.constprop.0` keeps its dots.
+        // STUBLEAK-DOTNAME-SANITIZE-0001.
+        let display_name = fd.get_name().to_string();
         self.emit.tag_func_name(&display_name, 0);
         // emit->spaces(function_call.spacing, function_call.bump);
         // function_call.spacing==0, so no spaces between name and '('.
@@ -15828,11 +15838,15 @@ impl PrintC {
                 // the base type and the next token, ptr_expr has spacing=0,
                 // so a trailing-`*` type renders `char *pattern` while a
                 // base type renders `int argc`.
-                let pname = sanitize_c_ident(&param.name);
+                // Parameter names pass through RAW like every other symbol
+                // name in the oracle (printc.cc:2222-2255
+                // emitPrototypeInputs → emitVarDecl(sym) at :2240 emits the
+                // backing Symbol's name verbatim).
+                let pname = &param.name;
                 if !Self::decl_prefix_ends_with_star(&param.data_type) {
                     self.emit.print(" ");
                 }
-                self.emit.tag_variable(&pname, 0);
+                self.emit.tag_variable(pname, 0);
             }
         }
         // if (proto->isDotdotdot()) { if (sz != 0) emit->print(COMMA); emit->print(DOTDOTDOT); }

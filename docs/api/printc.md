@@ -98,6 +98,11 @@ type_system::cast 20/20 全绿）。残余 12+16 token 两亚族让渡：
 
 ## 2026-09-24：sanitize_c_ident 放行 `:`——限定名保真（DRIVER-SWITCHD-DEFFN-0001）
 
+> **2026-09-25 更新（Lane DOTFIX）**：`sanitize_c_ident` 已整体退役——
+> 三站点全量直通原文（点号/冒号等一律保留），见本文件
+> 「2026-09-25（Lane DOTFIX）」条目与 STUBLEAK-DOTNAME-SANITIZE-0001。
+> 下文为历史记录。
+
 `sanitize_c_ident`（RUGRA-GLUE，无 Ghidra 对应物）此前把一切非
 `[A-Za-z0-9_]` 字符折叠为 `_`，包括命名空间分隔符 `::`。Ghidra 的打印器
 对函数名**不做任何标识符消毒**：`PrintC::docFunction` 经
@@ -3205,3 +3210,36 @@ cargo test --lib 1713 通过 + 1 预存 master 失败
 - **效果**：vsh 镜 `FUN_3190`×2 → `func_0x00003190`×2（与 golden 逐字节
   一致，remoteGetUNIXSocket 7→3）；httpd 镜 −62（`FUN_2c520` 族）；
   canon 不回退（FUN_ 路径不变）。
+
+## 2026-09-25（Lane DOTFIX）：符号/函数名直通与无类型常量整数形态（STUBLEAK 双残差收口）
+
+- **根因①（STUBLEAK-DOTNAME-SANITIZE-0001）**：`doc_function` 的
+  symbol_table 快照、`emit_function_declaration` 表头与
+  `emit_prototype_inputs` 参数名三站点均过 `sanitize_c_ident`
+  （RUGRA-GLUE 遗产），把 `.` 改写 `_`。oracle 发射名一律原文：
+  表头 `emit->tagFuncName(fd->getDisplayName(),...)`（printc.cc:2592）、
+  调用点经 FuncCallSpecs display name、参数名经 emitVarDecl(sym)
+  （printc.cc:2240）——printc.cc 全文不存在任何 C 标识符清洗。镜面档
+  裸 BFD 装载器递交 ELF 名 `parseconfig.constprop.0`（GCC clone 后缀），
+  被改写为 `parseconfig_constprop_0` → 表头+调用点 14 行 vs golden 直印
+  点号。canon 档 DWARF 拼写无点故从未暴露。
+- **修法①**：三站点直通原文（快照 `v.clone()`、表头 `fd.get_name()`、
+  参数名 `&param.name`）；`sanitize_c_ident` 删除（零调用方），其
+  DRIVER-SWITCHD-DEFFN-0001 `::` 透传注释由全文透传取代（`::` 形
+  httpd canon 1980-1998 三站点实测不变）。
+- **根因②（STUBLEAK-CHARPRINT-LOOPCONST-0001）**：登记定位
+  `push_constant` 无类型回退臂的 `sz==1 && printable → 'c'` 启发式；
+  实测追迹发现 for 头初始化常量走 coreaction
+  `for_header_const_text`（已按 push_integer 渲染 `0x26`），`'&'` 的
+  真实生产源是 **prettyprint 第七趟文本改写**（`==/!=/= 0xNN` → `'c'`
+  硬编码表，见 docs/api/prettyprint.md 本日条目）——登记的
+  `push_constant` 臂为潜在路径，同 commit 一并修直。
+- **修法②（printc 侧）**：`push_constant` 无类型（TYPE_UNKNOWN）臂改走
+  `integer_text(val, sz, false, DEFAULT)`——printc.cc:1766-1768
+  `TYPE_UNKNOWN → push_integer(val, ct->getSize(), false,...)`，
+  0x26 经 mostNaturalBase（printlanguage.cc:731 countdec=0 → 16）印
+  `0x26`；typed charPrint int/uint 臂保持字符字面量（cc:1749-1764 闸门）。
+- **效果**：curl 镜 259→211（点名族 14 行 + 字符改写族连带）、
+  httpd 镜 440→412、curl canon 396→388、httpd canon 896→872；
+  defects=0/numbering=0 四档全零；bank 1729/1730（1 失败为 master 既有
+  fspec `test_nonzeromask_pipeline_wiring`，pristine 复现，非本车道）。

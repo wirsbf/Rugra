@@ -1113,3 +1113,26 @@ printc 侧空间名形态接通后（`&stack0x00000008` canon 形），不跳过
   prettyprint.hh:558-560），printc 三个标号发射站点（emit_label_statement
   与 emit_any_label_statement 两臂）改调绝对形。**merge master 后该方法已
   由 TAGLINE 的 `tag_line_indent` 统一取代**（见上「修法与去重」）。
+
+## 2026-09-25（Lane DOTFIX）：第七趟字符常量文本改写退役（STUBLEAK-CHARPRINT-LOOPCONST-0001）
+
+- **根因**：后处理第七趟持一张 28 项硬编码表，把 `== 0xNN` / `!= 0xNN` /
+  `= 0xNN;` 文本改写为 `'c'` 字符字面量。oracle **不存在任何文本层常量
+  改写**：字符 vs 整数形态由 `PrintC::pushConstant`（printc.cc:1744-1768）
+  按 varnode **传播类型**决定——`isCharPrint()` 走 pushCharConstant，
+  TYPE_UNKNOWN/普通 int/uint 走 push_integer（0x26 经 mostNaturalBase=16
+  印 `0x26`，printc.cc:1325-1337）。文本表无法区分类型，把所有无类型/
+  int 型可打印常量污染成字符字面量：canon golden curl:741 与 direct-runner
+  golden:494 的 `for (lVar13/iVar12 = 0x26; ...)` 均被印成 `'&'`；
+  httpd 镜 `uVar12 != 0x26`（golden:5326）被印成 `'&'`。
+- **修法**：整表删除（连同三向 replace 循环）。typed-char 面
+  （httpd canon golden 30275 `cVar2 != '&'`）是 printc
+  `is_char_print` 类型传播的职责（typeprop 域，GENSMOKE-S2 族），不是
+  后处理文本层的职责。
+- **效果**：四档全降——curl 镜 259→211、httpd 镜 440→412、
+  curl canon 396→388、httpd canon 896→872；defects/numbering 全零。
+  已知连带：httpd canon 1543/1604 两行（ap_pregsub，golden 30275/30286
+  `cVar2 != '&'` 为 typed-char 面）原先经该表印 `'&'`，现印 `0x26`——
+  该两行变量名/结构本已与 golden 分叉，所属函数整体 45→41 仍净降；
+  typed `'&'` 正道是 printc `is_char_print` 类型传播（typeprop 域，
+  GENSMOKE-S2 族），非文本层职责。

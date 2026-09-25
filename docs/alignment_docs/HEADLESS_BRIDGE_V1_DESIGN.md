@@ -1579,3 +1579,99 @@ PARAMID 态改善）。后续若打印窗口扩容到 ap_mpm_run/ap_fatal_signal
 setup（struct 使用函数），本 census 直接承重。
 
 证据=/dev/shm/rugra-tests/structb/（A/B 双二进制+八脸输出+全门禁日志）。
+
+## §17.8 CURLPARAM 交付记录（Lane CURLPARAM，2026-09-25，基=master 94276edf=BOOLMARK 后）
+
+**任务形态**：httpd 侧已证自产+导入 753 < manifest 898（§17.7 数字）——curl 侧把
+`RUGRA_PARAMID=1` 迭代环（§17.1 形态 + §17.6 四守卫）整套复制到 curl 驱动，
+**去循环化的另一半**：curl 的 callee-siglock 通道输入从 harvested manifest 换成
+二进制自身运行时回收的原型。curl 与 httpd 的结构差异全部保留：驱动是
+**进程隔离 worker 协议**（每函数一个 `run_isolated_worker` 子进程，非线程闭包），
+迭代环的每一轮 = 对窗口内每个函数跑一次与打印 pass **完全同构的 worker 请求**
+（同一 `build_decompile_request` 构造点、同一二进制、同一超时隔离），只在请求上
+加两件事：本轮锁表（`paramid_table: Some(entries)` 拥有该通道——manifest 读
+整段跳过；round 1 空表=裸轮）与收割开关（worker 在 print 完成后从最终
+varnode 状态抽证据——与 httpd `decompile_one_function` 的收割位同位——经新增
+`WorkerPayload::DecompileHarvest` 返回）。**迭代窗口=124 全量语料减 48 个
+EXTERNAL 桩投影**（76 个真函数体；主循环桩臂的同一 skip）。四守卫
+（sticky 冲突记忆/窄整指针降级/退化站点过滤/静默站点否决）与全部仪器
+（ROUNDS/EVIDENCE=strict/STICKY/NOINTPTR/PLT=1/Round1=strict/EVICT/SITES/
+DEBUG/COMPARE）逐件带上；PLT 槽证据默认仍整表弃收（CURLPREP 判决：libc ABI
+表+DWARF 原型已在 callspecs 上，导入账本在 curl 侧无需建——装载臂的
+`has_model()` gap-fill 规则本来就跳过被覆盖位点）。证据策略（loose 层/
+窄指针降级）由**请求字段**下发（父进程单源，杜绝父/worker env 漂移；
+Round1=strict 分层仪器因此可只作用于第 1 轮）。
+
+**运行形态（亲测）**：round 1 裸 → 76 函数 63 条站点记录 → 12 锁；
+round 2 锁态 → 同 12 锁 → **round 2 不动点**（终表 12 = 4 全参锁 + 12 返回锁；
+monotone 收敛与 httpd 同形）。PARAMID 脸耗时 1m51s（默认 37s）。
+
+**三脸对照（硬门=自产 ≥ manifest + 零函数回退）——全等通过**：
+
+| 脸 | skeleton | defects | numbering | 逐函数 vs manifest |
+|---|---|---|---|---|
+| manifest（默认） | **396** | 0 | 0 | 基准（与基线 result/curl_cur.c **字节恒等**） |
+| 裸（RUGRA_V3SIG=0） | **396** | 0 | 0 | 与 manifest **字节恒等** |
+| 自产（RUGRA_PARAMID=1） | **396** | 0 | 0 | 与 manifest **字节恒等**（零回退平凡成立） |
+
+**结构性判决（本 lane 的核心发现，判例级）**：在 curl 树上 **callee-siglock
+通道是脸中性的——两种输入形态都是**。manifest 态装载 13 个原型
+（main 7 / parseconfig 1 / getparameter 2 / progressbarinit 1 / glob_range 2）
+而脸输出与裸态字节恒等；自产态终表 12 条**装载 0 个**（12 条全部命中
+`has_model()` DWARF-覆盖跳过——GetStr/my_get_line/parseconfig/getparameter/
+glob_url/next_url/match_url 等内部 callee 都有 DWARF 模型在位）。机制归因：
+CURLWIRE 的 src 侧 cast 臂（5e6aad2b）+ typeprop 已在 DWARF/libc 覆盖面把
+canon 形复现，锁只是把恢复本来就到的答案钉死——与 §17.7.1 STRUCTB 判例
+（"通道开关在本树不再改变脸"）同一形态，但更强：**输入自产化也不改变脸**。
+PARAMID 自产环在 curl 上的价值=通道运输层完整可用（去 manifest 依赖的
+half-looper 收口）+ 零风险（三脸全等），非脸改善——按判例诚实登记，不宣称
+PARAMID 态改善。
+
+**对拍（自产 12 vs manifest 55，RUGRA_PARAMID_COMPARE 默认开）**：
+- entry 级：overlap 12（self-only=0）| exact 4 / shape-diff 8 / manifest-only
+  43；precision(exact/overlap)=**33.3%**、recall=**7.3%**。
+- **DWARF 优势直接可见**：overlap 域内**零拼写冲突**——param slots
+  7 equal / **0 different**（httpd 同阶段 18 equal/10 diff）；returns
+  10 equal / **0 different** / 0 manifest-only / 2 self-only。证据回声
+  （link_call_specs 的 DWARF/libc 装载 → typeprop → arg varnode 类型）
+  使每个提交拼写与 canon 一致——收敛的不是覆盖率而是准确率。
+- manifest-only 43 分解：**40 = PLT/导入域**（策略弃收——libc/DWARF 通道
+  属地，`_init` 计入此类）+ **3 = 内部**：progressbarinit
+  （`ProgressData *` 结构拼写——KNOWN_BASES 准入门死证据，与 8 条
+  shape-diff 的锁深度损失同类：FILE */URLGlob */Configurable */HttpReq/
+  URLGlob/`int *`（glob_url slot2）等结构/窄指针槽位不进证据）、hugehelp
+  （manifest 惰性条目——无锁可装，合并规则按 httpd 形态正确弃收）、
+  GetStr（`char * *`/`char *` 均为已知基——见下节站点归因）。
+- shape-diff 8 条全部为 lock-flag 类（自产退化为 return-only；返回拼写
+  10/10 全对）。
+
+**GetStr 站点归因（RUGRA_PARAMID_SITES=1 亲测，17 位点全查）**：全部
+17 位点（caller 一律 getparameter）**零冲突、形态全同**——
+`arity=2 slots=["-", "char *"] ret=None`：slot1 `char *` 全证据一致；
+slot0（canon `char * *`）在**每一个**位点都无政策可采证据——打印脸该
+槽是 `&::config.useragent` 全局字段地址族（spacebase 相对 address-of
+形），槽 varnode 无类型/基名不在 KNOWN_BASES，运行时状态拼写通道看不
+穿该形；GetStr 又无返回消费证据 → 满证据 input-lock 规则下只能退
+return-only 而 ret=None → 惰性条目弃收。与 httpd §17.4 的
+"missing slot evidence (untyped args)" 同类——manifest 从 canon 打印
+文本 `&::config.X` 形读出 `char **`，运行时状态等价物需要全局字段
+指针类型回填（typeprop/DWARF-globals 联合域，非本车道 write-set）。
+
+**门禁（全过，亲测）**：默认脸与基线 result/curl_cur.c 字节恒等；mirror
+（RUGRA_MIRROR=1）± PARAMID 输出恒等（gate 日志拒绝行在场）；RUGRA_SEEDS=0
+± PARAMID 恒等（全局逃生门静默关）；RUGRA_V3SIG=0 恒等（单通道退）；
+PARAMID 双跑 cmp 恒等；默认双跑 cmp 恒等；bank 391/391 exit 0；gcc 审计
+104 OK/20 FAIL（PARAMID 脸=默认脸字节恒等→同名集平凡成立）；cargo test
+--lib 1729P+1 预存败（test_nonzeromask_pipeline_wiring——BOOLMARK/LOCKFIX
+行已档 master 干树同名同败，非本改动）；annotations/refs/gate-health 门禁
+过。src/ 零触碰（全走库公开面：`fd.callspecs`/`find_call_op`/`get_in`/
+`get_out`/`get_type`/`print_raw`）。
+
+**移交**：①结构拼写证据类（KNOWN_BASES 无 DWARF 域名）=与 httpd
+§17.6.5 typeprop 域同族的既有登记（C3 域），不新立 TODO；②GetStr 冲突族
+若未来要收口，路径=httpd HARVESTFIX 同法（标量 cast 槽证据恢复），登记在
+车道终报即可；③PLT 准入实验（RUGRA_PARAMID_PLT=1）在 curl 上未量测
+（has_model 跳过使其结构性 no-op，与 httpd 的净负测量一致）。
+
+证据=/dev/shm/rugra-tests/cparam/（三脸+双跑+全门禁输出+sites dump）；
+终报=本节。target /dev/shm/rugra-targets/sb-cparam 留 root 集成后回收。
