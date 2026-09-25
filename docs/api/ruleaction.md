@@ -1918,3 +1918,40 @@ union_map 逐边解析落地后的消费者接线（oracle 的 `getTypeReadFacin
 前后（亲父 master 93195bca → 本车道,默认态）:curl 369→309（glob_set 16→3 /
 glob_range 19→1 / next_url 22→7 / match_url 19→5,字段偏移族全收敛,残差归
 字符串常量族+换行）;httpd 872 字节恒等;0 not-settling/0 超时。
+
+## 2026-09-26：AddTreeState 相对指针偏移单位换算（RULEACTION-ADDRUNIT-0001）
+
+`AddTreeState::ptr_rel_state`（`isFormalPointerRel()` 闸门 + `TypePointerRel`
+访问器的所有权镜像）此前把存储的**字节**偏移（`base.pointer_rel.offset` =
+`TypePointerRel::offset`，type.hh:652；`getByteOffset` type.hh:675）直接当
+`getAddressOffset()` 的返回值消费。oracle 的 `getAddressOffset()`
+（type.hh:670）是 `AddrSpace::byteToAddressInt(offset, wordsize)`
+（space.hh:541 `val/ws`）——**地址单位**；ruleaction.cc 四个消费位点全取
+地址单位：
+
+- ctor 6035-6036：`nonmultsum = pRelType->getAddressOffset(); nonmultsum &= ptrmask;`
+- `clear` 5981-5982：同款重播种；
+- `calcSubtype` STRUCT 臂 6314：`offset == pRelType->getAddressOffset()`；
+- `calcSubtype` 尾部 6333-6335：`offset`/`correct` 各减 `getAddressOffset()`。
+
+修复：`ptr_rel_state` 返回五元组 `(addr_off, byte_off, parent, ptr_to,
+wordsize)`——`addr_off = byte_to_address_int(rel.offset, wordsize)`
+（getAddressOffset 镜像），`byte_off` 透传原始字节偏移（getByteOffset 镜像），
+供 STRUCT 臂 `pointer_rel_evaluate_thru_parent` 的 `offset` 形参使用
+（type.cc:2593 `byteOff + offset` 在字节域折叠——该形参此前恰好拿的就是
+字节值，本次修复保持）。四个消费位点相应改读 `addr_off`；wordsize 沿用
+`.max(1)` 钳制（FIELDOFF-CR-F6 已记录的形式性偏差：oracle 裸
+`getWordSize()`，ws=0 在 C++ 是 UB、在 Rust 是除零 panic）。
+
+**可观测性**：wordsize==1 时 `byte_to_address_int(x,1)==x`，两单位恒等
+——x86 双语料（curl/httpd，1 字节寻址）构造性不可观测，A/B 亲测字节恒等；
+wordsize>1 架构 formal rel 的 nonmultsum 此前偏大 wordsize 倍，现按
+oracle 地址单位播种。单测 `test_add_tree_ptr_rel_state_address_unit_offset`
+钉死：wordsize 2、字节偏移 8 → addr_off 4 / byte_off 8；ctor nonmultsum
+播种 4（地址单位）、size=byteToAddressInt(32,2)=16、baseType=parent、
+isDegenerate=false；clear 重播种 4；wordsize 1 恒等臂；HAS_STRIPPED
+（ephemeral）闸门排除臂。
+
+同车道一并收口（各见独立 commit）：RULEACTION-RS0-RELGATE-0001（RS0 缺口
+注释补 TODO ID + 修过时陈述）、RULEACTION-ANNO-DRIFT-0001（`// Ghidra:`
+起始行批量纠偏 221 处，零行为变化）。

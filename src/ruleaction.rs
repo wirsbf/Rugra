@@ -18197,19 +18197,19 @@ impl<'a> AddTreeState<'a> {
         let mut nonmultsum: u64 = 0;
         let mut p_rel: Option<std::sync::Arc<Datatype>> = None;
         // Ghidra 6032-6037: formal relative pointer — baseType = parent,
-        // nonmultsum seeded with the relative address offset (& ptrmask).
+        // nonmultsum seeded with the relative ADDRESS offset
+        // (getAddressOffset, type.hh:670) & ptrmask.
         let rel_state = ct.as_ref().and_then(Self::ptr_rel_state);
-        if let Some((rel_off, rel_parent, _, _)) = &rel_state {
+        if let Some((rel_off, _, _, _, _)) = &rel_state {
             p_rel = ct.clone();
             nonmultsum = (*rel_off as u64) & ptrmask;
-            let _ = rel_parent;
         }
         // Ghidra 6028/6038: baseType = ct->getPtrTo() (or the rel parent
         // assigned above); then the size/degenerate derivation below reads
         // that base type exactly as 6038-6050 does.
         let (base_type, size, is_degenerate) = match (&ct, &rel_state) {
-            (Some(ct_arc), Some((_, rel_parent, _, wordsize))) => {
-                // Relative form: baseType = pRelType->getParent().
+            (Some(_), Some((_, _, rel_parent, _, wordsize))) => {
+                // Relative form: baseType = pRelType->getParent() (6034).
                 let bt = rel_parent.clone();
                 Self::derive_base_geometry(&bt, *wordsize)
             }
@@ -18258,12 +18258,17 @@ impl<'a> AddTreeState<'a> {
     // RUGRA-GLUE: read the formal-relative-pointer state off Rugra's flat
     // TypePointer model (base.flags IS_PTRREL + base.pointer_rel) — the
     // ownership twin of Ghidra's `ct->isFormalPointerRel()` virtual plus the
-    // `TypePointerRel` accessors getAddressOffset/getParent.
+    // `TypePointerRel` accessors. `addr_off` mirrors getAddressOffset()
+    // (type.hh:670): `AddrSpace::byteToAddressInt(offset, wordsize)` — the
+    // stored BYTE offset (type.hh:652, mirrored by `rel.offset` /
+    // getByteOffset type.hh:675) scaled to ADDRESS units. `byte_off` passes
+    // the raw stored byte offset through for evaluateThruParent (type.cc:2593
+    // folds `byteOff + offset` in byte units).
     fn ptr_rel_state(
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
-    ) -> Option<(i64, std::sync::Arc<crate::type_system::datatype::Datatype>, std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
+    ) -> Option<(i64, i64, std::sync::Arc<crate::type_system::datatype::Datatype>, std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
         if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
-            // ruleaction.cc:6033 gates on ct->isFormalPointerRel()
+            // ruleaction.cc:6032 gates on ct->isFormalPointerRel()
             // (type.hh:228: (is_ptrrel|has_stripped)==is_ptrrel): the
             // ephemeral relative pointers built by propagateAddIn2Out carry
             // has_stripped (markEphemeral, type.cc:4020) and are EXCLUDED
@@ -18278,11 +18283,18 @@ impl<'a> AddTreeState<'a> {
             }
             if (p.base.flags & crate::type_system::datatype::type_flags::IS_PTRREL) != 0 {
                 if let Some(rel) = p.base.pointer_rel.as_ref() {
+                    // wordsize clamp: FIELDOFF-CR-F6 recorded deviation —
+                    // oracle reads bare getWordSize() (ws=0 is C++ UB; the
+                    // Rust divide would panic), so clamp to 1.
+                    let wordsize = p.wordsize.max(1) as i64;
                     return Some((
+                        // getAddressOffset (type.hh:670): bytes → address units.
+                        byte_to_address_int(rel.offset, wordsize),
+                        // getByteOffset (type.hh:675): raw stored byte offset.
                         rel.offset,
                         rel.parent.clone(),
                         p.ptr_to.clone(),
-                        p.wordsize.max(1) as i64,
+                        wordsize,
                     ));
                 }
             }
@@ -18323,7 +18335,9 @@ impl<'a> AddTreeState<'a> {
         self.nonmultsum = 0;
         self.biggest_non_mult_coeff = 0;
         if let Some(rel) = &self.p_rel {
-            if let Some((rel_off, _, _, _)) = Self::ptr_rel_state(rel) {
+            if let Some((rel_off, _, _, _, _)) = Self::ptr_rel_state(rel) {
+                // Ghidra 5981-5982: nonmultsum = getAddressOffset() & ptrmask
+                // (ADDRESS units, type.hh:670).
                 self.nonmultsum = (rel_off as u64) & self.ptrmask;
             }
         }
@@ -18821,15 +18835,20 @@ impl<'a> AddTreeState<'a> {
                     // offset must be explainable through the parent container
                     // (evaluateThruParent(0)) or the basic form must be used.
                     if let Some(rel) = &self.p_rel {
-                        if let Some((rel_off, rel_parent, rel_ptrto, _)) = Self::ptr_rel_state(rel) {
-                            // offset (uint8) == getAddressOffset() (int4):
-                            // unsigned comparison after converting the int4.
+                        if let Some((rel_off, rel_byte_off, rel_parent, rel_ptrto, _)) =
+                            Self::ptr_rel_state(rel)
+                        {
+                            // Ghidra 6314: offset (uint8) == getAddressOffset()
+                            // (int4, ADDRESS units): unsigned comparison after
+                            // converting the int4. evaluateThruParent folds the
+                            // stored BYTE offset (type.cc:2593), so it takes
+                            // rel_byte_off, not the address-unit rel_off.
                             if self.offset == rel_off as u64 {
                                 if !crate::type_system::datatype::pointer_rel_evaluate_thru_parent(
                                     rel_ptrto.as_ref(),
                                     rel_parent.as_ref(),
                                     self.rel_wordsize(),
-                                    rel_off,
+                                    rel_byte_off,
                                     self.ptrsize,
                                     0,
                                 ) {
@@ -18855,9 +18874,10 @@ impl<'a> AddTreeState<'a> {
             self.valid = false;
         }
         // Ghidra 6332-6336: with a relative pointer, both the sub-type offset
-        // and the correction shift by the relative address offset.
+        // and the correction shift by the relative ADDRESS offset
+        // (getAddressOffset, type.hh:670).
         if let Some(rel) = &self.p_rel {
-            if let Some((rel_off, _, _, _)) = Self::ptr_rel_state(rel) {
+            if let Some((rel_off, _, _, _, _)) = Self::ptr_rel_state(rel) {
                 let ptr_off = rel_off as u64;
                 self.offset = self.offset.wrapping_sub(ptr_off) & self.ptrmask;
                 self.correct = self.correct.wrapping_sub(ptr_off) & self.ptrmask;
@@ -27569,6 +27589,111 @@ mod tests {
         // 0x7FFFFFFFFFFFFFF8 (unsigned). offset = 0xFF8 - that, mod 2^64.
         assert_eq!(state.offset, 0x8000_0000_0000_1000);
         assert_eq!(state.correct, 0x8000_0000_0000_0008);
+    }
+
+    /// RULEACTION-ADDRUNIT-0001: `ptr_rel_state` must report the relative
+    /// offset in ADDRESS units — the `getAddressOffset()` mirror
+    /// (type.hh:670 = `AddrSpace::byteToAddressInt(offset, wordsize)`,
+    /// space.hh:541 `val/ws`) — alongside the raw stored BYTE offset
+    /// (`getByteOffset`, type.hh:675), and the AddTreeState ctor/clear must
+    /// seed `nonmultsum` with the ADDRESS-unit value (ruleaction.cc:6035 /
+    /// 5981). wordsize==1 keeps the two units identical (the x86 corpus
+    /// identity); wordsize>1 divides the byte offset by the word size.
+    #[test]
+    fn test_add_tree_ptr_rel_state_address_unit_offset() {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, PointerRelState, TypeBase, TypeMetatype, TypePointer,
+        };
+        // Parent container: 32-byte struct; the pointer points at byte
+        // offset 8 inside it; wordsize 2 → address offset 8/2 = 4.
+        let parent = Arc::new(Datatype::Base(TypeBase::new(
+            "container".into(),
+            32,
+            TypeMetatype::Struct,
+        )));
+        let ptr_to = Arc::new(Datatype::Base(TypeBase::new(
+            "field".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let make_ct = |wordsize: usize| {
+            let mut tp = TypePointer {
+                base: TypeBase::new("container *+".into(), 8, TypeMetatype::Pointer),
+                ptr_to: ptr_to.clone(),
+                wordsize,
+            };
+            tp.base.flags |= type_flags::IS_PTRREL;
+            tp.base.pointer_rel = Some(PointerRelState {
+                parent: parent.clone(),
+                offset: 8,
+                stripped: None,
+            });
+            Arc::new(Datatype::Pointer(tp))
+        };
+        // wordsize 2: getAddressOffset = 8/2 = 4 (address units);
+        // getByteOffset = 8 (byte units).
+        let ct2 = make_ct(2);
+        let (addr_off, byte_off, rel_parent, rel_ptrto, ws) =
+            AddTreeState::ptr_rel_state(&ct2).expect("formal rel pointer");
+        assert_eq!(ws, 2);
+        assert_eq!(byte_off, 8); // getByteOffset (type.hh:675)
+        assert_eq!(addr_off, 4); // getAddressOffset (type.hh:670)
+        assert!(Arc::ptr_eq(&rel_parent, &parent));
+        assert!(Arc::ptr_eq(&rel_ptrto, &ptr_to));
+        // wordsize 1: the two units are identical.
+        let (addr_off1, byte_off1, _, _, ws1) =
+            AddTreeState::ptr_rel_state(&make_ct(1)).expect("formal rel pointer");
+        assert_eq!(ws1, 1);
+        assert_eq!(addr_off1, 8);
+        assert_eq!(byte_off1, 8);
+        // Ephemeral rel pointers (HAS_STRIPPED) are excluded from the AddTree
+        // relative accounting (ruleaction.cc:6032 gate, type.hh:228).
+        let ephemeral = {
+            let mut tp = TypePointer {
+                base: TypeBase::new("container *+".into(), 8, TypeMetatype::Pointer),
+                ptr_to: ptr_to.clone(),
+                wordsize: 2,
+            };
+            tp.base.flags |= type_flags::IS_PTRREL | type_flags::HAS_STRIPPED;
+            tp.base.pointer_rel = Some(PointerRelState {
+                parent: parent.clone(),
+                offset: 8,
+                stripped: None,
+            });
+            Arc::new(Datatype::Pointer(tp))
+        };
+        assert!(AddTreeState::ptr_rel_state(&ephemeral).is_none());
+        // Ctor seeding (ruleaction.cc:6034-6036): baseType = parent,
+        // nonmultsum = getAddressOffset() & ptrmask — ADDRESS units, so 4,
+        // not the byte offset 8. size = byteToAddressInt(32, 2) = 16.
+        let mut fd = Funcdata::new("relws2", Address::new(0x1000), 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ct2.clone());
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        let mut state = AddTreeState::new(&mut fd, add_op, 0);
+        assert!(state.p_rel.is_some());
+        assert_eq!(state.nonmultsum, 4); // ADDRESS-unit seed (6035)
+        assert_eq!(state.size, 16); // byteToAddressInt(align 32, ws 2) (6041)
+        assert!(!state.is_degenerate); // 32 > unitsize 2 (6049-6050)
+        assert!(matches!(state.base_type.as_ref(), Some(bt) if Arc::ptr_eq(bt, &parent)));
+        // clear() re-seeds the same ADDRESS-unit value (ruleaction.cc:5981).
+        state.nonmultsum = 0;
+        state.clear();
+        assert_eq!(state.nonmultsum, 4);
     }
 
     // RUGRA-GLUE: test module helper (Rust-native fixture builder)
