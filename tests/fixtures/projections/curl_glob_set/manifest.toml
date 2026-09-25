@@ -16,19 +16,19 @@ date = "2026-09-24"
 
 [rugra]
 side = "rugra"
-driver_commit = "cd071239883d9e536aca5ed71adc6f6d6ee52b04"
+driver_commit = "c3313dab87bc63a14e84280d7736e2ecf046888d"
 driver_profile = "fast-release"
 capture_command = "RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=glob_set RUGRA_STAGE_PROJ_OUT=tests/fixtures/projections/curl_glob_set/rugra.projection cargo run --profile fast-release --example curl_decompile"
-date = "2026-09-24"
+date = "2026-09-26"
 
 [verification]
 tool = "tools/run_stage_bisect.sh (stage_bisect.py --v1 strict offsets)"
 status = "MATCH"
 stages = 366
 ops = 141943
-date = "2026-09-24"
+date = "2026-09-26"
 
 [integrity]
 oracle_sha256 = "7e989c902034bbb032e020d186cc79ddd873e5d2e41802be614786c94677ec31"
-rugra_sha256 = "f08ad43cf59c1f8fa2c94f59ead5efd19ff5feaa0c5890d0d63dde375b2fdd5f"
+rugra_sha256 = "8967b89a8338b35f7b382f3b9892d43162a7b3b975cb43f3313a710cf7f87c78"
 binary_sha256 = "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
