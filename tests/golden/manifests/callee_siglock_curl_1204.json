@@ -3,7 +3,7 @@
  "corpus": "curl",
  "source": "callee-siglock",
  "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
- "harvest_rule": "canon call-site form harvest over the target functions: per callee, arity = printed argument count (conflict = varargs drop), param slot types from bare-local/element/addr-of/deref/literal/cast-target evidence with conflict-sensitivity, input lock only on full KNOWN_BASES evidence, return lock only on cast-free agreeing consumers, no param names; call-site forms are authoritative over the callee's own golden header (Parameter ID iteration drift); CURLPREP --dwarf-types extension: servable bases grow the corpus's DWARF-named composites/typedefs (the parse_type_names factory surface the driver's parse_c_type resolves FILE/Configurable against), casts carry multiple pointer stars ((char **)0x0), and ::global / &::global.member arg forms evidence from the DWARF file-scope static + struct member table (one member level)",
+ "harvest_rule": "canon call-site form harvest over the target functions: per callee, arity = printed argument count (conflict = varargs drop), param slot types from bare-local/element/addr-of/deref/literal/cast-target evidence with conflict-sensitivity, input lock only on full KNOWN_BASES evidence, return lock only on cast-free agreeing consumers, no param names; call-site forms are authoritative over the callee's own golden header (Parameter ID iteration drift); CURLPREP --dwarf-types extension: servable bases grow the corpus's DWARF-named composites/typedefs (the parse_type_names factory surface the driver's parse_c_type resolves FILE/Configurable against), casts carry any pointer-star count (scalar (long)x and multi-star (char **)0x0 alike), and ::global / &::global.member arg forms evidence from the DWARF file-scope static + struct member table (one member level)",
  "targets": [
   "__libc_csu_init",
   "_init",
@@ -45,11 +45,11 @@
    "name": "SetHTTPrequest",
    "sites": 1,
    "arity": 2,
-   "input_lock": false,
+   "input_lock": true,
    "params": [
     {
-     "type": null,
-     "locked": false
+     "type": "HttpReq",
+     "locked": true
     },
     {
      "type": "HttpReq *",
@@ -538,11 +538,11 @@
    "name": "malloc",
    "sites": 5,
    "arity": 1,
-   "input_lock": true,
+   "input_lock": false,
    "params": [
     {
-     "type": "size_t",
-     "locked": true
+     "type": null,
+     "locked": false
     }
    ],
    "return": null
@@ -686,8 +686,8 @@
      "locked": false
     },
     {
-     "type": null,
-     "locked": false
+     "type": "long",
+     "locked": true
     }
    ],
    "return": null
@@ -784,8 +784,8 @@
      "locked": false
     },
     {
-     "type": null,
-     "locked": false
+     "type": "long",
+     "locked": true
     }
    ],
    "return": "int"

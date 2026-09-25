@@ -297,8 +297,13 @@ CALLEE_CALL = re.compile(
     r"(?P<cast>\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?"
     r"(?P<callee>[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
-# Simple value casts on arguments: (int)x, (int)x, (char *)x, (long *)x ...
-CALLEE_ARG_CAST = re.compile(r"^\(\s*(?P<t>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<ptr>\*+)\s*\)\s*")
+# Simple value casts on arguments: (int)x, (long)x, (char *)x, (char **)x ...
+# `\**` (zero or more stars) is the union of the pre-CURLPREP `\*?` (scalar
+# `(long)x` casts are slot evidence — memcmp's size_t slot) and CURLPREP's
+# `\*+` (multi-star `(char **)0x0` keeps its star count); `\*+` alone dropped
+# the zero-star form, and the all-or-nothing input lock then cost memcmp its
+# whole lock (HARVEST-SCALARCAST-0001).
+CALLEE_ARG_CAST = re.compile(r"^\(\s*(?P<t>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<ptr>\**)\s*\)\s*")
 IDENT_EXPR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NUMERIC = re.compile(r"^(?:0x[0-9a-fA-F]+|\d+)$")
 
@@ -1733,8 +1738,9 @@ def main():
                 + "; CURLPREP --dwarf-types extension: servable bases grow "
                 "the corpus's DWARF-named composites/typedefs (the "
                 "parse_type_names factory surface the driver's parse_c_type "
-                "resolves FILE/Configurable against), casts carry multiple "
-                "pointer stars ((char **)0x0), and ::global / "
+                "resolves FILE/Configurable against), casts carry any "
+                "pointer-star count (scalar (long)x and multi-star "
+                "(char **)0x0 alike), and ::global / "
                 "&::global.member arg forms evidence from the DWARF "
                 "file-scope static + struct member table (one member level)"
             )

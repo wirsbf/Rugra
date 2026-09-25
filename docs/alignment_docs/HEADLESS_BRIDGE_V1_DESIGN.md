@@ -1203,3 +1203,47 @@ build_cmt_seed.py 原样并入（独立函数，不触 --callee/--struct/--dwarf
 机制 C：tools/examples 驱动域豁免（无 src/ 改动）；机制 B：examples 驱动不
 在白名单模块,但按 B2 精神保留了与 CMTFILL oracle 复核脸的逐字节对照（上表
 第二行）。
+### 16.7 HARVESTFIX 交付记录（Lane HARVESTFIX，2026-09-25，基=master 2dd4c813=MANIFREGEN bridge 后）
+HARVEST-SCALARCAST-0001（P2）收口：16.6.3 登记的 harvester 侧标量 cast 证据缺口
+在 tools 域修复。
+#### 16.7.1 修法（一句话）
+`CALLEE_ARG_CAST` 的星号量词 `\*+` → `\**`（零或多星）——是 CURLPREP 前
+`\*?`（0/1 星，标量 `(long)x` 是槽证据）与 CURLPREP `\*+`（1+ 星，
+`(char **)0x0` 保留星数）的严格并集：标量 cast 证据恢复、多星增益保持、
+零星路径落回 `\*?` 的既有语义（`_arg_evidence` 的 `return base` 分支本就在）。
+#### 16.7.2 双 manifest 再生成组成对比
+httpd（命令=16.6.1 形态，缺省 targets，不开 --dwarf-types）：
+60 被调 = 28 全输入锁 + 26 返回锁 + 3 drops（drops 恒等）。与提交态的 diff
+= 2 条目：
+| 条目 | 提交态 | 再生成 | 处置 |
+| memcmp 0x12acb0 | 全锁 (void*,undefined1*,long)→int | **逐字节恒等**（`(long)iVar6`/`(long)*(int *)` 标量证据自然恢复全锁） | 修复验证本体 ✓ |
+| apr_getopt_init 0x12a450 | slot2 无证据（inert） | 全锁 (long*,long,int,long)（`(int)lVar2` 标量证据恢复=V3SIG 原始形） | **恢复提交态**（16.6.2 假锁判例，16.7.3 本车道 oracle 复判） |
+getopt 条目恢复后再生成输出与提交 manifest **字节恒等**——httpd manifest
+文件零改动（memcmp 旧条目从此由修复后的 harvester 自然可再生，不再依赖
+手工恢复）。纯再生（getopt 带锁）的 httpd 脸亦字节恒等（A/B 亲测）——
+假锁处置是 oracle 侧保守性，非脸必要性。
+curl（命令=16.5 CURLPREP 形态：--dwarf-types=examples/curl + 全 17 targets）：
+55 被调 = 30 全输入锁 + 26 返回锁 + 7 drops（计数与 drops 恒等；
+golden/dwarf sha256 恒等；harvest_rule 文本随规则更新）。4 条目组成变化：
+| 条目 | 旧 | 新 | 判定 |
+| SetHTTPrequest 0x103c50 | 仅返回锁 int | 全锁 (HttpReq,HttpReq*)→int（`(HttpReq)pCVar13` 标量 cast 证据） | **新锁=canon 翻转**（16.7.3 oracle 亲证；且与 canon golden 头 `int SetHTTPrequest(HttpReq req,HttpReq *store)` 逐字一致） |
+| malloc 0x102430 | 全锁 (size_t) | 无锁 | 真冲突弃收：canon 站点 `__n + 1`（size_t decl 证据）vs `(long)(iVar3 + 1)`（标量 cast 证据）冲突，conflict-sensitivity 按设计不锁 |
+| realloc 0x102470 | slot1 无证据 | slot1 `long`（`(long)puVar9 +` 标量证据） | inert（input_lock=false 条目 params 不装载） |
+| strnequal 0x102570 | slot2 无证据 | slot2 `long`（`(long)(int)sVar5` 标量证据） | inert（同上） |
+#### 16.7.3 oracle 预验证（锁定库 e40ed130 直跑，stage_shape_diag
+STAGE_CALLSITE_PROTOS；装置复刻：httpd main A0 与 SHAPEFIX
+oracle_main_seeded.c 字节恒等、curl getparameter A0 与 CURLPREP
+oracle_getparameter_A0.c 字节恒等）
+| 实验 | A0 | +锁（MOLD） | canon | 判决 |
+|---|---|---|---|---|
+| httpd ap_fini/memcmp 全锁 | `*(xunknown8 *)(…)` | `*(void * *)(…)`（slot0 形恢复） | `*(void **)(…)` | **修复验证** ✓（=16.6.2 第三行复判） |
+| httpd main/getopt 全锁 | `(…,xVar1,xVar5)` | `(…,iVar1,lVar2)`（canon-long 变量被重定型 int、无 cast） | `(…,(int)lVar2,lVar9)` | **假锁复判**：偏离 canon 变量定型 → 不采纳 ✓ |
+| curl getparameter/SetHTTPrequest 全锁 | `SetHTTPrequest.part.0()`（无参形） | `SetHTTPrequest.part.0((HttpReq)flag,(HttpReq *)nextarg)` | `SetHTTPrequest((HttpReq)pCVar13,(HttpReq *)pCVar10)` | **新锁=canon 翻转**：实参 cast 形逐字 ✓（名/后缀属符号层与种子层，正交） |
+#### 16.7.4 验证矩阵（httpd manifest 零改动 + curl manifest=纯再生）
+| httpd 默认脸（env -i） | 908/0/0 | **908/0/0**（compare_ghidra 口径 908 skeleton/0 defects/0 numbering；双跑 cmp 恒等；纯再生 A/B 恒等） | ✓ |
+| curl 默认脸（env -i） | 546/0/0 | **546/0/0**（双跑 cmp 恒等；新/旧 manifest 字节 A/B 恒等=驱动不载该文件亲证） | ✓ |
+| gcc 审计 | curl 104/20、httpd 15/14 | 同计数 | ✓ |
+| manifest 指纹 | — | oracle_commit+golden_sha256+dwarf_types_sha256 亲核恒等 | ✓ |
+写域遵守：examples/ 零触碰（CMTSEED/PARAMID 并行车道租约）；
+harvest_local_manifest.py 仅改 CALLEE_ARG_CAST 证据区与规则文本句
+（CMTSEED 的 --cmt 模式函数未触，合并冲突由 root 并集解）。
