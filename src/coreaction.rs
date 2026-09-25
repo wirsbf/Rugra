@@ -982,12 +982,17 @@ impl ActionConstantPtr {
         let op_code = op.read().unwrap().opcode;
         // cc:1077-1080: explicitly marked as a pointer type — resolve and
         // skip every heuristic gate (needexacthit=false: partial pointers may
-        // land mid-symbol).
-        if vn
-            .read()
-            .unwrap()
-            .get_type_read_facing()
-            .map(|dt| dt.get_metatype())
+        // land mid-symbol). cc:1077 reads `vn->getTypeReadFacing(op)` — the
+        // fd-aware consult (slot = op->getSlot(vn) = the `slot` param), so a
+        // union-with-ptr-field constant resolved to a TYPE_PTR field takes
+        // this head gate, not the heuristic path.
+        if crate::unionresolve::vn_type_read_facing(
+            fd,
+            vn,
+            &crate::op::PcodeOpRef(op.clone()),
+            slot as i32,
+        )
+        .map(|dt| dt.get_metatype())
             == Some(TypeMetatype::Pointer)
         {
             *rampoint = Self::resolve_constant(spc, vn_offset, vn_size, op_addr, full_encoding);
@@ -1062,23 +1067,34 @@ impl ActionConstantPtr {
                 OpCode::CPUI_INT_ADD => {
                     // cc:1118-1128: an INT_ADD output already typed PTR makes
                     // the constant the base of the pointer expression.
+                    // cc:1120 reads `outvn->getTypeDefFacing()` — the fd-aware
+                    // def-facing consult (slot -1).
                     let out_is_ptr = op
                         .read()
                         .unwrap()
                         .output
                         .as_ref()
-                        .and_then(|out| out.read().unwrap().get_type_def_facing())
+                        .and_then(|out| crate::unionresolve::vn_type_def_facing(fd, out))
                         .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
                         .unwrap_or(false);
                     if out_is_ptr {
                         // cc:1122-1123: another pointer base in the same
                         // expression means this constant is the offset, not
-                        // the pointer.
+                        // the pointer. cc:1122 reads
+                        // `op->getIn(1-slot)->getTypeReadFacing(op)` — the
+                        // fd-aware consult at slot 1-slot.
                         let other_is_ptr = op
                             .read()
                             .unwrap()
                             .get_in(1 - slot)
-                            .and_then(|other| other.read().unwrap().get_type_read_facing())
+                            .and_then(|other| {
+                                crate::unionresolve::vn_type_read_facing(
+                                    fd,
+                                    other,
+                                    &crate::op::PcodeOpRef(op.clone()),
+                                    (1 - slot) as i32,
+                                )
+                            })
                             .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
                             .unwrap_or(false);
                         if other_is_ptr {
@@ -5645,7 +5661,7 @@ impl ActionSetCasts {
         // (2) cc:2663-2668: null ct — mark explicit-print constants; that is
         // the only change this path can make.
         let Some(ct) = ct_opt else {
-            return Self::mark_explicit_unsigned(op_ref, slot, strategy)
+            return Self::mark_explicit_unsigned(fd, op_ref, slot, strategy)
                 || Self::mark_explicit_long_size(op_ref, slot, strategy);
         };
         // (3) cc:2671: vnin = vn = op->getIn(slot).
@@ -6041,6 +6057,7 @@ impl ActionSetCasts {
     /// Varnode is flagged `unsignedprint`. Faithful to
     /// `CastStrategy::markExplicitUnsigned` (cast.cc:38-77).
     fn mark_explicit_unsigned(
+        fd: &Funcdata,
         op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
@@ -6073,11 +6090,16 @@ impl ActionSetCasts {
             return false;
         }
         // cc:47-52: unsigned-family read-facing HIGH type, not char/enum.
-        let Some(dt) = vn
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(&op, slot as i32)
-            .or_else(|| vn.read().unwrap().v_type.clone())
+        // cc:47 reads `vn->getHighTypeReadFacing(op)` — the fd-aware consult
+        // (slot = op->getSlot(vn)); a constant whose high type resolves to a
+        // uint-family field forces the unsigned print.
+        let Some(dt) = crate::unionresolve::vn_high_type_read_facing(
+            fd,
+            &vn,
+            op_ref,
+            slot as i32,
+        )
+        .or_else(|| vn.read().unwrap().v_type.clone())
         else {
             return false;
         };
@@ -6088,14 +6110,18 @@ impl ActionSetCasts {
             return false;
         }
         // cc:53-58: binary op (not firstParamOnly) — if the other side is
-        // unsigned-family it forces the unsigned already.
+        // unsigned-family it forces the unsigned already. cc:55 reads
+        // `firstvn->getHighTypeReadFacing(op)` — the fd-aware consult at
+        // slot 1-slot.
         if op.num_input() == 2 && !first_param_only && slot <= 1 {
             if let Some(other) = op.get_in(1 - slot) {
-                if let Some(ot) = other
-                    .read()
-                    .unwrap()
-                    .get_high_type_read_facing(&op, (1 - slot) as i32)
-                    .or_else(|| other.read().unwrap().v_type.clone())
+                if let Some(ot) = crate::unionresolve::vn_high_type_read_facing(
+                    fd,
+                    other,
+                    op_ref,
+                    (1 - slot) as i32,
+                )
+                .or_else(|| other.read().unwrap().v_type.clone())
                 {
                     if unsigned_family(ot.get_metatype()) {
                         return false;
@@ -6466,17 +6492,21 @@ impl ActionSetCasts {
     /// CASTs (MYPROGRESS-SETCASTS-ORD399-0001: the extra CAST at 3519:99).
     fn subpiece_output_token(
         fd: &Funcdata,
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         outvn: &Arc<RwLock<crate::varnode::Varnode>>,
         type_factory: &Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::TypeMetatype;
+        let op = op_ref.0.read().unwrap();
         let out_size = outvn.read().unwrap().get_size();
-        // cc:2147: ct = op->getIn(0)->getHighTypeReadFacing(op)
+        // cc:2147: ct = op->getIn(0)->getHighTypeReadFacing(op) — the fd-aware
+        // consult keyed on slot 0 (the real in0 slot), so a union high type
+        // resolves to its field BEFORE findTruncation runs; the field may then
+        // be drilled into (e.g. a struct field's subfield) instead of falling
+        // to the def-facing arm.
         let ct = op.get_in(0).and_then(|a| {
-            let vn = a.read().unwrap();
-            vn.get_high_type_read_facing(op, 0)
-                .or_else(|| vn.v_type.clone())
+            crate::unionresolve::vn_high_type_read_facing(fd, a, op_ref, 0)
+                .or_else(|| a.read().unwrap().v_type.clone())
         });
         // cc:2149 + typeop.cc:2195-2207 computeByteOffsetForComposite:
         // lsb = (int4)op->getIn(1)->getOffset(); big-endian byteOff is
@@ -6501,7 +6531,7 @@ impl ActionSetCasts {
             if let Some((field, _offset)) = ct.find_truncation(
                 byte_off,
                 out_size,
-                Some(op),
+                Some(&op),
                 1,
                 Some(&fd.union_map),
             ) {
@@ -6511,10 +6541,8 @@ impl ActionSetCasts {
             }
         }
         // cc:2155-2157: dt = outvn->getHighTypeDefFacing(); non-UNKNOWN wins.
-        let dt = outvn
-            .read()
-            .unwrap()
-            .get_high_type_def_facing()
+        // The fd-aware def-facing consult (slot -1, def-op edge).
+        let dt = crate::unionresolve::vn_high_type_def_facing(fd, outvn)
             .or_else(|| outvn.read().unwrap().v_type.clone());
         if let Some(dt) = dt {
             if dt.get_metatype() != TypeMetatype::Unknown {
@@ -6536,9 +6564,8 @@ impl ActionSetCasts {
     /// (cc:2559-2582, incl. the typelock/RETURN force case), the
     /// testStructOffset0 PTRSUB form (cc:2586-2588), and the observable
     /// rewiring order (cc:2595-2609). The union needsResolution arms
-    /// (cc:2545-2548, 2553-2557, 2610-2613) remain registered residuals
-    /// (`PIPE-ACTION-COUNT-0001C`); this is not a whole-function match
-    /// claim.
+    /// (cc:2545-2548, 2553-2557, 2610-2613) consult the Funcdata union map
+    /// through the fd-aware facing twins (UNIONRESOLVE-PKG-A-0001).
     fn cast_output(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -6636,18 +6663,15 @@ impl ActionSetCasts {
                 // typeop.cc:473: in(1)->getHighTypeReadFacing(op) — the
                 // read must observe a same-action updateType on the address
                 // varnode (castInput's cast-adjust arm) through the
-                // HighVariable typedirty re-derivation.
+                // HighVariable typedirty re-derivation. The fd-aware consult
+                // is keyed on slot 1 (the address input's real slot).
                 let op_rg = op.0.read().unwrap();
                 let in1_high = op_rg.get_in(1).and_then(|a| {
-                    let vn = a.read().unwrap();
-                    vn.get_high_type_read_facing(&op_rg, 1)
-                        .or_else(|| vn.v_type.clone())
+                    crate::unionresolve::vn_high_type_read_facing(fd, a, op, 1)
+                        .or_else(|| a.read().unwrap().v_type.clone())
                 });
                 let out_high = || {
-                    outvn
-                        .read()
-                        .unwrap()
-                        .get_high_type_def_facing()
+                    crate::unionresolve::vn_high_type_def_facing(fd, &outvn)
                         .or_else(|| outvn.read().unwrap().v_type.clone())
                 };
                 match in1_high {
@@ -6722,12 +6746,11 @@ impl ActionSetCasts {
                 // typeop.cc:1518/1558/1608 TypeOpInt{Left,Right,Sright}
                 // ::getOutputToken: the token is the input-0 HIGH
                 // read-facing type, with bool demoted to the factory int
-                // base of the same size.
-                let op_rg = op.0.read().unwrap();
-                let res = op_rg.get_in(0).and_then(|a| {
-                    let vn = a.read().unwrap();
-                    vn.get_high_type_read_facing(&op_rg, 0)
-                        .or_else(|| vn.v_type.clone())
+                // base of the same size. The fd-aware consult is keyed on
+                // slot 0.
+                let res = op.0.read().unwrap().get_in(0).and_then(|a| {
+                    crate::unionresolve::vn_high_type_read_facing(fd, a, op, 0)
+                        .or_else(|| a.read().unwrap().v_type.clone())
                 });
                 match res {
                     Some(r) if r.get_metatype() == TypeMetatype::Bool => {
@@ -6755,9 +6778,8 @@ impl ActionSetCasts {
                 // DEF-facing high type when not UNKNOWN; otherwise (3) the
                 // factory INT base — never the ctor's TypeOpFunc UNKNOWN
                 // base (typeop.cc:2117) the generic arm would produce.
-                let op_rg = op.0.read().unwrap();
                 let Some(subpiece_token) =
-                    Self::subpiece_output_token(fd, &op_rg, &outvn, &type_factory)
+                    Self::subpiece_output_token(fd, op, &outvn, &type_factory)
                 else {
                     return 0;
                 };
@@ -6765,11 +6787,9 @@ impl ActionSetCasts {
             } else if opcode == OpCode::CPUI_PIECE {
                 // typeop.cc:2063-2072 TypeOpPiece::getOutputToken: PIECE
                 // casts to the output's DEF-facing high type when that is
-                // INT or UINT, else the factory UINT base.
-                let def_facing = outvn
-                    .read()
-                    .unwrap()
-                    .get_high_type_def_facing()
+                // INT or UINT, else the factory UINT base. The fd-aware
+                // def-facing consult (slot -1, def-op edge).
+                let def_facing = crate::unionresolve::vn_high_type_def_facing(fd, &outvn)
                     .or_else(|| outvn.read().unwrap().v_type.clone());
                 match def_facing {
                     Some(dt)
@@ -7121,14 +7141,16 @@ impl ActionSetCasts {
     /// here did, which produced casts to downChain-transformed field pointers
     /// whenever ActionInferTypes gave the PTRSUB output a PointerRel form).
     ///
-    /// Residual: `getTypeReadFacing`'s in-flow resolution of
-    /// needs-resolution types (PointerRel et al.) is not available yet
-    /// (ACTION-INFERTYPES-DISPATCH-0001) — the raw v_type/high type is used,
-    /// which is exact for every type that does not need resolution. Rugra
-    /// also has no typedef layer, so the `getTypedef()` unwrap loop is a
-    /// structural no-op.
+    /// cc:2325/2326 read `getTypeReadFacing(op)`/`getHighTypeReadFacing(op)`
+    /// — the fd-aware consults keyed on slot 0 (UNIONRESOLVE-PKG-A-0001
+    /// closed the former bare-v_type residual ACTION-INFERTYPES-DISPATCH
+    /// -0001 for this site): a union-ptr base resolved to a field pointer
+    /// now drives the same_type/one-level-down decisions with the field
+    /// type. Rugra has no typedef layer, so the `getTypedef()` unwrap loop
+    /// is a structural no-op.
     // Ghidra: typeop.cc:2320 TypeOpPtrsub::getInputCast / typeop.cc:2250 TypeOpPtradd::getInputCast
     fn ptr_input_reqtype(
+        fd: &Funcdata,
         op: &crate::op::PcodeOpRef,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::Datatype;
@@ -7137,15 +7159,11 @@ impl ActionSetCasts {
             let op = op.0.read().unwrap();
             (op.opcode, op.get_in(0).cloned()?)
         };
-        let in0 = in0_arc.read().unwrap();
-        // reqtype = op->getIn(0)->getTypeReadFacing(op)
-        let reqtype = in0.v_type.clone()?;
-        // curtype = op->getIn(0)->getHighTypeReadFacing(op)
-        let curtype = {
-            let op_rg = op.0.read().unwrap();
-            in0.get_high_type_read_facing(&op_rg, 0)
-                .unwrap_or_else(|| reqtype.clone())
-        };
+        // reqtype = op->getIn(0)->getTypeReadFacing(op)  (typeop.cc:2325)
+        let reqtype = crate::unionresolve::vn_type_read_facing(fd, &in0_arc, op, 0)?;
+        // curtype = op->getIn(0)->getHighTypeReadFacing(op)  (typeop.cc:2326)
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in0_arc, op, 0)
+            .unwrap_or_else(|| reqtype.clone());
         // Pointer-identity equality mirrors Ghidra's interned `Datatype*`
         // comparison; the name check extends it across separately-constructed
         // Arcs of the same named factory type.
@@ -7450,7 +7468,7 @@ impl Action for ActionSetCasts {
                 }
                 let changed =
                     if slot == 0 && matches!(live_opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
-                        Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
+                        Self::ptr_input_reqtype(fd, op_ref).is_some_and(|required| {
                             self.cast_input_ptr(fd, op_ref, slot, &strategy, required)
                         })
                     } else {
@@ -18784,7 +18802,7 @@ mod tests {
         let (op1, c0_1, _out1) =
             build_mark_unsigned_scenario(&mut fd1, OpCode::CPUI_SUBPIECE);
         assert!(
-            !ActionSetCasts::mark_explicit_unsigned(&op1, 0, &strategy),
+            !ActionSetCasts::mark_explicit_unsigned(&fd1, &op1, 0, &strategy),
             "SUBPIECE lone reader does not inherit sign => false (cast.cc:65)"
         );
         assert_eq!(
@@ -18796,7 +18814,7 @@ mod tests {
         let mut fd2 = Funcdata::new("t_markunsigned_pos", crate::address::Address::new(0), 8);
         let (op2, c0_2, _out2) = build_mark_unsigned_scenario(&mut fd2, OpCode::CPUI_INT_ADD);
         assert!(
-            ActionSetCasts::mark_explicit_unsigned(&op2, 0, &strategy),
+            ActionSetCasts::mark_explicit_unsigned(&fd2, &op2, 0, &strategy),
             "INT_ADD lone reader inherits sign => true (cast.cc:69-70)"
         );
         assert_ne!(

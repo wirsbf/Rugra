@@ -2972,10 +2972,12 @@ impl TypeStruct {
     /// Returns 0 (component) or -1 (whole structure).
     pub fn score_single_component(
         parent: &Datatype,
-        op: &crate::op::PcodeOp,
+        fd: &crate::funcdata::Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
         slot: i32,
     ) -> i32 {
         use crate::opcodes::OpCode;
+        let op = op_ref.0.read().unwrap();
         let code = op.opcode;
         if code == OpCode::CPUI_COPY || code == OpCode::CPUI_INDIRECT {
             // Look at the "other" end of the op: if slot==0 the output drives
@@ -3008,7 +3010,15 @@ impl TypeStruct {
             if let Some(vn) = op.get_in(1) {
                 let vn_rg = vn.read().unwrap();
                 if vn_rg.is_type_lock() {
-                    if let Some(ct) = vn_rg.get_type_read_facing_op(op, 1) {
+                    // cc:1908: ct = vn->getTypeReadFacing(op) — the fd-aware
+                    // consult keyed on slot 1 (the address input's real slot),
+                    // so a union-ptr address resolved to a field pointer
+                    // compares the FIELD's pointee against `parent`
+                    // (UNIONRESOLVE-PKG-A-0001; this arm feeds
+                    // resolve_in_flow's Array/Struct field selection).
+                    if let Some(ct) =
+                        crate::unionresolve::vn_type_read_facing(fd, vn, op_ref, 1)
+                    {
                         if ct.get_metatype() == TypeMetatype::Pointer {
                         if let Datatype::Pointer(p) = ct.as_ref() {
                             // Ghidra: `((TypePointer*)ct)->getPtrTo() == parent`

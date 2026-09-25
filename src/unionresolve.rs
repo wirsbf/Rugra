@@ -1619,7 +1619,8 @@ pub fn resolve_in_flow(
             };
             let field_num = crate::type_system::datatype::TypeStruct::score_single_component(
                 ct.as_ref(),
-                &op.0.read().unwrap(),
+                fd,
+                op,
                 slot,
             );
             let comp_fill = {

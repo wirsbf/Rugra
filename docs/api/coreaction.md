@@ -1,5 +1,55 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-26：13 处 union facing 退化读换 fd-aware 孪生（UNIONRESOLVE-PKG-A-0001 / lane PKGA）
+
+审计底稿 `docs/alignment_audit/UNION_CONSUMER_AUDIT_2026-09-26.md` §一 coreaction 表的
+13 处 divergent 消费点，全部换为 `unionresolve.rs` 的 fd-aware 孪生
+（`vn_type_read_facing`/`vn_type_def_facing`/`vn_high_type_read_facing`/
+`vn_high_type_def_facing`，consult `fd.union_map`），fd 均在调用点域内：
+
+- **`is_pointer`**（`// Ghidra: coreaction.cc:1070`）3 处：cc:1077 头门
+  `vn->getTypeReadFacing(op)`（slot=参数 slot——union-with-ptr-field 常量 resolved
+  为 TYPE_PTR 字段时走直解门而非启发式门）、cc:1120 INT_ADD 臂
+  `outvn->getTypeDefFacing()`（def-facing slot -1）、cc:1122 对侧指针判定
+  `op->getIn(1-slot)->getTypeReadFacing(op)`（slot 1-slot）。
+- **`mark_explicit_unsigned`**（`// Ghidra: cast.cc:38`）2 处：cc:47
+  `vn->getHighTypeReadFacing(op)` 与 cc:55 `firstvn->getHighTypeReadFacing(op)`——
+  签名加 `fd: &Funcdata`（调用点 cast_input 域内；测试同步传 fd）。常量 high 型
+  resolved 为 uint 族字段时 oracle 强制 unsigned 打印，退化形 union metatype 不
+  强制（COREACTION-INTSUFFIX-FIRE-0001 的两个读点）。
+- **`subpiece_output_token`**（`// Ghidra: typeop.cc:2142`）2 处：cc:2147
+  `in0->getHighTypeReadFacing(op)`——**slot 0 键**（in0 真实槽位）先 consult 再
+  findTruncation（人工 slot 1 键保持 cc:2150 原样）；此前退化形恒 raw union，以
+  人工 slot 1 键查 map（typeprop 建的是 slot-1 条目），两键命中集不同——field 为
+  struct 时 oracle 可下钻子字段、退化形落 def-facing。签名改收
+  `op_ref: &PcodeOpRef`（视图内派生）。cc:2155 `outvn->getHighTypeDefFacing()` 同
+  换 def-facing 孪生。
+- **`cast_output` LOAD 臂**（typeop.cc:475/484）2 处：in1 read-facing（slot 1）+
+  输出 def-facing。
+- **`cast_output` 移位族臂**（typeop.cc:1521/1561/1611）1 处：in0 read-facing
+  （slot 0）。
+- **`cast_output` PIECE 臂**（typeop.cc:2067）1 处：输出 def-facing。
+- **`ptr_input_reqtype`**（`// Ghidra: typeop.cc:2320/2250`）2 处：cc:2325
+  `reqtype=getTypeReadFacing(op)` 此前为**裸 `v_type`**（连 needsResolution 检查都
+  无，注释自认 residual ACTION-INFERTYPES-DISPATCH-0001——随修关闭该 residual 陈述）
+  与 cc:2326 `curtype=getHighTypeReadFacing(op)`。签名加 `fd`；union-ptr 基座
+  map-hit 时 oracle curtype=field 指针，same_type/下钻一层判定随之。
+- **`cast_output` 头注清理**：cc:2545-2548/2553-2557/2610-2613 的 union
+  needsResolution 臂 "remain registered residuals" 陈述已过时（6844/6847/6968/6971
+  已 fd-aware），改为现状陈述。
+
+**伴生（datatype.rs，同 lane）**：`TypeStruct::score_single_component`
+（`// Ghidra: type.cc:1893`）LOAD/STORE 指针臂 cc:1908
+`vn->getTypeReadFacing(op)`——签名改收 `(fd, op_ref)`（原 `&PcodeOp` 视图），换
+`vn_type_read_facing`（slot 1 键）。此臂直接决定 `resolve_in_flow` Array/Struct 臂
+的 field 选择（union-ptr 地址 resolved 为 field 指针时比较 FIELD 的 pointee 而非
+raw union-ptr 的 pointee）。唯一调用点 unionresolve.rs resolve_in_flow 同步。
+
+**行为影响面**：needsResolution 型（union/ptr-to-union/size-1 数组/单字段满幅
+struct/partial-union）在 map-hit 边上从 raw 退化为 resolved field；map-miss 边上
+Array/Struct/PartialUnion 的 findResolve miss 臂（element/field[0]/stripped）也与
+退化形不同。非 resolution 型行为恒等（孪生短路返回原 Arc）。
+
 ## 2026-09-25（LOCKFIX）：三处 op 读守卫跨"被调方再锁同一 op"窗口收紧（CURLWIRE-CR-F1）
 
 - **形态**：外层 `PcodeOp` 读守卫（binding 形）存活期间，被调函数经自身路径再取

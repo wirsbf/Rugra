@@ -140,6 +140,14 @@ downcasts or `Arc` ownership. No behavior changed and no status was promoted.
 
 ## 2026-09-23: pipeline wiring — resolveInFlow/findResolve dispatch + fd-aware read-facing twins (UNIONRESOLVE-PIPELINE-WIRING-0001 / lane EN2)
 
+**2026-09-26（UNIONRESOLVE-PKG-A-0001 / lane PKGA）**: the Array/Struct arm's
+`TypeStruct::score_single_component` call site now passes `(fd, op, slot)`
+directly — the helper's signature changed from a `&PcodeOp` view to
+`(parent, fd, op_ref, slot)` so its LOAD/STORE pointer arm (type.cc:1908
+`vn->getTypeReadFacing(op)`) consults the resolution map through
+`vn_type_read_facing` (slot-1 key) instead of the degenerate map-miss form.
+No scorer/dispatch logic in this file changed otherwise.
+
 The module now HAS its pipeline producers. New public free functions
 (threading `fd` in place of Ghidra's virtual `Datatype` dispatch, since
 Rugra's `Datatype` enum has no Funcdata back-pointer):
