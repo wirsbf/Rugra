@@ -540,28 +540,43 @@ pub struct Varnode {
     pub nzm: u64,
 }
 
-// RUGRA-GLUE: borrow-safety helper materializing the propagation half of
-// Varnode::setFlags (varnode.cc:358-359 `high->coverDirty()`) and
-// Varnode::clearFlags (varnode.cc:371-372) — i.e. HighVariable::coverDirty
-// (variable.hh:275-281: `highflags |= coverdirty; if (piece)
-// piece->markExtendCoverDirty();`) — as a free function taking the Arc, so
-// `&mut self` Varnode mutation methods can fire it. The oracle inline is a
-// single call on a raw pointer; Rust's high lives in its own RwLock, and
-// HighVariable::cover_dirty's piece walk has a final self leg
-// (variable.cc:136 writes the OWN high again), so the flag write and the
-// piece walk are sequenced under separate guards to avoid same-lock write
-// reentrancy. Observable flag state is identical to the oracle inline.
-// MERGE-HIGHCOVER-PROPAGATION-0001: this restores the oracle invariant that
-// any mutation dirtying a member Varnode cover invalidates the stored high
-// cover aggregate at mutation time.
-pub(crate) fn propagate_cover_dirty_to_high(high: &Arc<RwLock<HighVariable>>) {
+// RUGRA-GLUE: borrow-safety helper materializing BOTH notification arms of
+// Varnode::setFlags (varnode.cc:356-360) and Varnode::clearFlags
+// (varnode.cc:369-373) — as a free function taking the Arc, so `&mut self`
+// Varnode mutation methods can fire them:
+//   ARM 1 (unconditional, cc:357/:370): high->flagsDirty() —
+//        variable.hh:164 `highflags |= flagsdirty | namerepdirty`.
+//        NOT mask-gated in the oracle (unlike coverDirty): every attached
+//        setFlags/clearFlags notification re-dirties the derived-flag
+//        channel consumed by HighVariable::updateFlags (variable.cc:352,
+//        live Rust callers: merge_test_required, coreaction namevars /
+//        param-name gates, varmap, is_name_lock).
+//   ARM 2 (mask-gated, cc:358/:371): high->coverDirty() when the mask
+//        contains coverdirty — variable.hh:275-281 `highflags |= coverdirty;
+//        if (piece) piece->markExtendCoverDirty();` — the
+//        MERGE-HIGHCOVER-PROPAGATION-0001 invariant.
+// The two arms share one write-guard acquisition; the piece walk is
+// sequenced AFTER the guard is dropped because markExtendCoverDirty's final
+// self leg (variable.cc:136) writes the OWN high again — re-entering the
+// same RwLock for write would deadlock (single-threaded reentrancy).
+// Observable flag state is identical to the oracle's inline calls.
+pub(crate) fn propagate_flag_change_to_high(high: &Arc<RwLock<HighVariable>>, fl: u32) {
+    let coverdirty = (fl & varnode_flags::COVERDIRTY) != 0;
     let piece_arc = {
         let mut h = high.write().unwrap();
-        h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
+        // ARM 1: flagsDirty — unconditional (varnode.cc:357/:370).
+        h.highflags |= crate::variable::high_internal_flags::FLAGSDIRTY
+            | crate::variable::high_internal_flags::NAMEREPDIRTY;
+        if coverdirty {
+            // ARM 2: coverDirty — mask-gated (varnode.cc:358/:371).
+            h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
+        }
         h.piece.clone()
     };
-    if let Some(piece_arc) = piece_arc {
-        crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
+    if coverdirty {
+        if let Some(piece_arc) = piece_arc {
+            crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
+        }
     }
 }
 
@@ -1024,43 +1039,43 @@ impl Varnode {
     // Ghidra: varnode.cc:352 Varnode::setFlags
     /// Set boolean attributes. Faithful to `Varnode::setFlags`
     /// (varnode.cc:352-361): the flag bits are set, then the owning high is
-    /// notified — `flagsDirty()` always, plus `coverDirty()` when the mask
-    /// contains coverdirty. The coverdirty propagation half (cc:358-359) is
-    /// the MERGE-HIGHCOVER-PROPAGATION-0001 invariant: it keeps the stored
-    /// high cover aggregate invalidatable at mutation time so every raw
-    /// `HighVariable::getCover` reader (variable.hh:294 returns internalCover
-    /// with NO lazy update — freshness is purely this invariant) sees a
-    /// current aggregate whenever the high is not dirty.
-    /// The `flagsDirty` half (highflags flagsdirty|namerepdirty) is not
-    /// materialized here: no Rust reader consumes the high flagsdirty
-    /// channel yet (HighVariable::updateFlags has no live caller), so the
-    /// extra lock traffic would be unobservable dead state.
-    /// LOCK DISCIPLINE: the propagation takes a write guard on the high
+    /// notified via `propagate_flag_change_to_high` —
+    ///   - `flagsDirty()` UNCONDITIONALLY (cc:357; variable.hh:164, no mask
+    ///     gate — unlike coverDirty), re-dirtying the derived-flag channel
+    ///     consumed by `HighVariable::updateFlags` (variable.cc:352);
+    ///   - `coverDirty()` when the mask contains coverdirty (cc:358-359),
+    ///     the MERGE-HIGHCOVER-PROPAGATION-0001 invariant that keeps the
+    ///     stored high cover aggregate invalidatable at mutation time so
+    ///     every raw `HighVariable::getCover` reader (variable.hh:294
+    ///     returns internalCover with NO lazy update) sees a current
+    ///     aggregate whenever the high is not dirty.
+    /// LOCK DISCIPLINE: the notification takes a write guard on the high
     /// while the caller still holds this Varnode's write guard — a
     /// different lock, no reentrancy. Every in-tree call site acquires its
     /// Varnode guard inline (statement-level), never across a live high
-    /// guard; verified per-caller 2026-09-25 (HIGHCOV lane).
+    /// guard; verified by a scope-aware mechanical scan of all 261
+    /// set_flags/clear_flags call sites plus the 32 oracle-setFlags-routed
+    /// accessor call sites (2026-09-25, HIGHCOV lane; sole co-occurrence
+    /// candidate = test_copy_symbol_arc_high_branch, guard dropped before
+    /// the call and the varnode has no high).
     pub fn set_flags(&mut self, f: u32) {
         self.flags |= f;
-        if (f & varnode_flags::COVERDIRTY) != 0 {
-            if let Some(high) = self.high.clone() {
-                propagate_cover_dirty_to_high(&high);
-            }
+        if let Some(high) = self.high.clone() {
+            propagate_flag_change_to_high(&high, f);
         }
     }
 
     // Ghidra: varnode.cc:365 Varnode::clearFlags
     /// Clear boolean attributes. Faithful to `Varnode::clearFlags`
-    /// (varnode.cc:365-374): the oracle ALSO propagates coverDirty when the
-    /// cleared mask contains coverdirty (cc:371-372) — e.g. a member that
-    /// was dirty before its high was attached re-dirties the high at its
-    /// first rebuild. The same arm is wired here for mask symmetry.
+    /// (varnode.cc:365-374): the same two notifications as `set_flags` —
+    /// `flagsDirty()` unconditionally (cc:370), `coverDirty()` when the
+    /// cleared mask contains coverdirty (cc:371-372; e.g. a member that was
+    /// dirty before its high was attached re-dirties the high at its first
+    /// rebuild).
     pub fn clear_flags(&mut self, f: u32) {
         self.flags &= !f;
-        if (f & varnode_flags::COVERDIRTY) != 0 {
-            if let Some(high) = self.high.clone() {
-                propagate_cover_dirty_to_high(&high);
-            }
+        if let Some(high) = self.high.clone() {
+            propagate_flag_change_to_high(&high, f);
         }
     }
 
@@ -1114,18 +1129,23 @@ impl Varnode {
     /// a stable identity token and never attempts to lock the root again.
     ///
     /// NOTE (MERGE-HIGHCOVER-PROPAGATION-0001): the oracle's updateCover
-    /// ends with clearFlags(coverdirty) (varnode.cc:239), which propagates
-    /// coverDirty to the owning high (varnode.cc:371-372) — the load-bearing
-    /// case is a member that was dirty BEFORE its high was attached. Rugra
-    /// CANNOT fire that half here: callers hold READ guards on the member's
-    /// high across this call (merge.rs inflate_test via coreaction
-    /// check_implied_cover's borrowed &HighVariable; aggregate_high_cover_from),
-    /// and the propagation needs a write guard on that same high —
-    /// same-lock reentrancy deadlock. The reader-side compensations absorb
-    /// the gap: MergeTypeIntersectCache::update_high's instance scan marks
-    /// the high dirty from the member flag BEFORE any rebuild can clear it,
-    /// and inflate_test/aggregate_high_cover_from aggregate fresh from the
-    /// rebuilt members unconditionally.
+    /// ends with clearFlags(coverdirty) (varnode.cc:239), which fires BOTH
+    /// notification arms — flagsDirty unconditionally (cc:370) and coverDirty
+    /// (cc:371-372; the load-bearing case is a member that was dirty BEFORE
+    /// its high was attached). Rugra CANNOT fire either arm here: callers
+    /// hold READ guards on the member's high across this call (merge.rs
+    /// inflate_test via coreaction check_implied_cover's borrowed
+    /// &HighVariable; aggregate_high_cover_from), and the notifications need
+    /// a write guard on that same high — same-lock reentrancy deadlock. The
+    /// reader-side compensations absorb both gaps. For coverDirty:
+    /// MergeTypeIntersectCache::update_high's instance scan marks the high
+    /// dirty from the member flag BEFORE any rebuild can clear it, and
+    /// inflate_test/aggregate_high_cover_from aggregate fresh from the
+    /// rebuilt members unconditionally. For flagsDirty: a cover rebuild
+    /// mutates no member flags, so the derived-flag VALUE is unaffected by
+    /// the missing re-fire, and every in-tree attach path seeds FLAGSDIRTY
+    /// independently (HighVariable::new mirrors variable.cc:224's initial
+    /// dirty word; mergeInternal sets it at entry, variable.cc:631).
     pub fn update_cover_locked(root: &Arc<RwLock<Varnode>>) {
         let mut value = root.write().unwrap();
         if (value.flags & varnode_flags::COVERDIRTY) == 0 {
@@ -1206,13 +1226,16 @@ impl Varnode {
     }
     // Ghidra: varnode.cc:578 Varnode::setImplied
     /// Mark this as an implied variable in the final C source. (varnode.hh:309)
+    /// varnode.hh routes setImplied through setFlags — the high notification
+    /// (flagsDirty unconditional, no coverdirty in the mask) fires with it
+    /// (HIGHCOV lane 2026-09-25).
     pub fn set_implied(&mut self) {
-        self.flags |= varnode_flags::IMPLIED;
+        self.set_flags(varnode_flags::IMPLIED);
     }
     // Ghidra: varnode.cc:578 Varnode::clearImplied
-    /// Clear the implied mark. (varnode.hh:310)
+    /// Clear the implied mark. (varnode.hh:310; routed via clearFlags.)
     pub fn clear_implied(&mut self) {
-        self.flags &= !varnode_flags::IMPLIED;
+        self.clear_flags(varnode_flags::IMPLIED);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isExplicit
@@ -1265,14 +1288,15 @@ impl Varnode {
         self.addlflags &= !addl_flags::LIS_CONSUME;
     }
     // Ghidra: varnode.cc:578 Varnode::setExplicit
-    /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
+    /// Mark this as an explicit variable in the final C source. (varnode.hh:311;
+    /// routed via setFlags — the high flagsDirty notification fires with it.)
     pub fn set_explicit(&mut self) {
-        self.flags |= varnode_flags::EXPLICIT;
+        self.set_flags(varnode_flags::EXPLICIT);
     }
     // Ghidra: varnode.cc:578 Varnode::clearExplicit
-    /// Clear the explicit mark. (varnode.hh:312)
+    /// Clear the explicit mark. (varnode.hh:312; routed via clearFlags.)
     pub fn clear_explicit(&mut self) {
-        self.flags &= !varnode_flags::EXPLICIT;
+        self.clear_flags(varnode_flags::EXPLICIT);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isDirectWrite
@@ -1317,14 +1341,15 @@ impl Varnode {
         (self.flags & varnode_flags::ADDRFORCE) != 0
     }
     // Ghidra: varnode.cc:578 Varnode::setAddrForce
-    /// Mark as address-forced. (varnode.hh:307)
+    /// Mark as address-forced. (varnode.hh:307; routed via setFlags — the
+    /// high flagsDirty notification fires with it.)
     pub fn set_addr_force(&mut self) {
-        self.flags |= varnode_flags::ADDRFORCE;
+        self.set_flags(varnode_flags::ADDRFORCE);
     }
     // Ghidra: varnode.cc:578 Varnode::clearAddrForce
-    /// Clear address-forced. (varnode.hh:308)
+    /// Clear address-forced. (varnode.hh:308; routed via clearFlags.)
     pub fn clear_addr_force(&mut self) {
-        self.flags &= !varnode_flags::ADDRFORCE;
+        self.clear_flags(varnode_flags::ADDRFORCE);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isTypeLock
@@ -1386,24 +1411,25 @@ impl Varnode {
         (self.flags & varnode_flags::PRECISHI) != 0
     }
     // Ghidra: varnode.cc:578 Varnode::setPrecisLo
-    /// Mark as precise low half. (varnode.hh:321)
+    /// Mark as precise low half. (varnode.hh:321; routed via setFlags — the
+    /// high flagsDirty notification fires with it.)
     pub fn set_precis_lo(&mut self) {
-        self.flags |= varnode_flags::PRECISLO;
+        self.set_flags(varnode_flags::PRECISLO);
     }
     // Ghidra: varnode.cc:578 Varnode::setPrecisHi
-    /// Mark as precise high half. (varnode.hh:322)
+    /// Mark as precise high half. (varnode.hh:322; routed via setFlags.)
     pub fn set_precis_hi(&mut self) {
-        self.flags |= varnode_flags::PRECISHI;
+        self.set_flags(varnode_flags::PRECISHI);
     }
     // Ghidra: varnode.cc:578 Varnode::clearPrecisLo
-    /// Clear precise low half. (varnode.hh:323)
+    /// Clear precise low half. (varnode.hh:323; routed via clearFlags.)
     pub fn clear_precis_lo(&mut self) {
-        self.flags &= !varnode_flags::PRECISLO;
+        self.clear_flags(varnode_flags::PRECISLO);
     }
     // Ghidra: varnode.cc:578 Varnode::clearPrecisHi
-    /// Clear precise high half. (varnode.hh:324)
+    /// Clear precise high half. (varnode.hh:324; routed via clearFlags.)
     pub fn clear_precis_hi(&mut self) {
-        self.flags &= !varnode_flags::PRECISHI;
+        self.clear_flags(varnode_flags::PRECISHI);
     }
 
     // Ghidra: varnode.cc:578 Varnode::isProtoPartial
@@ -2270,9 +2296,10 @@ impl Varnode {
         self.flags &= !varnode_flags::NOLOCALALIAS;
     }
     // Ghidra: varnode.cc:578 Varnode::setUnaffected
-    /// Mark Varnode as unaffected. (varnode.hh:167)
+    /// Mark Varnode as unaffected. (varnode.hh:167; routed via setFlags —
+    /// the high flagsDirty notification fires with it.)
     pub fn set_unaffected(&mut self) {
-        self.flags |= varnode_flags::UNAFFECTED;
+        self.set_flags(varnode_flags::UNAFFECTED);
     }
 
     /// Is this an abnormal input to the function? (varnode.hh:240)

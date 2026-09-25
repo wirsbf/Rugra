@@ -310,13 +310,24 @@ clearFlags→coverDirty，varnode.cc:371-372——承载「attach 前已脏成�
 原裸读 `.cover`，同双循环内先行的 `op_set_input`（add_descend 置脏 vn2）后
 即可服陈旧——现前置 `update_cover_locked`（与 gather_block_varnodes 同纪律）。
 
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:varnode.rs
+set_flags/clear_flags 现携带 varnode.cc:357/:370 的无条件 flagsDirty()
+臂（variable.hh:164→FLAGSDIRTY|NAMEREPDIRTY，updateFlags 通道——存活读者=
+merge_test_required/namevars/varmap/is_name_lock）；propagate helper 拆双臂
+共享一次写锁；implied/explicit/addrforce/precis*/unaffected 访问器家族
+（varnode.hh 经 setFlags 路由者）改走 set_flags/clear_flags；
+mark_implied/compute_varnode_covers 的内联传播半边简化为字面 setFlags 调用
+（merge.cc:1598/:1603 镜像）。锁纪律重验（261+32+4 处机械扫描零生产
+共存面）；双语料 cmp 恒等重跑（见下）。
+
 **验证**：curl/httpd 默认脸对亲父 a9475ecc **cmp 逐字节恒等**（577/0/0 ==
 基线全指标）；httpd 双跑恒等；panic 0/timeout 3==基线（httpd）与 0/0（curl）；
 cargo test --lib 1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs
 --strict 绿；gcc 审计 104OK/20FAIL fail 名集==亲父。恒等判读：主路径此前的
 读者侧补偿已覆盖全部活语料位点，本改动把不变量从逐读者补偿提升为结构化
 维护（位点位点不再是唯一防线）。机制 C：merge 白名单——Cross-Review:
-PENDING（CR-R2-GETPARAM 的登记先例与本收口同链）。
+PENDING（CR-R2-GETPARAM 的登记先例与本收口同链；二轮窄域重审范围=
+varnode.rs set_flags/clear_flags 及文档）。
 
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`

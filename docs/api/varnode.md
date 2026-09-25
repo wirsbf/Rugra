@@ -537,10 +537,16 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 ### `pub fn set_flags(&mut self, f: u32)`
 
-为节点添加一个或多个 flag。掩码含 `COVERDIRTY` 时按 varnode.cc:356-360
-传播 `high->coverDirty()`（经 `propagate_cover_dirty_to_high`，
-MERGE-HIGHCOVER-PROPAGATION-0001 收口，2026-09-25）；`flagsDirty` 半边
-未物化（Rust 无 high flagsdirty 读者=不可观察死态）。
+为节点添加一个或多个 flag。两条通知臂（varnode.cc:356-360）：
+①`flagsDirty`（FLAGSDIRTY|NAMEREPDIRTY）**无条件**点火——派生旗通道
+`HighVariable::updateFlags`（variable.cc:352）的存活读者=merge_test_required、
+coreaction namevars/参数名门、varmap、is_name_lock；②`COVERDIRTY` 掩码门控
+（MERGE-HIGHCOVER-PROPAGATION-0001）。实现=varnode.rs
+`propagate_flag_change_to_high`（两臂共享一次写锁获取，piece walk 分段）。
+varnode.hh 经 setFlags/clearFlags 路由的内联访问器（setImplied/clearImplied、
+setExplicit/clearExplicit、setAddrForce/clearAddrForce、setPrecisLo/Hi+clear、
+setUnaffected）已同形改走 set_flags/clear_flags；mark/directwrite/return_address/
+autolive_hold/proto_partial 在 oracle 也是裸写，维持内联。
 
 ### 参数
 - `f`: 位标志集合
@@ -1254,9 +1260,19 @@ aggregate_high_cover_from），见两函数 NOTE 注释；由 HighVariable::new 
 脏（variable.cc:224）+ update_high 实例扫描 + inflate/aggregate 现聚合吸收。
 该角落承载「成员在 attach 前已脏」的首次重建置脏语义。
 
-**flagsDirty 半边未物化**：oracle 每次 setFlags 无条件
-`high->flagsDirty()`（flagsdirty|namerepdirty）；Rust 无 high flagsdirty
-消费者（updateFlags 无活调用），物化=不可观察死态——登记而非实现。
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:首轮提交的
+"Rust 无 high flagsdirty 消费者" 声明为假（存活调用者: merge.rs
+merge_test_required、coreaction.rs namevars/参数名门×2、varmap.rs、
+variable.rs is_name_lock）；oracle varnode.cc:357/:370 对每次带 high 的
+setFlags/clearFlags **无条件 flagsDirty()**（无掩码门——与 coverDirty 不同）。
+已物化：`propagate_flag_change_to_high` 拆双臂（FLAGSDIRTY|NAMEREPDIRTY
+无条件半+coverdirty 掩码半，共享一次写锁获取）；varnode.hh 经 setFlags 路由
+的访问器家族（implied/explicit/addrforce/precis*/unaffected）同形改走
+set_flags/clear_flags；mark_implied 的内联传播半边与
+compute_varnode_covers 的显式传播简化为字面 setFlags 调用（merge.cc:1598/
+:1603）。锁纪律按加宽调用点集重验：261 处 set_flags/clear_flags + 32 处
+访问器 + 4 处 set_unaffected 作用域感知机械扫描，唯一共存候选=测试内
+（守卫已 drop 且 vn 无 high），零生产死锁面；双语料 cmp 逐字节恒等重跑。
 
 验证：curl/httpd 默认脸对亲父 a9475ecc cmp 逐字节恒等；cargo test --lib
 1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs --strict 绿。
