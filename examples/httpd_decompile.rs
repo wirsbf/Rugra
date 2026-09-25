@@ -1307,7 +1307,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // HEADLESS-BRIDGE-V3-SIGLOCK-0003 (opt-in RUGRA_V3SIG=1): the callee
+    // HEADLESS-BRIDGE-V3-SIGLOCK-0003 (DEFAULT-ON since the V3FLIP
+    // promotion, 2026-09-25; opt-out RUGRA_V3SIG=0): the callee
     // locked-prototype manifest channel — the SHAPEFIX verdict's transport.
     // The canon golden's producer (analyzeHeadless) runs the Decompiler
     // Parameter ID analyzer, which decompiles CALLED functions and commits
@@ -1337,14 +1338,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // namelock. Entries with partial evidence keep active arity recovery
     // and lock only the return. The mirror gate stays clean (no installs,
     // the five projections remain byte-identical); RUGRA_SEEDS=0 is the
-    // global escape; opt-in polarity pending the V3 verification pass.
+    // global escape. V3FLIP promotion (DFLIP/SEEDFLIP precedent, opt-out
+    // polarity): the gate is default-on — the manifest ships in-repo, and
+    // the V3SIG opt-in pass measured −190 skeleton lines with zero
+    // regressions across the other 29 functions (f9b3f1bf lane report).
+    // RUGRA_V3SIG=0 restores the exact historical default face
+    // (byte-identical pre-flip bare face); RUGRA_V3SIG=1 remains the
+    // explicit form, equivalent to the new default. A binary whose callee
+    // manifest is absent decompiles as the unchanneled face (graceful
+    // no-op — the httpd-only manifest never gates other corpora).
     let v3sig_active = if mirror_flow_enabled() {
         eprintln!("[V3SIG] callee-siglock gate ignored under the mirror gate (projection purity)");
         false
     } else if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
         false
     } else {
-        std::env::var("RUGRA_V3SIG").is_ok()
+        std::env::var("RUGRA_V3SIG").ok().as_deref() != Some("0")
     };
     // The manifest table: canon address (base-0 vaddr + 0x100000) ->
     // (callee name, params Vec<Option<type spelling>>, return spelling,
