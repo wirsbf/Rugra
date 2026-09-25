@@ -7,15 +7,17 @@
 #       matched_floor = 函数覆盖下限（覆盖丢失即 FAIL）。
 # 首钉测量 @ 5afcc032（wt/mirror3, master）: curl 259/74, httpd 440/29, vsh 51/71
 # （区间带与 MIRROR2 提案一致取向：当前值 + 小回归带，防噪声性抖动 FAIL）。
-# sq 面（GEN4 第四语料棘轮, 2026-09-26 首钉 @ wt/gen4 9d027a33）: 810 单元
+# sq 面（GEN4 第四语料棘轮, 2026-09-26 首钉 @ wt/gen4 9d027a33; 同日 DBLHI 修复后重钉 @ wt/dblhi）: 810 单元
 # （776 真身+104 PLT 桩, sasquatch sha 5d1eb6d0…）; 面生而 FAIL 是预期承重状态——
-# health 红（ok=804/810,6 panic）绑定 GEN4-SQ-DBLHI-UNINSERT-0001（4 函数）+
-# MIRROR3-PRETTYFLUSH-FAILCLOSED-0001 预存族（2 函数）; numbering 硬断言红（=7）绑定
-# GEN4-SQ-DUPDECL-NUMBERING-0001; 三票收口前本面恒 FAIL=棘轮承重信号,修复车道不得绕过。
-# ceiling=22904 是 pre-fix 钉: 实测 15848 + 6 panic 函数（golden 共 3528 行）的
-# worst-case diff 上界 2×3528=7056; DBLHI 修复落地后须按实测重钉（登记 TODO）。
+# health 红（ok=805/810,5 非 ok）绑定 MIRROR3-PRETTYFLUSH-FAILCLOSED-0001（2 panic）+
+# GEN4-SQ-MERGE-FORCEDINTERSECT-0001（2 panic,DBLHI 修复后首暴露）+
+# GEN4-SQ-NULLLOCALTYPE-0001（1 LowlevelError,同上）; numbering 硬断言红（=7）绑定
+# GEN4-SQ-DUPDECL-NUMBERING-0001; 四票收口前本面恒 FAIL=棘轮承重信号,修复车道不得绕过。
+# ceiling=22639 是 DBLHI 修复后重钉（GEN4-SQ-CEILING-REPIN-0001）: 实测 15889 +
+# 5 非 ok 函数（golden 共 3375 行）的 worst-case diff 上界 2×3375=6750;
+# floor=805=实测 matched（progress_bar 修复后 +1）。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
 curl	275	74	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
 httpd	460	29	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
 vsh	55	71	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
-sq	22904	804	GEN4-GATE4-SQFACE-0001	9d027a33	2026-09-26
+sq	22639	805	GEN4-SQ-CEILING-REPIN-0001	7a39afad	2026-09-26
