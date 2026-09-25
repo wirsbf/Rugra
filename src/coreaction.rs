@@ -5386,6 +5386,71 @@ impl ActionSetCasts {
         strategy.cast_standard_full(&reqtype, &curtype, false, true)
     }
 
+    /// The call family's input-cast arm: neither `TypeOpCall`
+    /// (typeop.cc:660) nor `TypeOpCallind` (typeop.cc:738) overrides
+    /// `getInputCast`, so a CALL/CALLIND input slot takes the BASE
+    /// `TypeOp::getInputCast` (typeop.cc:295-303): `reqtype` is
+    /// `op->inputTypeLocal(slot)` — the virtual dispatch into
+    /// `TypeOpCall::getInputLocal` (typeop.cc:687-718, the callspec's
+    /// TYPE-LOCKED parameter, kept when non-void and sized <= the input
+    /// varnode) or `TypeOpCallind::getInputLocal` (typeop.cc:745-773, the
+    /// locked parameter without the size guard) — and `curtype` is the
+    /// input's high read-facing type; `castStandard(reqtype,curtype,false,
+    /// true)` decides the cast. This is the arm that renders canon's
+    /// locked-parameter argument casts (`(char *)0x0`,
+    /// `(char **)0x17520`, `(char *)pCStack_5b8` at GetStr/fopen sites).
+    // Ghidra: typeop.cc:295 TypeOp::getInputCast
+    fn call_input_cast(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
+        in_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        in_size: usize,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::typeop::TypeOp as _;
+        // cc:300 reqtype = op->inputTypeLocal(slot): the opcode-specific
+        // local lookup. CALL resolves its FuncCallSpecs from the slot-0
+        // fspec annotation (typeop.cc:694-699); CALLIND resolves it
+        // through the parent Funcdata (typeop.cc:757). The op read guard
+        // is scoped to this lookup alone — vn_high_type_read_facing below
+        // takes its own guards on the same op (read-read recursion under
+        // a waiting writer is not guaranteed with std RwLock).
+        let reqtype = {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode == OpCode::CPUI_CALLIND {
+                crate::typeop::TypeOpCallind::new(type_factory.clone())
+                    .get_input_local_in_fd(op_ref, slot, fd)
+            } else {
+                crate::typeop::TypeOpCall::new(type_factory.clone()).get_input_local(&op, slot)
+            }
+        };
+        // cc:301 curtype = vn->getHighTypeReadFacing(op); a varnode with
+        // no resolved type yet reads as the size-matched unknown base
+        // (Ghidra's getHighTypeReadFacing never returns null).
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, in_vn, op_ref, slot as i32)
+            .or_else(|| in_vn.read().unwrap().v_type.clone())
+            .or_else(|| {
+                type_factory.read().unwrap().get_base(
+                    in_size,
+                    crate::type_system::datatype::TypeMetatype::Unknown,
+                )
+            });
+        // cc:302 castStandard(reqtype,curtype,false,true); the returned Arc
+        // preserves reqtype identity, mirroring Ghidra's `return reqtype`.
+        match (reqtype, curtype) {
+            (Some(req), Some(cur))
+                if strategy
+                    .cast_standard_full(&req, &cur, false, true)
+                    .is_some() =>
+            {
+                Some(req)
+            }
+            _ => None,
+        }
+    }
+
     /// Faithful 1:1 port of `ActionSetCasts::castInput` (coreaction.cc:2655-2720).
     /// For input `slot` of `op`, compute the op's expected input type
     /// (inputTypeLocal = getBase(size, metain)), the current varnode's high
@@ -5520,6 +5585,19 @@ impl ActionSetCasts {
                 }
                 OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM => {
                     Self::divrem_input_cast(op_ref, slot, strategy, 2, &type_factory, fd)
+                }
+                // typeop.cc:295-303 TypeOp::getInputCast base arm — the
+                // call family does NOT override getInputCast, so a
+                // CALL/CALLIND input's required type flows through
+                // inputTypeLocal = TypeOpCall::getInputLocal
+                // (typeop.cc:687-718) / TypeOpCallind::getInputLocal
+                // (typeop.cc:745-773): the callspec's TYPE-LOCKED
+                // parameter (slot-1) anchors the cast. Before this arm
+                // CALL fell to the generic metain fallback whose reqtype
+                // is a plain base (or None), so locked parameters never
+                // produced argument casts.
+                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                    Self::call_input_cast(op_ref, slot, strategy, &type_factory, fd, &in_arc, in_size)
                 }
                 opc => match Self::input_metatype(opc) {
                     Some(meta) => {
