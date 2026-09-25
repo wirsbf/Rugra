@@ -32,6 +32,11 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 - `is_whole_feasible` / `is_whole_phi_feasible` — 合并可行性
 - `find_create_whole` / `find_create_output_whole` / `create_joined_whole` — 合并创建
 - `build_lo_from_whole` / `build_hi_from_whole` — 从整体重建半部
+  - **2026-09-26（GEN4-SQ-DBLHI-UNINSERT-0001）**：`build_hi_from_whole` MULTIEQUAL 臂
+    补齐 double.cc:635 `data.opUninsert(hiop)`（重插前先脱块，与 lo 孪生臂 :597 同构）。
+    此前漏抄导致 op 保持挂块 → `op_insert_begin` → `block_insert_op` 的
+    `parent.is_none()` 断言炸（funcdata.rs:4984）；sasquatch 语料 4 函数
+    （progress_bar/read_inode_1/read_inode_3/LzmaEnc_CodeOneBlock.part.0）worker panic。
 - `adjacent_offsets` — 指针相邻判断
 - `test_contiguous_pointers` — **核心**：成对 LOAD 指针连续性检测 (double.cc)
 - `is_addr_tied_contiguous` / `is_addr_tied_contiguous_result`

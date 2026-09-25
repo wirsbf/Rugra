@@ -1261,7 +1261,11 @@ impl SplitVarnode {
         let follow = PcodeOpRef(hiop.clone());
         match code {
             OpCode::CPUI_MULTIEQUAL => {
+                // double.cc:631-639: reinsert so as not to break the MULTIEQUAL
+                // sequence at the beginning of the block. Ghidra uninserts,
+                // rewrites the opcode/inputs, then opInsertBegin(hiop, bl).
                 let bl = parent_block(&hiop);
+                data.op_uninsert(&follow);
                 set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
                 if let Some(b) = bl {
                     data.op_insert_begin(&follow, &b);
