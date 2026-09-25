@@ -4201,7 +4201,74 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // can lock the prototype only after a model is in place.
     // B3-COREACTION-CONSTANTPTR-0001 (b): the architecture built above with
     // the Program-DB symbol graph + loader-backed StringManager.
-    fd.set_arch(worker_arch);
+    fd.set_arch(worker_arch.clone());
+    // PRINTC-COMMENTFILL-ARM comment seed channel (RUGRA_CMTSEED=<file>):
+    // the analyzer-side "Unresolved local var" warning records the canonical
+    // analyzeHeadless run stores through the program comment database. The
+    // channel mirrors that ingestion for the locked curl corpus: one
+    // `<hexaddr>\t<text>` record per line (backslash-n escapes joined into
+    // multi-var blocks), type=warning so instr_comment_type
+    // (user2|warning, printlanguage.cc:582) prints it mid-body, fad = the
+    // target entry (CommentDatabase keyed by function address), anchor =
+    // the record address filtered to this target's [vaddr, vaddr+size)
+    // window. Anchor rules and file format are the stage_cmt_diag oracle
+    // harness contract (SECSEED e40ed130 verification: 17 records / 45
+    // lines byte-exact vs canon).
+    if let Ok(cmt_seed_path) = std::env::var("RUGRA_CMTSEED") {
+        if !cmt_seed_path.is_empty() {
+            match std::fs::read_to_string(&cmt_seed_path) {
+                Ok(contents) => {
+                    let code_lo = target.vaddr;
+                    let code_hi = target.vaddr.saturating_add(target.size as u64);
+                    let mut injected = 0usize;
+                    let mut skipped = 0usize;
+                    if let Some(db) = worker_arch.commentdb.as_ref() {
+                        let mut db_write = db
+                            .write()
+                            .map_err(|_| "commentdb write lock poisoned during CMTSEED".to_string())?;
+                        for line in contents.lines() {
+                            let Some((addr_text, text)) = line.split_once('\t') else {
+                                continue;
+                            };
+                            let digits = addr_text
+                                .strip_prefix("0x")
+                                .or_else(|| addr_text.strip_prefix("0X"))
+                                .unwrap_or(addr_text);
+                            let Ok(anchor) = u64::from_str_radix(digits, 16) else {
+                                skipped += 1;
+                                continue;
+                            };
+                            if anchor < code_lo || anchor >= code_hi {
+                                skipped += 1;
+                                continue;
+                            }
+                            let text = text.replace("\\n", "\n");
+                            db_write.add_comment(
+                                rugra::comment::comment_type::WARNING,
+                                Address::new(target.vaddr),
+                                Address::new(anchor),
+                                &text,
+                            );
+                            injected += 1;
+                        }
+                    }
+                    eprintln!(
+                        "[CMTSEED] {} {} records injected, {} skipped (window 0x{:x}..0x{:x})",
+                        target.name,
+                        injected,
+                        skipped,
+                        code_lo,
+                        code_hi
+                    );
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "unable to read RUGRA_CMTSEED file {cmt_seed_path}: {error}"
+                    ));
+                }
+            }
+        }
+    }
     // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden addresses
     // are this driver's base-0 addresses + 0x100000 (same delta the
     // code-label layer carries); warning texts that embed an address render
