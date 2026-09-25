@@ -38,10 +38,10 @@
  "input_manifest": {
   "canonicalization": "sha256 over the canonical input description above",
   "cases": [
-   "two_case_return: labels {0},{1} with RETURN-terminated bodies — label/body order, isexit=false (no breaks)",
-   "single_case_default: label {5} + default edge — KEYWORD_DEFAULT rendering (cc:3140-3145); the default edge carries a table entry because the default arm calls getLabel(casenum,0) unconditionally",
-   "multi_label_first: first case block reached by two table entries (labels {2,3}) — consecutive `case 2:`/`case 3:` lines before the shared body (the PRINTC-SWITCH-EMIT-0001 timing-defect detector)",
-   "break_exit_form: case 0 empty with an edge to the formal exit (isexit=true, not last) — the explicit `break;` of cc:3342-3345 between later cases"
+   "two_case_return: labels {0},{1} with RETURN-terminated bodies \u2014 label/body order, isexit=false (no breaks)",
+   "single_case_default: label {5} + default edge \u2014 KEYWORD_DEFAULT rendering (cc:3140-3145); the default edge carries a table entry because the default arm calls getLabel(casenum,0) unconditionally",
+   "multi_label_first: first case block reached by two table entries (labels {2,3}) \u2014 consecutive `case 2:`/`case 3:` lines before the shared body (the PRINTC-SWITCH-EMIT-0001 timing-defect detector)",
+   "break_exit_form: case 0 empty with an edge to the formal exit (isexit=true, not last) \u2014 the explicit `break;` of cc:3342-3345 between later cases"
   ]
  },
  "observation_schema": {
@@ -50,7 +50,7 @@
  },
  "comparand_sha256": {
   "cpp_fixture_sha256": "e5728abe4c0be2ca2dacd55426cb79eea00981a5153d0cd085a2112681195c20",
-  "rust_fixture_sha256": "e8f69bfc20bbbea611029c6f1f29d63dee8ab43b5e4b734a8ed16e3d776fa64f",
+  "rust_fixture_sha256": "b993b71e96df2bfca731068a56969b43faa262d32c61592fcee22bcae6e26231",
   "runner_sha256": "2addde2a97085daa9fa5a8b761097b291310452b797477aadc69ca9ae622a8e0",
   "rugra_printc": "2acd43b1bd69e3b045c3402134f3d132f799042ca8360ef8a61cb5f7700d4653",
   "rugra_prettyprint": "c6eaa43fa0d5120db1d390fb569fea69e675d66b36f1179c8bf58d6469c0a681",
@@ -78,20 +78,20 @@
  "expected_exit_code": 0,
  "observation": {
   "overall_status": "UNTESTED",
-  "label_emission": "MATCH: per-label tagLine + `case` + spaces(1) + pushConstant + `:` (cc:3146-3157) — label order, multi-label grouping (multi_label_first's consecutive `case 2:`/`case 3:`), and default rendering all byte-identical",
-  "body_emission_timing": "MATCH: bl2->emit(this) at cc:3339-3341 — the first case's label precedes its body and every body lands inside the switch (the A10 regression: DEAD-guarded emit_block_structured swallowed the absorbed case blocks; fixed by emit_switch_case_body dispatching per FlowBlock::emit with no dead guard)",
-  "break_placement": "MATCH: cc:3342-3345 isExit(i)&&i!=last — break_exit_form's case 0 gets `break;`, RETURN-terminated cases and the last label do not",
+  "label_emission": "MATCH: per-label tagLine + `case` + spaces(1) + pushConstant + `:` (cc:3146-3157) \u2014 label order, multi-label grouping (multi_label_first's consecutive `case 2:`/`case 3:`), and default rendering all byte-identical",
+  "body_emission_timing": "MATCH: bl2->emit(this) at cc:3339-3341 \u2014 the first case's label precedes its body and every body lands inside the switch (the A10 regression: DEAD-guarded emit_block_structured swallowed the absorbed case blocks; fixed by emit_switch_case_body dispatching per FlowBlock::emit with no dead guard)",
+  "break_placement": "MATCH: cc:3342-3345 isExit(i)&&i!=last \u2014 break_exit_form's case 0 gets `break;`, RETURN-terminated cases and the last label do not",
   "layout": "MATCH: openBrace(same_line) ` {` (cc:3329, printc.cc:1593), startIndent/stopIndent per case (cc:3333/3348), labels at switch-body indent, statements +1 level, closing tagLine+`}` (cc:3350-3351); `switch(` with NO space per opBranchind tagOp+openParen (cc:586-587, matches the golden's `switch((int)pCVar10 ...)`)",
-  "constant_format": "MATCH: push_integer's val<=10 decimal boundary (printc.cc:1332) — `return 10;` vs `0x14`/`0x1e`/`0x28`/`0x3c` all identical (format_constant_value's boundary widened from <=9 to <=10 as part of this fix)"
+  "constant_format": "MATCH: push_integer's val<=10 decimal boundary (printc.cc:1332) \u2014 `return 10;` vs `0x14`/`0x1e`/`0x28`/`0x3c` all identical (format_constant_value's boundary widened from <=9 to <=10 as part of this fix)"
  },
  "residual_diffs": [],
  "out_of_scope_gaps": [
   {
-   "summary": "production try_rule_switch case labels are out-edge indices (case_values.push(vec![j])), never jumptable-recovered labels, and default_case is always None (checkSwitchSkips TODO) — the fixture bypasses try_rule_switch by hand-building the BlockSwitch, so these structurer/jumptable-recovery gaps do not surface here",
+   "summary": "production try_rule_switch case labels are out-edge indices (case_values.push(vec![j])), never jumptable-recovered labels, and default_case is always None (checkSwitchSkips TODO) \u2014 the fixture bypasses try_rule_switch by hand-building the BlockSwitch, so these structurer/jumptable-recovery gaps do not surface here",
    "evidence": "blockaction.rs try_rule_switch (cc:1711/1714-1721 region)"
   },
   {
-   "summary": "implied/return-value folding in the full pipeline: doc_function-level emission still prints `uVar0 = 10; return uVar0;` where the oracle folds to `return 10;` (ActionReturnRecovery + implied varnolds) — outside the emission-layer scope of this fixture (funcdata test asserts structure, not the fold)",
+   "summary": "implied/return-value folding in the full pipeline: doc_function-level emission still prints `uVar0 = 10; return uVar0;` where the oracle folds to `return 10;` (ActionReturnRecovery + implied varnolds) \u2014 outside the emission-layer scope of this fixture (funcdata test asserts structure, not the fold)",
    "evidence": "funcdata::tests::test_switch_case_structuring emitted text"
   }
  ],

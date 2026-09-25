@@ -1816,3 +1816,28 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
    caseblock 交父臂（cc:3659-3660）；不再用「cases+尾部 default」的原始组件序（该
    序使最后真实 case 的后继成为 default 前叶，goto 目标恰好是 default 时丢 goto
    语句，httpd main case 0x66 实证）。文档注释同步改写。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-DEFAULTCHAIN-0001 — default 进入链图 + 排序 rank key）
+
+1. **`BlockSwitch::default_order`**（新字段）：oracle 的 `caseblocks` 含正式 default
+   为普通成员（grabCaseBasic cc:3529-3533 逐组件 addCase；仅 cc:3515 isdefault 旗
+   标区分）。Rugra 把 default 体放独立 `default_case` 槽，此前链图（cc:3536-3544
+   fall-thru chain）无法把「case 组件 goto 目标=default 基本块」的链边接上——
+   glob_set 的 `'\\'`(0x4c48→0x4c5e) 链断，default 以自身首表项 0x5e 排序，落
+   `'`'` 之后并显式 `goto switchD_..._5e`。新虚拟条目（index=case_order.len()）
+   由 `grab_case_order`（blockaction.rs）注册进同一 casemap，default 自身的
+   fall-thru 链（default→另一 case 的罕见形）同样建模。
+2. **`finalize_case_labels` 扩展视图**：cc:3562-3591 两遍 label/depth + 稳定排序
+   在 `case_order + default_order` 扩展向量上执行（链索引=grab 时索引，先遍历后
+   排序，同 oracle）；default 作为链非根继承链根 label（cc:3577-3584），合并序中
+   落在根后（depth tie-break，block.hh:907）。
+3. **`default_label` 语义升级为 rank key**：printc 的 def_pos 与
+   `next_flow_after` 的合并序都数 `label < default_label`；key=
+   `max(前缀 regular label)+1`（首位为 0），使 count==oracle 合并序前缀数 r
+   （链根与 default 同 label 时仍计入前缀=oracle 的 depth tie-break）。残角：
+   链穿过 default 延续（default 后还有同 label regular）无精确标量，key 尽力
+   （RUGRA_BS_DUMP 见证；双语料实测 0 次触发）。
+4. **效果**（curl 默认脸 489→474）：glob_set 38→23——switch 体与 canon 同构
+   （`case '\\':` 直落 `default:` 无 goto、`case ']'` 居 default 后）；httpd
+   908 逐字节恒等；glob_word 等 label-rank 消费者 def_pos 数学等价（root-default
+   的 count 不变量，A/B 零差亲证）。

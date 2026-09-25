@@ -1588,3 +1588,16 @@ main 在 block.rs:4826 预存 panic，与本改动无关，panic 位点/计数�
 numbering=0；gcc 审计 fail 名集逐名恒等（curl 104/20、httpd 14/15 与亲父一致）；
 投影银行 391/391 MATCH；cargo test --lib 1712P/1F（nonzeromask 预存）零回退；
 check_ghidra_annotations/refs 全绿。
+
+## 2026-09-25 追加（BLOCKACTION-SWITCH-DEFAULTCHAIN-0001 — grab_case_order 注册 default 虚拟条目）
+
+`grab_case_order` 新增 `default_case` 参数与第三返回值 `default_order: Option<CaseOrder>`：
+default 组件经 `switch_case_basic_coords` 解析基本图坐标后，其 outindex 槽位在
+casemap 里登记为虚拟索引 `cases.len()`（cc:3527-3533 的全组件 addCase 语义），
+链环（cc:3536-3546）遍历 cases+虚拟 default——「case 的 BlockGoto 目标=default
+基本块」与「default 自身 fall-thru 入另一 case」两侧链边都能接上；坐标不可解析
+时返回 None（finalize 侧走 legacy 桶）。两调用点（try_rule_switch 与
+collapse_switches 安装器）与三处 BlockSwitch 重建/构造点同步传输新字段。
+机制 B 门禁：curl 474/0/0（glob_set −15）、httpd 908/0/0 字节恒等、bank 391/391、
+gcc fail 名集恒等、双跑 cmp 恒等；双侧 runner blockmultigoto/goto_prints 重钉后
+MATCH（printc_switch_emit 的 observation=UNTESTED 门为亲父预存断点，另行登记）。
