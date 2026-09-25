@@ -12726,12 +12726,12 @@ impl Rule for RulePullsubMulti {
 /// printed as a subtraction of the negated (small positive) value.
 ///
 /// NOTE: Ghidra consults the constant's read-facing data-type (`TYPE_UINT`,
-/// not char-print, enum/equate name-locks). Rugra resolves the non-union base
-/// type via `get_type_read_facing()` and applies the `TYPE_UINT` /
-/// `!isCharPrint()` guards. Factory-backed constants always carry a type, so
-/// their default `TYPE_UNKNOWN` is rejected. A malformed Rust-only `None`
-/// type still falls through; op-aware union resolution and the equate/enum
-/// branches remain under `RULE-ADDUNSIGNED-TYPEPRECOND-0001`.
+/// not char-print, enum/equate name-locks). Rugra consults the fd-aware twin
+/// `vn_type_read_facing` (union map resolution included, ruleaction.cc:7188)
+/// and applies the `TYPE_UINT` / `!isCharPrint()` guards. Factory-backed
+/// constants always carry a type, so their default `TYPE_UNKNOWN` is
+/// rejected. A malformed Rust-only `None` type still falls through; the
+/// equate/enum branches remain under `RULE-ADDUNSIGNED-TYPEPRECOND-0001`.
 pub struct RuleAddUnsigned;
 
 impl RuleAddUnsigned {
@@ -12756,11 +12756,18 @@ impl Rule for RuleAddUnsigned {
         }
         use crate::type_system::datatype::TypeMetatype;
         // Ghidra: dt = constvn->getTypeReadFacing(op); require metatype==
-        // TYPE_UINT, skip char-print types (ruleaction.cc:7188-7190). Rugra's
-        // get_type_read_facing returns the varnode's resolved base type. Its
-        // Rust-only None fall-through has no valid Ghidra Varnode analogue and
-        // remains a registered RULE-ADDUNSIGNED-TYPEPRECOND-0001 mismatch.
-        if let Some(dt) = constvn.read().unwrap().get_type_read_facing() {
+        // TYPE_UINT, skip char-print types (ruleaction.cc:7188-7190). The
+        // fd-aware twin consults the union map (resolved field type) with
+        // the reading op/slot key (op reads constvn at slot 1). The
+        // Rust-only None fall-through has no valid Ghidra Varnode analogue
+        // and remains a registered RULE-ADDUNSIGNED-TYPEPRECOND-0001
+        // mismatch.
+        if let Some(dt) = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &constvn,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            1,
+        ) {
             if dt.get_metatype() != TypeMetatype::Uint {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -12837,7 +12844,13 @@ impl Rule for RuleSubRight {
         {
             let in0_vn = op_arc.read().unwrap().inrefs.get(0).cloned();
             if let Some(vn) = in0_vn {
-                if let Some(dt) = vn.read().unwrap().get_type_read_facing() {
+                // fd-aware twin: op reads in(0) at slot 0 (ruleaction.cc:7256).
+                if let Some(dt) = crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &vn,
+                    &crate::op::PcodeOpRef(op_arc.clone()),
+                    0,
+                ) {
                     if dt.is_piece_structured() {
                         // Faithful to `data.opMarkSpecialPrint(op)` (ruleaction.cc:7275).
                         fd.op_mark_special_print(&crate::op::PcodeOpRef(op_arc.clone()));
@@ -13140,9 +13153,9 @@ impl RulePtrsubCharConstant {
 impl Rule for RulePtrsubCharConstant {
     // Ghidra: ruleaction.cc:7354 RulePtrsubCharConstant::applyOp
     fn apply_op(
-        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7372-7421).
+        // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7354-7403).
         let (sb, vn1, outvn) = {
             let op = op_arc.read().unwrap();
             let sb = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
@@ -13156,7 +13169,13 @@ impl Rule for RulePtrsubCharConstant {
         if !vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // sbType = sb->getTypeReadFacing(op); require TYPE_PTR to TYPE_SPACEBASE.
         use crate::type_system::datatype::{Datatype, TypeMetatype};
-        let sb_type = sb.read().unwrap().get_type();
+        // fd-aware twin: op reads sb at slot 0 (ruleaction.cc:7358).
+        let sb_type = crate::unionresolve::vn_type_read_facing(
+            fd,
+            &sb,
+            &crate::op::PcodeOpRef(op_arc.clone()),
+            0,
+        );
         let sb_is_spacebase_ptr = sb_type
             .as_ref()
             .map(|dt| {
@@ -13169,7 +13188,8 @@ impl Rule for RulePtrsubCharConstant {
         if !sb_is_spacebase_ptr { return Ok(action_status::NO_CHANGE); }
         // outtype = outvn->getTypeDefFacing(); require TYPE_PTR with
         //   basetype isCharPrint() (ruleaction.cc:7366-7369).
-        let outtype = outvn.read().unwrap().get_type();
+        // fd-aware def-facing twin (ruleaction.cc:7366).
+        let outtype = crate::unionresolve::vn_type_def_facing(fd, &outvn);
         let out_is_char_ptr = outtype
             .as_ref()
             .map(|dt| {
@@ -13197,7 +13217,7 @@ impl Rule for RulePtrsubCharConstant {
         //   (legacy/test Funcdata) cannot confirm readonly: Ghidra's scope
         //   always exists, so the conservative no-op matches the observable
         //   "rule did not fire".
-        match _fd.is_scope_read_only(symaddr, 1, op_addr) {
+        match fd.is_scope_read_only(symaddr, 1, op_addr) {
             Some(true) => {}
             _ => return Ok(action_status::NO_CHANGE),
         }
@@ -13207,7 +13227,7 @@ impl Rule for RulePtrsubCharConstant {
         //   PrintC::pushPtrCharConstant reads through at print time
         //   (printc.cc:1537/1698). charsize/opaque project basetype exactly
         //   as stringmanage.cc:166's virtual getStringData call does.
-        let Some(sm) = _fd.get_arch().and_then(|a| a.string_manager.clone()) else {
+        let Some(sm) = fd.get_arch().and_then(|a| a.string_manager.clone()) else {
             return Ok(action_status::NO_CHANGE);
         };
         let charsize = basetype.get_size() as i32;
@@ -13238,7 +13258,7 @@ impl Rule for RulePtrsubCharConstant {
                 let slot = subop.read().unwrap().slot_of_input(&outvn);
                 if let Some(slot) = slot {
                     if !Self::push_const_further(
-                        _fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone(),
+                        fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone(),
                     ) {
                         remove = false;
                     }
@@ -13253,17 +13273,17 @@ impl Rule for RulePtrsubCharConstant {
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         if remove_copy {
             // ruleaction.cc:7392-7393: data.opDestroy(op).
-            _fd.op_destroy(&op_ref);
+            fd.op_destroy(&op_ref);
         } else {
             // ruleaction.cc:7395-7400: convert the original PTRSUB to a COPY
             // of the constant, with the char-pointer type carried over
             // (cc:7396-7397).
             let outvn_size = outvn.read().unwrap().get_size();
-            let newvn = _fd.new_constant(outvn_size, val);
+            let newvn = fd.new_constant(outvn_size, val);
             newvn.write().unwrap().update_type(outtype);
-            _fd.op_remove_input(&op_ref, 1);
-            _fd.op_set_input(&op_ref, newvn, 0);
-            _fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+            fd.op_remove_input(&op_ref, 1);
+            fd.op_set_input(&op_ref, newvn, 0);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
         }
         Ok(action_status::CHANGE)
     }
@@ -13547,7 +13567,14 @@ impl Rule for RuleExpandLoad {
                     // elType = rootPtr (=def->getIn(0))->getTypeReadFacing(def)
                     let real_root = match def.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
                     };
-                    let dt = match real_root.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    // fd-aware twin with the defOp key: def reads real_root
+                    // (=def->getIn(0)) at slot 0 (ruleaction.cc:10937).
+                    let dt = match crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        &real_root,
+                        &crate::op::PcodeOpRef(def.clone()),
+                        0,
+                    ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                     };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                     let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13555,7 +13582,14 @@ impl Rule for RuleExpandLoad {
                     Some(ptr_to)
                 } else {
                     // elType = rootPtr->getTypeReadFacing(op)
-                    let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    // fd-aware twin with the LOAD op key: op reads root_ptr
+                    // (=op->getIn(1)) at slot 1 (ruleaction.cc:10940).
+                    let dt = match crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        &root_ptr,
+                        &op_ref,
+                        1,
+                    ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                     };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                     let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13563,7 +13597,13 @@ impl Rule for RuleExpandLoad {
                     Some(ptr_to)
                 }
             } else {
-                let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                // fd-aware twin with the LOAD op key (ruleaction.cc:10943).
+                let dt = match crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &root_ptr,
+                    &op_ref,
+                    1,
+                ) { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
                 };
                 if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
                 let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
@@ -13595,7 +13635,9 @@ impl Rule for RuleExpandLoad {
             // Check for natural integer truncation.
             if meta != TypeMetatype::Int && meta != TypeMetatype::Uint { return Ok(action_status::NO_CHANGE); }
             // outMeta = outVn->getTypeDefFacing()->getMetatype(); must be INT/UINT/UNKNOWN/BOOL.
-            let out_meta = out_vn.read().unwrap().get_type().map(|t| t.get_metatype());
+            // fd-aware def-facing twin (ruleaction.cc:10964).
+            let out_meta = crate::unionresolve::vn_type_def_facing(fd, &out_vn)
+                .map(|t| t.get_metatype());
             match out_meta {
                 None | Some(TypeMetatype::Int) | Some(TypeMetatype::Uint)
                 | Some(TypeMetatype::Unknown) | Some(TypeMetatype::Bool) => {}
@@ -17805,12 +17847,16 @@ impl Rule for RulePushPtr {
         for s in 0..num_input {
             let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue ,
             };
-            let is_ptr = in_vn
-                .read()
-                .unwrap()
-                .get_type_read_facing()
-                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
-                .unwrap_or(false);
+            // fd-aware twin: op reads in_vn at slot s (ruleaction.cc:6854
+            // vni->getTypeReadFacing(op)).
+            let is_ptr = crate::unionresolve::vn_type_read_facing(
+                fd,
+                &in_vn,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                s as i32,
+            )
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+            .unwrap_or(false);
             if is_ptr {
                 slot = s;
                 vni = Some(in_vn);
@@ -17824,7 +17870,7 @@ impl Rule for RulePushPtr {
         }
 
         // if (evaluatePointerExpression(op, slot) != 1) return 0;
-        if RulePtrArith::evaluate_pointer_expression(op_arc, slot) != 1 {
+        if RulePtrArith::evaluate_pointer_expression(fd, op_arc, slot) != 1 {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -17931,6 +17977,7 @@ impl RulePtrArith {
     /// pointer (i.e. there is no earlier pointer that should be pushed first).
     // Ghidra: ruleaction.cc:6540 RulePtrArith::verifyPreferredPointer
     fn verify_preferred_pointer(
+        fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
     ) -> bool {
@@ -17944,12 +17991,21 @@ impl RulePtrArith {
             return true;
         }
         // Find which input of preOp is a pointer.
+        // fd-aware twins: preOp reads its in(preslot) at slot preslot
+        // (ruleaction.cc:6548/6550).
         let mut preslot: usize = 0;
         let pre_is_ptr_0 = pre_op
             .read()
             .unwrap()
             .get_in(0)
-            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .and_then(|v| {
+                crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    v,
+                    &crate::op::PcodeOpRef(pre_op.clone()),
+                    0,
+                )
+            })
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if !pre_is_ptr_0 {
@@ -17958,7 +18014,14 @@ impl RulePtrArith {
                 .read()
                 .unwrap()
                 .get_in(1)
-                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .and_then(|v| {
+                    crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        v,
+                        &crate::op::PcodeOpRef(pre_op.clone()),
+                        1,
+                    )
+                })
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if !pre_is_ptr_1 {
@@ -17966,7 +18029,7 @@ impl RulePtrArith {
             }
         }
         // return (1 != evaluatePointerExpression(preOp, preslot));
-        Self::evaluate_pointer_expression(&pre_op, preslot) != 1
+        Self::evaluate_pointer_expression(fd, &pre_op, preslot) != 1
     }
 
     /// Faithful to `RulePtrArith::evaluatePointerExpression` (ruleaction.cc:6586-6627).
@@ -17979,6 +18042,7 @@ impl RulePtrArith {
     ///   - 2 → the conversion can proceed
     // Ghidra: ruleaction.cc:6568 RulePtrArith::evaluatePointerExpression
     fn evaluate_pointer_expression(
+        fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
     ) -> i32 {
@@ -17991,11 +18055,20 @@ impl RulePtrArith {
             return 0;
         }
         let other_slot = if slot == 0 { 1 } else { 0 };
+        // fd-aware twin: op reads in(1-slot) at slot other_slot
+        // (ruleaction.cc:6576).
         let other_is_ptr = op
             .read()
             .unwrap()
             .get_in(other_slot)
-            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .and_then(|v| {
+                crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    v,
+                    &crate::op::PcodeOpRef(op.clone()),
+                    other_slot as i32,
+                )
+            })
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if other_is_ptr {
@@ -18021,14 +18094,18 @@ impl RulePtrArith {
                 if other_vn.read().unwrap().is_free() && !other_vn.read().unwrap().is_constant() {
                     return 0;
                 }
-                let ov_is_ptr = other_vn
-                    .read()
-                    .unwrap()
-                    .get_type_read_facing()
-                    .map(|dt| {
-                        dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
-                    })
-                    .unwrap_or(false);
+                // fd-aware twin: decOp reads otherVn (=decOp->getIn(1-slot))
+                // at slot other_idx (ruleaction.cc:6588).
+                let ov_is_ptr = crate::unionresolve::vn_type_read_facing(
+                    fd,
+                    &other_vn,
+                    &crate::op::PcodeOpRef(dec_op.clone()),
+                    other_idx as i32,
+                )
+                .map(|dt| {
+                    dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
+                })
+                .unwrap_or(false);
                 if ov_is_ptr {
                     res = 2; // Do not push in the presence of other pointers.
                 }
@@ -18085,11 +18162,19 @@ impl Rule for RulePtrArith {
         let num_input = op_arc.read().unwrap().num_input();
         let mut slot: usize = num_input;
         for s in 0..num_input {
+            // fd-aware twin: op reads in(s) at slot s (ruleaction.cc:6645).
             let is_ptr = op_arc
                 .read()
                 .unwrap()
                 .get_in(s)
-                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .and_then(|v| {
+                    crate::unionresolve::vn_type_read_facing(
+                        fd,
+                        v,
+                        &crate::op::PcodeOpRef(op_arc.clone()),
+                        s as i32,
+                    )
+                })
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if is_ptr { slot = s; break; }
@@ -18097,10 +18182,10 @@ impl Rule for RulePtrArith {
         if slot == num_input {
             return Ok(action_status::NO_CHANGE);
         }
-        if Self::evaluate_pointer_expression(op_arc, slot) != 2 {
+        if Self::evaluate_pointer_expression(fd, op_arc, slot) != 2 {
             return Ok(action_status::NO_CHANGE);
         }
-        if !Self::verify_preferred_pointer(op_arc, slot) {
+        if !Self::verify_preferred_pointer(fd, op_arc, slot) {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -19007,42 +19092,47 @@ impl<'a> AddTreeState<'a> {
     /// When the base data-type is unit-sized, every ADD becomes a PTRADD.
     // Ghidra: ruleaction.cc:6423 AddTreeState::buildDegenerate
     fn build_degenerate(&mut self) -> bool {
-        let (base_align_lt_wordsize, word_size, ct_size, out_is_ptr) = {
+        let (base_align_lt_wordsize, out_is_ptr) = {
             let bt = match &self.base_type { Some(b) => b.clone(), None => return false ,
             };
-            let ws = {
-                let p = self.ptr.read().unwrap();
-                p.get_type_read_facing()
-                    .and_then(|ct| {
-                        use crate::type_system::datatype::Datatype;
-                        if let Datatype::Pointer(tp) = ct.as_ref() { Some(tp.wordsize) } else { None }
-                    })
-                    .unwrap_or(1)
+            // cc:6426 reads the ctor-cached `ct` member — its value is the
+            // cc:6025 consult `ptr->getTypeReadFacing(op)`, which the Rust
+            // ctor takes via the fd-aware twin. The wordsize comes from
+            // that cached (possibly union-resolved) pointer type, not a
+            // fresh raw read.
+            let ws: i64 = match &self.ct {
+                Some(ct) => {
+                    use crate::type_system::datatype::Datatype;
+                    if let Datatype::Pointer(tp) = ct.as_ref() {
+                        tp.wordsize as i64
+                    } else {
+                        1
+                    }
+                }
+                None => 1,
             };
             let align = bt.get_align_size() as i64;
-            let is_lt = align < ws as i64;
-            let out_meta = self
+            let is_lt = align < ws;
+            // cc:6430: baseOp->getOut()->getTypeDefFacing()->getMetatype()
+            // != TYPE_PTR — fd-aware def-facing twin, not the raw v_type.
+            let out_is_ptr = self
                 .base_op
                 .read()
                 .unwrap()
                 .get_out()
-                .and_then(|o| o.read().unwrap().v_type.clone())
+                .cloned()
+                .and_then(|o| crate::unionresolve::vn_type_def_facing(&*self.data, &o))
                 .map(|dt| {
                     use crate::type_system::datatype::TypeMetatype;
-                    let _ = dt.get_metatype();
-                    // out->getTypeDefFacing()->getMetatype() != TYPE_PTR
-                    let m = dt.get_metatype();
-                    m == TypeMetatype::Pointer
+                    dt.get_metatype() == TypeMetatype::Pointer
                 })
                 .unwrap_or(false);
-            (is_lt, ws, 0i64, out_meta)
+            (is_lt, out_is_ptr)
         };
         // If the size is really less than scale, there is padding — don't transform.
         if base_align_lt_wordsize {
             return false;
         }
-        let _ = word_size;
-        let _ = ct_size;
         // Make sure pointer propagates through INT_ADD.
         if !out_is_ptr {
             return false;
@@ -26506,7 +26596,7 @@ mod tests {
         op.inrefs = vec![ptr_vn, c];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 0);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 0);
     }
 
     /// evaluatePointerExpression: an INT_ADD(ptr, const) feeding an INT_ADD
@@ -26550,7 +26640,7 @@ mod tests {
         }
         out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
         // Single ADD descendant with a non-pointer other input → res stays 1 (push).
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 1);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 1);
     }
 
     /// evaluatePointerExpression: when the other input is itself a pointer,
@@ -26597,7 +26687,7 @@ mod tests {
             d.output = Some(out2);
         }
         out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
-        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 2);
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&fd, &op_arc, 0), 2);
     }
 
     /// verifyPreferredPointer: when the putative base pointer is NOT defined by
@@ -26620,7 +26710,7 @@ mod tests {
         op.inrefs = vec![ptr_vn, c];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
-        assert!(RulePtrArith::verify_preferred_pointer(&op_arc, 0));
+        assert!(RulePtrArith::verify_preferred_pointer(&fd, &op_arc, 0));
     }
 
     /// RulePtrArith::applyOp: no type recovery → NO_CHANGE (early out).
