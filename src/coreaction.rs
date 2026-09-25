@@ -2979,13 +2979,16 @@ impl Action for ActionDoNothing {
                     bl.write()
                         .unwrap()
                         .set_flags(crate::block::block_flags::DONOTHING_LOOP);
-                    let start = crate::block::front_leaf(&bl)
-                        .map(|l| l.read().unwrap().get_start_addr().as_u64())
-                        .unwrap_or(0);
-                    fd.warning(
-                        "Do nothing block with infinite loop",
-                        crate::address::Address::new(start),
-                    );
+                    // cc:3479: data.warning(..., bb->getStart()) — the
+                    // BlockBasic's own cover start (block.cc:2319: first
+                    // range's first address), NOT a front-leaf descent:
+                    // oracle getFrontLeaf on a t_basic block returns null
+                    // (block.cc:344-348 — subBlock(0) is null), so a
+                    // front_leaf detour here produces address 0 and the
+                    // comment never lands in the function's window
+                    // (MSTRUCT-DONOTHING-WARN-0001).
+                    let start = bl.read().unwrap().get_start_addr();
+                    fd.warning("Do nothing block with infinite loop", start);
                 }
                 continue;
             }
@@ -5541,11 +5544,12 @@ impl ActionSetCasts {
                 // producer (`(ContentUnion)SUB2416(...,8)` in main).
                 OpCode::CPUI_COPY => Self::copy_input_cast(op_ref, slot, strategy, fd),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
-                    // typeop.rs's comparison_input_cast holds the
-                    // degenerate read-facing (separate write-domain); the
-                    // guard is re-acquired for its &PcodeOp parameter.
-                    let op = op_ref.0.read().unwrap();
-                    crate::typeop::comparison_input_cast(&op, slot, strategy)
+                    // typeop.cc:932 TypeOpEqual::getInputCast — the fd-aware
+                    // canonical (comparison_input_cast) manages its own op
+                    // guards; the three High read-facing reads (cc:935/936/
+                    // 941) consult the Funcdata union map keyed on each
+                    // varnode's own slot (UNIONRESOLVE-PKG-B-0001).
+                    crate::typeop::comparison_input_cast(fd, op_ref, slot, strategy)
                 }
                 // typeop.cc:1023/1049 TypeOpIntSless/SlessEqual::getInputCast
                 // and cc:1075/1099 TypeOpIntLess/LessEqual::getInputCast: the
@@ -6626,13 +6630,16 @@ impl ActionSetCasts {
             if opcode == OpCode::CPUI_PTRSUB {
                 // typeop.cc:2349-2364 supplies PTRSUB's field-sensitive token,
                 // and coreaction.cc:2541 consumes it at this exact cast stage.
-                // Type inference continues to use getOutputLocal (INT).
+                // Type inference continues to use getOutputLocal (INT). The
+                // fd-carrying dispatch (get_output_token_in_fd) consults the
+                // union map at cc:2352's High read-facing read, so a union-ptr
+                // base resolves to its field pointer before downChain
+                // (UNIONRESOLVE-PKG-B-0001).
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
-                let op_rg = op.0.read().unwrap();
                 let Some(token) = crate::typeop::TypeOpPtrsub::new(type_factory)
-                    .get_output_token(&op_rg)
+                    .get_output_token_in_fd(op, fd)
                 else {
                     return 0;
                 };
@@ -6640,13 +6647,30 @@ impl ActionSetCasts {
             } else if opcode == OpCode::CPUI_PTRADD {
                 // typeop.cc:2244: the PTRADD token is the input-0 HIGH
                 // read-facing type ("cast to the input data-type"), not the
-                // output type.
+                // output type. The fd-carrying dispatch consults the union
+                // map at the same read (UNIONRESOLVE-PKG-B-0001).
                 let Some(type_factory) = type_factory else {
                     return 0;
                 };
-                let op_rg = op.0.read().unwrap();
                 let Some(token) = crate::typeop::TypeOpPtradd::new(type_factory)
-                    .get_output_token(&op_rg)
+                    .get_output_token_in_fd(op, fd)
+                else {
+                    return 0;
+                };
+                token
+            } else if opcode == OpCode::CPUI_COPY {
+                // typeop.cc:405-409 TypeOpCopy::getOutputToken: the COPY
+                // token is the input-0 HIGH read-facing type (fd-aware
+                // consult keyed on slot 0). This arm was previously missing
+                // — COPY fell through output_metatype's pointer-producing
+                // None arm, so castOutput never gave a COPY output a token;
+                // the oracle's virtual dispatch reaches TypeOpCopy's
+                // override here (UNIONRESOLVE-PKG-B-0001 wired it).
+                let Some(type_factory) = type_factory else {
+                    return 0;
+                };
+                let Some(token) = crate::typeop::TypeOpCopy::new(type_factory)
+                    .get_output_token_in_fd(op, fd)
                 else {
                     return 0;
                 };
@@ -7274,11 +7298,14 @@ impl ActionSetCasts {
     ///   the same getBase(size, TYPE_UNKNOWN) as the plain-TypeOp classes,
     ///   so they map to Unknown here.
     ///
-    /// Pointer-producing ops (PTRSUB/PTRADD/LOAD/CALL/CALLIND/COPY/
-    /// INDIRECT/MULTIEQUAL/CAST) return None so castOutput leaves their
-    /// output pointer type untouched — the pointer shape is established
-    /// upstream by ActionInferTypes / cast_input_ptr, and forcing a base-int
-    /// token would wrongly cast `(long *)out` → `(long)out`.
+    /// Pointer-producing ops (LOAD/CALL/CALLIND/INDIRECT/MULTIEQUAL/CAST)
+    /// return None so castOutput leaves their output pointer type untouched —
+    /// the pointer shape is established upstream by ActionInferTypes /
+    /// cast_input_ptr, and forcing a base-int token would wrongly cast
+    /// `(long *)out` → `(long)out`. PTRSUB/PTRADD/COPY also return None but
+    /// are intercepted by their own token arms above (typeop.cc:2349/2244/
+    /// 405 — UNIONRESOLVE-PKG-B-0001 wired the COPY arm), so their None
+    /// entries are unreachable from the castOutput default arm.
     fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::opcodes::OpCode;
         use crate::type_system::datatype::TypeMetatype;

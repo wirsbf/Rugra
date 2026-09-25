@@ -3,6 +3,35 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-09-26：fd-aware facing 消费点收口（UNIONRESOLVE-PKG-B-0001）
+
+锁定 oracle（e40ed130）的四个 facing 方法（varnode.cc:626-672）在 typeop 消费
+点的退化形（map-miss 臂）全部换成 fd-aware 孪生（unionresolve.rs
+`vn_high_type_read_facing`，consult `fd.union_map`），单一实现纪律同步落地：
+
+- **`comparison_input_cast`**（= `TypeOpEqual::getInputCast`，typeop.cc:932-943）
+  签名改 `(fd, op_ref, slot, strategy)`：cc:935/936/941 三处
+  `getHighTypeReadFacing(op)` 按各自 varnode 的 slot 键 consult union map；
+  detached fixture 保底 `v_type` 回退（无 AssignHigh 阶段）不变。生产调用点
+  coreaction.rs castInput 的 EQUAL/NOTEQUAL 臂直接传 `fd`+`op_ref`。
+- **trait `get_input_cast`** 签名改 `(op: &PcodeOpRef, slot, fd)`（对齐
+  `get_input_local_in_fd` 先例：Rust PcodeOp 无 parent→Funcdata 链，fd 穿参）。
+  compare 宏族 EQUAL/NOTEQUAL 臂路由到上述 canonical；LESS 族 other-operand
+  读不变。
+- **trait 新增 `get_output_token_in_fd(op_ref, fd)`**（默认转发 fd-less
+  `get_output_token`，镜像 Ghidra 单一虚分派）：`TypeOpCopy`（cc:405-409，
+  旧实现是裸 `v_type` 非 high 读）、`TypeOpPtradd`（cc:2244-2248）、
+  `TypeOpPtrsub`（cc:2349-2364，downChain 全体 + cc:2352 基座 consult fd 化）
+  的 token 覆写**只**存在于该 fd 形态——每个 oracle 函数单一实现。
+  生产消费点 = coreaction.rs cast_output 的 PTRSUB/PTRADD/COPY 臂（COPY 臂
+  本票新接线，见 coreaction.md）。
+- **`TypeOpPtradd/Ptrsub::getInputCast` 的 trait 侧退化副本删除**
+  （cc:2250/2320 的单一实现 = coreaction.rs `ptr_input_reqtype`，其
+  cc:2255/2256/2325/2326 consult 已 fd-aware；旧行为等价于 map-miss 臂，
+  生产与测试均无 trait 调用方）。
+- 测试侧新增 `op_ref()`/`detached_fd()` fixture 助手（detached fd 的空
+  union map ⇒ consult 恰为 map-miss 臂，与旧退化形同观察）。
+
 ## 2026-08-30：算术族 get_output_token → arithmeticOutputStandard（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 5）
 
 - `TypeOpIntAdd::get_output_token`（typeop.cc:1175）改调
