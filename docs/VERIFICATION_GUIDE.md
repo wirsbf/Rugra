@@ -902,3 +902,60 @@ CFG 偏差会进一步放大到 SSA、变量恢复与控制流结构化。
 因此，当前最准确的总述是：
 
 > Rugra 已经开始建设面向 Ghidra 的多层验证体系，但现阶段仍处于“结构层已有进展、运行时与端到端层面尚未完成”的状态。任何关于“已完全对齐”或“已保障一致性”的表述都应视为失真，后续文档与日志应统一回到这一真实基线之上。
+
+---
+
+## 11. CSPEC2-CR-N2 fixture：bad-jump-table 改名链的双侧实跑协议（2026-09-25）
+
+`tests/oracle/namevars_badjumptable_1204.cc` + `.metadata.json` 是 CALLSPEC-0001 (b)+(c)
+合流后的触发路径 fixture：httpd `ap_vhost_iterate_given_conn`（BFD VMA `0x2da50`）内
+`0x2daeb` BRANCHIND 跳表恢复失败（Too many branches，FailNormal）→
+`flow.cc:754 setBadJumpTable(true)` → `coreaction.cc:2779 lookForBadJumpTables` →
+`renameSymbol(UNRECOVERED_JUMPTABLE)` → 打印。
+
+### 11.1 oracle 侧（锁定库 e40ed130）
+
+```bash
+# 构建（锁定对象由 BRIDGE1 lane 预备，stamp 必须等于 e40ed130…）
+bash /dev/shm/rugra-tests/unreffix/build_namevars_badjt.sh \
+     FIXTURE=$PWD/tests/oracle/namevars_badjumptable_1204.cc
+# 运行（目标函数/入口有默认值，可省 env）
+/dev/shm/rugra-tests/unreffix/namevars_badjumptable_1204 sleight_specs examples/httpd \
+     >oracle.out 2>oracle.err
+```
+
+载入契约 = direct-runner golden 生成器（BfdArchitecture + readLoaderSymbols + dynsym
+函数注册 + 全域 followFlow + universal action + PrintC docFunction）；自证：渲染出的 C
+函数体与 `tests/golden/ghidra_httpd_1204.direct-runner.c` 的 `0x2da50` 块逐字节相同。
+观察面：stderr `[CALLSPEC-BADJT]`（注册序逐 callspec 的 badjt 旗标）+
+`[SYMDUMP-FINAL]`（改名后的 ScopeLocal map tree）+ stdout C 渲染。
+
+### 11.2 Rugra 侧（生产驱动，零 fixture 侧重复实现）
+
+```bash
+RUGRA_DUMP_FUNC=ap_vhost_iterate_given_conn MAX_FUNCS=30 \
+RUGRA_SEEDS=0 RUGRA_SYMDB=0 \
+<target>/fast-release/examples/httpd_decompile >rugra.out 2>rugra.err
+```
+
+`RUGRA_SEEDS=0 RUGRA_SYMDB=0` 是 direct-runner 等价 bare 脸；观察面：stderr
+`[JUMPTABLE] recovery failed at 0x2daeb mode=FailNormal → truncate`（生产者）、
+`[DUMP] sym#…`（RUGRA_DUMP_FUNC 符号倾泻）+ stdout C 渲染。确定性口径：stdout 必须逐
+字节恒等；stderr 只比对 `[DUMP]`/`[JUMPTABLE]` 观察行（`[INJECT]` 为并行线程顺序噪音，
+机制 B 已注记的噪声类）。
+
+### 11.3 结论（2026-09-25，本 lane 实跑）
+
+- 生产者（truncate 失败臂）双侧 MATCH；旗标只落在被截断的 `0x2daeb` CALLIND
+  （oracle `[CALLSPEC-BADJT] i=0 badjt=1`，`0x2daa5` 真·间接调用 badjt=0）；
+- **改名点火成功**：双侧 ScopeLocal 均出现 `UNRECOVERED_JUMPTABLE`，存储键一致
+  （oracle `u0x00000030:8` == rugra `[DUMP] sym#1 start=0x30 size=8`）——root 复测的
+  “最终 C 文本 UNRECOVERED 计数=0”不是链条未点火，而是**渲染层不读改名后的符号**；
+- 渲染层 MISMATCH 两处（→ `PRINTC-BADJT-PARAMSYM-0001`）：签名位 2 oracle
+  `code *UNRECOVERED_JUMPTABLE`（printc.cc:2222-2250 经 `param->getSymbol()`→
+  `emitVarDecl(sym)` 印后端符号）vs Rugra `void (*)()param_2`（printc.rs
+  `emit_prototype_inputs` 印 ProtoParameter 自带名，后端符号通道缺失）；调用点 oracle
+  `(*UNRECOVERED_JUMPTABLE)(…)` vs Rugra `(*(code *)param_2)(…)`
+  （`get_varnode_display_name_inner` P0.4 register-input 前置 proto 名，先于符号分支）；
+- 附带 `switch() {}` 空骨架残片（→ `BLOCKSTRUCT-TRUNC-SWITCHEMPTY-0001`）。
+
