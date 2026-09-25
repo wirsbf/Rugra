@@ -1140,3 +1140,66 @@ memcmp 旧条目（oracle MOLD 实验=canon 形逐字），harvester 修复（�
 | gcc 审计 | curl 104/20、httpd 15/14 | fail 集逐名恒等（tmp 路径除外） | ✓ |
 | 投影银行 | 391/391 | **391/391 MATCH**（exit 0 亲验） | ✓ |
 | manifest 指纹 | — | oracle_commit+golden_sha256 亲核 | ✓ |
+
+## §18 CMTSEED 交付记录（Lane CMTSEED，2026-09-25，基=亲父 2dd4c813=master MANIFREGEN 后）
+
+CMTFILL 移交件的 manifest 化+默认转正：注释通道从 /dev/shm 种子文件（opt-in
+`RUGRA_CMTSEED=<tsv>`）升级为入库 manifest（harvester `--cmt` 模式一次性再生）+
+驱动门反转（manifest 在库即默认装载）。
+
+### 18.1 harvest --cmt 通道（tools/harvest_local_manifest.py 新模式，add-only）
+
+`--cmt BINARY GOLDEN.c CORPUS ORACLE_COMMIT OUT.json`，方法=CMTFILL
+build_cmt_seed.py 原样并入（独立函数，不触 --callee/--struct/--dwarf 既有代码）：
+
+- **文本门控**：canon golden 的 `/* Unresolved local var: ... */` 块逐字提取
+  （20 列 `/* ` 首行 / 23 列 commentfill 续行 / emitter 的 ` */` 尾剥除）——
+  记录文本即 canon 自印文本，绝不从 DWARF 重拼类型拼写；
+- **DWARF 锚**：函数域组→具体 subprogram low_pc；词法域组→scope low_pc，无
+  low_pc 时 DW_AT_ranges 首区间 begin；组成员=location 为 DW_FORM_sec_offset
+  或缺席的变量（exprloc 变量解析为命名局部，永不入注释记录）；
+- **匹配**：逐函数按精确变量名序列、canon 顺序，一组一记录；
+- **校准表**（curl 语料表入库+provenance）：CommentSorter::findPosition backup
+  路径（comment.cc:298-306）要求 op.addr==comm.addr 精确命中——死代码化的入口
+  prologue/落在指令中间的词法块起始锚没有存活 op，记录会被 excise。7 条 curl
+  校准把 DWARF 锚重锚到 canon 锚定语句的首个存活 op（RUGRA_DUMP_FUNC dump；
+  e40ed130 stage_cmt_diag oracle 复核=17 记录/45 行块逐字节==canon）；
+- **产出**：canon 地址键（ELF vaddr+0x100000，与其他 manifest 同约定）、
+  oracle_commit+binary/golden sha256 指纹齐备、harvest_rule 全文；非 curl 语料
+  校准表为空表（原始 DWARF 锚直出，无 curl 数据继承——同 --struct 残差账本
+  的语料隔离原则）。
+
+### 18.2 manifest 与门反转（examples/curl_decompile.rs）
+
+- `tests/golden/manifests/curl_cmt_1204.json`：8 函数/17 记录/45 行/7 校准/0
+  drops；harvest 双跑 cmp 字节恒等；派生 (addr,text) 记录集与 CMTFILL
+  /dev/shm 种子文件**逐字节恒等**（亲测 diff）。
+- 门极性（SEEDFLIP 同式）：默认开（manifest 在库即装）→ `RUGRA_CMTSEED=0`
+  单通道逃生 / `RUGRA_SEEDS=0` 全局裸脸逃生 / mirror 三组件恒拒（投影银行
+  纯度）/ manifest 缺失或坏 JSON=loud no-op（任意无 manifest 二进制=裸脸）。
+- `RUGRA_CMTSEED=<path>` 保留为 manifest 路径覆盖（JSON 形）；**CMTFILL 的
+  TSV 种子文件形态退役**（被入库 manifest 取代；oracle harness stage_cmt_diag
+  侧契约不受影响）。注意一处组合语义变化：旧 TSV 门不受 RUGRA_SEEDS 约束，
+  现全局逃生优先于通道门（`RUGRA_SEEDS=0`+`RUGRA_CMTSEED=<path>`=不注入）。
+- 注入语义不变：type=warning、fad=目标入口、[vaddr,vaddr+size) 窗过滤、
+  生产 CommentDatabaseInternal::add_comment；manifest 地址为 canon 空间，
+  插入前重基到 ELF 相对（op 树同空间）。
+
+### 18.3 验证矩阵（亲测，基=亲父 2dd4c813，curl 546/httpd 908）
+
+| 门 | 基线 | 本车道 | 判定 |
+|---|---|---|---|
+| curl 默认脸（=原注入脸） | 546/0/0（Matched 124） | **489/0/0**（−57=45 注释行+对齐回声；Matched 124 不降） | ✓ |
+| 新默认脸 vs CMTFILL oracle 复核脸 | — | **cmp 字节恒等**（逐函数零回退由此继承） | ✓ |
+| `RUGRA_CMTSEED=0` | — | **==基线默认脸 cmp 字节恒等** | ✓ |
+| `RUGRA_SEEDS=0` | 基线全局裸脸 | ==旧驱动 `RUGRA_SEEDS=0` 脸 cmp 字节恒等（旧驱动 A/B 重建对照） | ✓ |
+| mirror（match_url 单函数） | — | 旧/新驱动输出 cmp 字节恒等+stderr 仅"gate ignored"一行 | ✓ |
+| httpd 默认脸 | 908/0/0 | **908/0/0 恒等**（stripped 语料,通道 no-op） | ✓ |
+| gcc 审计 | 104 OK/20 FAIL | 同比,**逐名 verdict 恒等**（注释行不入 fail 集） | ✓ |
+| 投影银行 | 391/391 | **391/391 MATCH**（exit 0 亲验） | ✓ |
+| 双跑确定性 | — | 驱动 stdout cmp 恒等 ×2；harvest manifest cmp 恒等 ×2 | ✓ |
+| Unresolved 行数 | canon 45 | **45==45** | ✓ |
+
+机制 C：tools/examples 驱动域豁免（无 src/ 改动）；机制 B：examples 驱动不
+在白名单模块,但按 B2 精神保留了与 CMTFILL oracle 复核脸的逐字节对照（上表
+第二行）。

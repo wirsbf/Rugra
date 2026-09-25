@@ -267,6 +267,95 @@ fn structseed_local_table() -> Option<&'static HashMap<String, Vec<CommittedLoca
         .as_ref()
 }
 
+// HEADLESS-BRIDGE-V1 CMT (warning-comment channel, CMTFILL harvest
+// promotion / CMTSEED lane): the canon `/* Unresolved local var: ... */`
+// blocks are analyzeHeadless front-end warnings the canonical run stores
+// through the program comment database (type=warning, instr_comment_type
+// prints them mid-body). CMTFILL shipped the channel behind an opt-in
+// RUGRA_CMTSEED=<tsv-file> gate with the seed built by a /dev/shm script;
+// this lane promotes it to a default-on manifest channel: the records are
+// harvested in-repo (tools/harvest_local_manifest.py --cmt: canon text
+// gate + DWARF scope anchors + the oracle-verified calibration table,
+// e40ed130 stage_cmt_diag byte-exact witness) into
+// tests/golden/manifests/curl_cmt_1204.json, canon-address keyed like
+// every other seed manifest (ELF vaddr + 0x100000). Gate polarity follows
+// SEEDFLIP: mirror components keep the gate closed (five-projection bank
+// purity), RUGRA_SEEDS=0 is the global bare-face escape, RUGRA_CMTSEED=0
+// opts just this channel out, RUGRA_CMTSEED=<path> overrides the manifest
+// location (JSON form; the CMTFILL TSV seed-file form is retired — the
+// in-repo manifest supersedes it), and a missing/corrupt manifest is a
+// loud no-op so a manifest-less checkout decompiles as the bare face.
+static CMTSEED_COMMENTS: std::sync::OnceLock<Option<Vec<(u64, String)>>> =
+    std::sync::OnceLock::new();
+
+// RUGRA-GLUE: per-process comment-manifest handle (mirrors the seed
+// tables above): flat anchor-sorted (canon addr, text) records, window-
+// filtered per target at the injection site.
+fn load_cmt_seed_manifest() -> Option<Vec<(u64, String)>> {
+    if mirror_flow_enabled() || mirror_bare_load_enabled() || mirror_fixture_data_enabled() {
+        eprintln!("[CMTSEED] seed gate RUGRA_CMTSEED ignored under the mirror gate (projection purity)");
+        return None;
+    }
+    if std::env::var("RUGRA_SEEDS").ok().as_deref() == Some("0") {
+        return None;
+    }
+    if std::env::var("RUGRA_CMTSEED").ok().as_deref() == Some("0") {
+        return None;
+    }
+    let path = std::env::var("RUGRA_CMTSEED")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "tests/golden/manifests/curl_cmt_1204.json".to_string());
+    match fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Err(err) => {
+                eprintln!("[CMTSEED] manifest {} is not valid JSON: {} (seeding disabled)", path, err);
+                None
+            }
+            Ok(raw) => {
+                let mut records = Vec::new();
+                if let Some(serde_json::Value::Object(functions)) = raw.get("functions") {
+                    for entry in functions.values() {
+                        let Some(serde_json::Value::Array(comments)) = entry.get("comments") else {
+                            continue;
+                        };
+                        for comment in comments {
+                            let (
+                                Some(serde_json::Value::String(addr)),
+                                Some(serde_json::Value::String(text)),
+                            ) = (comment.get("addr"), comment.get("text"))
+                            else {
+                                continue;
+                            };
+                            let digits = addr
+                                .strip_prefix("0x")
+                                .or_else(|| addr.strip_prefix("0X"))
+                                .unwrap_or(addr);
+                            let Ok(anchor) = u64::from_str_radix(digits, 16) else {
+                                continue;
+                            };
+                            records.push((anchor, text.clone()));
+                        }
+                    }
+                }
+                records.sort_by_key(|(anchor, _)| *anchor);
+                eprintln!("[CMTSEED] loaded {}: {} comment records", path, records.len());
+                Some(records)
+            }
+        },
+        Err(err) => {
+            eprintln!("[CMTSEED] cannot read manifest {}: {} (seeding disabled)", path, err);
+            None
+        }
+    }
+}
+
+// RUGRA-GLUE: cached accessor for the comment manifest (see
+// load_cmt_seed_manifest above).
+fn cmtseed_comments() -> Option<&'static Vec<(u64, String)>> {
+    CMTSEED_COMMENTS.get_or_init(load_cmt_seed_manifest).as_ref()
+}
+
 /// The locked 12.0.4 golden corpus for the curl fixture: every function the
 /// canonical Ghidra analyzeHeadless run decompiled
 /// (`tests/golden/ghidra_curl_1204.provenance.json` ledger, 124 entries,
@@ -4202,72 +4291,53 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // B3-COREACTION-CONSTANTPTR-0001 (b): the architecture built above with
     // the Program-DB symbol graph + loader-backed StringManager.
     fd.set_arch(worker_arch.clone());
-    // PRINTC-COMMENTFILL-ARM comment seed channel (RUGRA_CMTSEED=<file>):
-    // the analyzer-side "Unresolved local var" warning records the canonical
-    // analyzeHeadless run stores through the program comment database. The
-    // channel mirrors that ingestion for the locked curl corpus: one
-    // `<hexaddr>\t<text>` record per line (backslash-n escapes joined into
-    // multi-var blocks), type=warning so instr_comment_type
+    // PRINTC-COMMENTFILL-ARM comment seed channel (CMTSEED, default-on
+    // since the curl_cmt_1204.json manifest ships in-repo): the
+    // analyzer-side "Unresolved local var" warning records the canonical
+    // analyzeHeadless run stores through the program comment database.
+    // The channel mirrors that ingestion for the locked curl corpus: one
+    // (canon addr, text) record per manifest entry (multi-var blocks
+    // joined by real newlines), type=warning so instr_comment_type
     // (user2|warning, printlanguage.cc:582) prints it mid-body, fad = the
     // target entry (CommentDatabase keyed by function address), anchor =
     // the record address filtered to this target's [vaddr, vaddr+size)
-    // window. Anchor rules and file format are the stage_cmt_diag oracle
-    // harness contract (SECSEED e40ed130 verification: 17 records / 45
-    // lines byte-exact vs canon).
-    if let Ok(cmt_seed_path) = std::env::var("RUGRA_CMTSEED") {
-        if !cmt_seed_path.is_empty() {
-            match std::fs::read_to_string(&cmt_seed_path) {
-                Ok(contents) => {
-                    let code_lo = target.vaddr;
-                    let code_hi = target.vaddr.saturating_add(target.size as u64);
-                    let mut injected = 0usize;
-                    let mut skipped = 0usize;
-                    if let Some(db) = worker_arch.commentdb.as_ref() {
-                        let mut db_write = db
-                            .write()
-                            .map_err(|_| "commentdb write lock poisoned during CMTSEED".to_string())?;
-                        for line in contents.lines() {
-                            let Some((addr_text, text)) = line.split_once('\t') else {
-                                continue;
-                            };
-                            let digits = addr_text
-                                .strip_prefix("0x")
-                                .or_else(|| addr_text.strip_prefix("0X"))
-                                .unwrap_or(addr_text);
-                            let Ok(anchor) = u64::from_str_radix(digits, 16) else {
-                                skipped += 1;
-                                continue;
-                            };
-                            if anchor < code_lo || anchor >= code_hi {
-                                skipped += 1;
-                                continue;
-                            }
-                            let text = text.replace("\\n", "\n");
-                            db_write.add_comment(
-                                rugra::comment::comment_type::WARNING,
-                                Address::new(target.vaddr),
-                                Address::new(anchor),
-                                &text,
-                            );
-                            injected += 1;
-                        }
-                    }
-                    eprintln!(
-                        "[CMTSEED] {} {} records injected, {} skipped (window 0x{:x}..0x{:x})",
-                        target.name,
-                        injected,
-                        skipped,
-                        code_lo,
-                        code_hi
-                    );
+    // window (manifest addrs are canon-space, ELF vaddr + 0x100000 —
+    // rebased before the CommentDatabase insert, which is ELF-relative
+    // like the op tree). Anchor rules, calibration table and provenance
+    // are the harvest contract (tools/harvest_local_manifest.py --cmt;
+    // SECSEED/CMTFILL e40ed130 verification: 17 records / 45 lines
+    // byte-exact vs canon). Escape hatches: RUGRA_CMTSEED=0 / RUGRA_SEEDS=0.
+    if let Some(records) = cmtseed_comments() {
+        let code_lo = ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr;
+        let code_hi = code_lo.saturating_add(target.size as u64);
+        let mut injected = 0usize;
+        let mut skipped = 0usize;
+        if let Some(db) = worker_arch.commentdb.as_ref() {
+            let mut db_write = db
+                .write()
+                .map_err(|_| "commentdb write lock poisoned during CMTSEED".to_string())?;
+            for (anchor, text) in records {
+                if *anchor < code_lo || *anchor >= code_hi {
+                    skipped += 1;
+                    continue;
                 }
-                Err(error) => {
-                    return Err(format!(
-                        "unable to read RUGRA_CMTSEED file {cmt_seed_path}: {error}"
-                    ));
-                }
+                db_write.add_comment(
+                    rugra::comment::comment_type::WARNING,
+                    Address::new(target.vaddr),
+                    Address::new(*anchor - ANALYZE_HEADLESS_IMAGE_BASE),
+                    text,
+                );
+                injected += 1;
             }
         }
+        eprintln!(
+            "[CMTSEED] {} {} records injected, {} skipped (window 0x{:x}..0x{:x})",
+            target.name,
+            injected,
+            skipped,
+            code_lo,
+            code_hi
+        );
     }
     // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden addresses
     // are this driver's base-0 addresses + 0x100000 (same delta the
