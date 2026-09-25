@@ -450,3 +450,69 @@ dynamic (尾部): puVar10 (hash 0x22327fca60c34b)
 - FLAGBASE 终报 SYMDB 默认化余项① "main 重编号级联 ~67 行" **退役**（度量伪影，skeleton 不可见）；余项仅 ②已清（DATASYMS）+③ap_pregfree +2（独立登记）。SYMDB 默认化在编号/稳定性维度**无剩余阻塞**。
 - canon main 644 的收敛路径=HEAD 桥接层整程序回灌（不开库层 TODO，§7.3 判例）+ 已登记结构/类型族。
 - 工件：/dev/shm/rugra-tests/sb-renum/（classify.py/classify2.py/skel_diff.py/varseq*.py + main_skel.diff + main_classified*.txt + decls2.err 探针 + 双态输出）。
+
+# §9 PIRAM 续章（wt/piram，2026-09-25）— piRam 符号形 root 裁决：库内 mapGlobals 命名，动作期 DB 通道证伪（判例收口+移交）
+
+基 master 235864e4（PDOTFORM 105e5de6 已在祖先）。零 src/examples 改动（判例 lane）。
+
+## 9.1 任务与裁决
+
+PDOTFORM 终报留域："根修正（动作期 DB 通道→piRam 符号形）仍留 driver 决策域须 root 裁决"。本 lane 按通道方法论裁决，结论：**piRam/iRam 名是库内（decompile cpp）在动作期发明的符号名，不是任何 DB 通道可喂的数据——通道假设证伪，判例收口为库域移交**（TODO `FUNCDATA-PIRAM-MAPGLOBALS-0001`）。
+
+## 9.2 oracle 生成机制（本 session 逐行读，hook 回执）
+
+```
+Funcdata::mapGlobals (funcdata_varnode.cc:1653-1719)
+  遍历 vbank loc 集；跳过 free/非 persist
+  persist varnode 落全局作用域且 queryProperties 无 entry (:1701-1702)
+    → ct = maxvn->getHigh()->getType() (:1692-1693)；跨尺寸非整覆盖 → getBase(size, TYPE_UNKNOWN) (:1695)
+    → discover = localmap->discoverScope(addr, ct->getSize(), usepoint) (:1703)
+    → symbolname = discover->buildVariableName(addr,usepoint,ct,index,
+          Varnode::addrtied|Varnode::persist) (:1707-1708)
+    → discover->addSymbol(symbolname,ct,addr,usepoint) (:1709)
+    同址更宽访问 → inconsistentuse + coverVarnodes (:1711-1715)
+      = 同址多尺寸符号并存（httpd 0xa0830: iRam×8 + piRam×8）
+
+ScopeInternal::buildVariableName (database.cc:2434-2518) persist 分支 (:2455-2468)
+  getRegisterName(ram 偏移) 为空 →
+    ct->printNameBase(s)                     // "pi"/"i"/"u"/"a…" 前缀
+    + 空间名首字母大写 ("ram"→"Ram")          // :2463-2465
+    + hex << setfill('0') << setw(2*addrSize) // x86-64 = 16 位零填充
+    + byteToAddress(offset, wordSize)
+
+printNameBase (type.hh)
+  :273 基类  name[0]           → "i"(int/int8)/"u"(undefined)
+  :424 指针  'p' + pointee 前缀 → "pi"
+  :457 数组  'a' + 元素前缀     → "ai…"
+
+ScopeLocal::buildVariableName (varmap.cc:548-581) 仅覆盖栈空间（StackX_/Y_ 形）；
+ram 空间落到 ScopeInternal 基类实现。
+```
+
+**决定性语义**：名前缀依赖 mapGlobals 时点的 maxvn 高类型（cc:1692-1693）——这是库内类型传播（InferTypes/setcasts 往返）的产物，runner 侧（examples DB 通道）不可预知；播种 piRam 名 = 伪造（且 oracle 同位可能发明 iRam 或 uRam）。canon golden（Java DB 符号全）mapGlobals 永不发明名。
+
+## 9.3 量化（canon 诚实收口 + direct-runner 归因）
+
+| 语料 | piRam | iRam | uRam | 备注 |
+|---|---|---|---|---|
+| canon ghidra_curl_1204.c | 0 | 0 | 0 | Java DB 全符号 |
+| canon ghidra_httpd_1204.c | 0 | 0 | 0 | 同上 |
+| direct-runner curl | 3 行/1 符号 | 59 | — | myprogress，piRam…0017500（stderr 槽） |
+| direct-runner httpd | 58 行/6 符号/11 函数 | 617 | 24 | ap_setup_listeners 17/ap_mpm_run 8/ap_fini_vhost_config 8 顶 |
+| Rugra MIRROR（AFINI 期 4160d9e7 实测） | 0 | 0 | 23 行/11 符号 | +8 refs unique0x（PDOTFORM 后=ram0x<rep-off>） |
+
+Rugra MIRROR uRam 地址集 ⊂ oracle 同位 iRam/piRam 地址集（0xa0830: Rugra uRam×2 vs oracle iRam×8+piRam×8；0xa1058/0xa1180: Rugra 无符号 vs oracle 有）。
+
+## 9.4 Rugra 现位与两缺陷类
+
+- `varmap.rs build_variable_name_internal` persist 分支已逐字镜像 database.cc:2455-2468（printNameBase+大写空间名+`{:0w$x}` w=2*addrsize）；coreaction.rs ActionMapGlobals→`fd.map_globals()` 已接线（coreaction.rs:19552 有 "<printNameBase>Ram<offset>" 断言测试）。
+- **缺陷类①（类型盲前缀）**：persist 高类型在 mapGlobals 命名时点为 undefined → `uRam<16hex>`（oracle 同位 `iRam/piRam`）。域：类型传播可见性/时序（coreaction/typeprop）× map_globals ct 取值（funcdata.rs）。
+- **缺陷类②（无符号）**：8 refs（0xa1058/0xa1180/0xa11b0 族）根本无符号 → printc `ram0x<rep-off>` 未名位置回退（PDOTFORM 最小修正形）。域：mapGlobals 覆盖/persist 旗标/loc 集时序（funcdata）+ 链接消费（varmap/printc，SHAPEFIX 在飞域）。
+
+## 9.5 处置
+
+- 移交 `FUNCDATA-PIRAM-MAPGLOBALS-0001`（P2，见 TODO_BOARD 行）；实现车道须先 oracle drill（OPACTION_DEBUG + Scope debug，mapGlobals 前后逐 persist varnode high type 对照）定首叉再认领写域。
+- canon 门禁不受影响（piRam 族 canon 0 行）；影响面=direct-runner/MIRROR 次级门禁（httpd direct-runner 基 2780）。
+- 通道侧（examples）**零改动**——证伪即收口，防止伪造性播种通道入库。
+- 工件：/dev/shm/rugra-reports/LANE_PIRAM_2026-09-25.md（终报）；本 session oracle 读源回执（database.cc/funcdata_varnode.cc/varmap.cc/type.hh）在 .alignment_receipts.json。
+
