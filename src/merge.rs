@@ -39,11 +39,32 @@ struct AddrTiedLocRange {
 ///
 /// The cache is symmetric, exactly like `HighIntersectTest::highedgemap`.
 /// MergeType's speculative guards reject address-tied variables before this
-/// cache is queried, so the `StackAffectingOps` call-crossing branch of the
-/// general Ghidra cache is unreachable in this call closure.
+/// cache is queried, so for that closure the `StackAffectingOps`
+/// call-crossing branch is unreachable — but the cache is shared by every
+/// merge-family Action through the persistent mount (attach/detach), and the
+/// required/copy merge closures DO query it with one address-tied and one
+/// untied high (F-RESIDE: the helpf register-save slot webs vs the RSI
+/// chain), so the general Ghidra `intersection` branch
+/// (variable.cc:1186-1197) and its `StackAffectingOps` channel are ported
+/// here in full (MIRATTR-F-RESIDE-0001).
 #[derive(Default, Debug)]
 struct MergeTypeIntersectCache {
     tests: BTreeMap<(usize, usize), bool>,
+    /// `PcodeOpSet::opList` (cover.hh:38) of the `StackAffectingOps`
+    /// channel: CALL ops plus guarded STORE ops, sorted by
+    /// (block index, SeqNum order) once populated. Ghidra holds the
+    /// `StackAffectingOps` object inside the `Merge` (merge.hh:85) and
+    /// `HighIntersectTest` references it (variable.hh:258); the Rust cache
+    /// owns it by value because the whole cache round-trips through the
+    /// persistent mount at attach/detach, which carries the channel across
+    /// Actions exactly like the by-reference C++ member.
+    stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
+    /// `PcodeOpSet::blockStart` (cover.hh:39): index of the first op of each
+    /// non-empty block in `stack_affecting_ops`.
+    stack_affecting_block_start: Vec<usize>,
+    /// `PcodeOpSet::is_pop` (cover.hh:40): the lazy-populate flag that
+    /// `PcodeOpSet::clear` (cover.hh:63) resets.
+    stack_affecting_populated: bool,
 }
 
 impl MergeTypeIntersectCache {
@@ -348,6 +369,7 @@ impl MergeTypeIntersectCache {
     // Ghidra: variable.cc:1166 HighIntersectTest::intersection
     fn intersection(
         &mut self,
+        fd: &Funcdata,
         a: &Arc<RwLock<HighVariable>>,
         b: &Arc<RwLock<HighVariable>>,
     ) -> bool {
@@ -373,15 +395,284 @@ impl MergeTypeIntersectCache {
                 break;
             }
         }
+        // variable.cc:1186-1197: with no Cover-block intersection, if one
+        // variable is address tied and the other isn't, the untied variable
+        // must not cross any call that might affect the tied storage —
+        // `testUntiedCallIntersection` decides via the StackAffectingOps set.
+        if !result {
+            let (a_tied, b_tied) = {
+                // variable.hh:199 isAddrTied lazily re-derives flags
+                // (updateFlags); the Rust accessors are raw, so refresh first.
+                a.write().unwrap().update_flags();
+                b.write().unwrap().update_flags();
+                (a.read().unwrap().is_addr_tied(), b.read().unwrap().is_addr_tied())
+            };
+            if a_tied != b_tied {
+                result = if a_tied {
+                    self.test_untied_call_intersection(fd, a, b)
+                } else {
+                    self.test_untied_call_intersection(fd, b, a)
+                };
+            }
+        }
         self.tests.insert((a_key, b_key), result);
         self.tests.insert((b_key, a_key), result);
         result
+    }
+
+    // Ghidra: variable.cc:1072 HighIntersectTest::testUntiedCallIntersection
+    /// Test if the untied variable crosses any call that might affect the
+    /// tied variable's storage. Faithful to `testUntiedCallIntersection`
+    /// (variable.cc:1072-1086): globals (persist) need no test; a local
+    /// with no possible aliases is only in scope where written; otherwise
+    /// the untied cover is intersected with the lazily populated
+    /// StackAffectingOps set (CALL ops + guarded STOREs).
+    fn test_untied_call_intersection(
+        &mut self,
+        fd: &Funcdata,
+        tied: &Arc<RwLock<HighVariable>>,
+        untied: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        // variable.cc:1075: if (tied->isPersist()) return false;
+        {
+            let mut t = tied.write().unwrap();
+            t.update_flags();
+            if t.is_persist() {
+                return false;
+            }
+        }
+        // variable.cc:1077-1078: a local variable is only in scope if it
+        // has aliases.
+        let tied_vn = tied.read().unwrap().get_tied_varnode();
+        let Some(tied_vn) = tied_vn else {
+            return false;
+        };
+        if tied_vn.read().unwrap().has_no_local_alias() {
+            return false;
+        }
+        // variable.cc:1079-1080: lazy populate of the affecting-op set.
+        if !self.stack_affecting_populated {
+            self.populate_stack_affecting(fd);
+        }
+        // variable.cc:1081: untied->getCover().intersect(affectingOps, vn)
+        let untied_cover = high_cover(untied);
+        let rep = tied_vn.read().unwrap();
+        cover_intersects_op_set(self, fd, &untied_cover, &rep)
+    }
+
+    // Ghidra: merge.cc:63 StackAffectingOps::populate
+    /// Populate the CALL + guarded-STORE op set. Faithful to
+    /// `StackAffectingOps::populate` (merge.cc:63-76): every CALL op from
+    /// the call specs, plus the STORE ops with a valid store guard, then
+    /// `PcodeOpSet::finalize` (cover.cc:56-66) sorts by (block index,
+    /// SeqNum order) and records the per-block start indices.
+    fn populate_stack_affecting(&mut self, fd: &Funcdata) {
+        use crate::opcodes::OpCode;
+        for i in 0..fd.num_calls() {
+            if let Some(fc) = fd.get_call_specs(i) {
+                if let Some(op) = fc.op.upgrade() {
+                    self.stack_affecting_ops.push(crate::op::PcodeOpRef(op));
+                }
+            }
+        }
+        for guard in &fd.heritage.store_guard {
+            // heritage.hh:169 LoadGuard::isValid:
+            // `!op->isDead() && op->code() == opc`.
+            if let Some(op) = guard.get_op() {
+                let live_store = {
+                    let o = op.read().unwrap();
+                    !o.is_dead() && o.opcode == OpCode::CPUI_STORE
+                };
+                if live_store {
+                    self.stack_affecting_ops.push(crate::op::PcodeOpRef(op));
+                }
+            }
+        }
+        // Ghidra: cover.cc:56 PcodeOpSet::finalize
+        self.stack_affecting_ops
+            .sort_by(|a, b| Self::compare_by_block(a, b));
+        self.stack_affecting_block_start.clear();
+        let mut block_num: i64 = -1;
+        for (i, op) in self.stack_affecting_ops.iter().enumerate() {
+            let new_block_num = op
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index() as i64)
+                .unwrap_or(-1);
+            if new_block_num > block_num {
+                self.stack_affecting_block_start.push(i);
+                block_num = new_block_num;
+            }
+        }
+        self.stack_affecting_populated = true;
+    }
+
+    // Ghidra: cover.cc:49 PcodeOpSet::compareByBlock
+    /// Order ops by parent block index, then SeqNum order. Faithful to
+    /// `PcodeOpSet::compareByBlock` (cover.cc:49-54).
+    fn compare_by_block(
+        a: &crate::op::PcodeOpRef,
+        b: &crate::op::PcodeOpRef,
+    ) -> std::cmp::Ordering {
+        let (a_block, a_order, b_block, b_order) = {
+            let ao = a.0.read().unwrap();
+            let bo = b.0.read().unwrap();
+            let ab = ao
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index());
+            let bb = bo
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index());
+            (ab, ao.get_seq_num().get_order(), bb, bo.get_seq_num().get_order())
+        };
+        // Ghidra compares the parent POINTERS first (same block object),
+        // which is block identity; index equality is the same identity for
+        // live ops. None (no parent) orders first by index sentinel -1.
+        let a_idx = a_block.unwrap_or(-1);
+        let b_idx = b_block.unwrap_or(-1);
+        a_idx.cmp(&b_idx).then(a_order.cmp(&b_order))
+    }
+
+    // Ghidra: merge.cc:78 StackAffectingOps::affectsTest
+    /// Secondary test after a Cover/op-set intersection is established.
+    /// Faithful to `StackAffectingOps::affectsTest` (merge.cc:78-86): a
+    /// STORE with no guard record affects everything; a guarded STORE only
+    /// affects addresses within its guard range; CALL ops always affect.
+    fn stack_affecting_test(
+        &self,
+        fd: &Funcdata,
+        op: &crate::op::PcodeOpRef,
+        rep: &Varnode,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        if op.0.read().unwrap().opcode == OpCode::CPUI_STORE {
+            match fd.heritage.get_store_guard(&op.0) {
+                None => true,
+                Some(guard) => guard.is_guarded(&rep.address_space, rep.get_offset()),
+            }
+        } else {
+            // merge.cc:84: "We could conceivably do secondary testing of
+            // CALL ops here" — the oracle returns true unconditionally.
+            true
+        }
     }
 
     // Ghidra: variable.hh:270 HighIntersectTest::clear
     fn clear(&mut self) {
         self.tests.clear();
     }
+
+    // Ghidra: cover.hh:63 PcodeOpSet::clear
+    /// Clear the StackAffectingOps channel: `is_pop = false`,
+    /// `opList.clear()`, `blockStart.clear()` (cover.hh:63 expands
+    /// `PcodeOpSet::clear` exactly so). Invoked by `Merge::clear`
+    /// (merge.cc:1582 `stackAffectingOps.clear()`).
+    fn clear_stack_affecting(&mut self) {
+        self.stack_affecting_populated = false;
+        self.stack_affecting_ops.clear();
+        self.stack_affecting_block_start.clear();
+    }
+}
+
+// Ghidra: cover.cc:342 Cover::intersect(const PcodeOpSet&, Varnode*)
+/// Intersect a Cover with a populated PcodeOpSet. Faithful to
+/// `Cover::intersect(const PcodeOpSet &opSet, Varnode *rep)`
+/// (cover.cc:342-390): a merge-walk over the cover's blocks and the set's
+/// block-starts; in a common block, an op strictly inside the covered
+/// range (`contain` but not on the `boundary`) that passes the set's
+/// `affectsTest` secondary test prevents the merge. Implemented as a free
+/// function on the cache's channel because the Rust `Cover` (cover.rs) is
+/// a plain value type and the walk needs the cache's op-set state.
+fn cover_intersects_op_set(
+    cache: &MergeTypeIntersectCache,
+    fd: &Funcdata,
+    cover: &Cover,
+    rep: &Varnode,
+) -> bool {
+    let ops = &cache.stack_affecting_ops;
+    let block_start = &cache.stack_affecting_block_start;
+    if ops.is_empty() {
+        return false;
+    }
+    let op_block = |op: &crate::op::PcodeOpRef| -> i32 {
+        op.0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|p| p.read().unwrap().get_index())
+            .unwrap_or(-1)
+    };
+    // cover.cc:344-347: setBlock/opIndex/setIndex seed from the first op.
+    let mut set_block: usize = 0;
+    let mut op_index = block_start[set_block];
+    let mut set_index = op_block(&ops[op_index]);
+    // cover.cc:348: cover.lower_bound(opSet.opList[0] block) — BTreeMap
+    // keys are sorted, so the lower bound is the first key >= the seed.
+    let first_set_index = op_block(&ops[0]);
+    let mut cover_iter = cover
+        .blocks
+        .iter()
+        .skip_while(|(&k, _)| k < first_set_index)
+        .peekable();
+    loop {
+        // cover.cc:348-357: the cover iterator advances ONLY in the `<`
+        // and `==` arms; the `>` arm advances the set side and re-tests the
+        // same cover block (C++ does not touch coverIter there).
+        let Some((&cover_index, cover_block)) = cover_iter.peek().copied() else {
+            break;
+        };
+        if cover_index < set_index {
+            // cover.cc:349-350: cover block below the set block — advance
+            // the cover iterator only.
+            cover_iter.next();
+            continue;
+        } else if cover_index > set_index {
+            // cover.cc:351-356: advance the set block only; the same cover
+            // block is re-tested against the new set block.
+            set_block += 1;
+            if set_block >= block_start.len() {
+                break;
+            }
+            op_index = block_start[set_block];
+            set_index = op_block(&ops[op_index]);
+            continue;
+        }
+        // cover.cc:358-388: common block — scan the set's ops of this block
+        // against the covered range; the cover iterator advances past this
+        // block (post-increment at cover.cc:359).
+        cover_iter.next();
+        let mut op_max = ops.len();
+        set_block += 1;
+        if set_block < block_start.len() {
+            op_max = block_start[set_block];
+        }
+        while op_index < op_max {
+            let op = &ops[op_index];
+            // cover.cc:369-376: contain(op) via getUIndex, boundary(op)==0,
+            // then the secondary affectsTest.
+            let point = crate::cover::CoverBlock::get_u_index(&op.0.read().unwrap());
+            if cover_block.contain(point) && cover_block.boundary(point) == 0 {
+                if cache.stack_affecting_test(fd, op, rep) {
+                    return true;
+                }
+            }
+            op_index += 1;
+        }
+        if set_block >= block_start.len() {
+            break;
+        }
+    }
+    false
 }
 
 // Ghidra: merge.cc:1001 mergeAdjacent local-type gate
@@ -455,9 +746,15 @@ fn local_type_key_eq(a: &LocalTypeKey, b: &LocalTypeKey, nochar_distinct: bool) 
 ///     ActionDominantCopy's `processCopyTrims` (coreaction.hh:1008).
 ///   - `vector<PcodeOp *> protoPartial` — no Rugra counterpart yet
 ///     (`Merge::group_partials` is a documented no-op).
-///   - `StackAffectingOps stackAffectingOps` — no Rugra counterpart yet
-///     (lazily populated via `HighIntersectTest::testUntiedCallIntersection`,
-///     variable.cc:1080-1081).
+///   - `StackAffectingOps stackAffectingOps` — ported inside the shared
+///     `MergeTypeIntersectCache` (MIRATTR-F-RESIDE-0001): the CALL +
+///     guarded-STORE op set lazily populated by
+///     `HighIntersectTest::testUntiedCallIntersection`
+///     (variable.cc:1080-1081) and consumed by the addrtied-vs-untied
+///     branch of `HighIntersectTest::intersection` (variable.cc:1186-1197);
+///     it rides the cache because the whole cache round-trips through this
+///     mount at attach/detach, matching the C++ by-reference member's
+///     cross-Action lifetime.
 ///
 /// Rugra's merge Actions each construct a local `Merge::new()`
 /// (coreaction.rs applies), so the persistent channels round-trip through
@@ -483,14 +780,6 @@ pub struct MergePersistentState {
     /// only deposited/observed by the clear-lifecycle fixture. `Merge::clear`
     /// (merge.cc:1582) empties it regardless.
     proto_partial: Vec<crate::op::PcodeOpRef>,
-    /// `PcodeOpSet::opList` of the CALL/STORE ops indirectly affecting stack
-    /// variables (Ghidra merge.hh:85 `stackAffectingOps`, populated by
-    /// `StackAffectingOps::populate` merge.cc:63-76 via
-    /// `HighIntersectTest::testUntiedCallIntersection`
-    /// variable.cc:1080-1081). No Rust production path populates it yet.
-    stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
-    /// `PcodeOpSet::is_pop` mirror of `stackAffectingOps` (cover.hh:39): the    /// lazy-populate flag that `PcodeOpSet::clear` (cover.hh:63) resets.
-    stack_affecting_populated: bool,
 }
 
 impl MergePersistentState {
@@ -504,11 +793,12 @@ impl MergePersistentState {
     /// RUGRA-GLUE premise channel and dies with the same call.
     pub fn clear(&mut self) {
         self.test_cache.clear();
+        // merge.cc:1582 stackAffectingOps.clear() -> cover.hh:63
+        // PcodeOpSet::clear (is_pop=false, opList, blockStart).
+        self.test_cache.clear_stack_affecting();
         self.copy_trims.clear();
         self.live_set.clear();
         self.proto_partial.clear();
-        self.stack_affecting_ops.clear();
-        self.stack_affecting_populated = false;
     }
 
     // Ghidra: merge.cc:1549 Merge::registerProtoPartialRoot
@@ -546,8 +836,8 @@ impl MergePersistentState {
     pub fn channel_sizes_extended(&self) -> (usize, usize, bool) {
         (
             self.proto_partial.len(),
-            self.stack_affecting_ops.len(),
-            self.stack_affecting_populated,
+            self.test_cache.stack_affecting_ops.len(),
+            self.test_cache.stack_affecting_populated,
         )
     }
 
@@ -572,8 +862,8 @@ impl MergePersistentState {
     ) {
         self.copy_trims.extend(trims);
         self.proto_partial.extend(proto_roots);
-        self.stack_affecting_ops.extend(stack_ops);
-        self.stack_affecting_populated = true;
+        self.test_cache.stack_affecting_ops.extend(stack_ops);
+        self.test_cache.stack_affecting_populated = true;
     }
 }
 
@@ -814,6 +1104,8 @@ impl Merge {
         self.var_counter = 0;
         self.copy_trims.clear();
         self.type_test_cache.clear();
+        // merge.cc:1582: stackAffectingOps.clear() (cover.hh:63).
+        self.type_test_cache.clear_stack_affecting();
         self.live_set.clear();
         // clear() on an in-flight nested sequence would silently swallow an
         // attach/detach imbalance; assert balance instead so a leak surfaces
@@ -1249,7 +1541,7 @@ impl Merge {
                     .collect();
                 self.unify_address(fd, &members);
                 for range in &ranges[cluster_start..cluster_end] {
-                    self.merge_range_must(range)?;
+                    self.merge_range_must(fd, range)?;
                 }
                 if cluster_end - cluster_start > 1 {
                     let base_offset = ranges[cluster_start].offset;
@@ -1339,7 +1631,7 @@ impl Merge {
 
     // Ghidra: merge.cc:301 Merge::mergeRangeMust
     /// Merge one exact `(space, offset, size)` range in location-set order.
-    fn merge_range_must(&mut self, range: &AddrTiedLocRange) -> Result<()> {
+    fn merge_range_must(&mut self, fd: &Funcdata, range: &AddrTiedLocRange) -> Result<()> {
         let first = &range.members[0];
         Self::merge_test_must(&first.read().unwrap())?;
         let high = Self::required_high(first)?;
@@ -1349,7 +1641,7 @@ impl Merge {
                 continue;
             }
             Self::merge_test_must(&member.read().unwrap())?;
-                if !self.merge_required_result(&high, &candidate)? {
+                if !self.merge_required_result(fd, &high, &candidate)? {
                     // Registered debug TAG [MERGE-FAIL]/[MERGE-PAIR]
                     // (stderr, env-gated by RUGRA_MERGE_DIAG; registry:
                     // docs/api/merge.md "诊断 TAG 登记"). Dumps the failing
@@ -1435,13 +1727,14 @@ impl Merge {
     // followed by variable.cc:647-650.
     fn merge_required_result(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
     ) -> Result<bool> {
         if Arc::ptr_eq(high1, high2) {
             return Ok(true);
         }
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return Ok(false);
         }
         self.type_test_cache.move_intersect_tests(high1, high2);
@@ -1657,6 +1950,7 @@ impl Merge {
     /// (variable.cc:640-646) vs the single-class required merge (:648-654).
     fn merge_speculative(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
         isspeculative: bool,
@@ -1668,7 +1962,7 @@ impl Merge {
         // The cached test lazily (re)builds the pair's covers via updateHigh
         // (variable.cc:1148-1156) and reuses results cached by any earlier
         // merge Action on the persistent Funcdata Merge object.
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return false;
         }
         // variable.cc:681: HighVariable::merge calls
@@ -1686,6 +1980,7 @@ impl Merge {
     /// (variable.cc-side, true).
     fn merge_speculative_by_vn(
         &mut self,
+        fd: &Funcdata,
         vn1: &Arc<RwLock<Varnode>>,
         vn2: &Arc<RwLock<Varnode>>,
         isspeculative: bool,
@@ -1698,7 +1993,7 @@ impl Merge {
         let (Some(h1), Some(h2)) = (h1, h2) else {
             return false;
         };
-        self.merge_speculative(&h1, &h2, isspeculative)
+        self.merge_speculative(fd, &h1, &h2, isspeculative)
     }
 
     // RUGRA-GLUE: merge_test — 快速预检查两个 Varnode 是否可能合并。
@@ -2014,13 +2309,14 @@ impl Merge {
     /// separate merge classes (variable.cc:640-646).
     fn merge_type_pair(
         &mut self,
+        fd: &Funcdata,
         high1: &Arc<RwLock<HighVariable>>,
         high2: &Arc<RwLock<HighVariable>>,
     ) -> bool {
         if Arc::ptr_eq(high1, high2) {
             return true;
         }
-        if self.type_test_cache.intersection(high1, high2) {
+        if self.type_test_cache.intersection(fd, high1, high2) {
             return false;
         }
         self.type_test_cache.move_intersect_tests(high1, high2);
@@ -2055,6 +2351,7 @@ impl Merge {
     /// mergerequired divergence measured by the sb-impliedfold lane).
     fn merge_test_with_list(
         &mut self,
+        fd: &Funcdata,
         high: &Arc<RwLock<HighVariable>>,
         testlist: &mut Vec<Arc<RwLock<HighVariable>>>,
     ) -> bool {
@@ -2079,7 +2376,7 @@ impl Merge {
         // census), which then surfaced as the print-side
         // `uVarX = uVarX` / spill-restore copy noise.
         for other in testlist.iter() {
-            if self.type_test_cache.intersection(other, high) {
+            if self.type_test_cache.intersection(fd, other, high) {
                 return false;
             }
         }
@@ -2563,7 +2860,7 @@ impl Merge {
                 // merge.cc:942-947: attempt the (non-speculative) merge —
                 // ANCHOR survives (merge(high, newHigh, false)); failure marks
                 // the symbol/high and counts the conflict too.
-                if !self.merge_speculative(&anchor_high, &new_high, false) {
+                if !self.merge_speculative(fd, &anchor_high, &new_high, false) {
                     sym_arc
                         .write()
                         .unwrap()
@@ -2667,7 +2964,7 @@ impl Merge {
                     // returns false (skip), never snips (merge.cc:1565-1575).
                     // merge.cc:346: merge(vn1->getHigh(), vn2->getHigh(), false)
                     // — output-side survivor, required (non-speculative).
-                    let _ = self.merge_speculative(&high_out, &high_in, false);
+                    let _ = self.merge_speculative(fd, &high_out, &high_in, false);
                 }
             }
         }
@@ -3249,13 +3546,13 @@ impl Merge {
         let high_out_arc2 = out_vn.read().unwrap().high.clone();
         if let Some(ho) = high_out_arc2 {
             let mut testlist: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
-            self.merge_test_with_list(&ho, &mut testlist);
+            self.merge_test_with_list(fd, &ho, &mut testlist);
             let mut i = 0;
             for inp in inputs2.iter().take(max) {
                 let high_in = inp.read().unwrap().high.clone();
                 match high_in {
                     Some(hi) => {
-                        if !self.merge_test_with_list(&hi, &mut testlist) {
+                        if !self.merge_test_with_list(fd, &hi, &mut testlist) {
                             break;
                         }
                     }
@@ -3269,7 +3566,7 @@ impl Merge {
                 while nexttrim < max {
                     self.trim_op_input(fd, op, nexttrim);
                     testlist.clear();
-                    self.merge_test_with_list(&ho, &mut testlist);
+                    self.merge_test_with_list(fd, &ho, &mut testlist);
                     let mut all_ok = true;
                     for k in 0..max {
                         let inp_k = op.0.read().unwrap().inrefs.get(k).cloned();
@@ -3278,7 +3575,7 @@ impl Merge {
                                 let hi = vn.read().unwrap().high.clone();
                                 match hi {
                                     Some(h) => {
-                                        if !self.merge_test_with_list(&h, &mut testlist) {
+                                        if !self.merge_test_with_list(fd, &h, &mut testlist) {
                                             all_ok = false;
                                         }
                                     }
@@ -3315,7 +3612,7 @@ impl Merge {
                     }
                     // merge(high_out, high_in, false) — cover intersect → skip.
                     // merge.cc:766: merge(out->getHigh(), in->getHigh(), false).
-                    let _ = self.merge_speculative(&ho_arc, &hi_arc, false);
+                    let _ = self.merge_speculative(fd, &ho_arc, &hi_arc, false);
                 }
                 _ => {}
             }
@@ -3503,14 +3800,14 @@ impl Merge {
         let in_high = invn0.read().unwrap().high.clone();
         let (Some(out_high), Some(in_high)) = (out_high, in_high) else { return };
         if self.merge_test_required(&out_high, &in_high) {
-            if self.merge_speculative(&in_high, &out_high, false) {
+            if self.merge_speculative(fd, &in_high, &out_high, false) {
                 return;
             }
         }
         // merge.cc:860-868: snip output interference, then retry the merge.
         if self.snip_output_interference(fd, indop) {
             if self.merge_test_required(&out_high, &in_high) {
-                if self.merge_speculative(&in_high, &out_high, false) {
+                if self.merge_speculative(fd, &in_high, &out_high, false) {
                     return;
                 }
             }
@@ -3539,7 +3836,7 @@ impl Merge {
             let ok = match out_high_now {
                 Some(oh) => {
                     self.merge_test_required(&oh, &in0_high)
-                        && self.merge_speculative(&in0_high, &oh, false)
+                        && self.merge_speculative(fd, &in0_high, &oh, false)
                 }
                 None => false,
             };
@@ -4005,7 +4302,7 @@ impl Merge {
                 //   merge(high_out,high_in,true); — the OUTPUT high
                 // survives (merge.cc:1558: the second is merged into the
                 // first).
-                self.merge_speculative_by_vn(&out_vn, &in_vn, true);
+                self.merge_speculative_by_vn(fd, &out_vn, &in_vn, true);
             }
         }
 
@@ -4309,7 +4606,7 @@ impl Merge {
                     high_list.push_back(high);
                 }
             }
-            self.merge_linear(&mut group);
+            self.merge_linear(fd, &mut group);
         }
 
         self.detach(fd);
@@ -4323,7 +4620,7 @@ impl Merge {
     /// whose cover it does not intersect; if none is compatible it starts a
     /// new stack group. After a successful merge, the stacked head's cover
     /// snapshot is refreshed so subsequent tests reflect the union.
-    fn merge_linear(&mut self, highvec: &mut Vec<Arc<RwLock<HighVariable>>>) {
+    fn merge_linear(&mut self, fd: &Funcdata, highvec: &mut Vec<Arc<RwLock<HighVariable>>>) {
         if highvec.len() <= 1 {
             return;
         }
@@ -4337,7 +4634,7 @@ impl Merge {
             let mut merged = false;
             for output in &high_stack {
                 if self.merge_test_speculative(output, high)
-                    && self.merge_type_pair(output, high)
+                    && self.merge_type_pair(fd, output, high)
                 {
                     merged = true;
                     break;

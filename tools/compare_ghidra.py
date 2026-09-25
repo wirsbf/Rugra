@@ -89,13 +89,21 @@ def match_functions(rugra_funcs, ghidra_funcs, base_offset=0x100000):
     matched = []
     for addr, name, size, body in rugra_funcs:
         key = strip_gcc_suffix(name)
-        # The Rugra header's address may be base-0 (historical driver form,
-        # direct key hit) or image-based (the golden's own convention,
-        # e.g. 0x1022f0 — try both normalizations before falling back to
-        # the name key, whose last-wins dict would mispair duplicate names
-        # like the free/puts PLT-thunk vs EXTERNAL-stub pairs).
+        # Probe algebra (base = base_offset, keys stored as golden_addr - base):
+        #   G1 golden image-based / R2 rugra base-0  -> probe 1 (addr == key)
+        #   G1 golden image-based / R1 rugra image  -> probe 2 (addr-base == key)
+        #   G2 golden base-0     / R2 rugra base-0  -> probe 2 (both negative keys)
+        #   G2 golden base-0     / R1 rugra image  -> probe 4 (addr-2*base == key),
+        #     the direct-runner mirror convention pair (golden headers base-0,
+        #     Rugra mirror headers image-based): without probe 4 every lookup
+        #     falls through to by_name, whose last-wins dict mispairs duplicate
+        #     stripped names (e.g. SetHTTPrequest.part.0 vs SetHTTPrequest).
+        # Probe 4 is a provable no-op for the other three combos (its key is
+        # either negative where G1 keys are >= 0, or off by one base), so
+        # existing pairings cannot drift.
         ghidra = (by_addr.get(addr) or by_addr.get(addr - base_offset)
-                  or by_addr.get(addr + base_offset) or by_name.get(key))
+                  or by_addr.get(addr + base_offset)
+                  or by_addr.get(addr - 2 * base_offset) or by_name.get(key))
         if ghidra:
             matched.append((addr, name, body, ghidra[0], ghidra[1]))
     return matched
