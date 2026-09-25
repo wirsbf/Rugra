@@ -3947,10 +3947,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mirror_fn_syms: Vec<(u64, String)> = if mirror {
-        functions
+        // MIRROR2-HTTPD-PLTNAMES-0001: the direct-runner oracle's function
+        // set is registerBfdFunctionSymbols (static+dynamic BSF_FUNCTION,
+        // defined sections) FOLLOWED BY registerPltStubs — the x86-64
+        // psABI .rela.plt[i] (JUMP_SLOT only) ↔ stub mapping
+        // (.plt.sec+16*i when present, else .plt+16*(i+1)),
+        // regen_ghidra_golden.py:281-332, first-registration-wins at each
+        // address (registerFunctionSymbol's queryFunction dedup,
+        // regen_ghidra_golden.py:224-225). httpd's imports are UND in
+        // .dynsym, so the defined-symbol walk alone leaves every
+        // .plt.sec thunk unnamed and call sites fall to the FUN_/uRam
+        // fallbacks where the golden prints the import name
+        // (apr_time_now@0x2a640 etc.). .plt.got thunks stay UNregistered
+        // (the golden runner's own documented gap) — ElfPltImports is not
+        // reused here because it folds .plt.got in.
+        let mut syms: Vec<(u64, String)> = functions
             .iter()
             .map(|&(vaddr, _, _, ref name)| (vaddr, name.clone()))
-            .collect()
+            .collect();
+        let defined: std::collections::HashSet<u64> =
+            syms.iter().map(|&(vaddr, _)| vaddr).collect();
+        let mut registered: std::collections::HashSet<u64> = defined.clone();
+        if let Object::Elf(elf) = &obj {
+            let mut plt_sec_base = 0u64;
+            let mut plt_sec_size = 0u64;
+            let mut plt_base = 0u64;
+            let mut plt_size = 0u64;
+            for header in elf.section_headers.iter() {
+                if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
+                    if name == ".plt.sec" {
+                        plt_sec_base = header.sh_addr;
+                        plt_sec_size = header.sh_size;
+                    } else if name == ".plt" {
+                        plt_base = header.sh_addr;
+                        plt_size = header.sh_size;
+                    }
+                }
+            }
+            const R_X86_64_JUMP_SLOT: u32 = 7;
+            for (index, reloc) in elf.pltrelocs.iter().enumerate() {
+                if reloc.r_type != R_X86_64_JUMP_SLOT {
+                    continue;
+                }
+                let stub = if plt_sec_base != 0 && plt_sec_size >= (index as u64 + 1) * 16 {
+                    plt_sec_base + 16 * index as u64
+                } else if plt_base != 0 && plt_size >= (index as u64 + 2) * 16 {
+                    plt_base + 16 * (index as u64 + 1)
+                } else {
+                    continue;
+                };
+                if !registered.insert(stub) {
+                    continue; // defined symbol or earlier stub owns the address
+                }
+                if let Some(sym) = elf.dynsyms.get(reloc.r_sym) {
+                    if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                        if !name.is_empty() {
+                            syms.push((stub, name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        let stub_count = syms.len() - defined.len();
+        eprintln!(
+            "[PREPASS] flow mirror: PLT JUMP_SLOT stub symbols registered: {}",
+            stub_count
+        );
+        syms
     } else {
         Vec::new()
     };
