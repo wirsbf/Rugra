@@ -14099,14 +14099,28 @@ impl ActionConditionalConst {
         if var_vn.read().unwrap().lone_descend().is_some() { return; }
         // cc:4509-4510: flip edge if needed.
         let const_edge = if flip_edge { 1 - const_edge } else { const_edge };
+        // cc:4511: create ConstPoint. inSlot is bl->getOutRevIndex(constEdge)
+        // — the index of this branch's edge within the CONST BLOCK's
+        // in-edge list, NOT the branch's own out-edge index. The former
+        // port passed `const_edge` directly, which coincides only when the
+        // target's in-edge ordering happens to mirror the branch's
+        // out-edge numbering. For a merge target whose in-edges arrive in
+        // the opposite order (sigwinch@0xabd7: je ac39 is ac39's in-edge 0
+        // while being the branch's out-edge 1), the bogus inSlot matched
+        // the WRONG MULTIEQUAL slot in propagateConstant's immediate-edge
+        // arm (coreaction.cc:4408 `op->getIn(point.inSlot) == varVn`),
+        // fabricating a const-0 phi input that severed the
+        // ActionInferTypes pointer-type propagation through the spill COPY
+        // (SQ-STACKSPILL-TYPEWRITEBACK-0001: `unaff_R12 = piVar5` degraded
+        // to `unaff_R12 = 0`, piStack_68/int4* lost).
+        let in_slot = bl_out_rev_index[const_edge];
         // cc:4511: create ConstPoint.
         let out_block = match &bl_out[const_edge] { Some(b) => b.clone(), None => return ,
         };
-        let _ = bl_out_rev_index; // rev index not used in Rugra's block model
         points.push(ConstPoint::from_const_vn(
             var_vn, const_vn,
             out_block.read().unwrap().get_index(),
-            const_edge as i32,
+            in_slot,
             block_dom[const_edge],
         ));
     }
@@ -14325,6 +14339,16 @@ impl ActionConditionalConst {
                         .map(|o| {
                         let o_r = o.read().unwrap();
                         let v_r = var_vn.read().unwrap();
+                        // CSPEC-GLOBAL-APPLY-0001 承重补偿: the leading
+                        // `o_r.is_addr_tied()` conjunct has no oracle
+                        // counterpart (cc:4404 is `varVn->isAddrTied() &&
+                        // varVn->getAddr() == op->getOut()->getAddr()`
+                        // only). Bare-face gen_decompile has no Database,
+                        // so ram-merge output varnodes never carry the
+                        // addrtied flag; dropping this conjunct breaks
+                        // httpd canon byte-identity (md5 460367b2 vs
+                        // d6fd730a). Remove together with the
+                        // CSPEC-GLOBAL-APPLY-0001 database fix (A/B re-run).
                         o_r.is_addr_tied() && o_r.get_addr() == v_r.get_addr()
                     })
                         .unwrap_or(false);
@@ -14411,7 +14435,21 @@ impl ActionConditionalConst {
                         None => continue,
                     }
                 }
-                // cc:4435: if !blockIsDom, skip (but may still pushConstant).
+                // cc:4435: if (!point.blockIsDom) continue; — the oracle
+                // skips this descendant ENTIRELY when the const edge is not
+                // dominating: no constant replacement AND no pushConstant.
+                // The former port folded this gate into the dominates-if
+                // below, so a non-dominating point (e.g. a merge target
+                // with multiple predecessors) still fell into the
+                // pushConstant else-arm — fabricating ConstPoints on COPY
+                // outputs (stack-spill pointer chains like
+                // `R12 = malloc_result` in sigwinch@0xabe7) whose later
+                // handlePhiNodes const-0 replacement severed the
+                // ActionInferTypes pointer-type propagation
+                // (SQ-STACKSPILL-TYPEWRITEBACK-0001 D3 residual).
+                if !block_is_dom {
+                    continue;
+                }
                 let op_parent = op_r.parent.as_ref().and_then(|w| w.upgrade());
                 drop(op_r);
                 // cc:4436: constBlock->dominates(op->getParent()).
@@ -14423,7 +14461,7 @@ impl ActionConditionalConst {
                     }
                     _ => false,
                 };
-                if block_is_dom && dominated {
+                if dominated {
                     // SAFETY GUARD (convergence): only count this as a change if
                     // the target slot does NOT already hold the same constant
                     // value. Rugra's op_set_input does Arc-ptr dedup, but each
