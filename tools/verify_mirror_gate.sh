@@ -221,6 +221,19 @@ fi
 
 # ---------- 门禁模式 ----------
 BIN_DIR="${BIN_DIR:-$REPO_ROOT/target/fast-release/examples}"
+# staleness guard: binaries older than the HEAD commit are stale (2026-09-25 incident:
+# pre-tier binaries printed the canon face under the mirror env and silently exploded the diff)
+HEAD_TS=$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || echo 0)
+for _b in curl_decompile httpd_decompile; do
+  _p="$BIN_DIR/$_b"
+  if [[ -x "$_p" ]]; then
+    _bt=$(stat -c %Y "$_p" 2>/dev/null || echo 0)
+    if (( HEAD_TS > 0 && _bt > 0 && _bt < HEAD_TS )); then
+      echo "MIRROR-GATE: FAIL — stale binary $_p (older than HEAD; rebuild: cargo build --profile fast-release --examples)" >&2
+      exit 1
+    fi
+  fi
+done
 if [[ -z "$(ls -A "$BIN_DIR" 2>/dev/null)" ]]; then
     cat >&2 <<EOF
 no example binaries in $BIN_DIR — build first:
