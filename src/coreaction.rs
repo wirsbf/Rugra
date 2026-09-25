@@ -8921,6 +8921,16 @@ impl ActionInferTypes {
         let mut lastct: Option<Arc<Datatype>> = Some(ct.clone());
         // Snapshot the location tree: the loop inserts temp types and pushes
         // them across edges, which must not invalidate the iteration.
+        // coreaction.cc:5224-5229: `iter = data.beginLoc(addr)` ..
+        // `enditer = data.endLoc(endaddr)` — an INCLUSIVE lower bound at
+        // `addr`. A varnode whose offset is below `addr` is never visited,
+        // even when its size partially overlaps the walk window: feeding it
+        // through the `curoff = voff - off` subtraction wraps to a huge
+        // unsigned value, and the accidental `curoff + vsize` re-wrap let
+        // partial-overlap-below candidates reach get_exact_piece with a
+        // NEGATIVE offset — a state the oracle's beginLoc ordering never
+        // produces. The `voff >= off` gate restores the half-open window
+        // [addr, addr+ct_size).
         let candidates: Vec<_> = fd
             .vbank
             .loc_tree
@@ -8932,6 +8942,10 @@ impl ActionInferTypes {
                     return false;
                 }
                 let voff = g.get_offset();
+                if voff < off {
+                    // beginLoc(addr): strictly below the walk address.
+                    return false;
+                }
                 if !wrapped {
                     voff < end
                 } else {
