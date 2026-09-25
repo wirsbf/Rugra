@@ -1228,3 +1228,44 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — MIGW-FSPEC batch 1-2（EffectRecord 相等面 / ParamUnassignedError / ParameterBasic 旗标面 / ParamEntryRange 解析器数据面，Lane MIGWFSPEC）
+
+- **EffectRecord 相等性**：`impl PartialEq for EffectRecord` 按 oracle
+  fspec.hh:1769-1781 逐字段投影——`range != op2.range` 展开为
+  (space, offset, size) 成员比较 + `type == op2.type`。消费方
+  `ProtoModelMerged::intersectEffects`（fspec.cc:2791-2800）依赖"地址相等
+  且效果类型相等"才保留的语义。
+- **ParamUnassignedError**（fspec.hh:63-66）：`assignParameterStorage` 无法
+  为某原型位分配存储时抛出；Rust 形态为独立错误类型（String 载荷），
+  供 `FuncProto::updateAllTypes`（fspec.cc:4220-4222）的 catch 位模式匹配。
+- **ParameterBasic 旗标面（坍缩注记）**：Rugra 扁平 `ProtoParameter` 即
+  Ghidra `ParameterBasic` 的承载形态（结构文档已有注记）。本批补齐
+  `is_name_locked`/`is_size_type_locked`/`is_indirect_storage`/
+  `is_name_undefined`/`from_pieces`/`set_type_lock`（含 TYPE_UNKNOWN 时
+  附带 sizelock 的 cc:2929-2930 语义）/`set_name_lock`/
+  `override_size_lock_type`（尺寸必须精确相等 + 必须已 sizelock，否则
+  Err 镜像 throw）/`reset_size_lock_type`（经 TypeFactory 取同尺寸
+  TYPE_UNKNOWN）/`get_symbol`（恒 Err 镜像 cc:1190 throw）。
+  `impl PartialEq for ProtoParameter` 镜像基类内联 ==（fspec.hh:1144-1155）：
+  仅比存储地址 + 类型身份（`Arc::ptr_eq` 承载 Ghidra 指针等值），名字与
+  旗标不参与。
+- **ParamTrial::slot_group**（fspec.hh:265）：`entry->getSlot(addr,size-1)`
+  经 entry-index 投影（trial 持索引，调用方传 entry 切片）。
+  **ParamActive::test_shrink/shrink**（fspec.hh:329/336）：到
+  `trial[i]` 的逐字转发（shrink=endianness 参数由调用方携带，见
+  `ParamTrial::test_shrink` 注记）。
+- **ParamEntryRange 家族（fspec.hh:157-194，11 条）**：
+  `ParamEntryRange`（first/last/position/entry-index）、`InitData`
+  （→`ParamEntryRangeInitData`）、`SubsortPosition`（含 `bool ? 1000000 : 0`
+  极值形）、ctor/`getFirst`/`getLast`/`getSubsort`/`getParamEntry` 全部
+  落地。`ParamEntryResolver`（rangemap 的 Vec 投影，按 (first, position)
+  = (linetype, subsort) 序）提供 `insert`/`find`（物化"包含该 offset 的
+  全部 range"迭代器对）与 `has_range_starting_above`（cc:708
+  `iterpair.first != resolver->end()` 门探针）。
+- **resolver 数据面接通**：`ParamListStandard::populate_resolver`/
+  `add_resolver_range` 从 TODO 存根变为真实实现（cc:1174-1216 逐字：join
+  entry 按 piece 逐段注册、position 每段 +1、per-space 惰性建表）。
+  **管线零行为变化**：现行 `find_entry` 线性扫描与 `characterize_as_param`
+  查询路径未改动，resolver 仅作数据面填充 + `resolver_for` 查询面；
+  `stack_entry_index` 缓存行为保持（非 exclusion 栈 entry 最后写入者胜）。

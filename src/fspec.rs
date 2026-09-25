@@ -149,6 +149,45 @@ impl EffectRecord {
     }
 }
 
+// Ghidra: fspec.hh:1769 EffectRecord::operator==
+// Ghidra: fspec.hh:1776 EffectRecord::operator!=
+/// Equality on the full `VarnodeData range` (space, offset, size) plus the
+/// effect type, faithful to the inline `operator==`/`operator!=`
+/// (fspec.hh:1769-1781): `range != op2.range` compares the VarnodeData
+/// member-wise (space pointer identity, then offset, then size), then
+/// `type == op2.type`. Consumed by `ProtoModelMerged::intersectEffects`
+/// (fspec.cc:2791-2800) to keep only address-equal records whose effect
+/// types also agree.
+impl PartialEq for EffectRecord {
+    // Ghidra: fspec.hh:1769 EffectRecord::operator==
+    fn eq(&self, other: &Self) -> bool {
+        self.space == other.space
+            && self.offset == other.offset
+            && self.size == other.size
+            && self.effect_type == other.effect_type
+    }
+}
+
+/// `ParamUnassignedError` (fspec.hh:63-66): LowlevelError raised by
+/// `ProtoModel::assignParameterStorage` when no storage could be assigned
+/// to a prototype position. `FuncProto::updateAllTypes` catches it to set
+/// the sticky `error_inputparam` flag (fspec.cc:4220-4222). Rust models
+/// the exception as a distinct string error kind so callers can pattern
+/// match exactly the one catch site.
+// Ghidra: fspec.hh:65 ParamUnassignedError::ParamUnassignedError
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamUnassignedError(pub String);
+
+impl std::fmt::Display for ParamUnassignedError {
+    // RUGRA-GLUE: Display for the anyhow-style error surface; Ghidra carries
+    // the message inside the LowlevelError base class.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ParamUnassignedError: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParamUnassignedError {}
+
 /// Flags for ProtoParameter (corresponds to flags in fspec.hh)
 pub mod protoparam_flags {
     pub const THIS_POINTER: u32 = 1;
@@ -233,6 +272,145 @@ impl ProtoParameter {
     /// Returns true if the type is locked (user-defined)
     pub fn is_type_locked(&self) -> bool {
         (self.flags & protoparam_flags::TYPE_LOCKED) != 0
+    }
+
+    // Ghidra: fspec.hh:1178 ParameterBasic::isNameLocked
+    /// Is the parameter name locked? Faithful to `ParameterBasic::
+    /// isNameLocked` (fspec.hh:1178): `((flags & ParameterPieces::namelock)
+    /// != 0)`. Rugra's flat `ProtoParameter` carries the same
+    /// `ParameterPieces` flag bits, so the ParameterBasic read projects
+    /// directly onto it.
+    pub fn is_name_locked(&self) -> bool {
+        (self.flags & NAME_LOCK_PIECE) != 0
+    }
+
+    // Ghidra: fspec.hh:1179 ParameterBasic::isSizeTypeLocked
+    /// Is only the size of the parameter locked (data-type still unknown)?
+    /// Faithful to `ParameterBasic::isSizeTypeLocked` (fspec.hh:1179):
+    /// `((flags & ParameterPieces::sizelock) != 0)`.
+    pub fn is_size_type_locked(&self) -> bool {
+        (self.flags & SIZE_LOCK_PIECE) != 0
+    }
+
+    // Ghidra: fspec.hh:1181 ParameterBasic::isIndirectStorage
+    /// Is this really a pointer to the true parameter? Faithful to
+    /// `ParameterBasic::isIndirectStorage` (fspec.hh:1181).
+    pub fn is_indirect_storage(&self) -> bool {
+        (self.flags & INDIRECT_STORAGE_PIECE) != 0
+    }
+
+    // Ghidra: fspec.hh:1183 ParameterBasic::isNameUndefined
+    /// Is the name undefined (empty)? Faithful to
+    /// `ParameterBasic::isNameUndefined` (fspec.hh:1183):
+    /// `(name.size() == 0)`.
+    pub fn is_name_undefined(&self) -> bool {
+        self.name.is_empty()
+    }
+
+    // Ghidra: fspec.hh:1169 ParameterBasic::ParameterBasic
+    /// Construct from raw pieces, faithful to
+    /// `ParameterBasic(const string &nm,const Address &ad,Datatype *tp,uint4 fl)`
+    /// (fspec.hh:1169-1170): every field is copied verbatim from the
+    /// pieces. The flat ProtoParameter keeps the space half of Ghidra's
+    /// `Address` alongside the legacy offset (ADDRESS-0001).
+    pub fn from_pieces(
+        nm: &str,
+        space: AddressSpace,
+        addr: Address,
+        tp: Arc<Datatype>,
+        flags: u32,
+    ) -> Self {
+        Self { name: nm.to_string(), data_type: tp, address: addr, address_space: space, flags }
+    }
+
+    // Ghidra: fspec.cc:2924 ParameterBasic::setTypeLock
+    /// Toggle the data-type lock. Faithful to `ParameterBasic::setTypeLock`
+    /// (fspec.cc:2924-2934): setting the lock on a TYPE_UNKNOWN data-type
+    /// additionally raises the \e size-lock bit (locking the size without a
+    /// concrete type); clearing the lock clears both bits together.
+    pub fn set_type_lock(&mut self, val: bool) {
+        if val {
+            self.flags |= protoparam_flags::TYPE_LOCKED;
+            if self.data_type.get_metatype() == crate::type_system::TypeMetatype::Unknown {
+                self.flags |= SIZE_LOCK_PIECE;
+            }
+        } else {
+            self.flags &= !(protoparam_flags::TYPE_LOCKED | SIZE_LOCK_PIECE);
+        }
+    }
+
+    // Ghidra: fspec.cc:2936 ParameterBasic::setNameLock
+    /// Toggle the name lock. Faithful to `ParameterBasic::setNameLock`
+    /// (fspec.cc:2936-2943).
+    pub fn set_name_lock(&mut self, val: bool) {
+        if val {
+            self.flags |= NAME_LOCK_PIECE;
+        } else {
+            self.flags &= !NAME_LOCK_PIECE;
+        }
+    }
+
+    // Ghidra: fspec.cc:2954 ParameterBasic::overrideSizeLockType
+    /// Override the data-type of a size-locked parameter. Faithful to
+    /// `ParameterBasic::overrideSizeLockType` (fspec.cc:2954-2964): the new
+    /// type must have exactly the locked size and the parameter must already
+    /// be size-locked; anything else is an error (mirrored as `Err`).
+    pub fn override_size_lock_type(&mut self, ct: &Arc<Datatype>) -> Result<(), String> {
+        if self.data_type.get_size() == ct.get_size() {
+            if !self.is_size_type_locked() {
+                return Err("Overriding parameter that is not size locked".to_string());
+            }
+            self.data_type = ct.clone();
+            return Ok(());
+        }
+        Err("Overriding parameter with different type size".to_string())
+    }
+
+    // Ghidra: fspec.cc:2966 ParameterBasic::resetSizeLockType
+    /// Reset the data-type to a TYPE_UNKNOWN of the same size, preserving
+    /// the size lock. Faithful to `ParameterBasic::resetSizeLockType`
+    /// (fspec.cc:2966-2972): a parameter whose type is already TYPE_UNKNOWN
+    /// is left untouched.
+    pub fn reset_size_lock_type(
+        &mut self,
+        factory: &crate::type_system::TypeFactory,
+    ) {
+        if self.data_type.get_metatype() == crate::type_system::TypeMetatype::Unknown {
+            return;
+        }
+        let size = self.data_type.get_size();
+        if let Some(base) = factory.get_base(size, crate::type_system::TypeMetatype::Unknown) {
+            self.data_type = base;
+        }
+    }
+
+    // Ghidra: fspec.hh:1190 ParameterBasic::getSymbol
+    /// A ParameterBasic has no backing Symbol: Ghidra throws
+    /// `LowlevelError("Parameter is not a real symbol")` (fspec.hh:1190).
+    /// The flat Rust projection mirrors the always-throwing override as
+    /// `Err` (the symbol-backed override lives on `ParameterSymbol`).
+    pub fn get_symbol(&self) -> Result<std::sync::Arc<std::sync::RwLock<crate::database::Symbol>>, String> {
+        Err("Parameter is not a real symbol".to_string())
+    }
+}
+
+// Ghidra: fspec.hh:1144 ProtoParameter::operator==
+// Ghidra: fspec.hh:1154 ProtoParameter::operator!=
+/// Storage-and-type equality, faithful to the base-class inline
+/// `operator==`/`operator!=` (fspec.hh:1144-1155): parameters are equal iff
+/// they share the storage address and the data-type; the name and lock
+/// flags are deliberately not compared. The data-type comparison is
+/// pointer identity in Ghidra (`getType() != op2.getType()` compares
+/// `Datatype *`); `Arc::ptr_eq` is the Rust equivalent.
+impl PartialEq for ProtoParameter {
+    // Ghidra: fspec.hh:1144 ProtoParameter::operator==
+    fn eq(&self, other: &Self) -> bool {
+        if self.address_space != other.address_space
+            || self.address.as_u64() != other.address.as_u64()
+        {
+            return false;
+        }
+        std::sync::Arc::ptr_eq(&self.data_type, &other.data_type)
     }
 }
 
@@ -4296,6 +4474,18 @@ impl ParamTrial {
     pub fn get_slot(&self) -> i32 { self.slot }
     // Ghidra: fspec.hh:210 ParamTrial::setSlot
     pub fn set_slot(&mut self, val: i32) { self.slot = val; }
+
+    // Ghidra: fspec.hh:265 ParamTrial::slotGroup
+    /// Get the position of \b this within its parameter \e group: `return
+    /// entry->getSlot(addr,size-1)` (fspec.hh:265). The trial stores its
+    /// ParamEntry by index; the caller supplies the model's entry list (the
+    /// Rust stand-in for dereferencing the `const ParamEntry *`), mirroring
+    /// how `fillinMap`/`forceInactiveChain` already resolve
+    /// `getEntryIndex()` through the owning list.
+    pub fn slot_group(&self, entries: &[ParamEntry]) -> Option<i32> {
+        let index = self.entry_index?;
+        Some(entries[index].get_slot(self.addr, self.size - 1))
+    }
     // Ghidra: fspec.hh:210 ParamTrial::getOffset
     pub fn get_offset(&self) -> i32 { self.offset }
     // RUGRA-GLUE: expose the packed flags for differential-fixture
@@ -4569,6 +4759,23 @@ impl ParamActive {
     }
     // Ghidra: fspec.cc:1936 ParamActive::getTrialMut
     pub fn get_trial_mut(&mut self, i: usize) -> &mut ParamTrial { &mut self.trial[i] }
+
+    // Ghidra: fspec.hh:329 ParamActive::testShrink
+    /// Test if the i-th trial can be shrunk to the given range. Faithful
+    /// inline forwarder `return trial[i].testShrink(addr,sz);`
+    /// (fspec.hh:329). `is_big_endian` carries the trial space's
+    /// endianness for the legacy spaceless `Address` (see
+    /// `ParamTrial::test_shrink`).
+    pub fn test_shrink(&self, i: usize, addr: Address, sz: i32, is_big_endian: bool) -> bool {
+        self.trial[i].test_shrink(addr, sz, is_big_endian)
+    }
+
+    // Ghidra: fspec.hh:336 ParamActive::shrink
+    /// Shrink the i-th trial to the given range. Faithful inline forwarder
+    /// `trial[i].setAddress(addr,sz);` (fspec.hh:336).
+    pub fn shrink(&mut self, i: usize, addr: Address, sz: i32) {
+        self.trial[i].set_address(addr, sz);
+    }
     // Ghidra: fspec.cc:1936 ParamActive::getSlotBase
     pub fn get_slot_base(&self) -> i32 { self.slotbase }
     // RUGRA-GLUE: read-only projection of ParamActive::stackplaceholder for
@@ -5844,6 +6051,175 @@ pub enum ParamListKind {
     Merged,
 }
 
+/// A contiguous offset range registered in a [`ParamEntryResolver`],
+/// binding the range to the `ParamEntry` (by index into the owning
+/// `ParamListStandard::entry` list) that declared it. Faithful to
+/// `class ParamEntryRange` (fspec.hh:157-193): the rangemap value type
+/// carrying `(first, last, position, entry)`. Rugra stores the entry as an
+/// index because Rust ownership replaces Ghidra's `ParamEntry *` into a
+/// `std::list` whose allocation order equals declaration order (see the
+/// `ParamTrial::operator<` projection note).
+#[derive(Debug, Clone)]
+pub struct ParamEntryRange {
+    /// Starting offset of the ParamEntry's range. Faithful to `first`.
+    pub first: u64,
+    /// Ending offset of the ParamEntry's range (inclusive). Faithful to `last`.
+    pub last: u64,
+    /// Position of the ParamEntry within the entire prototype list.
+    /// Faithful to `position`.
+    pub position: i32,
+    /// Index of the actual ParamEntry in the owning entry list. Rust
+    /// stand-in for Ghidra's `ParamEntry *entry`.
+    pub entry: usize,
+}
+
+/// Helper for initializing ParamEntryRange in a range map. Faithful to
+/// `ParamEntryRange::InitData` (fspec.hh:164-171).
+#[derive(Debug, Clone, Copy)]
+pub struct ParamEntryRangeInitData {
+    /// Position (within the full list) being assigned to the ParamEntryRange.
+    pub position: i32,
+    /// Index of the underlying ParamEntry being assigned.
+    pub entry: usize,
+}
+
+impl ParamEntryRangeInitData {
+    // Ghidra: fspec.hh:170 ParamEntryRange::InitData::InitData
+    /// `InitData(int4 pos,ParamEntry *e) { position = pos; entry = e; }`
+    pub fn new(position: i32, entry: usize) -> Self {
+        Self { position, entry }
+    }
+}
+
+/// Helper class for subsorting on position. Faithful to
+/// `ParamEntryRange::SubsortPosition` (fspec.hh:173-181).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubsortPosition {
+    position: i32,
+}
+
+impl SubsortPosition {
+    // Ghidra: fspec.hh:177 SubsortPosition::SubsortPosition()
+    /// Default constructor for use with rangemap (position left
+    /// uninitialized in Ghidra; Rust zeroes it — the value is never read
+    /// through this constructor).
+    pub fn new() -> Self { Self { position: 0 } }
+
+    // Ghidra: fspec.hh:178 SubsortPosition::SubsortPosition(int4)
+    /// Construct given position: `position = pos`.
+    pub fn with_position(pos: i32) -> Self { Self { position: pos } }
+
+    // Ghidra: fspec.hh:179 SubsortPosition::SubsortPosition(bool)
+    /// Construct minimal/maximal subsort: `position = val ? 1000000 : 0`.
+    pub fn from_bool(val: bool) -> Self {
+        Self { position: if val { 1000000 } else { 0 } }
+    }
+
+    // Ghidra: fspec.hh:180 SubsortPosition::operator<
+    /// `return position < op2.position;`
+    pub fn less_than(&self, op2: &SubsortPosition) -> bool {
+        self.position < op2.position
+    }
+}
+
+impl Default for SubsortPosition {
+    // RUGRA-GLUE: Rust Default mirrors the rangemap no-arg constructor.
+    fn default() -> Self { Self::new() }
+}
+
+impl ParamEntryRange {
+    // Ghidra: fspec.hh:187 ParamEntryRange::ParamEntryRange
+    /// Initialize the range: `first = f; last = l; position =
+    /// data.position; entry = data.entry;` (fspec.hh:187-188).
+    pub fn new(data: &ParamEntryRangeInitData, f: u64, l: u64) -> Self {
+        Self { first: f, last: l, position: data.position, entry: data.entry }
+    }
+
+    // Ghidra: fspec.hh:189 ParamEntryRange::getFirst
+    /// Get the first address in the range.
+    pub fn get_first(&self) -> u64 { self.first }
+
+    // Ghidra: fspec.hh:190 ParamEntryRange::getLast
+    /// Get the last address in the range.
+    pub fn get_last(&self) -> u64 { self.last }
+
+    // Ghidra: fspec.hh:191 ParamEntryRange::getSubsort
+    /// Get the sub-subsort object: `return SubsortPosition(position);`.
+    pub fn get_subsort(&self) -> SubsortPosition {
+        SubsortPosition::with_position(self.position)
+    }
+
+    // Ghidra: fspec.hh:192 ParamEntryRange::getParamEntry
+    /// Get the index of the actual ParamEntry (Ghidra returns the pointer).
+    pub fn get_param_entry(&self) -> usize { self.entry }
+}
+
+/// A map from offset to ParamEntry: `typedef rangemap<ParamEntryRange>
+/// ParamEntryResolver` (fspec.hh:194). Ghidra's generic `rangemap`
+/// (database.hh) keeps intervals in a tree keyed by `(first, subsort)`
+/// whose `find(offset)` returns the sublist of ALL ranges containing the
+/// offset. Rugra's projection keeps the ranges in a `Vec` sorted by
+/// `(first, position)` — the same (linetype, subsort) order the rangemap
+/// iterates — and materializes the containing sublist on demand, which is
+/// byte-equivalent for the two operations the decompiler consumes
+/// (`ParamListStandard::characterizeAsParam` fspec.cc:692-718 via
+/// `find`/`find_end` and the `!= end()` above-query-start gate).
+#[derive(Debug, Clone, Default)]
+pub struct ParamEntryResolver {
+    /// Registered ranges sorted by `(first, position)` — the rangemap's
+    /// (linetype, subsort) iteration order.
+    ranges: Vec<ParamEntryRange>,
+}
+
+impl ParamEntryResolver {
+    // RUGRA-GLUE: owning constructor; Ghidra allocates the resolver with
+    // `new ParamEntryResolver()` inside addResolverRange (fspec.cc:1183).
+    pub fn new() -> Self { Self { ranges: Vec::new() } }
+
+    // Ghidra: fspec.cc:1174 ParamListStandard::addResolverRange (resolver->insert)
+    /// Insert one range: the rangemap's `insert(initdata, first, last)`
+    /// keeps the collection ordered by `(first, subsort)`; the Vec
+    /// projection pushes then re-sorts by `(first, position)` to preserve
+    /// the identical iteration order.
+    pub fn insert(&mut self, init: &ParamEntryRangeInitData, first: u64, last: u64) {
+        self.ranges.push(ParamEntryRange::new(init, first, last));
+        self.ranges.sort_by(|a, b| {
+            a.first.cmp(&b.first).then(a.position.cmp(&b.position))
+        });
+    }
+
+    /// All registered ranges containing `offset`, in `(first, position)`
+    /// order — the materialized form of rangemap `find(offset)`'s iterator
+    /// pair. Empty when no registered extent contains the offset.
+    // Ghidra: database.hh rangemap<ParamEntryRange>::find (fspec.hh:194 ParamEntryResolver)
+    pub fn find(&self, offset: u64) -> Vec<&ParamEntryRange> {
+        self.ranges
+            .iter()
+            .filter(|r| r.first <= offset && offset <= r.last)
+            .collect()
+    }
+
+    // RUGRA-GLUE: probe backing the `iterpair.first != resolver->end()`
+    // gate (fspec.cc:708): after the containing sublist is consumed the
+    // rangemap iterator points at the next range in order, so the gate is
+    /// true exactly when some registered range starts above `offset`.
+    pub fn has_range_starting_above(&self, offset: u64) -> bool {
+        self.ranges.iter().any(|r| r.first > offset)
+    }
+
+    /// Number of registered ranges (diagnostic/fixture surface).
+    // RUGRA-GLUE: fixture/diagnostic surface over the resolver storage; the
+    // rangemap exposes size through its iterator pair interface instead.
+    pub fn len(&self) -> usize { self.ranges.len() }
+
+    /// Registered ranges in `(first, position)` order (fixture surface).
+    // RUGRA-GLUE: fixture/diagnostic surface over the resolver storage.
+    pub fn ranges(&self) -> &[ParamEntryRange] { &self.ranges }
+
+    // RUGRA-GLUE: clippy-idiomatic emptiness predicate for len().
+    pub fn is_empty(&self) -> bool { self.ranges.is_empty() }
+}
+
 /// Response codes for address assignment. Faithful to `AssignAction`'s
 /// anonymous enum (modelrules.hh:264-271). Local copy in `fspec`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6455,6 +6831,11 @@ pub struct ParamListStandard {
     entry: Vec<ParamEntry>,
     space_base: Option<AddressSpace>,
     stack_entry_index: Option<usize>,
+    /// Per-space resolver maps from offset to ParamEntry. Faithful to
+    /// `vector<ParamEntryResolver *> resolverMap` (fspec.hh:597), indexed
+    /// by space; Rugra keys by `AddressSpace` instead of Ghidra's
+    /// `spc->getIndex()` slot.
+    resolver_map: Vec<(AddressSpace, ParamEntryResolver)>,
     /// Ghidra: fspec.hh:598 `list<ModelRule> modelRules` — rules to apply
     /// when assigning addresses (fillin-relevant projection, see
     /// [`ModelRuleFillin`]).
@@ -6480,6 +6861,7 @@ impl ParamListStandard {
             entry: Vec::new(),
             space_base: None,
             stack_entry_index: None,
+            resolver_map: Vec::new(),
             model_rules: Vec::new(),
         }
     }
@@ -7365,30 +7747,80 @@ pub fn characterize_as_param(
     }
 
     // Ghidra: fspec.cc:1191 ParamListStandard::populateResolver
-    /// Enter all the ParamEntry objects into an interval map.
-    ///
-    /// TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
-    /// rangemap (fspec.hh:597). Rugra's resolver is the linear scan in
-    /// `find_entry`; this method refreshes the `stack_entry_index` cache.
+    /// Enter all the ParamEntry objects into an interval map. Faithful 1:1
+    /// port of `populateResolver` (fspec.cc:1191-1216): the position counter
+    /// advances once per registered range — a join ParamEntry registers one
+    /// range per join piece at consecutive positions, every other entry
+    /// registers its `[base, base+size-1]` extent at one position. The
+    /// per-space resolver is created on first use (Ghidra's `resolverMap`
+    /// grows to the space index and null slots are allocated lazily).
+    /// Rugra additionally keeps the legacy `stack_entry_index` cache so the
+    /// linear `find_entry` scan used by the live pipeline is unaffected
+    /// (resolver-backed queries are opt-in via `resolver_for`).
     pub fn populate_resolver(&mut self) {
         self.stack_entry_index = None;
-        for (i, e) in self.entry.iter().enumerate() {
-            if !e.is_exclusion() && e.get_space() == AddressSpace::Stack {
-                self.stack_entry_index = Some(i);
+        // Ghidra walks `list<ParamEntry>` mutating the resolver in place;
+        // Rust's ownership splits the walk into a projection pass and an
+        // insertion pass over the same (space, first, last, entry, position)
+        // tuples in the same order.
+        let mut registrations: Vec<(AddressSpace, u64, u64, usize, i32)> = Vec::new();
+        let mut position = 0i32;
+        let mut new_stack_entry_index = None;
+        for (index, param_entry) in self.entry.iter().enumerate() {
+            let spc = param_entry.get_space();
+            if spc == AddressSpace::Join {
+                let pieces: Vec<VarnodeData> = param_entry
+                    .get_join_pieces()
+                    .map(|p| p.to_vec())
+                    .unwrap_or_default();
+                for v_data in &pieces {
+                    // Individual pieces making up the join are mapped to the ParamEntry
+                    let last = v_data.offset + (v_data.size as u64 - 1);
+                    registrations.push((v_data.space, v_data.offset, last, index, position));
+                    position += 1;
+                }
+            } else {
+                let first = param_entry.get_base();
+                let last = first + (param_entry.get_size() as u64 - 1);
+                registrations.push((spc, first, last, index, position));
+                position += 1;
+            }
+            if !param_entry.is_exclusion() && spc == AddressSpace::Stack {
+                new_stack_entry_index = Some(index);
             }
         }
+        for (spc, first, last, param_entry, pos) in registrations {
+            self.add_resolver_range(spc, first, last, param_entry, pos);
+        }
+        self.stack_entry_index = new_stack_entry_index;
     }
 
     // Ghidra: fspec.cc:1174 ParamListStandard::addResolverRange
-    /// Internal method for adding a single address range to the
-    /// ParamEntryResolvers.
-    ///
-    /// TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
-    /// rangemap. Rugra's resolver is the linear scan in `find_entry`, so
-    /// this is a no-op stub; preserved for API parity.
+    /// Add a single address range to the per-space ParamEntryResolver.
+    /// Faithful 1:1 port of `addResolverRange` (fspec.cc:1174-1189): grow
+    /// the resolver map for the space on first use, then insert
+    /// `inittype(position, paramEntry)` over `[first, last]`.
     pub fn add_resolver_range(
-        &mut self, _spc: AddressSpace, _first: u64, _last: u64, _param_entry: usize, _position: i32,
-    ) {}
+        &mut self, spc: AddressSpace, first: u64, last: u64, param_entry: usize, position: i32,
+    ) {
+        for (key, resolver) in self.resolver_map.iter_mut() {
+            if *key == spc {
+                resolver.insert(&ParamEntryRangeInitData::new(position, param_entry), first, last);
+                return;
+            }
+        }
+        let mut resolver = ParamEntryResolver::new();
+        resolver.insert(&ParamEntryRangeInitData::new(position, param_entry), first, last);
+        self.resolver_map.push((spc, resolver));
+    }
+
+    // RUGRA-GLUE: space-keyed lookup standing in for Ghidra's
+    // `resolverMap[spc->getIndex()]` array index (the resolver map is
+    /// consulted by resolver-backed queries; a space with no registered
+    /// extent yields `None`, mirroring the null resolver slot).
+    pub fn resolver_for(&self, spc: AddressSpace) -> Option<&ParamEntryResolver> {
+        self.resolver_map.iter().find(|(key, _)| *key == spc).map(|(_, r)| r)
+    }
 
     // Ghidra: fspec.cc:1226 ParamListStandard::parsePentry
     /// Parse a `<pentry>` element and add it to this list.
