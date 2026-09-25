@@ -176,7 +176,18 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
   `DW_AT_data_member_location` constant or `DW_OP_plus_uconst`, resolved
   member type) — named by `DW_AT_name` without a `struct `/`union ` prefix,
   which is the spelling Ghidra's type manager prints (`Configurable *`,
-  matching the 12.0.4 golden);
+  matching the 12.0.4 golden). Imported unions carry the
+  `NEEDS_RESOLUTION` flag (COREACT-C3-UNIONRES-0001, 2026-09-25):
+  Ghidra's `TypeUnion` constructor sets `needs_resolution` on every
+  instance (type.hh:551) and pointers to the union inherit it in
+  `TypePointer::calcSubmeta` (type.cc:1048-1049) — the flag is what drives
+  `ActionInferTypes::propagateTypeEdge`'s always-resolve arm
+  (coreaction.cc:5081-5084) and `ActionSetCasts::resolveUnion`
+  (coreaction.cc:2490); the DWARF import completes fields at construction,
+  so only the resolution flag is set (`type_incomplete` is cleared by the
+  factory's setFields counterpart, exactly as the ctor+setFields decode
+  path in the oracle). Same flagging pattern as the enum `ENUMTYPE` note
+  above;
 - `DW_TAG_enumeration_type` builds `TypeEnum` with its `DW_TAG_enumerator`
   value table;
 - `DW_TAG_array_type` builds `Datatype::Array` from the first subrange's

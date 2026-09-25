@@ -3111,3 +3111,45 @@ defects=0、numbering=0；curl **577/0/0**（`(BADTYPE *)` 双重 cast 1 行
 转 canon 精确形，skeleton 不动）；bank 391/391；双跑 cmp 恒等；
 cargo test --lib 1713 通过 + 1 预存 master 失败
 （fspec::test_nonzeromask_pipeline_wiring，master 上同败，非本改动）。
+
+### opPtrsub 联合体臂：getUnionField 消费（COREACT-C3-UNIONRES-0001，2026-09-25）
+
+- **背景**：`dispatch_op_rpn` 的 `CPUI_PTRSUB` 臂与 legacy `op_ptrsub` 此前把
+  TYPE_UNION 与 TYPE_STRUCT 合并走 `find_partial_field`（findTruncation 检索）。
+  Ghidra 在 printc.cc:977-990 对联合体点设有**独立臂**：suboff 必须为 0（否则
+  LowlevelError）；字段名/类型/ident 取自 Funcdata 联合体解析图——
+  `fd->getUnionField(ptype, op, -1)`，键为**指针类型** + slot -1（即
+  `ActionSetCasts::resolveUnion` 在 coreaction.cc:2509 attach 的边），
+  从不 findTruncation。Rugra 联合体 PTRSUB 因此印成 `field_0x0` 或裸偏移——
+  12.0 ResolvedUnion 机制的消费端缺口。
+- **本改动（对齐移植）**：
+  - RPN 路径（`dispatch_op_rpn` CPUI_PTRSUB）与 legacy（`op_ptrsub`）在
+    `meta == Union` 时先查 `union_resolutions` 快照（doc_function 时
+    `snapshot_union_resolutions` 安装），键构造与生产端完全一致
+    （`ResolveEdge::new(ptype, op, -1)`——指针剥壳 + encoding 0x1000-1）；
+    `field_num >= 0` 时从 `TypeUnion::fields[field_num]` 取 name/type。
+    TYPE_STRUCT 保留原 find_partial_field 路径不动。
+  - oracle 的两个 LowlevelError 臂（suboff≠0；解析缺失/负 fieldNum）在
+    resolveUnion 门控插入的管线里不可达，且 Rugra 打印器无抛错通道
+    （同 cc:943-946 非 pointer 臂的既有 accommodations），落
+    `field_0x<hex>` 默认名。
+  - 四形态发射（valueon×flex，cc:1018-1055）复用 PDOTFORM 车道落地的基础
+    ——flex 臂 `.` + 基座 load-value 翻转直接适用于 `.content.Set` 形。
+- **生产端前置（同 commit，debugproto.rs）**：DWARF 导入的联合体补
+  `NEEDS_RESOLUTION` 旗标（Ghidra TypeUnion ctor type.hh:551；指针继承
+  type.cc:1048 calcSubmeta）——没有它 `ActionInferTypes::propagateTypeEdge`
+  的 always-resolve 臂（coreaction.cc:5081-5084）与 `resolveUnion`
+  （coreaction.rs 既有移植）全部饿死，联合体臂永远查不到解析条目。
+- **效果（curl 门禁）**：match_url `.content.Set`/`.content.NumRange` 字段名
+  形落地（`lVar3 = *(long *)&glob.pattern[iVar5].content.Set;`）；curl
+  577→575（glob_range 38→32）；httpd 940 不动；bank 391/391。
+- **残余（登记 TODO，见对齐块）**：①`.Set` 后继偏移未规范化为
+  PTRSUB(#c)（canon `.Set.size` vs Rugra `(long)&...content.Set + 8`）——
+  oracle 在 rules 阶段经 `getTypeReadFacing` 的 findResolve 让 AddTree/
+  RuleStructOffset0 看到 Set*，Rugra 的 varnode 侧 read-facing 仍是退化形
+  （varnode.rs，HIGHCOV 并行域）；②per-edge 评分在"原始边"（canon 留
+  `(int8)&...content + 8` 裸形的 sprintf 参数边）差一枚 +5：oracle 的
+  union* 是 ephemeral TypePointerRel（propagateAddIn2Out 的 parent 记账，
+  typeop.cc:1241），其 downChain 经 parent 再入返回非空 → 全联合体平局 →
+  whole-union 胜出；Rugra 该指针为裸形（rel=false 实证）→ Set 胜出 →
+  该边过度解析为 `.content.Set`（match_url 24/next_url 22 的 +2 来源）。
