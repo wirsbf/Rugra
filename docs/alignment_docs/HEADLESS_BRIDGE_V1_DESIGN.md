@@ -1344,3 +1344,97 @@ ap_update_vhost_from_headers 56→70（+14 回归）——两处回归=自产锁
   标量过锁（当前仅量具）。
 - 回收：/dev/shm/rugra-targets/sb-paramid 留 root 集成后回收；lane 证据
   /dev/shm/rugra-tests/paramid/。
+
+## §17.6 PARAMID2 交付记录（Lane PARAMID2，2026-09-25，基=亲父 09739f13=master PARAMID 后）
+> HEADLESS-BRIDGE-PARAMID2-0001：自产签名提精度——差距分解驱动的四条
+> strict 守卫 + 默认证据层翻转。写域=`examples/httpd_decompile.rs`+docs；
+> src/ 零触碰。证据 /dev/shm/rugra-tests/paramid2/（保留至 root 集成）。
+
+### 17.6.1 差距根因（逐条实证，RUGRA_PARAMID_SITES=1 逐站点 dump）
+1. **回退根因（ap_matches +7 / ap_update_vhost +14）**：FUN_0012ce20 的
+   slot0 在 round 1 是真冲突（ap_matches 站 `int *` vs ap_update 站
+   `long`，合并正确杀槽）；round 1 的 ret=int 锁经 typeprop 涟漪改写
+   ap_update 站点链上的 varnode 类型，round 2 两站都显 `int *`——
+   逐轮新鲜合并把 round 1 的冲突"忘了"，毒锁落表并把 server_rec 链
+   改写成 `piVar15` 形（`*(long*)(lVar14+0x80)`→`*(long*)(piVar15+0x20)`）。
+2. **窄整型指针证据类**：canon 60 锁表 0 条 `int */uint */short */ushort *`
+   （拼写普查：long 37/int 1/char* 12/long* 9/undefined8 9/undefined8* 5/
+   undefined1* 3/undefined* 1/undefined4* 1/undefined8** 1/void* 1）；
+   Rugra 把 canon 恢复为宽标量（long）的链 typeprop 成了窄整指针——
+   两条回退 + strncmp/memcmp/ap_sockaddr_equal 毒锚全部同根。
+3. **退化 0 元调用点**：main caseD 发射环的 `strcasecmp()`（bare 脸
+   line 471；canon 同位 `strcasecmp((char *)__s1,"crit")`）——lift 丢参
+   线，作为站点证据是伪 0 元数，按元数冲突规则杀死整条目。
+4. **观测不全站点**：FUN_0012ce20 在 ap_matches 的站点（策略后）零贡献
+   ——锁它=对未采样的调用者外推，实测把 ap_matches 自己的签名改型
+   （头行 undefined8→int + param_2 undefined8→long，canon golden 从不
+   如此）。
+
+### 17.6.2 四条守卫 + 默认层翻转（全部实测判优）
+| 策略 | 机制 | 判决 |
+|---|---|---|
+| **sticky 冲突记忆** | 槽/返回/元数在任一轮冲突→永久死（harvest 单遍语义=全部轮观测的并集；锁回声不得翻案） | 单独 1038→1018；被 ②吸收后无独立增量但保留（防御其他类） |
+| **窄整指针降级** | `int */uint */short */ushort *` 在证据层=无证据（canon 0 条的 oracle 实测；根因是恢复残差不是策略差） | 1038→1016；回退主修 |
+| **退化站点过滤** | 0 元数站点 vs 正元数共识=lift 伪迹（非 varargs；真 varargs 仍是正元数间冲突：__printf_chk 2/5/7） | 中性（PLT 关闭时 strcasecmp 不在域）；保留防御 |
+| **静默站点否决**（sticky） | 多站点 callee 有一站零贡献（无槽证据+无活返回消费）→不提交（观测不全）；回声不算补证 | 1016→1015，ap_matches +1 清零 |
+| **默认证据层=全形态** | undefined 族标量计证据（canon 自己锁 9×undefined8+5×undefined8*）；守卫齐备后实测反超 | **1015→1009**；精确率 18.8%→63.2%（§17 的 1071 是无守卫 loose——守卫才是缺件，不是准入规则） |
+| 负结果：PLT 准入（RUGRA_PARAMID_PLT=1） | 36 条自证 PLT 锁 | 1019/1023 vs 1016——所有配置净负，维持整体弃收 |
+| 负结果：分阶段层（RUGRA_PARAMID_ROUND1=strict） | r1 保守层采证 | 1015 vs 1009——保守层把 undefined8 读成"无证据"制造静默站点误触发否决；守卫必须与喂它的层同层 |
+
+**机制注记（默认层为何反超）**：迭代回声不止单调——round 1 全形态锁
+落表后，typeprop 把宽标量链重定型，round 2+ 的证据拼写成 `long *`
+（ap_run_rewrite_args/ap_setup_prelinked_modules/ap_read_config slot0/
+FUN_0012c550 从 `undefined8 *` 自举到 manifest 精确形）。§17.2 的
+`undefined8 *` shape-diff 主族由此收敛。
+
+### 17.6.3 对拍（自产 vs manifest 60 锁，默认=守卫全形态）
+| 配置 | 条目 | overlap | exact | 精确率 | 召回率 | 槽位 eq/diff/m-only/s-only | 返回 |
+|---|---|---|---|---|---|---|---|
+| §17 基线 strict | 31 | 17 | 5 | 29.4% | 8.3% | 18/10/8/1 | 9/0 |
+| **PARAMID2 默认** | **49** | **19** | **12** | **63.2%** | **20.0%** | **20/1/11/3** | **13/0** |
+| 保守层（=strict 逃生门） | 28 | 16 | 3 | 18.8% | 5.0% | 10/9/15/1 | 9/0 |
+
+manifest-only 43→41 = **33 导入域**（PLT/import-signature 数据通道，
+binary stripped 无 DWARF 可读——`readelf -S` 仅 .dynsym；canon 的锁来自
+generic_clib 签名库按名应用，自宿主需签名库数据通道，登记见 17.6.5）
++ **8 in-text**：4 条 inert（FUN_0012c520/ap_run_optional_fn_retrieve/
+ap_show_directives/ap_show_modules——canon 通道也什么都不装，零脸差）
++ 3 条恢复残差槽冲突（ap_fini_vhost_config/ap_fixup_virtual_hosts
+slot0 `undefined1*` vs `undefined8` 两站不一致；FUN_0012cbd0 slot1
+`undefined8*` vs `long*`——sticky 杀，脸中性）+ 1 条降级代价
+（FUN_0012c8e0 slot0 `int *` 被降级，manifest 是 `long`；实测不锁更好：
+87 vs 89）。"2 窗外"旧分类修正：strcasecmp 的退化站点在 main 窗内
+（caseD 发射环），属上述退化类，非窗外。
+
+### 17.6.4 验收矩阵
+| 门 | 数字/结果 | 判定 |
+|---|---|---|
+| 默认脸（env 全空） | cmp 亲父基线字节恒等 | ✓ |
+| RUGRA_V3SIG=0 | cmp 亲父基线字节恒等 | ✓ |
+| mirror（±RUGRA_PARAMID=1） | 恒拒（显式日志）+ 输出 cmp 恒等 | ✓ |
+| RUGRA_SEEDS=0+PARAMID=1 | 门静默关闭 + 输出与纯 SEEDS=0 恒等 | ✓ |
+| **PARAMID=1 默认（守卫全形态）** | **1009/0/0**（裸 1097、manifest 908；收回 88/189=**46.6%**，§17 为 59/189=31.2%） | 零 defects/numbering |
+| 逐函数 vs 裸态 | ap_fini 148→87、main 611→584；**ap_matches 6→6、ap_update_vhost 56→56——回退清零**；其余恒等 | ✓ |
+| 保守层逃生门（EVIDENCE=strict） | 1015/0/0（=守卫 strict 形） | ✓ |
+| 迭代收敛 | 50→49→49 不动点（3 轮上限内） | ✓ |
+| PARAMID 双跑 | cmp 恒等 | ✓ |
+| 投影银行 | 391/391 MATCH（exit 0） | ✓ |
+| gcc 审计 | 15 OK/14 FAIL==默认脸同名集 | ✓ |
+| curl | 驱动与库未触（cargo check + E2E 差分，构造性不变） | ✓ |
+| src/ | 零触碰（git diff=examples+docs） | ✓ |
+
+### 17.6.5 剩余差距登记（101 行 = 1009 vs manifest 908 的逐函数构成）
+1. **main 81 行**（584 vs 503）：long/long* 锚族的 var 级涟漪（typeprop
+   域，V3SIG-UND224-TYPEORDER-0001 同族；自产环已把可自举的部分收敛，
+   残余=canon typeprop 产 long 形而 Rugra 产 undefined 族形的点差）。
+2. **导入域族 ~16 行**：ap_matches 4 + ap_update_vhost 5 + ap_fini 7
+   （memcmp 全锁 [void*, undefined1*, long] slot0 的 void* 形——canon
+   调用点带 cast；Rugra 无 void* 恢复）——全部经由 canon 的 33 条
+   import-signature 锁（strcasecmp/strncmp/memcmp/apr_ctone 族）作用，
+   binary stripped 无 DWARF 可直读（readelf -S 仅 .dynsym），自宿主需
+   签名库数据通道（登记为数据通道缺口，驱动域不可自产）。
+3. **caseD 4 行**：strcasecmp() 退化调用点的参数恢复缺陷（lift 丢参线，
+   src 域登记；canon 的 arity-2 锁同位可物化参数——锁通道已证，缺的是
+   参数恢复本身）。
+- 回收：/dev/shm/rugra-targets/sb-paramid2 留 root 集成后回收；lane 证据
+  /dev/shm/rugra-tests/paramid2/。
