@@ -1,0 +1,894 @@
+{
+ "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+ "corpus": "curl",
+ "source": "callee-siglock",
+ "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+ "harvest_rule": "canon call-site form harvest over the target functions: per callee, arity = printed argument count (conflict = varargs drop), param slot types from bare-local/element/addr-of/deref/literal/cast-target evidence with conflict-sensitivity, input lock only on full KNOWN_BASES evidence, return lock only on cast-free agreeing consumers, no param names; call-site forms are authoritative over the callee's own golden header (Parameter ID iteration drift); CURLPREP --dwarf-types extension: servable bases grow the corpus's DWARF-named composites/typedefs (the parse_type_names factory surface the driver's parse_c_type resolves FILE/Configurable against), casts carry multiple pointer stars ((char **)0x0), and ::global / &::global.member arg forms evidence from the DWARF file-scope static + struct member table (one member level)",
+ "targets": [
+  "__libc_csu_init",
+  "_init",
+  "_start",
+  "file2string",
+  "getparameter",
+  "glob_range",
+  "glob_set",
+  "glob_word",
+  "helpf",
+  "main",
+  "match_url",
+  "my_get_line",
+  "my_get_token",
+  "myprogress",
+  "next_url",
+  "parseconfig",
+  "progressbarinit"
+ ],
+ "callees": {
+  "0x1036d0": {
+   "name": "GetStr",
+   "sites": 17,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char * *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x103c50": {
+   "name": "SetHTTPrequest",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "HttpReq *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x102580": {
+   "name": "__ctype_b_loc",
+   "sites": 3,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "ushort * *"
+  },
+  "0x102440": {
+   "name": "__isoc99_sscanf",
+   "sites": 2,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "undefined1 *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x102380": {
+   "name": "__stack_chk_fail",
+   "sites": 7,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x102300": {
+   "name": "__vfprintf_chk",
+   "sites": 1,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "va_list",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102420": {
+   "name": "__xstat",
+   "sites": 3,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "stat *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x102000": {
+   "name": "_init",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x102520": {
+   "name": "curl_easy_cleanup",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102450": {
+   "name": "curl_easy_init",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "long"
+  },
+  "0x102340": {
+   "name": "curl_easy_perform",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x1024d0": {
+   "name": "curl_easy_setopt",
+   "sites": 51,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "long",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x102550": {
+   "name": "curl_formparse",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": "int"
+  },
+  "0x1024e0": {
+   "name": "curl_getdate",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x102460": {
+   "name": "curl_getenv",
+   "sites": 2,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102350": {
+   "name": "curl_slist_append",
+   "sites": 3,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x1024a0": {
+   "name": "curl_slist_free_all",
+   "sites": 3,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "curl_slist *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102490": {
+   "name": "curl_version",
+   "sites": 3,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x1024f0": {
+   "name": "exit",
+   "sites": 9,
+   "arity": 1,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x102360": {
+   "name": "fclose",
+   "sites": 8,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1023d0": {
+   "name": "fgets",
+   "sites": 2,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "bool *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x103a90": {
+   "name": "file2string",
+   "sites": 2,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102410": {
+   "name": "fileno",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x1024b0": {
+   "name": "fopen",
+   "sites": 6,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1023c0": {
+   "name": "fputc",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x1022f0": {
+   "name": "free",
+   "sites": 13,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102500": {
+   "name": "fwrite",
+   "sites": 3,
+   "arity": 4,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x103f00": {
+   "name": "getparameter",
+   "sites": 3,
+   "arity": 4,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "bool *",
+     "locked": true
+    },
+    {
+     "type": "Configurable *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x104d60": {
+   "name": "glob_range",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "int",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x104bc0": {
+   "name": "glob_set",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "int",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x104f70": {
+   "name": "glob_url",
+   "sites": 1,
+   "arity": 3,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "URLGlob * *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "int *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x104a60": {
+   "name": "glob_word",
+   "sites": 3,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "int",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x104a00": {
+   "name": "hugehelp",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x102330": {
+   "name": "isatty",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "int",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x102430": {
+   "name": "malloc",
+   "sites": 5,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "size_t",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1023b0": {
+   "name": "maprintf",
+   "sites": 1,
+   "arity": 0,
+   "input_lock": false,
+   "params": [],
+   "return": null
+  },
+  "0x105220": {
+   "name": "match_url",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "URLGlob",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x1023f0": {
+   "name": "memcpy",
+   "sites": 1,
+   "arity": 3,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "void *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "size_t",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x103840": {
+   "name": "my_get_line",
+   "sites": 2,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "FILE *",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x103720": {
+   "name": "my_get_token",
+   "sites": 3,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x104ff0": {
+   "name": "next_url",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "URLGlob *",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x103c80": {
+   "name": "parseconfig",
+   "sites": 3,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "Configurable *",
+     "locked": true
+    }
+   ],
+   "return": "int"
+  },
+  "0x1049a0": {
+   "name": "progressbarinit",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "ProgressData *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102320": {
+   "name": "puts",
+   "sites": 4,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102470": {
+   "name": "realloc",
+   "sites": 3,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x1024c0": {
+   "name": "strcat",
+   "sites": 1,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "bool *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102390": {
+   "name": "strchr",
+   "sites": 7,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "char *"
+  },
+  "0x102310": {
+   "name": "strcpy",
+   "sites": 3,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": null
+  },
+  "0x102530": {
+   "name": "strdup",
+   "sites": 6,
+   "arity": 1,
+   "input_lock": false,
+   "params": [
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": null
+  },
+  "0x102370": {
+   "name": "strlen",
+   "sites": 7,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "size_t"
+  },
+  "0x102570": {
+   "name": "strnequal",
+   "sites": 2,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "Configurable *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "int"
+  },
+  "0x1023a0": {
+   "name": "strrchr",
+   "sites": 2,
+   "arity": 2,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "char *"
+  },
+  "0x102560": {
+   "name": "strstr",
+   "sites": 3,
+   "arity": 2,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char *",
+     "locked": true
+    }
+   ],
+   "return": "char *"
+  },
+  "0x1023e0": {
+   "name": "strtol",
+   "sites": 5,
+   "arity": 3,
+   "input_lock": false,
+   "params": [
+    {
+     "type": "char *",
+     "locked": true
+    },
+    {
+     "type": "char * *",
+     "locked": true
+    },
+    {
+     "type": null,
+     "locked": false
+    }
+   ],
+   "return": "long"
+  },
+  "0x102400": {
+   "name": "time",
+   "sites": 1,
+   "arity": 1,
+   "input_lock": true,
+   "params": [
+    {
+     "type": "time_t *",
+     "locked": true
+    }
+   ],
+   "return": null
+  }
+ },
+ "harvest_drops": [
+  {
+   "callee": "CARRY1",
+   "reason": "no golden header address"
+  },
+  {
+   "callee": "CONCAT44",
+   "reason": "no golden header address"
+  },
+  {
+   "callee": "__fprintf_chk",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "__printf_chk",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "__sprintf_chk",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "helpf",
+   "reason": "arity conflict across sites (varargs/derived)"
+  },
+  {
+   "callee": "strequal",
+   "reason": "arity conflict across sites (varargs/derived)"
+  }
+ ],
+ "dwarf_types_source": "examples/curl",
+ "dwarf_types_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+}
