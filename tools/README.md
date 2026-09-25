@@ -229,23 +229,19 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`ac7a35266cf5612ac6d8bb340f53a4a946418d14`（src tree
-`9ecc44287480fb5dcf5c6698756351596eeeb1f5`，REGISTRY-CHECKPOINT-ADVANCE 第八窗：
-分支线锚 ac7a3526（^1=c07e2345，master 侧 38c3338a）折叠多窗批
-（dowhile 吸收链 forceOutputNum/forceFalseEdge、push88 :PUSH 构造器、
-stackslot fold canonical-arch attach、hdefects ActionDoNothing 链 + printc
-emitBlockDoWhile/Goto、canonical arch Funcdata::new、isOpIdentical typedef-strip、
-castInput 双层守卫、W0 POSTFIX-RETIRE 死代码五笔）。
-与第六/七窗相同拓扑：分支 tip 已被 master 包含，--no-ff
-合并树 == master tip，HEAD:src 不变量直接钉在锚的 src 树上），从 baseline target
-连续重放 432 个
-first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/
-count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/
-tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`
-→重生成→`--check`。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
+`80ffb7d138dd6825990a4986ed77f0ae7d2355ee`（src tree
+`4d47cf92b618eac87975dfa707bd6a20c13fc76d`，REGISTRY-CHECKPOINT-ADVANCE 第九窗：
+分支线锚 80ffb7d1（^1=b382a54f，master 侧 e486fb18）折叠 2026-09 整月开发窗
+（salvage、SubfloatFlow、unionresolve 系列、POSTFIX-RETIRE W1/W2、
+RuleStringStore、varmap NameRecommend、RETREC、multigoto 家族、jumptable
+matchModel 家族、value-set solver、FS/GS+flag lifts、drill 模块、PLT thunk、
+MERGEBATCH 各车道与 SCOPEBREAK；该窗取代未合并的 w-registry10 推进
+（7c955a78 折叠 af678926），其内容为本窗所包含）。与第六/七/八窗相同拓扑：
+分支 tip 已被 master 包含，锚合并树 == master tip，HEAD:src 不变量直接钉在锚的
+src 树上），从 baseline target 连续重放 437 个 first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`→重生成→`--check`。本窗（10581→11007 条，+611/−185）: 119 reviewed transitions（117 同 4-key re-key + 2 个历史 token 回退闭环——debugproto void_signature_dwarf_prototype 回退 26eee4ad 改名、printc emit_flow_basic 回退 rustfmt 尾分隔符）、66 tombstones（STRNCPY x10/EXPEL-CORPUS x5/typeop fd-aware x5/switch default join x5/PendingBrace x5/POSTFIX-RETIRE W2 四刀）、492 introduced（BlockMultiGoto x27、drill 模块 x24、varmap NameRecommend x15 等 131 个 origin commit）、11 个 introduced 死亡、零未证删除。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
 差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
-当前文件记录 493 条 lineage、1002 个 `introduced_live` 与 61 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
+当前文件记录 588 条 lineage、1483 个 `introduced_live` 与 127 个 tombstone（reviewed 规则 363+127，逐条带 origin 钉定）。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
 诊断，永不进入自动 replacement。schema 2 允许 reviewed tombstone 覆盖 post-baseline
@@ -255,6 +251,12 @@ origin 做 commit/blob/记录字段/token 唯一性全量校验）；schema 1 �
 静默丢掉 origin。Rust 侧 raw ID 碰撞（同 module+owner+signature，如两个 #[test] 域内的
 同名 helper）由 `enclosing_scope_header` 内容消解器分离（最近包裹 item 的原始头部，
 position-independent；不能分离仍 rc=2），与 Ghidra 侧 preprocessor guard 消解器同构。
+
+`--cross-check`（FMAPRECON §4.4.5 采纳）用 REFSDEF 行形解析器对 114 个 `.cc` 做 ctags
+枚举旁证：逐文件唯一名合计 5549（解析器）/5530（ctags 剥 `ghidra::` 后），残差
+122/103 为已分类的算子拼写/嵌套构造/类体内联自由键等名粒度差异——锁定 oracle 上为
+常量，任一漂移（含 ctags 行为漂移）rc=1，须先重新裁决再重生成。解析器在 `.hh` 系统性
+高估（doxygen 尾注释击穿 `;` 守卫），只作 `.cc` 旁证，不作分母枚举器。
 
 metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
 `known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或
