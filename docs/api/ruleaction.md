@@ -20,7 +20,13 @@
   outvn def-facing（`_fd` 参数更名 `fd` 以供孪生穿参）；
 - `RuleExpandLoad::apply_op` 三读+outVn（cc:10937/10940/10943/10964）——**defOp 与 op
   两键分派**：10937 用 defOp 读 real_root（=def->getIn(0)）slot 0，10940/10943 用
-  LOAD op 读 root_ptr（=op->getIn(1)）slot 1，10964 outVn def-facing；
+  LOAD op 读 root_ptr（=op->getIn(1)）slot 1，10964 outVn def-facing。**2026-09-26
+  （RASWEEP 车道，RULEACTION-EXPANDLOAD-NONCONST-0001；行引勘正 CR-RASWEEP F2——
+  合取 if 语句实际位于 cc:10930，cc:10927 是 `Datatype *elType;` 声明行）**：arm 门
+  对齐 cc:10930 合取条件 `defOp->code()==CPUI_INT_ADD && defOp->getIn(1)->isConstant()`
+  ——defOp 为 INT_ADD 但 in(1) 非常量时不再提前 `NO_CHANGE`，而是落入 else 臂：
+  addOp=None、offset=0、elType 以 LOAD op 键从原 root_ptr 读取（cc:10940/10943
+  路径），规则仍可触发；
 - `RulePushPtr::apply_op`（cc:6854）——op 读 in(s) slot s；
 - `RulePtrArith::verify_preferred_pointer`（cc:6548/6550）——preOp 读 in(preslot)
   slot preslot，**加 fd 参数**；
@@ -1198,7 +1204,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 
 ### 2026-06-27（会话2 续）：RuleDivOpt
 
-- `RuleDivOpt` — `RuleDivOpt`（ruleaction.cc:8069-8355）：除法乘法编码还原。`sub(ext(V)*c, d) >> e` / `sub(ext(V)*c) >> e` / `(ext(V)*c) >> n` → `V / divisor`。
+- `RuleDivOpt` — `RuleDivOpt`（ruleaction.cc:8051-8337）：除法乘法编码还原。`sub(ext(V)*c, d) >> e` / `sub(ext(V)*c) >> e` / `(ext(V)*c) >> n` → `V / divisor`。
   - `find_form` — `findForm`（8069）：检测 shift→subpiece→mult→zext/sext 链，返回 (in_vn, n, y128, xsize, ext_opc)
   - `calc_divisor` — `calcDivisor`（8157）：从乘法编码 c 反推除数（u128 运算）
   - `check_form_overlap` — `checkFormOverlap`（8260）：检测 SUBPIECE 形式是否被上级 shift 形式包含
@@ -1226,13 +1232,13 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - 触发于所有 FLOAT_ opcodes（18 个）。注册进 oppool1（5619）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
-### 2026-06-29（续）：RuleSLess2Zero（ruleaction.cc:5711 + getHiBit 5659）
-- `RuleSLess2Zero` — 简化 INT_SLESS 与 0/-1 的比较。形式包括：`-1 s< SUB(V,hi) => -1 s< V`、`~V s< 0 => -1 s< V`、`-1 s< CONCAT(V,W) => -1 s< V` 等。辅助函数 `get_hi_bit` 对应 Ghidra `getHiBit`（ruleaction.cc:5659-5682）。
+### 2026-06-29（续）：RuleSLess2Zero（ruleaction.cc:5693 + getHiBit 5641）
+- `RuleSLess2Zero` — 简化 INT_SLESS 与 0/-1 的比较。形式包括：`-1 s< SUB(V,hi) => -1 s< V`、`~V s< 0 => -1 s< V`、`-1 s< CONCAT(V,W) => -1 s< V` 等。辅助函数 `get_hi_bit` 对应 Ghidra `getHiBit`（ruleaction.cc:5641-5664）。
 - 触发于 CPUI_INT_SLESS。注册进 oppool1（5558）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
-### 2026-06-29（续 2）：RulePopcountBoolXor（ruleaction.cc:10265 + getBooleanResult 10335）
-- `RulePopcountBoolXor` — 简化通过 POPCOUNT 组合的布尔表达式：`popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`。辅助函数 `get_boolean_result` 对应 Ghidra `getBooleanResult`（ruleaction.cc:10335-10419），追踪 INT_AND/XOR/OR/ZEXT/SEXT/LEFT 链提取布尔源。
+### 2026-06-29（续 2）：RulePopcountBoolXor（ruleaction.cc:10258 + getBooleanResult 10317）
+- `RulePopcountBoolXor` — 简化通过 POPCOUNT 组合的布尔表达式：`popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`。辅助函数 `get_boolean_result` 对应 Ghidra `getBooleanResult`（ruleaction.cc:10317-10402），追踪 INT_AND/XOR/OR/ZEXT/SEXT/LEFT 链提取布尔源。
 - 触发于 CPUI_POPCOUNT。注册进 oppool1（5616）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
@@ -1242,10 +1248,10 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - 触发于 CPUI_INT_DIV/CPUI_INT_SDIV。注册进 oppool1（5602）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
-### 2026-06-29（续 4）：RuleDivTermAdd（ruleaction.cc:7832 + findSubshift 7928）
+### 2026-06-29（续 4）：RuleDivTermAdd（ruleaction.cc:7830 + findSubshift 7910）
 - `RuleDivTermAdd` — 简化优化的除法表达式：`sub(ext(V)*c,b)>>d + V => sub((ext(V)*(c+2^n))>>n, 0)`，其中 n=d+b*8。
 - 使用 Rust 原生 `u128` 替代 Ghidra 的 128 位多精度算术（set_u128/leftshift128/add128）。`is_constant_extended` 已存在（varnode.rs），`new_extended_constant` 新增到 funcdata.rs（funcdata_varnode.cc:462 忠实移植）。
-- 辅助函数 `find_subshift` 对应 Ghidra `findSubshift`（ruleaction.cc:7928-7953）。
+- 辅助函数 `find_subshift` 对应 Ghidra `findSubshift`（ruleaction.cc:7910-7935）。
 - 触发于 CPUI_SUBPIECE/INT_RIGHT/INT_SRIGHT。注册进 oppool1（5594）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
@@ -1257,7 +1263,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 
 ### 2026-06-29（续 6）：RuleSignMod2nOpt2（ruleaction.cc:8867）
 - `RuleSignMod2nOpt2` — 转换 INT_SREM 形式：`V - (Vadj & ~(2^n-1)) => V s% 2^n`。
-- 实现了 `check_sign_ext_form` 路径（INT_ADD，CDQ 风格符号扩展，ruleaction.cc:8928-8952）。
+- 实现了 `check_sign_ext_form` 路径（INT_ADD，CDQ 风格符号扩展，ruleaction.cc:8910-8934）。
 - MULTIEQUAL 路径（`checkMultiequalForm`）需块结构访问（getParent/getIn/getTrueOut），deferred。
 - 触发于 CPUI_INT_MULT。注册进 oppool1（5604）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
@@ -1306,7 +1312,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - `RulePtraddUndo`(6927) — 标 TODO（需 hasTypeRecoveryStarted + opUndoPtradd）
 - `RulePtrsubUndo`(7146) — **4 helper(getConstOffsetBack/getExtraOffset/removeLocalAddRecurse/removeLocalAdds) 1:1 完全移植**；applyOp 标 TODO（需 isPtrsubMatching）
 - `RuleSegment`(9013) — 标 TODO（需 SegmentOp/userops）
-- `RulePiecePathology`(10578) — INDIRECT case wired via `fd.get_op_from_const` + `is_call()` (对齐 ruleaction.cc:10453-10464). 标 TODO（bytes-consumed API for tracePathologyForward）
+- `RulePiecePathology`(10560) — INDIRECT case wired via `fd.get_op_from_const` + `is_call()` (对齐 ruleaction.cc:10507-10513). 标 TODO（bytes-consumed API for tracePathologyForward）
 
 验证：832/832 测试（新增 13），curl 24/24 无回归。
 
@@ -1351,7 +1357,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - RulePtrsubCharConstant: push_const_further 加 outtype 参数 + update_type（cc:7351）
 - RuleExpandLoad: modify_and_comparison 加 dt 参数 + update_type ×2（cc:10915）
 - RuleExpandLoad apply: new_out update_type（cc:10994）
-- RuleAddUnsigned: copy_symbol（cc:7211）
+- RuleAddUnsigned: copy_symbol（cc:7211）——2026-09-26（RASWEEP 车道，RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001，取材 wt/globvars 1a04cbec 按内容重放）升级为 copy_symbol_arc 完整移植：含 varnode.cc:500-504 high 记账（typeDirty/setSymbol(this)），原字段半拷贝在 cvn 已挂 HighVariable 时漏掉 high 侧同步（注：b61eb3f0 散文重钉曾意外覆写本注记与上条 ExpandLoad 注记，root 集成侧按 CR-RASWEEP F2 恢复并勘正行引）
 - RulePullsubIndirect: indirect-creation 分支完整移植 new_indirect_creation（cc:998-1002）
 - RuleIndirectCollapse: STORE guard 完整移植 get_store_guard + is_guarded（cc:3223-3236）
 - RuleSwitchSingle: 完整 applyOp（find_jump_table + jt 判断 + BRANCH 改写 + remove_jump_table + structure clear，cc:5430-5477）
@@ -1360,7 +1366,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫（cc:7188-7190）。RuleSubRight: does_special_printing + is_piece_structured + is_addr_tied + get_base_type(Uint/Int)+update_type。RuleFloatSignCleanup: TYPE_FLOAT 判断。RuleExpandLoad: get_base_type(Uint) 重写。RuleIndirectCollapse: has_no_local_alias + no_indirect_collapse + INDIRECT_CREATION。RuleSwitchSingle: warning_header 替换 eprintln。RulePtrsubUndo: clear_stop_type_propagation + op_undo_ptradd 完整接入。RuleSegment: userops.get_segment_op 接入 + contiguous_test/findContiguousWhole 移植。RuleTransformCpool: tf.find_by_name(rec.type_name) + update_type_lock。剩余 10 处 TODO 每处精确标注缺失 API（SymbolEntry/resolveConstant/PieceNode/CloneBlockOps/functionalEquality/SegmentOp.execute）。
 
 ### 2026-07-01（续 5）：determine_datatype partial path + RulePtrsubCharConstant full transform
-- determine_datatype（ruleaction.cc:7481-7510）：partial 路径用 get_structured_type + get_symbol_entry + SymbolEntry::get_addr/get_offset + get_sub_type walk 实现。不再对 partial 返回 None。
+- determine_datatype（ruleaction.cc:7463-7492）：partial 路径用 get_structured_type + get_symbol_entry + SymbolEntry::get_addr/get_offset + get_sub_type walk 实现。不再对 partial 返回 None。
 - RulePtrsubCharConstant（ruleaction.cc:7372-7421）：完整 transform。用 Funcdata::string_table 做 read-only+string 检查（symaddr=vn1 offset，spacebase base=0）。PTRSUB→COPY of constant pointer + update_type。删除 resolveConstant/isReadOnly TODO（退化 via string_table）。
 
 ### 2026-07-01（续 6）：oppool2 完整移植（5 条 Rule，0%→100%）
@@ -1385,12 +1391,12 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫（cc:718
 
 ### 2026-07-01（续 9）：PiecePathology + IgnoreNan 深度路径
 - PiecePathology：isPathology（ruleaction.cc:10427-10505）递归 def 链遍历 + tracePathologyForward（10506-10559）前向 descend 追踪到 CALL/RETURN 记 bytes_consumed。apply_op 双路径（SUBPIECE + INDIRECT）。
-- IgnoreNan 深度路径：checkBackForCompare（9622-9662）+ isAnotherNan（9664-9694）+ testForComparison（9696-9738）三种合并路径 + CBRANCH 保护。nan_ignore_all=false 时真正执行 NaN 数据流移除。
+- IgnoreNan 深度路径：checkBackForCompare（9604-9639）+ isAnotherNan（9646-9659）+ testForComparison（9678-9720）三种合并路径 + CBRANCH 保护。nan_ignore_all=false 时真正执行 NaN 数据流移除。
 - fspec.rs：FuncProto +return_bytes_consumed + FuncCallSpecs +input_consume Vec + getter/setter。
 
 ### 2026-07-01（续 10）：4 条 stub/partial Rule 补全
 - SubfloatConvert：常量折叠路径（subflow.cc:3394-3403）。非 const 保持 NO_CHANGE（完整 SubfloatFlow 精度追踪 TODO）。
-- ConditionalMove 非 const 路径：gather_expression + construct_bool（ruleaction.cc:9305-9381）。值在分支前形成的非 const 情况能产生 BOOL_OR/AND。
+- ConditionalMove 非 const 路径：gather_expression + construct_bool（ruleaction.cc:9287-9341）。值在分支前形成的非 const 情况能产生 BOOL_OR/AND。
 - RuleEarlyRemoval：本行“6 guard 全对齐”是旧的代码形似结论；2026-08-28 锁定
   fixture 只批准 14/14 covered projection。IOP/FSPEC manager、nullable input、
   reset/clear/propagateCopyAway 与完整 OpBank/错误路径仍未闭合。
