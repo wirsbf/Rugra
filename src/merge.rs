@@ -57,14 +57,19 @@ impl MergeTypeIntersectCache {
     // Dirty predicate = the oracle's flag protocol as observed at the test
     // gate. varnode.cc:352-361 Varnode::setFlags sets the member Varnode's
     // coverdirty AND synchronously calls high->coverDirty()
-    // (variable.hh:275-281, + piece->markExtendCoverDirty). Rugra's
-    // set_flags/add_descend/erase_descend (varnode.rs) set only the
-    // Varnode-level flag — the propagation half lives HERE so the invariant
-    // "high clean ⇒ internalCover == union of current instance covers"
-    // (which the oracle maintains synchronously) holds at every test:
-    // a high is dirty iff its own flag is set OR any member Varnode still
-    // carries coverdirty (in the oracle both were set together, so this
-    // detects exactly the same state).
+    // (variable.hh:275-281, + piece->markExtendCoverDirty). Since the
+    // HIGHCOV lane (2026-09-25) the Rust set_flags/add_descend/
+    // erase_descend/calc_cover carry that propagation half, so the flag
+    // state at this gate matches the oracle. The instance-scan is RETAINED
+    // as defense-in-depth for the one propagation leg that stays
+    // lock-blocked in Rust: update_cover_locked/get_cover clear the member
+    // flag without re-marking the high (varnode.cc:371-372's clearFlags
+    // half — callers hold read guards on the member's high across the
+    // rebuild; see the NOTE in update_cover_locked). The scan keeps the
+    // invariant "high clean ⇒ internalCover == union of current instance
+    // covers" (which the oracle maintains synchronously) holding at every
+    // test even across that gap: a high is dirty iff its own flag is set
+    // OR any member Varnode still carries coverdirty.
     fn update_high(&mut self, high: &Arc<RwLock<HighVariable>>) -> bool {
         let (high_dirty, instance_dirty) = {
             let h = high.read().unwrap();
@@ -572,37 +577,38 @@ impl MergePersistentState {
     }
 }
 
-// Ghidra: variable.hh:275 HighVariable::coverDirty
-/// Mark a high's cover dirty WITHOUT the nested-write hazard of
-/// `HighVariable::cover_dirty`: the oracle inline does
-/// `highflags |= coverdirty; if (piece) piece->markExtendCoverDirty();`
-/// where markExtendCoverDirty's final self leg (variable.cc:136) writes
-/// the OWN high again. Calling the Rust `cover_dirty` method while holding
-/// the outer write guard re-enters the same RwLock for write and
-/// deadlocks (single-threaded same-lock reentrancy); the flag write and
-/// the piece walk are therefore sequenced here under separate guards —
-/// the observable flag state is identical to the oracle's inline.
+// Ghidra: variable.hh:164+275 HighVariable::flagsDirty + coverDirty
+/// The deferred setFlags notification for a member whose mutation happened
+/// without one (the update_high instance-scan compensation): fires BOTH
+/// arms of varnode.cc:356-360 — flagsDirty unconditionally (variable.hh:164)
+/// and coverDirty with the piece walk (variable.hh:275-281) — under the
+/// sequenced-guard discipline implemented by propagate_flag_change_to_high
+/// (varnode.rs; the piece walk's final self leg variable.cc:136 writes the
+/// OWN high again, so the flag write and the walk must not share a guard).
 fn mark_high_cover_dirty(high: &Arc<RwLock<HighVariable>>) {
-    let piece_arc = {
-        let mut h = high.write().unwrap();
-        h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
-        h.piece.clone()
-    };
-    if let Some(piece_arc) = piece_arc {
-        crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
-    }
+    crate::varnode::propagate_flag_change_to_high(
+        high,
+        crate::varnode::varnode_flags::COVERDIRTY,
+    );
 }
 
 // Ghidra: variable.hh:294 HighVariable::getCover
-/// Raw stored-cover read. In the oracle every mutation that dirties a
-/// member Varnode cover propagates coverDirty to the owning high
-/// (varnode.cc:352-360 setFlags → high->coverDirty) so a clean stored
-/// product is always current; Rugra's mutation paths do not all maintain
-/// that propagation, so readers of this raw form can be served a stale
-/// aggregate. Known raw readers are being converted to fresh aggregation
-/// (inflate_test did); remaining ones are registered as
-/// MERGE-HIGHCOVER-PROPAGATION-0001 — do NOT add new readers of this
-/// helper for correctness-critical cover comparisons.
+/// Raw stored-cover read — the oracle getCover inline returns internalCover
+/// with NO lazy update (variable.hh:294-300); its freshness contract is the
+/// mutation-time propagation invariant (varnode.cc:352-360 setFlags →
+/// high->coverDirty), which the Rust mutation half now carries (HIGHCOV
+/// lane 2026-09-25: set_flags/add_descend/erase_descend/calc_cover), with
+/// one lock-blocked leg remaining (update_cover_locked's clearFlags half —
+/// see the NOTE in varnode.rs). Every raw reader of this helper MUST
+/// therefore sit behind a refresh gate, mirroring the oracle's call
+/// discipline:
+///   - intersection() reads only after update_high on both operands
+///     (variable.cc:1170-1181 ordering);
+///   - compare_high_by_block is invoked only from merge_linear, which
+///     refreshes every high via update_high before the sort
+///     (merge.cc:280-282 ordering).
+/// Do NOT add new readers of this helper outside that discipline
+/// (MERGE-HIGHCOVER-PROPAGATION-0001).
 fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let piece = high.read().unwrap().piece.clone();
     if let Some(piece) = piece {
@@ -944,9 +950,10 @@ impl Merge {
         // all speculative merges finalize the instance sets so each
         // HighVariable's cover reflects all its members. ActionMarkImplied
         // (run later in the pipeline) reads VARNODE covers directly (lazily
-        // rebuilt) and aggregates fresh inside inflate_test — it no longer
-        // depends on this stored product; the stored-field staleness debt is
-        // MERGE-HIGHCOVER-PROPAGATION-0001.
+        // rebuilt) and aggregates fresh inside inflate_test — it does not
+        // depend on this stored product. The stored-field product is kept
+        // materialized for the raw-gated readers (high_cover discipline,
+        // MERGE-HIGHCOVER-PROPAGATION-0001).
         self.update_high_covers(fd);
 
         // NOTE (FUNCDATA-LINKSYMBOL-TYPED-0001): Ghidra's merge sequence
@@ -995,34 +1002,30 @@ impl Merge {
 
     // Ghidra: merge.cc:1594 Merge::markImplied
     /// Mark a Varnode as implied. Faithful to Merge::markImplied
-    /// (merge.cc:1594-1605): after setImplied, the def op's inputs are
-    /// marked coverdirty because their covers traverse the now-implied
-    /// root and must be rebuilt before any later read. Varnode::setFlags
-    /// (varnode.cc:358-359) propagates the dirty bit to the member's high;
-    /// varnode.rs set_flags lacks that half, so the propagation is done
-    /// inline here — the observable state (vn COVERDIRTY + its high's
-    /// coverdirty) is identical to the oracle's single setFlags call.
+    /// (merge.cc:1594-1605): after setImplied, the def op's cover-having
+    /// inputs are marked coverdirty because their covers traverse the
+    /// now-implied root and must be rebuilt before any later read. Both the
+    /// cc:1598 setImplied and the cc:1603 setFlags(coverdirty) route through
+    /// varnode.rs set_implied/set_flags, which carry the full high
+    /// notification (flagsDirty unconditional + coverDirty when the mask
+    /// has it) — the observable state matches the oracle's calls one for
+    /// one (HIGHCOV lane 2026-09-25; the inline propagation half added
+    /// earlier, when set_flags lacked the arm, is now redundant and gone).
     pub fn mark_implied(vn: &Arc<RwLock<Varnode>>) {
         vn.write().unwrap().set_implied();
         let def = vn.read().unwrap().get_def();
         let Some(def) = def else { return };
-        let inputs: Vec<std::sync::Arc<RwLock<Varnode>>> = {
+        let inputs: Vec<std::sync::Arc<std::sync::RwLock<Varnode>>> = {
             let op = def.read().unwrap();
             (0..op.num_input())
                 .filter_map(|i| op.get_in(i).cloned())
                 .collect()
         };
         for input in inputs {
-            let high = {
-                let mut v = input.write().unwrap();
-                if !v.has_cover() {
-                    continue;
-                }
-                v.flags |= varnode_flags::COVERDIRTY;
-                v.high.clone()
-            };
-            if let Some(high) = high {
-                mark_high_cover_dirty(&high);
+            let has_cover = input.read().unwrap().has_cover();
+            if has_cover {
+                // merge.cc:1603: defvn->setFlags(Varnode::coverdirty).
+                input.write().unwrap().set_flags(varnode_flags::COVERDIRTY);
             }
         }
     }
@@ -4426,6 +4429,15 @@ impl Merge {
                     }
                     // vn2->getCover()->containVarnodeDef(vn1)==1 (merge.cc:1087)
                     let (v1_blk, v1_ord, v1_is_input) = varnode_def_loc(&vn1.read().unwrap());
+                    // merge.cc:1087: vn2->getCover() is the lazy rebuild
+                    // read (varnode.hh:202 → varnode.cc:233) — rebuild
+                    // before reading so a mid-pass coverdirty instance
+                    // cannot feed its stale cover into the boundary
+                    // containment test (earlier op_set_input calls in this
+                    // same double loop dirty vn1/vn2 via add_descend;
+                    // discipline identical to gather_block_varnodes).
+                    // MERGE-HIGHCOVER-PROPAGATION-0001 residual reader fix.
+                    Varnode::update_cover_locked(vn2);
                     let vn2_covers_vn1 = vn2.read().unwrap()
                         .cover.as_ref().map(|c| c.contain_varnode_def_at(v1_is_input, v1_blk, v1_ord) == 1)
                         .unwrap_or(false);
@@ -4440,6 +4452,9 @@ impl Merge {
                     }
                     // vn1->getCover()->containVarnodeDef(vn2)==1 (merge.cc:1092)
                     let (v2_blk, v2_ord, v2_is_input) = varnode_def_loc(&vn2.read().unwrap());
+                    // merge.cc:1092: vn1->getCover() lazy rebuild read —
+                    // same discipline as the vn2 read above.
+                    Varnode::update_cover_locked(vn1);
                     let vn1_covers_vn2 = vn1.read().unwrap()
                         .cover.as_ref().map(|c| c.contain_varnode_def_at(v2_is_input, v2_blk, v2_ord) == 1)
                         .unwrap_or(false);
@@ -4885,22 +4900,17 @@ impl Merge {
                     if vn.cover.is_none() {
                         vn.calc_cover();
                     }
-                    vn.flags |= varnode_flags::COVERDIRTY;
+                    // Ghidra: varnode.cc:352 setFlags — calcCover's own
+                    // cc:261 setFlags(coverdirty) already fired the high
+                    // notification (flagsDirty + coverDirty + piece walk);
+                    // this re-fire mirrors the sweep's unconditional dirty
+                    // intent (MERGE-COPYNOISE-SPILLRESTORE-0001) and is
+                    // idempotent, like the oracle's repeated setFlags calls.
+                    vn.set_flags(varnode_flags::COVERDIRTY);
                     true
                 }
             };
             if materialize {
-                // Ghidra: varnode.cc:358-359 — setFlags(coverdirty) also
-                // calls high->coverDirty() on the member Varnode's high.
-                // The flag write above is the Rugra equivalent of
-                // calcCover()+setFlags; mirror the propagation half here so
-                // the sweep's rebuild does not leave every high cover
-                // silently stale (MERGE-COPYNOISE-SPILLRESTORE-0001: stale
-                // high covers produced false block-level intersections that
-                // refused merges the oracle performed).
-                if let Some(high) = vn_arc.read().unwrap().high.clone() {
-                    mark_high_cover_dirty(&high);
-                }
                 // Ghidra: varnode.cc:233 Varnode::updateCover →
                 // cover.cc:477 Cover::rebuild (backward fill through
                 // predecessors, MULTIEQUAL slot precision, INDIRECT marker

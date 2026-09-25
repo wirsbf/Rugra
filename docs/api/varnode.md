@@ -537,7 +537,16 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 
 ### `pub fn set_flags(&mut self, f: u32)`
 
-为节点添加一个或多个 flag。
+为节点添加一个或多个 flag。两条通知臂（varnode.cc:356-360）：
+①`flagsDirty`（FLAGSDIRTY|NAMEREPDIRTY）**无条件**点火——派生旗通道
+`HighVariable::updateFlags`（variable.cc:352）的存活读者=merge_test_required、
+coreaction namevars/参数名门、varmap、is_name_lock；②`COVERDIRTY` 掩码门控
+（MERGE-HIGHCOVER-PROPAGATION-0001）。实现=varnode.rs
+`propagate_flag_change_to_high`（两臂共享一次写锁获取，piece walk 分段）。
+varnode.hh 经 setFlags/clearFlags 路由的内联访问器（setImplied/clearImplied、
+setExplicit/clearExplicit、setAddrForce/clearAddrForce、setPrecisLo/Hi+clear、
+setUnaffected）已同形改走 set_flags/clear_flags；mark/directwrite/return_address/
+autolive_hold/proto_partial 在 oracle 也是裸写，维持内联。
 
 ### 参数
 - `f`: 位标志集合
@@ -1225,3 +1234,46 @@ Datatype *ct)`（varnode.cc:1265-1271）的 typed 镜像：分配 unique 地址�
 `Funcdata::new_unique_typed` 承担同一默认。调用方：
 `Merge::allocateCopyTrim`（merge.cc:416/429）与 `Merge::trimOpOutput`
 （merge.cc:668/677）的 trim COPY 输出携带源 varnode 类型（PM-F2S ord337 修复）。
+
+## 2026-09-25：coverDirty 传播半边接线（MERGE-HIGHCOVER-PROPAGATION-0001，Lane HIGHCOV）
+
+oracle 不变量：任何弄脏成员 varnode cover 的突变同步传播 coverDirty 到所属
+high（varnode.cc:352-361 setFlags / 365-374 clearFlags 的 cc:358-359/371-372
+臂；触发者 addDescend cc:339、eraseDescend cc:325、calcCover cc:261、
+VarnodeBank::replace cc:1350-1351、makeFree→setDef cc:1322）——存储聚合
+（`HighVariable::getCover` 裸读 internalCover，无惰性更新）的新鲜度完全靠它。
+
+接线（本日）：①新增 `propagate_cover_dirty_to_high(high)`（RUGRA-GLUE 借用安全
+helper：high 写锁置位 COVERDIRTY → 释放 → piece walk，规避
+markExtendCoverDirty 末腿 variable.cc:136 的同锁重入；merge.rs
+`mark_high_cover_dirty` 委托同一实现）；②`set_flags`/`clear_flags` 掩码含
+`COVERDIRTY` 时自动传播；③`add_descend`/`erase_descend`/`calc_cover` 的内联
+`flags |= COVERDIRTY` 改走 `set_flags`（oracle 字面 setFlags 调用形态）——
+replace/make_free/创建位点（set_input/set_output 置
+`INPUT|COVERDIRTY`/`WRITTEN|COVERDIRTY`，high==None 时传播臂自然 no-op，
+=oracle high==null 分支）随之自动携带。
+
+**锁不可达的 clear 侧**：`update_cover_locked`（varnode.cc:239
+clearFlags→传播）与 `get_cover`（varnode.hh:202 → updateCover）不传播——
+调用方持 high 读守卫（checkImpliedCover 借用 `&HighVariable`、
+aggregate_high_cover_from），见两函数 NOTE 注释；由 HighVariable::new 初始
+脏（variable.cc:224）+ update_high 实例扫描 + inflate/aggregate 现聚合吸收。
+该角落承载「成员在 attach 前已脏」的首次重建置脏语义。
+
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:首轮提交的
+"Rust 无 high flagsdirty 消费者" 声明为假（存活调用者: merge.rs
+merge_test_required、coreaction.rs namevars/参数名门×2、varmap.rs、
+variable.rs is_name_lock）；oracle varnode.cc:357/:370 对每次带 high 的
+setFlags/clearFlags **无条件 flagsDirty()**（无掩码门——与 coverDirty 不同）。
+已物化：`propagate_flag_change_to_high` 拆双臂（FLAGSDIRTY|NAMEREPDIRTY
+无条件半+coverdirty 掩码半，共享一次写锁获取）；varnode.hh 经 setFlags 路由
+的访问器家族（implied/explicit/addrforce/precis*/unaffected）同形改走
+set_flags/clear_flags；mark_implied 的内联传播半边与
+compute_varnode_covers 的显式传播简化为字面 setFlags 调用（merge.cc:1598/
+:1603）。锁纪律按加宽调用点集重验：261 处 set_flags/clear_flags + 32 处
+访问器 + 4 处 set_unaffected 作用域感知机械扫描，唯一共存候选=测试内
+（守卫已 drop 且 vn 无 high），零生产死锁面；双语料 cmp 逐字节恒等重跑。
+
+验证：curl/httpd 默认脸对亲父 a9475ecc cmp 逐字节恒等；cargo test --lib
+1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs --strict 绿。
+详见 docs/api/merge.md 同日节。

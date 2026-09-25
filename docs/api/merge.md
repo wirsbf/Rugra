@@ -277,11 +277,57 @@ high->coverDirty 传播不变量的完整补齐）。
 改为无条件从惰性重建的成员 cover 现聚合——Rugra 的变体路径没有完整维护
 Ghidra 的「成员 cover 变脏必传播 high dirty」不变量（varnode.cc:352-360
 setFlags → high->coverDirty，由 addDescend/eraseDescend/calcCover 触发），
-重建后的成员 cover 留下「干净但陈旧」的 high 聚合：for-header 迭代临时件
+重建后的成员 cover 留下「干净但陈旧」的高聚合：for-header 迭代临时件
 （PTRADD/PTRSUB out）自身 cover 正确止于唯一 COPY 读点，陈旧聚合却到块底，
 inflateTest 把边界相触（oracle 判 1 放行、保持 implied、canon 内联
 `ppuVar12 = ppuVar12 + 1`）误判整区间相交（==2 拒绝）→ 循环体临时件显式化。
 无条件现聚合=oracle 不变量下的恒等乘积，只比陈旧存储新。
+
+## 2026-09-25：MERGE-HIGHCOVER-PROPAGATION-0001 收口（Lane HIGHCOV）
+
+传播不变量的**突变半边**从读者侧补偿移回 oracle 位点：varnode.rs
+`set_flags`/`clear_flags` 的 coverdirty 掩码臂、`add_descend`（cc:339）、
+`erase_descend`（cc:325）、`calc_cover`（cc:261）现携带 varnode.cc:358-359/
+371-372 的 `high->coverDirty()` 传播（实现=varnode.rs
+`propagate_cover_dirty_to_high`，merge.rs `mark_high_cover_dirty` 委托同一函数，
+单一实现）。传播体按 merge.rs 既有锁纪律序列化（high 写锁置位 → 释放 →
+piece walk 的 own-high 末腿），全部调用点为语句级 vn 写守卫（无一跨 high
+守卫存活，逐点核验 2026-09-25）。
+
+**锁不可达的 clear 侧**（`update_cover_locked`/`get_cover` 的
+clearFlags→coverDirty，varnode.cc:371-372——承载「attach 前已脏成员」角落）
+维持不传播：调用方（checkImpliedCover 借用 `&HighVariable`、
+`aggregate_high_cover_from`）持 high 读守卫，传播需同 high 写锁=重入死锁。
+该缺口由三层防御吸收：①`HighVariable::new` 按 variable.cc:224 初始置脏
+（新 high 首门必重建）；②`update_high` 的实例扫描保留（对 clear 侧缺口
+精准检测：成员旗仍在扫描时可见）；③inflate_test/aggregate_high_cover_from
+无条件现聚合。`high_cover()` 裸读者纪律不变：仅 intersection（update_high
+后读=variable.cc:1170-1181 序）与 compare_high_by_block（merge_linear 排序前
+逐 high 刷新=merge.cc:280-282 序）两个门内位点。
+
+**hide_shadows 残余读者修复**：merge.cc:1087/1092 的
+`vn->getCover()->containVarnodeDef` 是惰性重建读（varnode.hh:202）；Rugra
+原裸读 `.cover`，同双循环内先行的 `op_set_input`（add_descend 置脏 vn2）后
+即可服陈旧——现前置 `update_cover_locked`（与 gather_block_varnodes 同纪律）。
+
+**flagsDirty 半边（CR-HIGHCOV 发现 1 修正，2026-09-25 二轮）**:varnode.rs
+set_flags/clear_flags 现携带 varnode.cc:357/:370 的无条件 flagsDirty()
+臂（variable.hh:164→FLAGSDIRTY|NAMEREPDIRTY，updateFlags 通道——存活读者=
+merge_test_required/namevars/varmap/is_name_lock）；propagate helper 拆双臂
+共享一次写锁；implied/explicit/addrforce/precis*/unaffected 访问器家族
+（varnode.hh 经 setFlags 路由者）改走 set_flags/clear_flags；
+mark_implied/compute_varnode_covers 的内联传播半边简化为字面 setFlags 调用
+（merge.cc:1598/:1603 镜像）。锁纪律重验（261+32+4 处机械扫描零生产
+共存面）；双语料 cmp 恒等重跑（见下）。
+
+**验证**：curl/httpd 默认脸对亲父 a9475ecc **cmp 逐字节恒等**（577/0/0 ==
+基线全指标）；httpd 双跑恒等；panic 0/timeout 3==基线（httpd）与 0/0（curl）；
+cargo test --lib 1713P/1F（nonzeromask 预存）；bank 391/391；annotations/refs
+--strict 绿；gcc 审计 104OK/20FAIL fail 名集==亲父。恒等判读：主路径此前的
+读者侧补偿已覆盖全部活语料位点，本改动把不变量从逐读者补偿提升为结构化
+维护（位点位点不再是唯一防线）。机制 C：merge 白名单——Cross-Review:
+PENDING（CR-R2-GETPARAM 的登记先例与本收口同链；二轮窄域重审范围=
+varnode.rs set_flags/clear_flags 及文档）。
 
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
