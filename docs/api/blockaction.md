@@ -1618,3 +1618,17 @@ default，对 default 的链（`chain==k`）静默改接重加 case。修复 = �
 - 触发面亲测：curl 3 次臂事件（47→48）与 httpd 3 次（16→17）全部 remapped=0——
   双语料休眠；3 个单测（`multigoto_defaultchain_tests`）钉死重映射数学；
 - 补丁前后 curl（474/0/0）与 httpd（908/0/0）输出字节恒等。
+
+## 2026-09-25 追加（MSTRUCT — try_rule_switch isexit/isdefault 捕获见证探针）
+
+Lane MSTRUCT（结构族分拣）在 `try_rule_switch` 的 case 捕获循环（cc:3511-3515 addCase
+语义位点）补一条 `RUGRA_IRRED_DBG=1` 门控的 stderr 见证行（`[IRRED-SW] capture`：
+case 块号/首叶地址/isdefault/isexit/size_out），与既有 `[IRRED-SW] try/reject` 探针族
+同库同门。零行为变化（stdout 字节恒等亲证：curl 镜 200 与基线 cmp IDENTICAL）。
+
+诊断价值（本车道分拣证据，绑定 MSTRUCT-SWITCHGOTO-SELECTGOTO-0001）：
+glob_word 捕获快照显示 default（0x4c5e）`isexit=true (size_out=1)` 与 oracle
+addCase 语义一致——default_isexit 捕获侧无缺口；而输出侧 default 臂尾打印
+`goto code_r0x00004c20;`（无 `break;`），且捕获列表含同地址双块（31@0x4c48 与
+22@0x4c48、32@0x4d04 与 23@0x4d04）——结构树基本块重复 + 发射侧 break 缺席的
+组合是后继车道（blockaction+printc 联合）的入口证据。

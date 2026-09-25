@@ -6416,6 +6416,17 @@ impl<'a> CollapseStructure<'a> {
             let (is_default_edge, _outindex, _basic) =
                 Self::switch_case_basic_coords(&switch_basic, &curbl);
             let isexit_flag = curbl.read().unwrap().size_out() == 1;
+            if irred_sw {
+                eprintln!(
+                    "[IRRED-SW] capture fn={} case blk{} addr={:#x} isdefault={} isexit={} (size_out={})",
+                    self.name,
+                    cur_idx,
+                    crate::block::dbg_front_leaf_start_addr(&curbl),
+                    is_default_edge,
+                    isexit_flag,
+                    curbl.read().unwrap().size_out()
+                );
+            }
             if is_default_edge {
                 default_case = Some(curbl);
                 default_isexit = isexit_flag;

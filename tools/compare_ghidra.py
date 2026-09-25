@@ -422,6 +422,10 @@ def main():
           f'(in {funcs_with_defects}/{len(matched)} functions)')
     print(f'Total Rugra numbering issues: {total_numbering}')
     print(f'\nNOTE: skeleton diff > 0 不一定是对齐缺陷 (for↔while 等价变换).')
+    print(f'      判定口径 (MSTRUCT 2026-09-25): 对 canon/headless golden (桥接层富化),')
+    print(f'      for↔while 拆分等形态差可为 HEAD 伪差; 对 direct-runner mirror golden')
+    print(f'      (tests/golden/*_1204.direct-runner.c, 同输入 oracle 真值), 形态差')
+    print(f'      = 真实输出差 (库侧修复, 不做工具归一化 — 见 MSTRUCT-FORMDIFF-BOUNDARY-0001).')
     print(f'      defects > 0 是真实质量缺陷 (空else/寄存器泄漏/调用丢失).')
     print(f'      numbering issues > 0 是 181538f 类编号 bug (per-prefix 计数器 / 重复声明).')
 
