@@ -1,5 +1,17 @@
 # `userop.rs` API Reference
 
+## 2026-09-25：STRINGDATA builtin 的 display_string 旗标（Lane STRNCPY）
+
+`try_register_builtin_by_id` 对 `BUILTIN_STRINGDATA` 建立的记录现在带上
+`userop_flags::DISPLAY_STRING`（userop.cc:355-359 `InternalStringOp` 构造器
+的 `flags |= display_string`）。此前记录 flags=0，`PrintC::opCallother` 会把
+STRINGDATA CALLOTHER 当 functional syntax 渲染而非字符字面量通道。这是
+constseq STRNCPY 变换（constseq.cc:705 `getInternalString` 产出的源指针）的
+打印前置件之一；printc 侧的 dispatch 臂与字面量渲染见
+STRNCPY-PRINT-CALLOTHER-0001（printc 车道）。
+
+## （历史节，见下）
+
 **源代码路径**: `src/userop.rs`
 **Ghidra 对应**: `userop.hh` / `userop.cc` (1009行)
 **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——派生 userop 类型/selector/conflict/builtin 契约未闭合；SegmentOp 硬编码 `base<<4`，JumpAssist consumer 与真实 ActionSegmentize 缺失，Architecture/Flow 生产路径未安装 userops。正式门禁 `NO_ORACLE`。

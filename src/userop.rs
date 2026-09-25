@@ -501,7 +501,13 @@ impl UserOpManage {
             BUILTIN_WCSNCPY => ("builtin_wcsncpy", UserOpType::Datatype),
             _ => return Err("Bad built-in userop id".to_string()),
         };
-        let op = UserPcodeOp::new(name.to_string(), op_type, builtin_id as i32);
+        let mut op = UserPcodeOp::new(name.to_string(), op_type, builtin_id as i32);
+        // userop.cc:355-359 InternalStringOp: the stringdata record carries
+        // the display_string flag, steering PrintC::opCallother to the
+        // character-constant emit instead of functional syntax.
+        if builtin_id == BUILTIN_STRINGDATA {
+            op.flags |= userop_flags::DISPLAY_STRING;
+        }
         self.builtin_map.insert(builtin_id, Box::new(op));
         Ok(builtin_id)
     }

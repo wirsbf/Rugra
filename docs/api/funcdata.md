@@ -1,5 +1,20 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-25：get_internal_string 走 registerInternalStringData（Lane STRNCPY）
+
+`get_internal_string`（funcdata_varnode.cc:1413 的对应物）的手搓校验/插入/
+合成 hash 块被替换为已移植的
+`StringManager::register_internal_string_data`（stringmanage.cc:185-199）：
+- 键从 op 地址改为 **hash 的常量空间地址**——正是 print 侧
+  `PrintC::printCharacterConstant` 经 STRINGDATA CALLOTHER 的 in(1) 常量读回
+  的地址（printc.cc:701-714），旧键下打印永远 miss；
+- 删除非 oracle 的 `has_char_terminator` 拒绝门（oracle `checkCharacters`
+  只要求合法编码，无 NUL 也接受——`"+0000"` 5 字节无 NUL 即依赖此语义）；
+- hash 采用忠实的 `calcInternalHash`（crc32^offset，stringmanage.cc:95-105），
+  替换 addr|charsize<<56 合成值（hash 值从不进入输出文本，属可规范化内部
+  ID，但键语义现在与 oracle 同构）。
+调用方：constseq.rs `HeapSequence::build_string_copy`（constseq.cc:705）。
+
 ## 2026-09-23：spacebase 类型挂载重启用（HERITAGE-LOADCLAIM-0001 / VARGROUP-ABSORB-0001 v3）
 
 `Funcdata::spacebase` 的 SP 输入寄存器 TypeSpacebase 指针挂载
