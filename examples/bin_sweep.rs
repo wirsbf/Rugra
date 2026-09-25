@@ -28,10 +28,11 @@
 //!   --jobs <n>            concurrent binaries (default 4)
 //!   --out-dir <dir>       result directory (default /tmp/opencode/binsweep)
 //!   --list-only           enumerate + write the plan, run nothing
-//!   env RUGRA_SWEEP_MIRROR=1  worker flow range (0, u64::MAX) — the
-//!                         direct-runner oracle contract (same semantics
-//!                         as gen_decompile's RUGRA_GEN_MIRROR); default
-//!                         keeps the historical [entry, MAX) range.
+//!   env RUGRA_SWEEP_MIRROR inert (historical): worker flow always uses
+//!                         the direct-runner oracle range (0, u64::MAX) —
+//!                         same semantics as gen_decompile after
+//!                         BINSWEEP-JTDEST-UNLINKED-0001. Formerly
+//!                         toggled the driver-bounded [entry, MAX) form.
 //!
 //! Outputs under --out-dir:
 //!   functions.jsonl  one record per attempted function (ticket evidence)
@@ -478,9 +479,6 @@ fn build_architecture(
     Ok(Arc::new(arch))
 }
 
-fn mirror_flow_enabled() -> bool {
-    std::env::var("RUGRA_SWEEP_MIRROR").is_ok()
-}
 
 // RUGRA-GLUE: hermetic single-function decompile (gen run_one shape) that
 // RETURNS the produced C text length instead of printing it, so the sweep
@@ -521,18 +519,14 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
 
     let empty_protos = std::collections::BTreeMap::new();
-    if mirror_flow_enabled() {
-        rugra::flow::follow_flow_range(&mut fd, &mut sleigh, 0, u64::MAX, &empty_protos)
-    } else {
-        rugra::flow::follow_flow_with_callee_protos(
-            &mut fd,
-            &mut sleigh,
-            Address::new(target.vaddr),
-            u64::MAX,
-            &empty_protos,
-        )
-    }
-    .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
+    // Full-space flow range (0, u64::MAX) — the direct-runner oracle
+    // contract (followFlow(code:0, code:highest), funcdata.cc:163
+    // startProcessing). The historical bounded [entry, MAX) form rejected
+    // far-away jumptable case targets as out-of-bounds
+    // (BINSWEEP-JTDEST-UNLINKED-0001); RUGRA_SWEEP_MIRROR is now an
+    // inert marker (still forwarded to children and recorded).
+    rugra::flow::follow_flow_range(&mut fd, &mut sleigh, 0, u64::MAX, &empty_protos)
+        .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
 
     let fd_arc = Arc::new(std::sync::RwLock::new(fd));
     fd_arc
