@@ -1,0 +1,13 @@
+# mirror_gate_baselines.tsv — 第四门禁（镜面三口径）冻结基线台账
+# 形态 = MIRROR2-GATE4-PROPOSAL-0001 阶段一（冻结基线 + 漂移报警），
+# 绑定 TODO MIRROR3-GATE4-BASELINE-0001（L2：超上限即 FAIL）。
+# 列: corpus  skeleton_ceiling  matched_floor  todo_id  pinned_commit  measured_at
+# 语义: skeleton 为单向棘轮上限（改善不失败；收紧须先登记 TODO 并改本行）；
+#       defects/numbering 恒为硬断言 0（不在本表，runner 内写死）；
+#       matched_floor = 函数覆盖下限（覆盖丢失即 FAIL）。
+# 首钉测量 @ 5afcc032（wt/mirror3, master）: curl 259/74, httpd 440/29, vsh 51/71
+# （区间带与 MIRROR2 提案一致取向：当前值 + 小回归带，防噪声性抖动 FAIL）。
+corpus	ceiling	floor	todo_id	pinned_commit	measured_at
+curl	275	74	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
+httpd	460	29	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25
+vsh	55	71	MIRROR3-GATE4-BASELINE-0001	5afcc032	2026-09-25

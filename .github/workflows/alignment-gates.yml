@@ -50,3 +50,35 @@ jobs:
 
       - name: Verify strict four-category evidence parsing
         run: python3 tools/check_alignment_evidence.py --self-test
+
+  # MIRROR3-GATE4-BASELINE-0001: the fourth gate (mirror three-corpus faces vs
+  # the locked direct-runner goldens). Phase-1 form = frozen baseline +
+  # drift alarm (tools/mirror_gate_baselines.tsv); defects/numbering are
+  # hard-zero asserts, skeleton ceilings are one-way ratchets. The vsh face
+  # SKIPs when its host-specific corpus binary (/usr/bin/virt-ssh-helper) is
+  # absent; curl/httpd faces run unconditionally.
+  mirror-gate:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out Rugra
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ./target
+          key: mirror-gate-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build example drivers (fast-release)
+        run: cargo build --profile fast-release --example curl_decompile --example httpd_decompile --example gen_decompile
+
+      - name: Run the mirror gate (fourth gate)
+        run: tools/verify_mirror_gate.sh --bin-dir target/fast-release/examples
+
+      - name: Mirror gate self-test
+        run: tools/verify_mirror_gate.sh --self-test
