@@ -86,6 +86,33 @@ isEntryPoint/getStartBlock/opInsertBegin/constructJoinAddress/newVarnode/combine
 `LowlevelError` 映射后的 `Result`，不再忽略 non-input/non-contiguous 或 bank 删除失败。
 该单点只闭合返回值传播；combine 的 synthetic fixture 证据与未覆盖 Architecture/ProtoModel
 边界记录在 `docs/api/funcdata.md` 和 `VARNODE-INIT-0001` metadata。
+
+### 2026-09-25：空间限定构造收口（FAMILY-AUDIT-SPACELESS-SITES-0001）
+
+三处 Register/RAM 钉死构造改用 oracle 的完整 (space,offset) 源：
+
+1. `SplitVarnode::create_joined_whole`（double.cc:565-578）：oracle `newaddr`
+   是空间限定地址——contiguous 分支 = pieces 自身地址（double.cc:572
+   `res = lo/hi->getAddr()`），join 分支走 `constructJoinAddress`
+   （translate.cc:817-860：spacebase/stack 与 default-code/ram 在偏移连续时
+   保留原空间 cc:827-836，其余落 **join 空间** formal JoinRecord cc:848-859）。
+   Rugra 原 implicit-RAM `new_varnode` 把寄存器/栈 piece 的 whole 伪造成
+   `Ram@offset`（HERITAGE-CROSSSPACE-MERGE 同族垃圾种子）。修复：
+   `(newaddr, whole_space)` 二元组 + `new_varnode_in_space(wholesize,
+   whole_space, newaddr)`；join 分支的 offset 计算保持既有 degraded glue
+   （arch.rs `construct_join_address`，无 join-record 分配/register-name 查询），
+   本审计只钉死空间。
+2. `SplitVarnode::replace_copy_force`（double.cc:1402-1431）双构造点
+   （cc:1416/1423）：oracle `addr` 参数是 `CopyForceForm::verify` 里
+   `isAddrTiedContiguous` 填的 reslo/reshi piece 自身完整地址（double.cc:3158
+   → cc:811/816）。修复：`CopyForceForm` 增 `addr_out_space`（verify 时从
+   reslo 取，double.cc:805 已保证两 piece 同空间），签名加 `space` 参数，
+   两构造点改 `new_varnode_out_full(size, space, addr, op)`。
+
+触发面实证（curl/httpd 默认态 release 探针）：joined-whole 与 copy-force
+双位点 **0 次触发**（双精度恢复路径语料休眠）——恒等 = correct-by-construction；
+一旦触发即按 oracle 空间构造。输出字节恒等见 TODO 板该行验收。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.313316 -->
+
  

@@ -1107,34 +1107,70 @@ impl SplitVarnode {
         let lo = self.lo.clone().unwrap();
         let hi = self.hi.clone().unwrap();
         // double.cc:571-576: if contiguous, newaddr is the shared storage;
-        // otherwise newaddr = getArch()->constructJoinAddress(...).
-        let newaddr = match is_addr_tied_contiguous(&lo, &hi) {
-            Some(a) => a,
+        // otherwise newaddr = getArch()->constructJoinAddress(...). The
+        // oracle's newaddr is a full space-qualified Address (double.cc:572
+        // res = lo/hi->getAddr() — the pieces' own space; double.cc:573
+        // constructJoinAddress), so the whole inherits the pieces' space or
+        // the join space — never an implicit RAM slot
+        // (FAMILY-AUDIT-SPACELESS-SITES-0001).
+        let (newaddr, whole_space) = match is_addr_tied_contiguous(&lo, &hi) {
+            Some(a) => {
+                // cc:572 fills res with the piece's own address; both pieces
+                // share the space (the helper rejects space mismatches at
+                // double.cc:805).
+                let space = lo.read().unwrap().get_space();
+                (a, space)
+            }
             None => {
                 let hi_addr = hi.read().unwrap().get_addr().as_u64();
                 let hi_size = hi.read().unwrap().get_size();
                 let lo_addr = lo.read().unwrap().get_addr().as_u64();
                 let lo_size = lo.read().unwrap().get_size();
+                let (lo_spc, hi_spc) = (
+                    lo.read().unwrap().get_space(),
+                    hi.read().unwrap().get_space(),
+                );
+                // translate.cc:817-860 space rule for the join fallback:
+                // spacebase/stack and default-code/ram pieces keep their own
+                // space when the offsets are contiguous (translate.cc:827-836
+                // usejoinspace=false); every other join (register pieces,
+                // non-contiguous) is a formal JoinRecord in the join space
+                // (translate.cc:848-859). Rugra's construct_join_address
+                // glue keeps its degraded offset computation; this audit
+                // pins only the space.
+                let mappable = lo_spc == hi_spc
+                    && (lo_spc == AddressSpace::Stack || lo_spc == AddressSpace::Ram);
+                let contiguous =
+                    lo_addr + lo_size as u64 == hi_addr || hi_addr + hi_size as u64 == lo_addr;
                 let joined = data
                     .get_arch()
                     .map(|a| {
                         a.construct_join_address(hi_addr, hi_size, lo_addr, lo_size)
                     });
-                match joined {
-                    Some(off) => Address::new(off),
+                let (off, space) = match joined {
+                    Some(off) => (
+                        off,
+                        if mappable && contiguous {
+                            lo_spc
+                        } else {
+                            AddressSpace::Join
+                        },
+                    ),
                     None => {
                         // No Architecture set; fall back to a zero address so the
                         // rest of the transform can proceed.
                         eprintln!(
                             "double_precis: create_joined_whole no arch for constructJoinAddress (double.cc:573)"
                         );
-                        Address::new(0)
+                        (0, AddressSpace::Join)
                     }
-                }
+                };
+                (Address::new(off), space)
             }
         };
-        // double.cc:576: whole = data.newVarnode(wholesize, newaddr)
-        let whole = data.new_varnode(self.wholesize, newaddr);
+        // double.cc:576: whole = data.newVarnode(wholesize, newaddr) — the
+        // full storage address (space + offset).
+        let whole = data.new_varnode_in_space(self.wholesize, whole_space, newaddr);
         // whole->setWriteMask()
         whole.write().unwrap().addlflags |= crate::varnode::addl_flags::WRITE_MASK;
         self.whole = Some(whole);
@@ -1906,9 +1942,14 @@ impl SplitVarnode {
 
     // Ghidra: double.cc:1402 SplitVarnode::replaceCopyForce
     /// Rewrite the double precision version of a COPY to an address forced
-    /// Varnode. (`replaceCopyForce`, double.cc:1402)
+    /// Varnode. (`replaceCopyForce`, double.cc:1402) — `addr` is the oracle's
+    /// full storage Address (double.cc:3137-3180 addrOut = the reslo/reshi
+    /// piece's own address); the space travels alongside
+    /// (FAMILY-AUDIT-SPACELESS-SITES-0001).
+    #[allow(clippy::too_many_arguments)]
     pub fn replace_copy_force(
         data: &mut Funcdata,
+        space: AddressSpace,
         addr: Address,
         in_sv: &mut SplitVarnode,
         copylo: &OpArc,
@@ -1950,7 +1991,8 @@ impl SplitVarnode {
                 let later_addr = later_op.read().unwrap().get_addr();
                 let other_copy = data.new_op(1, later_addr);
                 data.op_set_opcode(&other_copy, OpCode::CPUI_COPY);
-                let vn = data.new_varnode_out(in_sv.get_size(), addr, &other_copy);
+                let vn =
+                    data.new_varnode_out_full(in_sv.get_size(), space, addr, &other_copy);
                 data.op_set_input(&other_copy, in_vn.clone(), 0);
                 data.op_insert_before(&other_copy, &PcodeOpRef(later_op));
                 in_vn = vn;
@@ -1962,7 +2004,7 @@ impl SplitVarnode {
         let size = in_sv.get_size();
         let whole_copy = data.new_op(1, hi_addr);
         data.op_set_opcode(&whole_copy, OpCode::CPUI_COPY);
-        let out_vn = data.new_varnode_out(size, addr, &whole_copy);
+        let out_vn = data.new_varnode_out_full(size, space, addr, &whole_copy);
         out_vn.write().unwrap().flags |= varnode_flags::ADDRFORCE;
         // double.cc:1425-1426: if (returnForm) data.markReturnCopy(wholeCopy).
         if return_form {
@@ -5116,6 +5158,11 @@ pub struct CopyForceForm {
     copylo: Option<OpArc>,
     copyhi: Option<OpArc>,
     addr_out: Address,
+    /// double.cc:3137-3180: addrOut is filled by isAddrTiedContiguous with
+    /// the reslo/reshi piece's own full address (double.cc:811/816); Rugra's
+    /// split Address carries the space here
+    /// (FAMILY-AUDIT-SPACELESS-SITES-0001).
+    addr_out_space: AddressSpace,
 }
 
 impl CopyForceForm {
@@ -5128,6 +5175,7 @@ impl CopyForceForm {
             copylo: None,
             copyhi: None,
             addr_out: Address::new(0),
+            addr_out_space: AddressSpace::Register,
         }
     }
 
@@ -5175,7 +5223,12 @@ impl CopyForceForm {
             }
             // double.cc:3158-3159: output MUST be contiguous addresses.
             match SplitVarnode::is_addr_tied_contiguous_result(&reslo, &reshi) {
-                Some(addr) => self.addr_out = addr,
+                Some(addr) => {
+                    self.addr_out = addr;
+                    // double.cc:811/816: res = the piece's own address; both
+                    // pieces share the space (double.cc:805 rejects mismatches).
+                    self.addr_out_space = reslo.read().unwrap().get_space();
+                }
                 None => {
                     self.copylo = None;
                     self.reslo = None;
@@ -5263,7 +5316,14 @@ impl CopyForceForm {
         }
         let copylo = self.copylo.clone().unwrap();
         let copyhi = self.copyhi.clone().unwrap();
-        SplitVarnode::replace_copy_force(data, self.addr_out.clone(), &mut self.in_sv, &copylo, &copyhi);
+        SplitVarnode::replace_copy_force(
+            data,
+            self.addr_out_space,
+            self.addr_out.clone(),
+            &mut self.in_sv,
+            &copylo,
+            &copyhi,
+        );
         *i = self.in_sv.clone_split();
         true
     }
