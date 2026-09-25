@@ -332,21 +332,34 @@ enum StringBackend {
     NativeUnicode { loader: Arc<dyn LoadImage> },
     /// Declared `GhidraStringManager`/Java contract reader
     /// (string_ghidra.cc:42-56 control flow): detection = charset-valid +
-    /// NUL-terminated with **no 2048 search bound** (Java-side semantics,
+    /// NUL-terminated with **no 2048 search bound** (declared contract,
     /// ghidra_arch.cc:780-810); the return is truncated at `maximumChars`
     /// characters with `isTruncated` set by `assignStringData`. Built by
     /// `Architecture::buildStringManager` (ghidra_arch.cc:368 equivalent).
+    /// NOTE (CR-ENVDAT F4, STRINGMANAGE-JAVAFALLBACK-MAXCHARS-0001): the
+    /// real Java 12.0.4 bridge (DecompileCallback.getStringData) bounds its
+    /// no-Data fallback read at maxChars (`length > maxChars → null`), so
+    /// this arm's unbounded search is a declared stand-in, not the Java
+    /// fallback's shape — registered for re-derivation, behavior frozen.
     ///
     /// `client` is the environment-side query target of the
     /// COMMAND_GETSTRINGDATA bridge (ghidra_arch.cc:786): when attached,
-    /// `getStringData` asks the client whether a **string Data object
-    /// exists at the exact address** (the Java `getDataAt` contract —
-    /// interior bytes of a Data return nothing) and never raw-reads the
-    /// image, exactly as `GhidraStringManager::getStringData`
-    /// (string_ghidra.cc:45) forwards to `ArchitectureGhidra::getStringData`
-    /// and reads nothing itself. `None` keeps the declared raw-read
-    /// contract (the pre-client stand-in used by faces without the
-    /// analysis-period environment layer).
+    /// `getStringData` asks the client INSTEAD of reading the image itself,
+    /// exactly as `GhidraStringManager::getStringData` (string_ghidra.cc:45)
+    /// forwards to `ArchitectureGhidra::getStringData` and reads nothing
+    /// itself. The REAL Java-side query semantics (CR-ENVDAT F1, verified
+    /// against Ghidra_12.0.4_build DecompileCallback.getStringData):
+    /// `getDataContaining(addr)` — a **containing** string Data answers
+    /// from ANY byte of its span, interior bytes yielding the **offcut
+    /// suffix** (`getByteOffcut(diff)`), and with no containing string
+    /// Data the query falls back to a **raw memory read**
+    /// (MemoryBufferImpl) bounded by maxChars (`length > maxChars →
+    /// null`). The attached client is free to model that full shape or to
+    /// answer a narrower projection (see `StringDataClient`); Rugra's
+    /// driver currently attaches the corpus-witness projection.
+    /// `None` keeps the declared raw-read contract (the pre-client
+    /// stand-in used by faces without the analysis-period environment
+    /// layer).
     GhidraJavaContract {
         loader: Arc<dyn LoadImage>,
         client: Option<Arc<dyn StringDataClient>>,
@@ -356,17 +369,46 @@ enum StringBackend {
 /// The environment half of the `GhidraStringManager` bridge
 /// (string_ghidra.cc:45 `glb->getStringData` ->
 /// `ArchitectureGhidra::getStringData`, ghidra_arch.cc:780-822
-/// COMMAND_GETSTRINGDATA): the attached environment answers whether a
-/// string Data object exists at the **exact** address — the Java
-/// `getDataAt` semantics, where interior bytes of a Data object return
-/// nothing — and hands back the UTF-8 bytes plus the truncation flag the
-/// Java side computes at `maxBytes`.
+/// COMMAND_GETSTRINGDATA). The C++ side of the seam is fixed: the manager
+/// forwards the query and reads nothing itself; the ENVIRONMENT side
+/// decides what counts as string data.
+///
+/// # Real Java 12.0.4 bridge semantics (CR-ENVDAT F1 — the seam contract)
+///
+/// Verified against `DecompileCallback.getStringData`
+/// (Ghidra_12.0.4_build, CR-ENVDAT reviewer pull):
+///
+/// 1. `getDataContaining(addr)` — the query resolves the **containing**
+///    Data object, not an exact-start Data: a string Data answers from
+///    ANY byte of its span.
+/// 2. Interior bytes of a string Data answer with the **offcut suffix**
+///    (`getByteOffcut(diff)` — the run from the offcut to the Data's
+///    terminator), not an empty buffer.
+/// 3. With no containing string Data the query falls back to a **raw
+///    memory read** (`MemoryBufferImpl`) — the bridge is NOT
+///    exact-start-only and NOT zero-read; the fallback detection is
+///    bounded by maxChars (`length > maxChars → null`).
+/// 4. Terminator convention (CR-ENVDAT F3): the real bridge's returned
+///    byteData **includes the trailing NUL** (DecompileProcess:
+///    `sz = res.length + 1`; ghidra_arch.cc:801-810 pushes the full
+///    amount into the buffer). Byte-level B2 fixtures must count it.
+///
+/// Rugra's driver currently attaches a **corpus-witness projection** of
+/// the observable query-point answer set (the canon golden's per-address
+/// fold/&DAT verdicts), which is narrower than the full Java shape: it
+/// answers `Some` only at the witnessed string-Data starts and `None`
+/// elsewhere, and its byte vector omits the trailing NUL (print-
+/// unobservable; STRINGMANAGE-CLIENT-OFFCUT-0001 will re-derive the full
+/// offcut+fallback shape and absorb the driver's interior hard tables).
 pub trait StringDataClient: Send + Sync {
     // Ghidra: ghidra_arch.cc:780 ArchitectureGhidra::getStringData
-    /// Answer the COMMAND_GETSTRINGDATA query for `addr`: `Some((utf8
-    /// bytes, is_truncated))` when the environment's string Data exists at
-    /// the exact address, `None` when it does not (the C++ leaves the
-    /// buffer empty — ghidra_arch.cc:817-819).
+    /// Answer the COMMAND_GETSTRINGDATA query for `addr`: `Some((bytes,
+    /// is_truncated))` when the environment's answer set has string data
+    /// covering the query, `None` when it does not (the C++ leaves the
+    /// buffer empty — ghidra_arch.cc:817-819). Per the seam contract above,
+    /// a full-shape client returns the offcut suffix for interior bytes of
+    /// a string Data and falls back to a maxChars-bounded raw read with no
+    /// covering Data; the bytes include the trailing NUL.
     fn get_string_data(&self, addr: Address, charsize: i32, max_bytes: i32)
         -> Option<(Vec<u8>, bool)>;
 }
@@ -447,13 +489,15 @@ impl StringManager {
     // ArchitectureGhidra::getStringData writes COMMAND_GETSTRINGDATA to
     // the Java process, ghidra_arch.cc:783-795, and the process is fixed
     // at architecture construction; Rugra keeps the query target
-    // attachable so the analysis-period environment layer can install the
-    // string-Data registry without rebuilding the manager)
+    // attachable so the analysis-period environment layer can install its
+    // answer-set projection without rebuilding the manager)
     /// Attach the environment-side COMMAND_GETSTRINGDATA target (the
-    /// analysis-period string Data set). After this call the
-    /// GhidraJavaContract backend answers queries through the client only
-    /// — no raw image reads — mirroring GhidraStringManager's
-    /// forward-to-Java control flow (string_ghidra.cc:45).
+    /// analysis-period environment's answer set — see the
+    /// `StringDataClient` seam contract for the real Java bridge shape).
+    /// After this call the GhidraJavaContract backend answers queries
+    /// through the client only — no raw image reads — mirroring
+    /// GhidraStringManager's forward-to-Java control flow
+    /// (string_ghidra.cc:45).
     pub fn set_string_data_client(&mut self, client: Arc<dyn StringDataClient>) {
         if let Some(StringBackend::GhidraJavaContract { client: slot, .. }) = &mut self.backend {
             *slot = Some(client);
@@ -597,12 +641,14 @@ impl StringManager {
                 // string_ghidra.cc:45: glb->getStringData(stringData.byteData,
                 // addr, charType, maximumChars, stringData.isTruncated) —
                 // the query forwards to the environment and the manager
-                // reads nothing itself. The client answers with the
-                // string Data bytes at the exact address (Java getDataAt:
-                // interior bytes of a Data return nothing) or with
-                // nothing, in which case the already-occupied map entry
-                // stays empty (ghidra_arch.cc:817-819 leaves the buffer
-                // empty for a no-string response).
+                // reads nothing itself. The environment-side answer shape
+                // is the StringDataClient seam contract above (real Java:
+                // getDataContaining + offcut suffix + maxChars-bounded raw
+                // fallback, bytes with trailing NUL; the driver attaches
+                // the corpus-witness projection). A `None` answer leaves
+                // the already-occupied map entry empty (ghidra_arch.cc:
+                // 817-819 leaves the buffer empty for a no-string
+                // response).
                 Some(client) => match client.get_string_data(
                     addr,
                     charsize,
@@ -1239,10 +1285,16 @@ mod tests {
 
     /// STRLIT-ENVDAT-0001: the attached StringDataClient takes over the
     /// GhidraJavaContract backend entirely — GhidraStringManager never
-    /// raw-reads (string_ghidra.cc:45 forwards to the environment), and the
-    /// environment answers with the Java getDataAt contract: a string Data
-    /// at the EXACT address yields bytes, an interior byte yields nothing
-    /// even though the loader holds valid string bytes there.
+    /// raw-reads (string_ghidra.cc:45 forwards to the environment). This
+    /// test pins the CORPUS-WITNESS PROJECTION the driver attaches
+    /// (Some only at witnessed string-Data starts, None elsewhere): the
+    /// real Java bridge is wider (getDataContaining + offcut suffix +
+    /// maxChars-bounded raw fallback — see the StringDataClient seam
+    /// contract); a full-shape client would answer the interior byte too.
+    /// The projection's observable contract is what this test locks: with
+    /// the client attached, the loader is never touched, and addresses
+    /// outside the witnessed answer set are negative even though the
+    /// loader holds valid string bytes there.
     struct FixedRegistryClient {
         entries: std::collections::HashMap<u64, Vec<u8>>,
     }

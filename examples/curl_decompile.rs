@@ -3001,15 +3001,29 @@ fn scan_rodata_dat_entries(
 // STRLIT-ENVDAT-0001: the environment half of the GhidraStringManager
 // bridge — the stand-in for the Java process that answers
 // COMMAND_GETSTRINGDATA (ghidra_arch.cc:786-791) in the canon headless
-// run. The Java side resolves the query through the Program's Data
-// objects (getDataAt): a string Data at the EXACT address returns its
-// UTF-8 bytes, an interior byte of a Data returns nothing — the
-// exact-start contract that keeps DAT-labeled interior references alive
-// as &DAT PTRSUBs (RulePtrsubCharConstant's isString gate,
-// ruleaction.cc:7375, answers false) while string-start references fold
-// to literals. This registry carries the analysis-period string Data set
-// (the scan product minus the canon-proven absent starts) as the
-// environment's observable answer set.
+// run. CR-ENVDAT F1/F2 revision: the REAL Java bridge
+// (DecompileCallback.getStringData, Ghidra_12.0.4_build) resolves the
+// query with getDataContaining — a containing string Data answers from
+// any byte (interior bytes yield the getByteOffcut suffix), and with no
+// containing string Data it falls back to a maxChars-bounded raw memory
+// read. This registry is NOT that full shape: it is the CORPUS-WITNESS
+// PROJECTION of the observable query-point answer set (the canon
+// golden's per-address fold/&DAT verdicts) — Some only at the witnessed
+// string-Data starts, None elsewhere. What keeps the DAT-labeled
+// interior references alive as &DAT is NOT an isString answer (the
+// string manager is never queried at those addresses): it is the
+// charPrint TYPE gate of RulePtrsubCharConstant (ruleaction.cc:7369)
+// intercepting the undefined1* PTRSUBs the DB channel's DAT-label
+// entries produce, BEFORE the isString query at :7375. The registry's
+// load-bearing answers are the POSITIVE ones: string-start references
+// pass the charPrint gate and fold only because isString answers true
+// there, and the print-side pushPtrCharConstant (printc.cc:1698) renders
+// the interior-suffix literals ("r", "%s%s") from its positive answers.
+// The 5-start exclude list inside the registry is zero-observable dead
+// weight in this corpus (the charPrint gate already blocks those
+// addresses); it stays as the semantically consistent projection of the
+// canon answer set. The full-shape offcut+fallback client
+// (STRINGMANAGE-CLIENT-OFFCUT-0001) will re-derive this layer.
 struct CurlStringDataRegistry {
     entries: HashMap<u64, String>,
 }
@@ -3029,9 +3043,14 @@ impl rugra::stringmanage::StringDataClient for CurlStringDataRegistry {
         _charsize: i32,
         max_bytes: i32,
     ) -> Option<(Vec<u8>, bool)> {
-        // Exact-start lookup only: an interior byte of a string Data has no
-        // Data of its own (Java getDataAt), so the query falls through to
-        // the empty-buffer answer (ghidra_arch.cc:817-819).
+        // Corpus-witness projection lookup: addresses outside the witnessed
+        // answer set fall through to the empty-buffer answer
+        // (ghidra_arch.cc:817-819). NOTE (CR-ENVDAT F3): the real bridge
+        // returns the bytes WITH the trailing NUL (DecompileProcess
+        // sz=res.length+1); this projection returns the run bytes without
+        // it — print-unobservable, to be absorbed by the full-shape
+        // client (STRINGMANAGE-CLIENT-OFFCUT-0001 /
+        // STRINGMANAGE-CLIENT-NUL-CONV-0001).
         let value = self.entries.get(&addr.as_u64())?;
         let mut bytes = value.as_bytes().to_vec();
         let mut is_truncated = false;
@@ -5676,40 +5695,50 @@ fn decompile_request(
 
     // STRLIT-ENVDAT-0001: the analysis-period string Data registry — the
     // environment half of the GhidraStringManager bridge
-    // (COMMAND_GETSTRINGDATA, ghidra_arch.cc:786). The canon headless run
-    // answers that query from the Program's Data objects: a string Data at
-    // the EXACT address yields the string bytes, interior bytes yield
-    // nothing (Java getDataAt semantics), which is what keeps the
-    // DAT-labeled interior references alive as &DAT PTRSUBs instead of
-    // folding to literals. The driver's string_entries — the scan product
-    // minus the canon-proven absent starts (see the exclude list at the
-    // scan site) — is that registry. Attached only on the full-analysis
-    // canon face: every mirror component and the bare-load face keep the
-    // raw-read declared contract (their goldens carry no string Data at
-    // all — the direct-runner golden prints every reference as a bare
-    // const, which the raw-read manager reproduces because those faces
-    // install no Program-DB entries and never create PTRSUBs).
+    // (COMMAND_GETSTRINGDATA, ghidra_arch.cc:786). CR-ENVDAT F1/F2
+    // revision: the real Java bridge resolves the query with
+    // getDataContaining (interior bytes yield the offcut suffix; no
+    // containing Data falls back to a maxChars-bounded raw read) — this
+    // registry is the CORPUS-WITNESS PROJECTION of the observable
+    // query-point answer set, not the full shape. The &DAT PTRSUBs are
+    // NOT kept alive by isString answers: the string manager is never
+    // queried at those addresses — the charPrint TYPE gate
+    // (ruleaction.cc:7369) intercepts the undefined1* PTRSUBs from the
+    // DB channel's DAT-label entries before the isString query (:7375).
+    // The registry's load-bearing answers are the POSITIVE ones (the
+    // fold path and print-side pushPtrCharConstant, printc.cc:1698).
+    // Attached only on the full-analysis canon face: every mirror
+    // component and the bare-load face keep the raw-read declared
+    // contract (their goldens carry no string Data at all — the
+    // direct-runner golden prints every reference as a bare const, which
+    // the raw-read manager reproduces because those faces install no
+    // Program-DB entries and never create PTRSUBs).
     if !request.string_entries.is_empty()
         && !mirror_bundle_enabled()
         && !mirror_flow_enabled()
         && !mirror_bare_load_enabled()
     {
         if let Some(sm) = worker_arch.string_manager.as_ref() {
-            // The registry carries the ACTION-side analysis-period set —
-            // the full scan minus the canon DAT-label starts
-            // (CANON_DAT_LABEL_STARTS) — so isString answers false at the
-            // &DAT witnesses (no RulePtrsubCharConstant fold) while every
-            // folded literal's start stays positive. PLUS the canon
+            // The registry carries the ACTION-side analysis-period answer
+            // set — the full scan minus the canon DAT-label starts
+            // (CANON_DAT_LABEL_STARTS; the exclusion is zero-observable
+            // dead weight in this corpus since the charPrint gate already
+            // blocks those addresses — it stays as the semantically
+            // consistent projection of the canon answer set) — so every
+            // folded literal's start answers positive. PLUS the canon
             // string Data at scan-missed interior suffixes: the scan
             // admits only maximal runs, but the canon golden folds the
             // interior runs "r" at 0x61c2 (fopen modes — canon:1579/1955/
             // 2051 `fopen(...,"r")`) and "%s%s" at 0x61eb (canon:873) —
-            // the Java getDataAt answers string Data at those EXACT
-            // interior addresses. Registry-only: no Program-DB entry (the
+            // the canon answer set is positive at those interior
+            // addresses. Registry-only: no Program-DB entry (the
             // interior skip keeps them out), so the references stay bare
             // constants and the print-side pushPtrCharConstant
             // (printc.cc:1698) renders the literal — the same observable
-            // the canon fold chain produces.
+            // the canon fold chain produces. The full-shape offcut
+            // client (STRINGMANAGE-CLIENT-OFFCUT-0001) can derive both
+            // this addenda table and the positive answers from the
+            // containing-entry geometry instead of hard tables.
             const CANON_INTERIOR_STRING_DATA: [(u64, &str); 2] =
                 [(0x61c2, "r"), (0x61eb, "%s%s")];
             let mut registry_entries: Vec<(u64, String)> = request
@@ -5729,7 +5758,7 @@ fn decompile_request(
                     &registry_entries,
                 )));
             eprintln!(
-                "[PREPASS] {} string Data registry attached: {} exact-start entries (GhidraStringManager query contract)",
+                "[PREPASS] {} string Data registry attached: {} corpus-witness answer-set entries (GhidraStringManager environment half)",
                 target.name,
                 registry_entries.len()
             );

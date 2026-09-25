@@ -33,36 +33,60 @@ Ghidra has two concrete managers, both `maximumChars=2048`:
 `Architecture::build_string_manager` 安装）按此契约实现并显式声明；native
 2048 界行为由 `new_unicode` 保留并由同一双侧 fixture 锁定。
 
-## 2026-09-26：StringDataClient 环境查询通道（STRLIT-ENVDAT-0001）
+## 2026-09-26：StringDataClient 环境查询通道（STRLIT-ENVDAT-0001；CR-ENVDAT 修订）
 
 `GhidraStringManager::getStringData`（string_ghidra.cc:33-48）**从不自读 image**：
 缓存未命中时把查询整体转发给环境（`glb->getStringData` ->
 `ArchitectureGhidra::getStringData`，ghidra_arch.cc:780-822 的
-`ELEM_COMMAND_GETSTRINGDATA` 管道协议），由 Java 侧按 **getDataAt 语义**回答——
-精确起始地址上有 string Data 才返回其 UTF-8 字节与截断标志，Data 内部字节
-（interior）一律空回答（ghidra_arch.cc:817-819 leave the buffer empty）。
-canon headless 的 `&DAT_<addr>` 符号形正是该语义的产物：interior 引用的
-PTRSUB 在 `RulePtrsubCharConstant` 的 `isString` 门（ruleaction.cc:7375）得到
-false 而存活，字符串起始引用则折叠为字面量。
+`ELEM_COMMAND_GETSTRINGDATA` 管道协议）。C++ 半边的这一控制流是钉死的；
+**环境半边的真实 Java 语义**（CR-ENVDAT F1，reviewer 亲拉
+Ghidra_12.0.4_build `DecompileCallback.getStringData` 核实）：
+
+1. `getDataContaining(addr)`——按**包含** Data 解析，非精确起始；
+2. string Data 的 interior 字节经 `getByteOffcut(diff)` 返回 **offcut 后缀**
+   （从 offcut 到终止符的游程），非空答；
+3. 无包含 string Data 时走 `MemoryBufferImpl` **原始内存读回退**（非零读取），
+   检测受 maxChars 界（`length > maxChars → null`）；
+4. 返回 byteData **含尾部 NUL**（DecompileProcess `sz = res.length+1`；
+   ghidra_arch.cc:801-810 全量入 buffer）——字节级 B2 fixture 须计入
+   （CR-ENVDAT F3，STRINGMANAGE-CLIENT-NUL-CONV-0001）。
+
+canon headless 的 `&DAT_<addr>` 符号形**不是** string-manager 语义的产物：
+保住 &DAT 的是 `RulePtrsubCharConstant` 的 **charPrint 类型门**
+（ruleaction.cc:7369 `!basetype->isCharPrint() → return 0`）——DAT 标签的
+undefined1\* PTRSUB 在 isString 查询（:7375）**之前**被拦截，string manager
+在这些地址从未被查询（CR-ENVDAT F2）。真正承重的是 **DB 通道的 undefined1
+条目**（驱动侧 DAT 标签层）；string-manager 的正答集只在折叠路径
+（字符串起始引用经 charPrint 门后折叠为字面量）与 print 侧
+`pushPtrCharConstant`（printc.cc:1698）消费。
 
 Rugra 侧新增（src/stringmanage.rs）：
 
 - `trait StringDataClient: Send + Sync` — 环境半边（Java 进程的替身）：
-  `get_string_data(addr, charsize, max_bytes) -> Option<(Vec<u8>, bool)>`，
-  `Some((utf8 字节, is_truncated))` = 精确起始有 string Data，`None` = 无。
+  `get_string_data(addr, charsize, max_bytes) -> Option<(Vec<u8>, bool)>`。
+  契约见 trait 文档（真实桥语义=接缝契约；全形客户端=offcut 后缀+maxChars
+  界 raw 回退+尾部 NUL）。
 - `StringBackend::GhidraJavaContract { loader, client }` — `client: Some` 时
-  `get_string_data` **只**查询 client（零 image 读取，镜像
-  string_ghidra.cc:45 的转发控制流）；`None` 保持既有声明的 raw-read 契约
-  （无环境层的面：httpd 驱动、测试、bare/mirror 面）。
+  `get_string_data` **只**查询 client（零 image 读取，镜像 string_ghidra.cc:45
+  的转发控制流）；`None` 保持既有声明的 raw-read 形态（无环境层的面：
+  httpd 驱动、测试、bare/mirror 面）。注意（CR-ENVDAT F4，
+  STRINGMANAGE-JAVAFALLBACK-MAXCHARS-0001）：None 臂"检测无界"的声明与
+  真实 Java 回退（maxChars 界）不符——预存声明，登记待再推导，行为冻结。
 - `set_string_data_client(&mut self, client)` — 驱动注入点（C++ 对应物是
-  sout/sin 管道本身，ghidra_arch.cc:783-795；进程在架构构造时固定，Rugra 保留
-  可后接的查询目标）。
+  sout/sin 管道本身，ghidra_arch.cc:783-795）。
+
+**驱动现挂载的是可观察查询点正答集的语料见证投影**（canon golden 逐地址
+fold/&DAT 判据），窄于全形：仅在见证的 string-Data 起点答 `Some`、其余 `None`，
+字节向量不含尾部 NUL（打印不可观测）。全形 offcut+回退客户端
+（STRINGMANAGE-CLIENT-OFFCUT-0001）落地后可消纳驱动的 interior 硬表
+（CANON_INTERIOR_STRING_DATA）。
 
 消费面不变：rule 侧 `RulePtrsubCharConstant`（ruleaction.cc:7375）与 print 侧
 `PrintC::printCharacterConstant`（printc.cc:1537/1541）共享同一 Architecture
 单例，正/负缓存一次成型。单测
-`test_client_channel_exact_start_semantics` 锁定：client 挂载后 loader 零读取、
-interior 负结果、未登记地址负结果。
+`test_client_channel_exact_start_semantics` 锁定投影的可观察契约：client
+挂载后 loader 零读取、投影外地址负结果（含 loader 持有效串字节的 interior
+字节）。
 
 
 ## Structs
