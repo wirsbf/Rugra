@@ -60,12 +60,304 @@ const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
 // the registerDynamicFunctionSymbols mirror), and the projection flips its
 // honest load_mode literal to single_function_bfd. On this driver the
 // canonical bundle key RUGRA_MIRROR reduces to the flow component alone:
-// httpd has no libc-signature ledger, no known-noreturn marking, and no
-// DWARF prototype application to neutralize (the curl components with no
-// counterpart here). Env unset = the exact historical inject path,
-// byte-identical.
+// httpd has no libc-signature ledger and no DWARF prototype application to
+// neutralize (the curl components with no counterpart here), and the
+// known-noreturn ledger (HTTPDMAIN-F1-NORETURN-0001) is canon-face-only —
+// under the gate it stays OFF (bare-BFD parity, the same polarity as
+// curl's mirror_fixture_data component: the direct-runner golden carries
+// zero "Subroutine does not return" warnings). Env unset = the exact
+// historical inject path plus the canon noreturn ledger, byte-identical
+// otherwise.
 fn mirror_flow_enabled() -> bool {
     std::env::var("RUGRA_MIRROR").is_ok() || std::env::var("RUGRA_FLOW_MIRROR").is_ok()
+}
+
+// ============================================================================
+// HTTPDMAIN-F1-NORETURN-0001: "Non-Returning Functions - Known" data source
+// (the FLOW-NORETURN-DATA-0001 precedent, curl_decompile.rs:1853-1998, ported
+// for the httpd corpus).
+//
+// Ghidra's Java analyzer `NoReturnFunctionAnalyzer` (NAME = "Non-Returning
+// Functions - Known", Ghidra/Features/Base/src/main/java/ghidra/app/plugin/
+// core/analysis/NoReturnFunctionAnalyzer.java @ oracle e40ed13014) walks the
+// primary symbol table, strips leading '_' chars from each symbol name, and
+// on an exact (case-sensitive) match against the per-format name list calls
+// `Function.setNoReturn(true)` — the program-database flag that the
+// decompiler later reads via queryCall's `copyFlowEffects`
+// (flow.cc:663-669), making `checkForFlowModification` (flow.cc:636-651)
+// insert `artificialHalt(PcodeOp::noreturn)` after the CALL and emit the
+// "Subroutine does not return" warning (flow.cc:646). The name list is
+// selected per executable format by data/noReturnFunctionConstraints.xml;
+// for this ELF corpus it is data/ElfFunctionsThatDoNotReturn (21 names,
+// byte-exact below, file order preserved). That data file carries no
+// trailing-`*` wildcard entries, so the analyzer's wildcard prefix set is
+// empty for ELF and only the exact-match path applies here.
+//
+// Matching semantics ported from NoReturnFunctionAnalyzer.added() /
+// loadFunctionNamesIfNeeded():
+//   * strip ALL leading '_' from the symbol name (`__stack_chk_fail` ->
+//     `stack_chk_fail`, `_exit` -> `exit`); the list itself has no leading
+//     underscores (the loader strips-and-warns on any).
+//   * exact, case-sensitive containment (`Unwind_Resume` and the mangled
+//     `ZSt9terminatev` / `ZN10__cxxabiv111__terminateEPFvvE` keep their
+//     case: `_ZSt9terminatev` matches only through underscore stripping).
+//   * the analyzer's namespace guard (skip when the parent namespace is
+//     neither global, library, nor std — protects demangled class methods
+//     like `Menu::_exit()`) is vacuous for this driver: the ELF symbol table
+//     carries raw mangled names with no namespace structure, and a mangled
+//     method name (`_ZN5Menu5_exitEv`) never exact-matches the list anyway.
+//
+// httpd binary reality (disassembly-verified, this session): the imports
+// matching the list are exactly `exit` (PLT stub 0x2b530, called by main at
+// 0x2b8b8), `__stack_chk_fail` (PLT stub 0x2a980, called at the canary-fail
+// tail of ap_parse_vhost_addrs 0x2cff6 / ap_fini_vhost_config 0x2d66a /
+// ap_update_vhost_from_headers 0x2da44 / ap_ht_time 0x2df16 /
+// ap_os_is_path_absolute 0x2e15c — each the function's last instruction),
+// and `abort` (PLT stub 0x2a570, imported but never called in the canon
+// window — an inert entry exactly like the analyzer's own never-queried
+// markings). `apr_terminate` / `apr_thread_exit` / `__cxa_finalize` do NOT
+// exact-match any list entry and stay unmarked. The canon golden carries
+// exactly one "Subroutine does not return" warning per site above
+// (tests/golden/ghidra_httpd_1204.c: main/ap_parse_vhost_addrs/
+// ap_fini_vhost_config/ap_update_vhost_from_headers/ap_ht_time/
+// ap_os_is_path_absolute, 6 total in the 29-function window).
+//
+// Face polarity (the curl precedent's mirror_fixture_data component): the
+// canon face carries the ledger; the mirror face keeps it OFF — the
+// direct-runner golden (bare BfdArchitecture, no analyzer stack) has ZERO
+// noreturn warnings, so RUGRA_MIRROR runs must not mark anything.
+// ============================================================================
+
+/// Ghidra's `ElfFunctionsThatDoNotReturn` name list (oracle commit
+/// e40ed13014, Ghidra/Features/Base/data/ElfFunctionsThatDoNotReturn, 21
+/// non-comment lines verbatim in file order). Selected for this corpus by
+/// data/noReturnFunctionConstraints.xml's
+/// `executable_format name="Executable and Linking Format (ELF)"` fallback
+/// entry (the httpd fixture has no golang/rustc compiler spec).
+const KNOWN_NO_RETURN_ELF_NAMES: [&str; 21] = [
+    "exit",
+    "cexit",
+    "c_exit",
+    "abort",
+    "reboot",
+    "longjmp",
+    "longjmp_chk",
+    "siglongjmp",
+    "panic",
+    "stack_chk_fail",
+    "cxa_throw",
+    "cxa_terminate",
+    "cxa_call_unexpected",
+    "cxa_bad_cast",
+    "Unwind_Resume",
+    "assert_fail",
+    "assert_rtn",
+    "fortify_fail",
+    "ZSt9terminatev",
+    "ZN10__cxxabiv111__terminateEPFvvE",
+    "pthread_exit",
+];
+
+// RUGRA-GLUE: Java-side analyzer (NoReturnFunctionAnalyzer.added) with no
+// decompiler-C++ counterpart; this driver function is the program-database
+// seeding equivalent on Rugra's side of the front-end boundary.
+/// Strip leading '_' chars from a raw ELF symbol name, mirroring the
+/// analyzer's `while (name.charAt(startIndex) == '_') ++startIndex;` loop.
+/// ASCII-only names from the ELF strtab; the '_' byte prefix is what the
+/// Java loop consumes, so byte indexing is exact here.
+pub fn strip_leading_underscores(name: &str) -> &str {
+    name.trim_start_matches('_')
+}
+
+// RUGRA-GLUE: Java-side analyzer (NoReturnFunctionAnalyzer.added) with no
+// decompiler-C++ counterpart; see the module note above.
+/// Exact no-return classification for a raw ELF symbol name: strip leading
+/// underscores, then case-sensitive containment in the Known list (the ELF
+/// list has no wildcard entries, so no prefix path applies).
+pub fn is_known_no_return(symbol_name: &str) -> bool {
+    KNOWN_NO_RETURN_ELF_NAMES
+        .contains(&strip_leading_underscores(symbol_name))
+}
+
+// RUGRA-GLUE: Java-side analyzer makeNoReturnFunction
+// (NoReturnFunctionAnalyzer.java:121-180, the functionAt.setNoReturn(true)
+// calls at :144/:168) with no decompiler-C++ counterpart; the driver's
+// program-database equivalent for the function being decompiled.
+/// Pre-flow function-attribute half of HTTPDMAIN-F1-NORETURN-0001: set
+/// `no_return` on the decompiled function's own FuncProto when its primary
+/// symbol name matches the Known list — the analyzer's
+/// `functionAt.setNoReturn(true)` DB attribute, which flow-time queryCall
+/// reads via copyFlowEffects (flow.cc:663-664) for callers' call sites.
+/// Idempotent: re-marking keeps the bit, and a non-matching name never
+/// clears it (the analyzer never unsets the flag on non-matches). Returns
+/// whether the function was marked (for the [PREPASS] log). Inert on the
+/// current canon window (no window function's own symbol matches the
+/// list); ported for contract parity with the curl precedent.
+pub fn mark_known_no_return_function(fd: &mut Funcdata, symbol_name: &str) -> bool {
+    if !is_known_no_return(symbol_name) {
+        return false;
+    }
+    fd.funcp.set_no_return(true);
+    true
+}
+
+// RUGRA-GLUE: the analyzer's program-database marking + Ghidra's
+// FlowInfo::queryCall queryFunction boundary (flow.cc:660) in one
+// driver-owned table; Rugra's Funcdata owns no per-callee Funcdata at flow
+// time, so the driver hands the callee `funcp` slices to the flow walk
+// (mirror face) or to the canon splice pass below.
+/// Flow-visible callee table (HTTPDMAIN-F1-NORETURN-0001 segment (c)):
+/// iterate the driver-seeded symbol table and, for every symbol matching
+/// the Known no-return list, build the minimal callee FuncProto — the
+/// `funcp` slice `queryFunction` returns for the matched function: the
+/// default proto shape (symbol name + void return, all flags clear) with
+/// the analyzer's `setNoReturn(true)` DB attribute set. The flow-time
+/// consumer (`FlowInfo::query_call`'s `copy_flow_effects`, flow.cc:663-664)
+/// reads only the `is_inline|no_return` flag subset, so the void return and
+/// empty parameter list carry no additional semantics; addresses never
+/// called remain inert entries (Ghidra's analyzer equally marks functions
+/// that some decompilation never queries).
+pub fn known_no_return_callee_protos(
+    symbol_table: &HashMap<u64, String>,
+) -> std::collections::BTreeMap<u64, rugra::fspec::FuncProto> {
+    symbol_table
+        .iter()
+        .filter(|(_, name)| is_known_no_return(name))
+        .map(|(&address, name)| {
+            // The same default-proto construction Funcdata::new gives the
+            // decompiled function itself (funcdata.rs:525-531) — Ghidra's
+            // FuncCallSpecs ctor "clones a default" for fresh specs.
+            let mut proto = rugra::fspec::FuncProto::new(
+                name.clone(),
+                std::sync::Arc::new(rugra::type_system::datatype::Datatype::Void(
+                    rugra::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        rugra::type_system::datatype::TypeMetatype::Void,
+                    ),
+                )),
+            );
+            proto.set_no_return(true);
+            (address, proto)
+        })
+        .collect()
+}
+
+// RUGRA-GLUE: the canon (linear inject) transport of
+// FlowInfo::checkForFlowModification (flow.cc:636-651). On the mirror face
+// the FlowInfo walk consumes the callee table natively (flow.rs:1306-1320
+// — artificial_halt(NORETURN) + the warning); the canon face lifts the
+// whole function linearly and never runs the walk, so the driver performs
+// the same observable mutation at the same relative position: the analyzer
+// marks the DB before decompilation, and the halt exists from flow time —
+// before block formation in both worlds (Ghidra: opDeadInsertAfter during
+// the walk, blocks split at it via the RETURN arm's startbasic, flow.cc:
+// 332-335; here: the raw splice precedes inject_raw_ops, and
+// build_blocks_from_ops splits at the RETURN terminator with no
+// fallthrough edge, funcdata.rs:7927-7930). The halt op is the exact
+// artificialHalt shape (flow.cc:592-601): CPUI_RETURN, 4-byte constant-1
+// input, the CALL instruction's own address/seq.
+/// Canon-path raw splice: after every direct CALL op whose in(0) target
+/// address is a Known no-return callee, insert the artificial-halt raw
+/// RETURN op. Records each spliced call address in `halt_addrs` for the
+/// post-inject flag pass (the raw layer carries no op flags; the
+/// PcodeOp::noreturn marking happens on the injected op).
+fn splice_known_no_return_halts(
+    raw_ops: Vec<rugra::pcoderaw::PcodeOpRaw>,
+    callee_protos: &std::collections::BTreeMap<u64, rugra::fspec::FuncProto>,
+    halt_addrs: &mut std::collections::HashSet<u64>,
+) -> Vec<rugra::pcoderaw::PcodeOpRaw> {
+    if callee_protos.is_empty() {
+        return raw_ops;
+    }
+    let mut spliced = Vec::with_capacity(raw_ops.len());
+    let mut count = 0usize;
+    for raw in raw_ops {
+        let is_noreturn_call = {
+            let is_call = rugra::opcodes::OpCode::from_i32(raw.get_opcode())
+                == Some(rugra::opcodes::OpCode::CPUI_CALL);
+            is_call
+                && raw
+                    .inputs()
+                    .first()
+                    .is_some_and(|tgt| {
+                        tgt.space == rugra::space::AddressSpace::Ram
+                            && callee_protos.contains_key(&tgt.offset)
+                    })
+        };
+        let seq = raw.seq_num();
+        spliced.push(raw);
+        if !is_noreturn_call {
+            continue;
+        }
+        let Some(seq) = seq else { continue };
+        // flow.cc:592-601 artificialHalt: RETURN + newConstant(4,1), at the
+        // CALL op's own address (checkForFlowModification's op->getAddr()).
+        let mut halt = rugra::pcoderaw::PcodeOpRaw::new(
+            rugra::opcodes::OpCode::CPUI_RETURN as i32,
+        );
+        halt.add_input(rugra::pcoderaw::VarnodeRaw::new(
+            rugra::space::AddressSpace::Const,
+            1,
+            4,
+        ));
+        halt.set_seq_num(seq);
+        halt_addrs.insert(seq.get_addr().as_u64());
+        count += 1;
+        spliced.push(halt);
+    }
+    if count > 0 {
+        eprintln!(
+            "[PREPASS] known no-return: {count} artificial halt(s) spliced after direct calls"
+        );
+    }
+    spliced
+}
+
+// RUGRA-GLUE: the flag half of the canon transport — Funcdata::opMarkHalt
+// (funcdata_op.cc:37-48) + Funcdata::warning, the two mutations
+// checkForFlowModification performs on the Funcdata (flow.cc:643/646).
+/// Post-inject halt marking: for every spliced RETURN (identified by the
+/// recorded call addresses — a real `ret` instruction can never share a
+/// call instruction's address), set the `PcodeOp::noreturn` halt flag and
+/// emit the "Subroutine does not return" warning anchored at the CALL's
+/// address, exactly as flow.rs:1309/1320 does on the walk path. Consumers:
+/// heritage skips halt RETURNs for return-value placement (heritage.rs
+/// cc:1627 mirror), ActionSetCasts and printc skip non-printed halt ops
+/// (printc.cc:2696 notPrinted = marker|nonprinting|noreturn), and the block
+/// already ended at the halt with no fallthrough edge.
+fn flag_known_no_return_halts(fd: &mut Funcdata, halt_addrs: &std::collections::HashSet<u64>) {
+    if halt_addrs.is_empty() {
+        return;
+    }
+    let mut flagged = 0usize;
+    let ops: Vec<rugra::op::PcodeOpRef> = fd.obank.alivelist.clone();
+    for op_ref in ops {
+        let (is_spliced, addr) = {
+            let op = op_ref.0.read().unwrap();
+            (
+                op.opcode == rugra::opcodes::OpCode::CPUI_RETURN
+                    && halt_addrs.contains(&op.get_addr().as_u64()),
+                op.get_addr(),
+            )
+        };
+        if !is_spliced {
+            continue;
+        }
+        // funcdata_op.cc:47 op->setFlag(flag) via opMarkHalt — the
+        // PcodeOp::noreturn bit artificialHalt's caller passes.
+        fd.op_mark_halt(&op_ref, rugra::op::pcodeop_flags::NORETURN);
+        // flow.cc:646: data.warning("Subroutine does not return",
+        // op->getAddr()) — only when the call site is not inline (no
+        // inline calls exist on this corpus).
+        fd.warning("Subroutine does not return", addr);
+        flagged += 1;
+    }
+    if flagged > 0 {
+        eprintln!(
+            "[PREPASS] known no-return: {flagged} halt op(s) marked NORETURN + warning"
+        );
+    }
 }
 
 // DRIVER-RIPREL-CONSTFOLD-0001: SLEIGH's rip-relative export model for the
@@ -2918,6 +3210,29 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
                 func_name, fd.obank.optree.len(), fd.bblocks.get_size());
         } else {
 
+        // HTTPDMAIN-F1-NORETURN-0001 segment (b): the analyzer's own-DB
+        // attribute for the decompiled function (makeNoReturnFunction's
+        // functionAt.setNoReturn(true)) — inert on the current canon window
+        // (no window function's symbol matches the Known list) but ported
+        // for contract parity with the curl precedent's pre-flow position.
+        if mark_known_no_return_function(&mut fd, &func_name) {
+            eprintln!(
+                "[PREPASS] {} marked known no-return ({} matches Non-Returning Functions - Known)",
+                func_name, func_name
+            );
+        }
+        // HTTPDMAIN-F1-NORETURN-0001 segment (c) + canon transport: the
+        // flow-visible callee table (the queryCall queryFunction boundary,
+        // flow.cc:660), then the checkForFlowModification equivalent at the
+        // raw layer — the artificial-halt splice BEFORE inject_raw_ops, so
+        // the halt exists from flow time exactly as on the walk path
+        // (block formation splits at it; the flag pass below completes the
+        // opMarkHalt + warning halves right after injection).
+        let noreturn_callees = known_no_return_callee_protos(&sym_table);
+        let mut noreturn_halt_addrs: std::collections::HashSet<u64> =
+            std::collections::HashSet::new();
+        let raw_ops = splice_known_no_return_halts(raw_ops, &noreturn_callees, &mut noreturn_halt_addrs);
+
         // Tail-call flow overrides — transport of Ghidra's Java-side
         // TailCallAnalyzer writing FlowOverride CALL_RETURN entries into
         // the program DB before decompilation: a direct `jmp` whose
@@ -2953,6 +3268,15 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
 
         fd.inject_raw_ops(&raw_ops);
         eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());
+        // HTTPDMAIN-F1-NORETURN-0001: complete the canon transport right
+        // after injection — the opMarkHalt flag + the "Subroutine does not
+        // return" warning on each spliced halt (the two Funcdata mutations
+        // checkForFlowModification performs, flow.cc:643/646), before the
+        // jumptable recovery below (the halt exists from flow time in the
+        // oracle, i.e. before generateOps phase 2) and before the action
+        // pipeline (heritage's halt-RETURN skip, ActionSetCasts' and
+        // printc's notPrinted all read the flag inside perform_action).
+        flag_known_no_return_halts(&mut fd, &noreturn_halt_addrs);
         // HTTPD-MAIN-WARNUNREACH-JTEDGE-0001: the oracle's load
         // contract is Funcdata::followFlow (funcdata_op.cc:756), whose
         // generateOps phase 2 recovers jump tables BEFORE block
@@ -6172,4 +6496,239 @@ fn emit_stage_drill(
         .flush()
         .map_err(|error| format!("unable to flush stage drill: {error}"))?;
     Ok(())
+}
+
+// ============================================================================
+// HTTPDMAIN-F1-NORETURN-0001 tests (the FLOW-NORETURN-DATA-0001 precedent's
+// test set, adapted to the httpd corpus witness).
+// ============================================================================
+#[cfg(test)]
+mod noreturn_tests {
+    use super::*;
+
+    /// Every listed name classifies no-return through the raw ELF form
+    /// (leading-underscore strip + exact containment).
+    #[test]
+    fn classifies_list_members() {
+        for name in [
+            "exit",
+            "_exit",
+            "cexit",
+            "c_exit",
+            "abort",
+            "reboot",
+            "longjmp",
+            "_longjmp",
+            "longjmp_chk",
+            "siglongjmp",
+            "panic",
+            "__stack_chk_fail",
+            "__cxa_throw",
+            "cxa_terminate",
+            "cxa_call_unexpected",
+            "__cxa_bad_cast",
+            "_Unwind_Resume",
+            "__assert_fail",
+            "__assert_rtn",
+            "__fortify_fail",
+            "_ZSt9terminatev",
+            "__ZN10__cxxabiv111__terminateEPFvvE",
+            "pthread_exit",
+        ] {
+            assert!(is_known_no_return(name), "{name} must classify no-return");
+        }
+    }
+
+    /// Exact-match boundary: case is significant, near-miss spellings stay
+    /// returning, and the httpd corpus's own look-alike imports never match
+    /// (the analyzer's flat-ELF namespace-guard analog).
+    #[test]
+    fn rejects_non_members() {
+        for name in [
+            "Exit",
+            "STACK_CHK_FAIL",
+            "exits",
+            "exit2",
+            "my_exit",
+            "aborting",
+            "apr_terminate",      // httpd import: returning (list has no
+                                  // bare "terminate" entry)
+            "apr_terminate2",     // httpd import, returning
+            "apr_thread_exit",    // httpd import: pthread_exit is listed,
+                                  // the apr_ variant is not
+            "apr_pool_abort_set", // httpd import, returning
+            "apr_pool_abort_get", // httpd import, returning
+            "__cxa_finalize",    // httpd import: cxa_finalize is NOT listed
+            "__libc_start_main",
+            "exit@GLIBC_2.2.5",  // version suffix is not stripped by the
+                                  // analyzer (symbol.getName is the raw
+                                  // name); the PLT thunk symbol the driver
+                                  // seeds carries the bare import name
+            "_ZN5Menu5_exitEv",   // mangled method: Menu::_exit()
+        ] {
+            assert!(
+                !is_known_no_return(name), "{name} must NOT classify no-return"
+            );
+        }
+    }
+
+    /// Fixture witness: the locked httpd binary's .dynsym imports classify
+    /// exactly `abort`, `__stack_chk_fail`, and `exit` as known no-return
+    /// (the three names the canon splice rides on: exit@plt 0x2b530 called
+    /// by main at 0x2b8b8, __stack_chk_fail@plt 0x2a980 at the five
+    /// canary-fail tails, abort@plt 0x2a570 imported but uncalled — an
+    /// inert entry exactly like the analyzer's own never-queried markings).
+    #[test]
+    fn httpd_dynsym_classifies_abort_stack_chk_fail_exit_only() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/httpd");
+        let data = std::fs::read(path).expect("examples/httpd fixture readable");
+        let elf = match goblin::Object::parse(&data).expect("httpd parses as ELF") {
+            goblin::Object::Elf(elf) => elf,
+            _ => panic!("httpd fixture is not an ELF object"),
+        };
+        let mut matched: std::collections::BTreeSet<String> = Default::default();
+        for sym in elf.dynsyms.iter() {
+            if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                if is_known_no_return(name) {
+                    matched.insert(name.to_string());
+                }
+            }
+        }
+        let expected: std::collections::BTreeSet<String> = [
+            "abort".to_string(),
+            "__stack_chk_fail".to_string(),
+            "exit".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(matched, expected);
+    }
+
+    /// The list itself stays byte-faithful to the oracle data file: 21
+    /// entries, no leading underscores, no wildcard tails.
+    #[test]
+    fn list_stays_faithful_to_oracle_data_file() {
+        assert_eq!(KNOWN_NO_RETURN_ELF_NAMES.len(), 21);
+        for name in KNOWN_NO_RETURN_ELF_NAMES {
+            assert!(
+                !name.starts_with('_'), "{name} must not carry a leading '_'"
+            );
+            assert!(!name.ends_with('*'), "{name} must not be a wildcard entry");
+            assert_eq!(name, name.trim(), "{name} must be pre-trimmed");
+        }
+    }
+
+    /// Pre-flow function-attribute marking: a matching function gets its
+    /// own FuncProto's no_return bit set, mirroring the analyzer's
+    /// functionAt.setNoReturn(true) on the function itself. Inert on the
+    /// current canon window (no window function matches) but contract-held.
+    #[test]
+    fn preflow_marking_sets_function_attribute() {
+        let mut fd = Funcdata::new("panic", Address::new(0x2e000), 64);
+        assert!(!fd.funcp.is_no_return());
+        assert!(mark_known_no_return_function(&mut fd, "panic"));
+        assert!(fd.funcp.is_no_return());
+        let mut fd2 = Funcdata::new("__stack_chk_fail", Address::new(0x2e100), 32);
+        assert!(mark_known_no_return_function(&mut fd2, "__stack_chk_fail"));
+        assert!(fd2.funcp.is_no_return());
+    }
+
+    /// Non-members are left untouched, and the marking never clears an
+    /// existing bit (the analyzer only ever sets the flag on matches).
+    #[test]
+    fn preflow_marking_is_idempotent_and_never_clears() {
+        let mut fd = Funcdata::new("ap_getword", Address::new(0x2e9f0), 170);
+        assert!(!mark_known_no_return_function(&mut fd, "ap_getword"));
+        assert!(!fd.funcp.is_no_return());
+        assert!(mark_known_no_return_function(&mut fd, "exit"));
+        assert!(mark_known_no_return_function(&mut fd, "exit"));
+        assert!(!mark_known_no_return_function(&mut fd, "ap_getword"));
+        assert!(fd.funcp.is_no_return());
+    }
+
+    /// Flow-visible callee table (segment (c)): only Known-list members
+    /// enter the table, keyed by symbol address; each entry is the minimal
+    /// callee funcp slice — no_return set, everything else default (void
+    /// return, no model, not inline) so queryCall's copy_flow_effects
+    /// (flow.cc:663-664) reads exactly the analyzer's flag and nothing else.
+    #[test]
+    fn callee_table_contains_only_members_with_minimal_slice() {
+        let mut symbols: HashMap<u64, String> = HashMap::new();
+        symbols.insert(0x2b530, "exit".to_string()); // httpd exit@plt
+        symbols.insert(0x2a980, "__stack_chk_fail".to_string());
+        symbols.insert(0x2a570, "abort".to_string());
+        symbols.insert(0x2a640, "apr_time_now".to_string()); // ordinary import
+        symbols.insert(0x2a6d0, "apr_terminate".to_string()); // look-alike
+        symbols.insert(0x2e9f0, "ap_getword".to_string()); // defined function
+        let table = known_no_return_callee_protos(&symbols);
+        assert_eq!(table.len(), 3);
+        for &address in &[0x2b530u64, 0x2a980, 0x2a570] {
+            let proto = &table[&address];
+            assert!(
+                proto.is_no_return(), "entry 0x{address:x} must be no-return"
+            );
+            assert!(!proto.is_inline());
+            assert!(!proto.has_model());
+            assert_eq!(proto.num_params(), 0);
+        }
+        assert_eq!(table[&0x2a980].name, "__stack_chk_fail");
+        // Empty symbol table: empty table.
+        assert!(known_no_return_callee_protos(&HashMap::new()).is_empty());
+    }
+
+    /// Canon splice transport: a CALL to a table callee gains the
+    /// artificial-halt RETURN right after it (same instruction seq, const-1
+    /// input); a CALL to an ordinary callee and non-CALL ops are untouched;
+    /// an empty table leaves the stream byte-identical.
+    #[test]
+    fn splice_inserts_halt_after_noreturn_call_only() {
+        use rugra::pcoderaw::{PcodeOpRaw, VarnodeRaw};
+        use rugra::space::AddressSpace;
+        let mut symbols: HashMap<u64, String> = HashMap::new();
+        symbols.insert(0x2b530, "exit".to_string());
+        let table = known_no_return_callee_protos(&symbols);
+        let seq = rugra::address::SeqNum::new(rugra::address::Address::new(0x2b8b8), 0);
+        let mk_call = |target: u64| {
+            let mut op = PcodeOpRaw::new(rugra::opcodes::OpCode::CPUI_CALL as i32);
+            op.add_input(VarnodeRaw::new(AddressSpace::Ram, target, 8));
+            op.set_seq_num(seq);
+            op
+        };
+        let mk_store = || {
+            let mut op = PcodeOpRaw::new(rugra::opcodes::OpCode::CPUI_STORE as i32);
+            op.set_seq_num(seq);
+            op
+        };
+        let raw = vec![mk_store(), mk_call(0x2b530), mk_call(0x2a640)];
+        let mut halts = std::collections::HashSet::new();
+        let out = splice_known_no_return_halts(raw, &table, &mut halts);
+        assert_eq!(out.len(), 4);
+        assert_eq!(
+            rugra::opcodes::OpCode::from_i32(out[2].get_opcode()),
+            Some(rugra::opcodes::OpCode::CPUI_RETURN)
+        );
+        assert_eq!(halts, [0x2b8b8u64].into_iter().collect());
+        // The halt carries the const-1 input and the CALL's own seq.
+        let inputs = out[2].inputs();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].space, AddressSpace::Const);
+        assert_eq!(inputs[0].offset, 1);
+        assert_eq!(inputs[0].size, 4);
+        assert_eq!(out[2].seq_num().map(|s| s.get_addr().as_u64()), Some(0x2b8b8));
+        // Ordinary call untouched, store untouched.
+        assert_eq!(
+            rugra::opcodes::OpCode::from_i32(out[3].get_opcode()),
+            Some(rugra::opcodes::OpCode::CPUI_CALL)
+        );
+        assert_eq!(
+            rugra::opcodes::OpCode::from_i32(out[0].get_opcode()),
+            Some(rugra::opcodes::OpCode::CPUI_STORE)
+        );
+        // Empty table: passthrough, no halt addresses.
+        let raw2 = vec![mk_store(), mk_call(0x2b530)];
+        let mut halts2 = std::collections::HashSet::new();
+        let out2 = splice_known_no_return_halts(raw2, &Default::default(), &mut halts2);
+        assert_eq!(out2.len(), 2);
+        assert!(halts2.is_empty());
+    }
 }
