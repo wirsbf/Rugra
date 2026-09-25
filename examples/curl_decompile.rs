@@ -5285,12 +5285,24 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // proxy — the same names the Program-DB layer carries (function-statics
     // in their function namespace), so print-side address-keyed lookups
     // agree with the symbol graph.
-    for (&address, global) in debug_globals.iter() {
-        let name = match &global.parent_function {
-            Some(parent) => format!("{}::{}", parent, global.name),
-            None => global.name.clone(),
-        };
-        fd.add_symbol(address, name);
+    // MIRROR2-DWARF-TIERLEAK-0001: this overlay is analyzer-imported DWARF
+    // knowledge; the raw BFD harness (BfdArchitecture + readLoaderSymbols)
+    // the bare-load component reproduces imports no DWARF at all — the
+    // direct-runner golden prints default iRam/xRam spellings where this
+    // layer would substitute DWARF variable names. Skip under the gate.
+    if mirror_bare_load_enabled() {
+        eprintln!(
+            "[PREPASS] {} bare-load: DWARF global display-name overlay disabled",
+            target.name
+        );
+    } else {
+        for (&address, global) in debug_globals.iter() {
+            let name = match &global.parent_function {
+                Some(parent) => format!("{}::{}", parent, global.name),
+                None => global.name.clone(),
+            };
+            fd.add_symbol(address, name);
+        }
     }
     for (address, value) in &request.string_entries {
         fd.add_string(*address, value.clone());
@@ -5456,11 +5468,24 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // Symbol-driven declarations are not in place (see
     // PRINTC-SYMBOL-DECL-0001 / FUNCDATA-LINKSYMBOL-TYPED-0001). The full
     // per-global map stays available via `address_pointer_map()`.
-    fd.global_struct_ptrs = debug_globals
-        .address_pointer_map()
-        .into_iter()
-        .filter(|(address, _)| *address == 0x17520)
-        .collect();
+    // MIRROR2-DWARF-TIERLEAK-0001: the struct-pointer stamp is DWARF
+    // knowledge (the direct-runner golden's raw-BFD environment has no
+    // DWARF type graph); under it the mirror face must keep the oracle's
+    // untyped form — `xunknown8 *pxVar15` scalar-bump loop and
+    // `xRam0000000000017520`, not `Configurable *`/`pCVar16->useragent`
+    // and `pCRam...`. The gate leaves the map empty; canon unchanged.
+    if mirror_bare_load_enabled() {
+        eprintln!(
+            "[PREPASS] {} bare-load: DWARF global struct-pointer seed disabled",
+            target.name
+        );
+    } else {
+        fd.global_struct_ptrs = debug_globals
+            .address_pointer_map()
+            .into_iter()
+            .filter(|(address, _)| *address == 0x17520)
+            .collect();
+    }
 
     // FLOW-NORETURN-DATA-0001 segment (c): hand the flow-visible callee
     // table to flow. In Ghidra the "Non-Returning Functions - Known"
@@ -7189,7 +7214,17 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         // the declaration, and every call site, so the DWARF name wins for
         // both the FuncInfo identity and the symbol table used by call-site
         // naming (queryCall's getFuncdata display name).
-        let dwf_name = debug_prototypes.get(ledger_vaddr).map(|p| p.name.clone());
+        // MIRROR2-DWARF-TIERLEAK-0001: that rename is the headless DWARF
+        // analyzer's transaction; the raw BFD harness of the bare-load
+        // mirror has no DWARF channel, and its golden keeps the loader
+        // spellings (`parseconfig.constprop.0` etc. — the direct-runner
+        // header list). dwf_name stays None under the gate so ELF names
+        // win everywhere; the canon face keeps the DWARF precedence.
+        let dwf_name = if mirror_bare_load_enabled() {
+            None
+        } else {
+            debug_prototypes.get(ledger_vaddr).map(|p| p.name.clone())
+        };
         if let Some(dwf) = dwf_name.as_deref() {
             symbol_table.insert(ledger_vaddr, dwf.to_string());
         }
@@ -7240,10 +7275,19 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // EXTERNAL-space entries have no body to infer from (Ghidra gets import
     // prototypes from a signature database Rugra does not have), and
     // inferring on them would inject bogus CALL arg counts into callers.
-    let mut prototype_db: std::collections::HashMap<u64, usize> = debug_prototypes
-        .iter()
-        .map(|(&address, prototype)| (address, prototype.parameters.len()))
-        .collect();
+    // MIRROR2-DWARF-TIERLEAK-0001: the DWARF param-count seeds are
+    // analyzer-imported knowledge — the raw BFD harness of the bare-load
+    // mirror carries no DWARF prototypes, so under the gate the pre-pass
+    // starts empty and only its own inference feeds external_prototypes.
+    let mut prototype_db: std::collections::HashMap<u64, usize> = if mirror_bare_load_enabled()
+    {
+        std::collections::HashMap::new()
+    } else {
+        debug_prototypes
+            .iter()
+            .map(|(&address, prototype)| (address, prototype.parameters.len()))
+            .collect()
+    };
     for func in &functions {
         if func.origin != FunctionOrigin::ElfSymbol
             || func.size < 5
@@ -7337,6 +7381,39 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|(&address, name)| (address, name.clone()))
         .collect();
+    // MIRROR2-DWARF-TIERLEAK-0001 / readLoaderSymbols parity: the raw BFD
+    // harness registers FUNCTION symbols only (LoadImageBfd::
+    // advanceToNextSymbol's BSF_FUNCTION filter, loadimage_bfd.cc:181-192,
+    // + the golden runner's registerPltStubs psABI mapping,
+    // regen_ghidra_golden.py:281-332) — no OBJECT/GOT PTR_/PTR_DAT_ data
+    // labels, no .plt.got thunks. The canon face's symbol_table carries
+    // the full analyzer-era label set; under the bare-load component the
+    // request payload must drop every non-function entry or
+    // ActionConstantPtr symbolizes data addresses the oracle leaves as
+    // raw constants (golden witness `strdup(0x17680)` vs the leaked
+    // `strdup(glob_buffer)`).
+    if mirror_bare_load_enabled() {
+        let mut loader_function_addrs: std::collections::HashSet<u64> =
+            std::collections::HashSet::new();
+        for sym in elf.syms.iter() {
+            if sym.is_function() && sym.st_value != 0 {
+                loader_function_addrs.insert(sym.st_value);
+            }
+        }
+        for sym in elf.dynsyms.iter() {
+            if sym.is_function() && sym.st_value != 0 {
+                loader_function_addrs.insert(sym.st_value);
+            }
+        }
+        for &plt_addr in plt_symbols.keys() {
+            loader_function_addrs.insert(plt_addr);
+        }
+        symbol_entries.retain(|(address, _)| loader_function_addrs.contains(address));
+        eprintln!(
+            "[PREPASS] bare-load: symbol payload filtered to the loader function set ({} entries)",
+            symbol_entries.len()
+        );
+    }
     symbol_entries.sort_by_key(|(address, _)| *address);
     let mut string_entries: Vec<(u64, String)> = string_table
         .iter()
@@ -7458,6 +7535,28 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         // instead of spawning a doomed worker.
         if let Some(import) = external_import_slots.get(&func.vaddr) {
             if import.name == func.name {
+                // MIRROR2-EXTSTUB-MIRRORLEAK-0001: the EXTERNAL memory
+                // block is a Java ELF-importer artifact (ElfProgramBuilder
+                // synthesizes it for undefined .dynsym imports); the raw
+                // BFD harness the mirror bundle reproduces
+                // (BfdArchitecture + readLoaderSymbols + the golden
+                // runner's registerBfdFunctionSymbols/registerPltStubs,
+                // regen_ghidra_golden.py:459-461) has no such block and
+                // registers no function at 0x19000+ — the direct-runner
+                // golden (74 functions) ends at _fini. Emitting the canon
+                // stub sections under the bundle leaks 48 blocks that the
+                // compare tool's by-name fallback then mispairs against
+                // the golden's same-named real bodies (~11 pseudo-diff
+                // lines each, the 403-line EXTSTUB family). Skip the
+                // whole projection under the canonical bundle; canon and
+                // every single-component A/B face keep it unchanged.
+                if mirror_bundle_enabled() {
+                    eprintln!(
+                        "[PREPASS] {} mirror: EXTERNAL-block stub projection skipped (0x{:x})",
+                        func.name, func.vaddr
+                    );
+                    continue;
+                }
                 println!(
                     "/* ---- 0x{:x}: {} ({} bytes) ---- */",
                     ANALYZE_HEADLESS_IMAGE_BASE + func.vaddr, func.name, func.size
