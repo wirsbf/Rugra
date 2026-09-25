@@ -63,6 +63,18 @@ jobs:
       - name: Check out Rugra
         uses: actions/checkout@v4
 
+      # build.rs:29 hard-requires the locked SLEIGH C++ tree; without this
+      # step the mirror-gate job dies before the first gate line runs.
+      - name: Check out locked Ghidra oracle
+        uses: actions/checkout@v4
+        with:
+          repository: NationalSecurityAgency/ghidra
+          ref: e40ed13014025f82488b1f8f7bca566894ac376b
+          path: ghidra
+          sparse-checkout: |
+            Ghidra/Features/Decompiler/src/decompile/cpp
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
