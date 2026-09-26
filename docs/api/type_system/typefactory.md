@@ -1,5 +1,21 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-09-26：DataOrg flavor 补 `code` 核心注册（Lane TYPINGPX，TYPINGPX-PXNAME-0001）
+
+`init_data_org_core_types` 在 `undefined1..8` 之后显式注册
+`set_core_type_result("code", 1, Code, false)` 再 `cache_core_types()` ——
+ghidra_arch.cc:349 `types->setCoreType("code",1,TYPE_CODE,false);` 的逐字对应
+（下方 2026-09-24 条目列出的 Java 投影表本就含 `code`，但代码侧漏注册——
+文档-代码漂移就此闭合）。语义链：cacheCoreTypes（type.cc:3239-3244）填
+`typecache[1][TYPE_CODE]`，使 `get_base(1, Code)` 与 `get_type_code()`
+（type.cc:3680 同一 cache 槽探针）统一返回**命名** `code` 核心对象；此前
+data-org flavor 下 `get_base(1, Code)` 返回**未命名** base——`printNameBase`
+（type.hh:273）贡献空字符，mapGlobals 命名落 `pRam`（oracle `pcRam`；
+双侧 fixture `tests/oracle/typingpx_pxname_1204.*` case d 钉死）。新单测
+`test_data_org_code_core_named_and_unified` 固定：`get_base(1,Code)` 名为
+`code`、与 `get_type_code()`/`find_by_name("code")` Arc 同一。canon 双语料
+字节恒等亲证（E2E 门禁，Lane TYPINGPX 终报）。
+
 ## 2026-09-24：DataOrg core-type 表改为 Java headless `<coretypes>` 精确投影（Lane GH）
 
 `init_data_org_core_types` 的整数命名不再用 `int{N}`/`uint{N}` 约定式拼写，改为

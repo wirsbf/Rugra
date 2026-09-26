@@ -473,6 +473,24 @@ impl TypeFactory {
             self.add_core_type(Arc::new(Datatype::Base(base)));
         }
 
+        // Ghidra: ghidra_arch.cc:324 ArchitectureGhidra::buildCoreTypes
+        // (`types->setCoreType("code",1,TYPE_CODE,false);` at cc:349) —
+        // every oracle headless form registers the code core: the
+        // ArchitectureGhidra fallback table (ghidra_arch.cc:349) AND the
+        // Java client's
+        // `<coretypes>` stream (canon gate witness: the headless golden
+        // renders named `code` types, `(code *)PTR_…`). cacheCoreTypes
+        // (type.cc:3239-3244) then fills typecache[1][TYPE_CODE], which
+        // unifies `getBase(1,TYPE_CODE)` AND `getTypeCode()` (type.cc:3680
+        // probes the same cache slot) onto the NAMED core. Without this
+        // registration the data-org flavor answered `get_base(1, Code)`
+        // with an UNNAMED base — an empty printNameBase contribution
+        // (TYPINGPX-PXNAME-0001 case d: `pRam` vs oracle `pcRam`) and an
+        // unnamed/typed code-type split the oracle never produces.
+        if let Err(message) = self.set_core_type_result("code", 1, TypeMetatype::Code, false) {
+            panic!("LowlevelError: {message}");
+        }
+
         self.cache_core_types();
     }
 
@@ -5234,6 +5252,31 @@ mod tests {
                 .get_base(8, TypeMetatype::Float)
                 .expect("8-byte float core"),
             &factory.find_by_name("double").expect("double")
+        ));
+    }
+
+    #[test]
+    fn test_data_org_code_core_named_and_unified() {
+        // Ghidra: ghidra_arch.cc:349 — every oracle headless form registers
+        // the `code` core; cacheCoreTypes (type.cc:3239-3244) fills
+        // typecache[1][TYPE_CODE], unifying getBase(1,TYPE_CODE) and
+        // getTypeCode() onto the NAMED core. The data-org flavor previously
+        // answered get_base(1, Code) with an UNNAMED base (empty
+        // printNameBase contribution — TYPINGPX-PXNAME-0001 case d).
+        let mut factory = TypeFactory::new_flavor(8, CoreTypeFlavor::DataOrg);
+        let by_base = factory
+            .get_base(1, TypeMetatype::Code)
+            .expect("code base resolves");
+        assert_eq!(by_base.get_name(), "code");
+        assert_eq!(by_base.get_metatype(), TypeMetatype::Code);
+        assert_eq!(by_base.get_size(), 1);
+        // type.cc:3680 getTypeCode probes the same typecache slot: both
+        // access paths must return the SAME canonical object.
+        let by_getter = factory.get_type_code();
+        assert!(Arc::ptr_eq(&by_base, &by_getter));
+        assert!(Arc::ptr_eq(
+            &by_base,
+            &factory.find_by_name("code").expect("code core registered")
         ));
     }
 
