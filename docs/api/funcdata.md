@@ -2972,3 +2972,74 @@ unionresolve.rs `resolve_in_flow` Array/Struct 臂与 coreaction.rs
 （getTypePointerStripArray/downChain/getTypePointer）一致；调用方
 （castInput/cc:2714 与 castOutput/cc:2571 族）均不持工厂 guard，
 无重入死锁面。
+
+## 2026-09-26：MIGW1-FUNCDATA-0004 Rust 化批次一（维护面/调试面/打印面/内联壳）
+
+车道 `W-2026-09-26-MIGW1-FUNCDATA-0004`（worktree `wt/migfuncdata`）。本批将
+`UNMAPPED_DECOMPOSITION_2026-09-26.md` funcdata 簇真缺失清单中的以下定义 Rust 化
+（每函数带 `// Ghidra:` 锚点；逐函数 B2 fixture 见 `tests/oracle/funcdata_*_1204.*`）：
+
+**转发/维护面（funcdata.hh 1-liner 族，46 defs）**：`start_clean_up`（hh:186，
+新增 `clean_up_index` 字段替代旧 no-op 标记）、`get_clean_up_index`（hh:187）、
+`seen_deadcode`（hh:242）、`dead_removal_allowed`（hh:254）、
+`dead_removal_allowed_seen`（hh:260）、`find_covered_input`（hh:303）、
+`find_covering_input`（hh:310）、`find_varnode_written`（hh:333，`uniq=~0` 显式
+化为 `u32::MAX`）、`begin_loc`/`end_loc` 全 6 对重载（hh:337-372；size/fl/pc
+三对以谓词过滤表达同一半开区间，见 FUNCDATA-LOCSIZE-BOUND-0001）、`overlap_loc`
+（hh:375，随 bank 侧 (addr,size) 适配签名）、`begin_def`/`end_def` 全 3 对重载
+（hh:379-394）、`end_lane_access`（hh:398）、`clear_active_output`（hh:420）、
+`clear_dead_ops`（hh:428）、`mark_return_copy`（hh:452）、`find_op`（hh:453）、
+`op_dead_insert_after`（hh:460）、`op_dead_and_gone`（hh:476）、
+`op_mark_start_basic`（hh:480）、`op_mark_start_instruction`（hh:481）、
+`target_op`（hh:490，避免与既有查询撞名）、`begin_op_code`/`end_op_code` +
+alive/dead/all/addr 四对（hh:500-527）。
+
+**OPACTION_DEBUG 观察面（14 defs，hh:580-612 + cc:1007-1118）**：Rust 侧常开
+编译、行为由 `opactdbg_on` 门控（ctor 按 cc:74-81 初始化：breakcount=-1、全部
+false）；`enable/disable_jt_callback`（hh:593/594，fn 指针形态）、
+`debug_activate`/`deactivate`（hh:595/596）、`debug_size`（hh:601）、
+`debug_enable`/`disable`/`clear`（hh:602-605）、`debug_handle_break`（hh:609）、
+`debug_set_break`（hh:610）、`debug_mod_clear`（cc:1024-1032）、`debug_set_range`
+（cc:1063-1072）、`debug_check_range`（cc:1076-1098，PC 界与 uniq 界的 continue
+短路逐条对齐）、`debug_print_range`（cc:1100-1118，返回字符串、sink 归调用方）。
+`Funcdata::clear` 补 cc:90 `clean_up_index=0` 与 cc:110 `opactdbg_count=0` 复位。
+既有 `drillobserve.rs` 全局 recorder 与该 Funcdata 成员面并存（前者是 stage-drill
+传输层 RUGRA-GLUE，后者是 hh 声明的成员 1:1）。
+
+**打印面（3 defs）**：`print_raw`（cc:209-225；空块分支逐行 `seqnum:\t<opRaw>`，
+SeqNum 文本为 address.cc:32-38 的 DECIMAL uniq 形式 `seqnum_text`；带块分支组合
+block.cc:1300-1316，依赖 block.rs BlockBasic::printRaw/printHeader 缺口——残差
+登记 FUNCDATA-BLOCKPRINTRAW-DEP-0001；空 obank 走 RecovError→`Error::Lowlevel`）、
+`print_varnode_tree`（cc:579-591，def-tree 序 printInfo）、`print_local_range`
+（cc:597-608，ScopeLocal union 窗口按 RangeList::printBounds 文本；子 scope 循环
+因 Rust ScopeLocal 无 child map 为结构性缺失 FUNCDATA-LOCALRANGE-CHILDREN-0001）。
+
+**内联/表达式（5 defs）**：`do_live_inject`（cc:848-876，dead-list 尾捕获 +
+"Illegal branching injection" 异常路径；payload 经 `InjectPayload::inject` 的
+raw-ops 返回形态）、`inline_flow`（funcdata_op.cc:853-916 全序；两处已证明
+行为中性的重排序以适配 Rust 借用：testHardInlineRestrictions 前移、inlineClone
+先于 jumpvec 拷贝；`FlowInfo::inline_ezclone`/`inline_clone` 为 flow.rs 结构
+占位、JumpTable 无拷贝构造 → FUNCDATA-INFLOW-DEP-0001，B2 状态 NO_ORACLE）、
+`compare_cse_hash`（funcdata_op.cc:1404-1408 自由函数）、
+`CloneBlockOps::clone_expression`（funcdata_block.cc:1024-1040，含空表
+LowlevelError）、`AncestorRealistic::mark`（hh:714-717，push 先于 setMark）。
+
+**State 构造器（2 defs）**：`ArState::new`（hh:673-680）与
+`ArState::pull_back_subpiece`（hh:685-690，SUBPIECE 回拉的 offset 累加），SUBPIECE
+入栈点已改用构造器（此前内联字面量）。
+
+**等价裁决（不逐行 Rust 化，3 defs）**：`~Funcdata`（cc:190-201）——C++ 手工
+deleteScope/clearCallSpecs/delete jumpvec 在 Rust 所有权模型下由字段 Drop 吸收
+（self_ref 为 Weak 无环）；`PcodeEmitFd::setFuncdata`（hh:623）——Rust 以方法
+接收者绑定发射目标（`inject_raw_ops_single`），无裸指针可设；
+`CloneBlockOps::ClonePair` ctor（hh:635）——`clone_list` 的 `(clone,orig)` 元组
+即 pair，建对位点与 C++ push 相同。
+
+**依赖阻塞未实现（7 defs，FUNCDATA-ENCODE-DEP-0001）**：`encode`/`decode`/
+`encodeTree`/`encodeHigh`/`encodeVarnode`/`encodeJumpTable`/`decodeJumpTable`
+——阻塞于 varnode.rs/op.rs 的 String 形 `Varnode::encode`/`PcodeOp::encode`（无
+`&mut dyn Encoder` 重载）与 jumptable.rs 的 `JumpTable::encode/decode` 整体缺失，
+均在其他车道 write-set（MIGW1-DATABASE-0005 / wave-2 marshal+jumptable 票）。
+
+验证：`cargo check --lib` 0 error；`cargo test --lib` 1753 passed / 0 failed
+（与基线一致，5 ignored 不变）。
