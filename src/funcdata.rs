@@ -693,10 +693,21 @@ fn loc_pc_in_span(
 /// Stream form of a SeqNum: `pc.printRaw() ':' uniq` — the uniq counter
 /// prints in DECIMAL (no hex manipulator is active on a fresh stream).
 /// Faithful to `operator<<(ostream &s,const SeqNum &sq)`
-/// (address.cc:32-38); Rust returns a String instead of writing to
+/// (address.cc:32-38); the pc text is `AddrSpace::printRaw`
+/// (space.cc:206-219): `0x` + zero-padded hex with the shrinking-width
+/// rule (offset<2^32 → 8 digits, <2^48 → 12, else 16) and no `+cut`
+/// suffix at wordsize 1. Rust returns a String instead of writing to
 /// ostream.
 fn seqnum_text(sq: &crate::address::SeqNum) -> String {
-    let mut s = format!("{}", sq.addr);
+    let offset = sq.addr.as_u64();
+    let digits = if (offset >> 32) == 0 {
+        8
+    } else if (offset >> 48) == 0 {
+        12
+    } else {
+        16
+    };
+    let mut s = format!("0x{:0width$x}", offset, width = digits);
     s.push(':');
     s.push_str(&sq.time.to_string());
     s

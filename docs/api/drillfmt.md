@@ -12,8 +12,8 @@
   十六进制输出;地址宽度按 8/6/4 字节动态收缩(space.cc:208-215)。
 - `DrillFmt::varnode_raw`:varnode.cc:711-756 printRawNoMarkup/printRaw 全
   语义 — 寄存器名(含 `+off` 子寄存器后缀,xref 反查 point.offset/size)、
-  否则 `<shortcut><offset>`(`#`/`u`/`s`/`r` 按空间)、`expect!=size` 时
-  `:size`、`(i)`、`(<def-seqnum>)`(无前导空格)、`(free)`。
+  否则 `<shortcut><offset>`、`expect!=size` 时 `:size`、`(i)`、
+  `(<def-seqnum>)`(无前导空格)、`(free)`。
 - `DrillFmt::op_print_debug`:op.cc:376-385 — `<seqnum>: ` + dead/unattached
   `**` 或 printRaw。
 - `DrillFmt::op_raw`:typeop.cc 各 TypeOp 结构形式 — binary/unary/func、
@@ -23,9 +23,34 @@
   subpiece(动态 `SUB<in><out>`,typeop.cc:2127-2135);operator 名取
   Ghidra ctor 名 + getOperatorName 覆盖(float 系 `f+` 等,与
   src/typeop.rs 注册名一致)。
+
+### 2026-09-26 — FUNCDATA-PRINT-0001 修正(shortcut 表 + null 槽渲染)
+
+- `space_shortcut` 重写为 translate.cc:517-570 `assignShortcut` 的忠实
+  表:const `#`(cc:524-526)、名为 "register" 的 IPTR_PROCESSOR `%`
+  (cc:527-529)、其余 IPTR_PROCESSOR 取 name[0](cc:530-533,故 ram=`r`)、
+  spacebase `s`(cc:535-537)、internal `u`(cc:538-540)、join `j`
+  (cc:543-545)、iop `i`(cc:546-548)、default `x`(cc:550-552)。
+  **SB-DRILL-RAM-SHORTCUT 关闭**:ram='r' 由 print_family fixture 的
+  oracle 直跑证明(`r0x00001100`),与真实 x86-64 oracle 符号转储
+  (regsym-evidence:code 符号 `r0x...`、register 存储 `%0x...`)一致;
+  旧表 Register='r'/Ram='0' 两处皆误。v1 bank 投影不经本模块,零影响
+  (bank 391/391 复跑验证)。
+- `op_raw` null 槽渲染:每个 TypeOp 形态的 varnode 槽位都经
+  `Varnode::printRaw(ostream&, const Varnode*)` 静态包装
+  (varnode.cc:1207-1214),null 槽印 `<null>`;Ghidra op 构造即预留
+  null 槽(op.cc:71-84 `inrefs(s)`),Rugra `inrefs` 只存已设输入,
+  缺席槽位在此按 `<null>` 渲染(print_family fixture 的无输出
+  INT_ADD 证明:`<null> = <null> + <null>`)。
+- CALLIND 形态修正:typeop.cc:791-807 `s << name` 后**无空格**直接接
+  in0(CALL 是 `name << ' '`,cc:668-670,两者不对称);RETURN 分隔符
+  修正:typeop.cc:882-900 — in1 前空格、in2+ 前逗号(旧实现全用空格)。
+- 模块头与 op_raw 的 typeop.cc 行号引用重锚(cited-line-drift 修正:
+  copy 425-431、load 502-509、store 572-580、branch 590-601、
+  cbranch 621-636、return 882-900、multiequal 1967-1983、
+  indirect 2022-2033、call 668-684、callind 791-807、
+  ptradd 2283-2296、ptrsub 2380-2388)。
 - 已登记格式缺口(不影响本语料,不构成管线差异):
-  - SB-DRILL-RAM-SHORTCUT:ram 空间 varnode 的 shortcut 在 next_url 语料
-    中未出现,暂按 `'0'` 输出,未与 oracle 对拍。
   - SB-DRILL-FSPEC-NAME:CALL 目标恒 `ffunc_<addr>`;oracle 经 FspecSpace
     打印被调函数真名,命名 callee 会差(本语料被调者全是无名 PLT stub,
     双侧一致)。

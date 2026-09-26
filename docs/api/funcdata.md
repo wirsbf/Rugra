@@ -3007,12 +3007,18 @@ false）；`enable/disable_jt_callback`（hh:593/594，fn 指针形态）、
 传输层 RUGRA-GLUE，后者是 hh 声明的成员 1:1）。
 
 **打印面（3 defs）**：`print_raw`（cc:209-225；空块分支逐行 `seqnum:\t<opRaw>`，
-SeqNum 文本为 address.cc:32-38 的 DECIMAL uniq 形式 `seqnum_text`；带块分支组合
+SeqNum 文本为 address.cc:32-38 形式 `seqnum_text` = `AddrSpace::printRaw`
+（space.cc:206-219，`0x`+按 8/12/16 位零填充收缩宽度）+ `':'` + **十进制**
+uniq；带块分支组合
 block.cc:1300-1316，依赖 block.rs BlockBasic::printRaw/printHeader 缺口——残差
 登记 FUNCDATA-BLOCKPRINTRAW-DEP-0001；空 obank 走 RecovError→`Error::Lowlevel`）、
 `print_varnode_tree`（cc:579-591，def-tree 序 printInfo）、`print_local_range`
 （cc:597-608，ScopeLocal union 窗口按 RangeList::printBounds 文本；子 scope 循环
 因 Rust ScopeLocal 无 child map 为结构性缺失 FUNCDATA-LOCALRANGE-CHILDREN-0001）。
+opRaw 文本经 `drillfmt::DrillFmt::op_raw`（TypeOp 分发投影）；2026-09-26 起
+shortcut 表与 null 槽 `<null>` 渲染按 translate.cc:517-570 /
+varnode.cc:1207-1214 修正（详见 docs/api/drillfmt.md），print_family fixture
+双侧 byte-MATCH。
 
 **内联/表达式（5 defs）**：`do_live_inject`（cc:848-876，dead-list 尾捕获 +
 "Illegal branching injection" 异常路径；payload 经 `InjectPayload::inject` 的
