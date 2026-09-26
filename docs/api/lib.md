@@ -4,6 +4,9 @@ The crate root exports `debugproto`, the native Program-import boundary that
 supplies DWARF-declared, locked `FuncProto` values before the Action pipeline.
 This mirrors Ghidra's separation between its front-end DWARF analyzer and the
 C++ decompiler; it does not move DWARF parsing into `ActionInputPrototype`.
+The crate root also exports `frontend`, the native ELF front-end boundary
+(symbol import / function discovery / PT_LOAD memory map / demangling —
+FRONTEND-MINIMAL-0001; see `docs/api/frontend.md`).
 
 **源代码路径**: `src/lib.rs`
 
@@ -609,3 +612,14 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - `drillobserve`: v2 drill 只读 per-application 记录器(OPACTION_DEBUG 镜像钩子,funcdata 变更入口同位挂钩)。
 - `drillfmt`: oracle printDebug 原文格式化器(SeqNum raw/Varnode printDebug 语义/TypeOp 结构形式)。
 (源自 wt/sb-rust 发射器链集成)
+
+## 2026-09-26: 新增模块 frontend（FRONTEND-MINIMAL-0001 基础阶段）
+
+- `pub mod frontend;` — 原生 ELF 前端边界（无锁定树对应物——Ghidra 的 ELF
+  导入/分析在 Java 层，decompile-cpp oracle 树只消费已填充的 Program）。
+  四件：`import_symbols`（.symtab/.dynsym 符号导入，名字/地址/大小/类型/
+  绑定 + exports/imports 分类）、`discover_functions`（非 stripped：定义
+  STT_FUNC + e_entry → 函数表，与 canon 驱动手工函数表同构）、
+  `derive_memory_map`（PT_LOAD → add_range 集）、`demangle`（cpp_demangle
+  接线，喂符号导入路径）。数据级差分验收与范围边界见
+  `docs/api/frontend.md`。
