@@ -6194,11 +6194,24 @@ mod tests {
         // conversion never takes a cast.
         let mut zext = pcodeop(OpCode::CPUI_INT_ZEXT);
         let zext_out = typed_vn(8, 0x30, None);
-        zext_out.write().unwrap().set_flags(varnode_flags::WRITTEN | varnode_flags::IMPLIED);
         zext.output = Some(zext_out.clone());
+        let zext_ref = op_ref(zext);
+        // cc:1876: vn0->isWritten() && vn0->isImplied() — the Rust
+        // is_written reads the WRITTEN flag (opSetOutput sets flag+def
+        // together); the def link mirrors the defining-op edge the oracle
+        // reads through vn0->getDef().
+        zext_out
+            .write()
+            .unwrap()
+            .set_flags(varnode_flags::WRITTEN | varnode_flags::IMPLIED);
+        zext_out
+            .write()
+            .unwrap()
+            .def
+            .replace(std::sync::Arc::downgrade(&zext_ref.0));
         let mut op = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
         op.inrefs.push(zext_out);
-        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0, 1))));
         let op_r = op_ref(op);
         assert!(f2i.get_input_cast(&op_r, 0, &detached_fd()).is_none());
         // The absorb predicate itself (cc:1872-1883).
@@ -6214,7 +6227,7 @@ mod tests {
         )));
         let mut plain = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
         plain.inrefs.push(typed_vn(4, 0x10, Some(uint4.clone())));
-        plain.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        plain.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0, 1))));
         // Non-constant input with no NZMask constraint (high bit possible):
         // care stays TRUE -> uint under int base takes the cast.
         let cast = f2i
@@ -6226,8 +6239,8 @@ mod tests {
         // the uint current type becomes cast-free under the int base
         // (cc:1858-1859 shift reads the constant's NZMask).
         let mut const_op = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
-        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(4, 0x7f))));
-        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0x7f, 4))));
+        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0, 1))));
         assert!(f2i
             .get_input_cast(&op_ref(const_op), 0, &detached_fd())
             .is_none());
@@ -6276,7 +6289,7 @@ mod tests {
             "uint2".into(), 2, TypeMetatype::Uint,
         )));
         op.inrefs.push(typed_vn(2, 0x10, Some(uint2)));
-        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(3, 1))));
         op.output = Some(typed_vn(2, 0x20, None));
         let op_r = op_ref(op);
         // uint current under uint base is cast-free regardless of gate.
@@ -6374,7 +6387,7 @@ mod tests {
         );
         let mut sub = pcodeop(OpCode::CPUI_SUBPIECE);
         sub.inrefs.push(typed_vn(8, 0x10, None));
-        sub.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        sub.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0, 1))));
         sub.output = Some(typed_vn(4, 0x30, None));
         assert_eq!(
             TypeOpSubpiece::new(factory.clone()).get_operator_name(&sub),
@@ -6416,7 +6429,7 @@ mod tests {
         let indirect = TypeOpIndirect::new(aligned_factory());
         let mut iop = pcodeop(OpCode::CPUI_INDIRECT);
         iop.inrefs.push(typed_vn(4, 0x10, None));
-        iop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(8, 0x99))));
+        iop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(0x99, 8))));
         let base = indirect
             .get_input_local(&iop, 0)
             .expect("slot 0 base default");
@@ -6434,7 +6447,7 @@ mod tests {
         // detached fixture -> the base UNKNOWN default for every slot.
         let callother = TypeOpCallother::new(aligned_factory());
         let mut cop = pcodeop(OpCode::CPUI_CALLOTHER);
-        cop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        cop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(3, 1))));
         cop.inrefs.push(typed_vn(4, 0x10, None));
         let local = callother
             .get_input_local(&cop, 1)
@@ -6498,7 +6511,7 @@ mod tests {
             "bool".into(), 1, TypeMetatype::Bool,
         )));
         op.inrefs.push(typed_vn(1, 0x10, Some(bool_t)));
-        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(3, 1))));
         let token = left
             .get_output_token_in_fd(&op_ref(op), &detached_fd())
             .expect("bool in0 demotes to int");
@@ -6508,7 +6521,7 @@ mod tests {
         let int4 = int_t();
         let mut op2 = pcodeop(OpCode::CPUI_INT_LEFT);
         op2.inrefs.push(typed_vn(4, 0x10, Some(int4.clone())));
-        op2.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        op2.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(3, 1))));
         let token = left
             .get_output_token_in_fd(&op_ref(op2), &detached_fd())
             .expect("int in0 passes through");
