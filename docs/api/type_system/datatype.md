@@ -1,5 +1,26 @@
 # `type_system/datatype.rs` API Reference
 
+**2026-09-26（DATATYPE-PRINTRAW-0001 / lane DATATYPEPR，发现方 lane MIGW-DATABASE）**:
+`Datatype::print_raw`（`// Ghidra: type.cc:139`）六臂修正为锁定 oracle 的完整虚分派
+printRaw 族——票面六臂 + 亲读追加三项裁决（见下）：
+
+| 臂 | oracle 真值（锁定 e40ed130 亲读） | 修正前 |
+|---|---|---|
+| Code（type.cc:2772-2780） | `<name>`（空名 `funcptr`）+ `()` | `code <name>`（fabricated） |
+| Struct/Enum/Union/Spacebase（无 override） | 基类 fallback（type.cc:139-146）：非空 `name`，空名 `unkbyte<size>` | `struct{f+off:t,...}` / `enum N` / `union N` / `spacebase N`（全 fabricated，含不存在的字段遍历） |
+| Array（type.cc:1204-1209） | `<elem> [N]`（`[` 前有空格） | `<elem>[N]`（无空格） |
+| Pointer spaceid 臂（type.cc:910-918） | `elem *` + spaceid 非空时 `(spacename)` | 缺 `(spacename)` 后缀 |
+| Base/Void 空名 fallback（亲读追加 A1/A2） | `unkbyte<size>` / 基类逻辑 | Base 臂空名打印空串；Void 臂硬编码 `"void"` |
+| PointerRel 虚分派（亲读追加 A3） | `ptrto *+<offset>[<parent>]`（type.cc:2597-2606） | Pointer 臂无视 `base.pointer_rel`，rel 指针打成普通 `ptrto *` |
+
+PartialStruct/PartialEnum/PartialUnion 三臂原已对齐（`[off=O,sz=S]`），未动。
+证据：`tests/oracle/datatype_printraw_1204.*`（32 case 双侧 stdout 字节恒等，
+runner `tools/run_datatype_printraw_oracle.sh`，`overall=MATCH`）。canon 可达面裁决：
+`print_raw` 生产消费者仅 `variable.rs:1059`（variable.cc:795 `type->printRaw` 调试
+打印镜像）与两 example 的 `evidence_spelling` 标记启发（白名单 `known_evidence_base`
+过滤，非 C 文本发射）——修正后 curl/httpd E2E 输出与基线 **cmp 字节恒等**（空名
+base/spaceid/rel 形态在 canon 管线均不可达：spaceid 指针仅测试代码构造）。
+
 **2026-09-26（UNIONRESOLVE-PKG-A-0001 / lane PKGA）**: `TypeStruct::score_single_component`
 （`// Ghidra: type.cc:1893`）签名改收 `(parent, fd, op_ref, slot)`（原
 `(parent, &PcodeOp, slot)` 视图形）——LOAD/STORE 指针臂 cc:1908

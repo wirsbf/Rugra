@@ -8131,6 +8131,48 @@
         "rust_function_ids": [],
         "ghidra_function_ids": []
       }
+    },
+    {
+      "id": "datatype_printraw_1204",
+      "description": "DATATYPE-PRINTRAW-0001 (lane DATATYPEPR): complete virtual printRaw family - base fallback (name/unkbyteN) for Void/Base/Enum/Struct/Union/Spacebase, TypePointer arms incl. spaceid (ram/stack) and TypePointerRel virtual dispatch, TypeArray ' [N]' spacing, TypeCode name-or-funcptr plus '()', all three TypePartial* [off=,sz=] forms - 32-case bilateral stdout byte-identical MATCH",
+      "runner": [
+        "tools/run_datatype_printraw_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/datatype_printraw_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_datatype_printraw_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/datatype_printraw_1204.cc",
+          "fixture_source_2": "tests/oracle/datatype_printraw_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_datatype_printraw_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "Datatype::print_raw",
+          "pointer_rel_print_raw"
+        ],
+        "ghidra_function_ids": [
+          "Datatype::printRaw",
+          "TypePointer::printRaw",
+          "TypeArray::printRaw",
+          "TypePartialEnum::printRaw",
+          "TypePartialStruct::printRaw",
+          "TypePartialUnion::printRaw",
+          "TypePointerRel::printRaw",
+          "TypeCode::printRaw"
+        ]
+      }
     }
   ]
 }

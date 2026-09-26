@@ -1796,46 +1796,77 @@ impl Datatype {
     }
 
     // Ghidra: type.cc:139 Datatype::printRaw
-    /// Print a raw representation for debugging.
-    /// Faithful to Datatype::printRaw (type.cc:139) + the Partial* overrides
-    /// (TypePartialEnum::printRaw type.cc:2264, TypePartialStruct::printRaw
-    /// type.cc:2356, TypePartialUnion::printRaw type.cc:2433), which all
-    /// render as `<parent.printRaw>[off=<offset>,sz=<size>]`.
+    /// Print a raw representation for debugging. Faithful to the virtual
+    /// printRaw family of type.cc under the locked oracle:
+    ///   - `Datatype::printRaw` (type.cc:139-146): the base fallback for
+    ///     subclasses with no override (TypeVoid/TypeBase/TypeEnum/
+    ///     TypeStruct/TypeUnion/TypeSpacebase) — print `name`, or
+    ///     `unkbyte<size>` when the name is empty.
+    ///   - `TypePointer::printRaw` (type.cc:910-918): `ptrto` raw form,
+    ///     `" *"`, then `"(<spacename>)"` when `spaceid` is set.
+    ///   - `TypePointerRel::printRaw` (type.cc:2597-2606) overrides it for
+    ///     relative pointers: `ptrto *+<offset>[<parent>]`.
+    ///   - `TypeArray::printRaw` (type.cc:1204-1209): `arrayof` raw form,
+    ///     then `" [<arraysize>]"` (space before the bracket).
+    ///   - `TypePartialEnum/Struct/Union::printRaw` (type.cc:2264/2356/
+    ///     2433): `<container>[off=<offset>,sz=<size>]`.
+    ///   - `TypeCode::printRaw` (type.cc:2772-2780): `<name>` or
+    ///     `funcptr`, then `"()"`.
     pub fn print_raw(&self) -> String {
         match self {
-            Datatype::Void(_) => "void".into(),
-            Datatype::Base(b) => b.name.clone(),
-            Datatype::Pointer(p) => format!("{} *", p.ptr_to.print_raw()),
-            Datatype::Array(a) => format!("{}[{}]", a.array_of.print_raw(), a.num_elements),
-            Datatype::Struct(s) => {
-                let fields: Vec<String> = s.fields.iter()
-                    .map(|f| format!("{}+{}:{}", f.name, f.offset, f.type_ptr.print_raw()))
-                    .collect();
-                format!("struct{{{}}}", fields.join(","))
+            Datatype::Pointer(p) => {
+                // Ghidra: type.cc:2597 TypePointerRel::printRaw
+                if let Some(rel) = &p.base.pointer_rel {
+                    return pointer_rel_print_raw(&p.ptr_to, rel.offset, &rel.parent);
+                }
+                // Ghidra: type.cc:910 TypePointer::printRaw
+                let mut s = format!("{} *", p.ptr_to.print_raw());
+                if let Some(space) = p.base.pointer_space {
+                    s.push_str(&format!("({})", space.name()));
+                }
+                s
             }
-            Datatype::Enum(e) => format!("enum {}", e.base.name),
-            Datatype::Union(u) => format!("union {}", u.base.name),
-            Datatype::Code(c) => format!("code {}", c.base.name),
-            Datatype::Spacebase(s) => format!("spacebase {}", s.base.name),
-            // Ghidra: type.cc:2264/2356/2433 — "<container>[off=<o>,sz=<s>]"
+            // Ghidra: type.cc:1204 TypeArray::printRaw
+            Datatype::Array(a) => format!("{} [{}]", a.array_of.print_raw(), a.num_elements),
+            // Ghidra: type.cc:2772 TypeCode::printRaw
+            Datatype::Code(c) => {
+                if c.base.name.is_empty() {
+                    "funcptr()".to_string()
+                } else {
+                    format!("{}()", c.base.name)
+                }
+            }
+            // Ghidra: type.cc:2356 TypePartialStruct::printRaw
             Datatype::PartialStruct(ps) => format!(
                 "{}[off={},sz={}]",
                 ps.container.print_raw(),
                 ps.offset,
                 ps.base.size
             ),
+            // Ghidra: type.cc:2264 TypePartialEnum::printRaw
             Datatype::PartialEnum(pe) => format!(
                 "{}[off={},sz={}]",
                 pe.parent.print_raw(),
                 pe.offset,
                 pe.base.size
             ),
+            // Ghidra: type.cc:2433 TypePartialUnion::printRaw
             Datatype::PartialUnion(pu) => format!(
                 "{}[off={},sz={}]",
                 pu.container.print_raw(),
                 pu.offset,
                 pu.base.size
             ),
+            // Ghidra: type.cc:139 Datatype::printRaw — base fallback for
+            // Void/Base/Enum/Struct/Union/Spacebase (no override).
+            _ => {
+                let b = self.base_record();
+                if !b.name.is_empty() {
+                    b.name.clone()
+                } else {
+                    format!("unkbyte{}", b.size)
+                }
+            }
         }
     }
 }
@@ -5673,12 +5704,14 @@ mod tests {
 
     #[test]
     fn test_partial_struct_print_raw() {
-        // type.cc:2356 — "<container>[off=<o>,sz=<s>]".
+        // type.cc:2356 — "<container>[off=<o>,sz=<s>]"; the container is
+        // itself printed by its own printRaw (base fallback type.cc:139
+        // for a named struct, no field iteration).
         let s = build_struct_for_partial();
         let dt = Datatype::PartialStruct(TypePartialStruct::new(s.clone(), 4, 4, None));
-        let raw = dt.print_raw();
-        assert!(raw.starts_with("struct{"));
-        assert!(raw.contains("[off=4,sz=4]"));
+        // Named container "S" (size 10, not printed by the fallback):
+        // the oracle renders exactly "S[off=4,sz=4]".
+        assert_eq!(dt.print_raw(), "S[off=4,sz=4]");
     }
 
     #[test]
