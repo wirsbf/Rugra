@@ -39,7 +39,7 @@ golden 收敛）、canon httpd 283→**263**/0/0（20 行 SEXT48→`(long)` cast
 - `integer_text_with_mods` 增 `force_unsigned/force_sized` 参数——**cc:1319 语义**：`sign && displayFormat != force_char` 分支（符号两补数翻转 cc:1314-1318）收尾把 `force_unsigned_token` 复位 false（有符号渲染永不带 U），随后 match 尾部追加 `'U'` / `size_suffix`；
 - `integer_text_flagged`（vn 承载形）+ `default_cast_constant_text_flagged`（cc:1814 default-cast 臂的 push_integer 同样携带 vn）；
 - 接线点：RPN 叶片 `constant_leaf_text` 全臂（Uint/Int/Unknown/None-ct/default-cast）、直接发射 `push_constant_typed`（Option vn）、`push_varnode` 常量梯级与 `push_constant`（vn 恒在域）。无 vn 的 scalar 形（enum/char 臂与 `vn==0` 调用点，cast.cc:50-51 对 charPrint/enum 恒拒）保持 false——与 oracle 观测恒等。
-- `size_suffix` 字段（`// Ghidra: printc.cc:2332`，`initializeFromArchitecture` cc:2336-2339）："LL" 当 sizeof(long)==sizeof(int)，否则 "L"；x86-64 gcc 语料（8≠4）构造器钉 "L"。
+- `size_suffix` 字段（`// Ghidra: printc.cc:2332`，`initializeFromArchitecture` cc:2336-2339）："LL" 当 sizeof(long)==sizeof(int)，否则 "L"；**PRINTC-UNMAP-SINGLETON-0001 起动态计算**——`initialize_from_architecture(types)` 在 doc_function 入口从 `fd.arch.types` 幂等求值（x86-64 语料 8≠4 → "L"，与旧构造器钉值字节恒等；castStrategy->setTypeFactory 半为结构 no-op：promote_size 已在 CastStrategyC::new 物化，cast.rs 无工厂句柄）。
 
 **E2E（curl 124 / httpd 34，fast-release 亲测，基=master 5ec78f22 干净重建 A/B）**：curl 369→**361**/0/0（main 100→94、getparameter 45→43，其余 122 函数零变化）；`0x4000U/0x2004000U/0x10000400U/0x23U` 四位与 golden 清单逐一对应，Rugra U-行骨架无 golden 之外形态（0 处 overshoot）。httpd 872→**866**/0/0（六处 `iVar10 + 1U/2U`；golden 115 U-行中 Rugra 现 6——其余为 coreaction `mark_explicit_unsigned` 在 httpd 的点火不足，登记移交）；双跑 cmp 恒等；gcc 审计 curl 104/20、httpd 15/14 双侧恒等；bank 391/391；lib 1730P/1F==亲父集（nonzeromask 预存）。
 
@@ -586,8 +586,15 @@ StringManager。本次替换为 `constant_leaf_text`（`&mut self`，持 vn/op�
 - `TYPE_VOID`（cc:1772-1774）：oracle 是 `clear(); throw LowlevelError`；
   Rugra 双路径统一降级为 `/* void constant */` 标记（发射路径不 panic，与
   直接发射臂同形）。`TYPE_FLOAT`（cc:1791-1793 → `push_float`
-  cc:1380-1424）：Rugra 无 FloatFormat，统一发 `FLOAT_UNKNOWN`——
-  cc:1386 无格式 sentinel 本身，与直接发射臂同形。
+  cc:1380-1424）：**全量移植**（PRINTC-UNMAP-SINGLETON-0001）——
+  `push_float_text` 双路径共享文本核：`get_float_format`（translate.cc:962-970
+  默认 4/8 字节 IEEE 754 形态，其余尺寸 → cc:1385-1387 的 FLOAT_UNKNOWN
+  sentinel）；`get_host_float` 分类（infinity/nan 的 extractSign 符号臂
+  cc:1391-1402）；`print_decimal`（float.cc:427-459 的 %g/%e 往返精度环，
+  float_emulate.rs 移植 + `calc_precision` cc:217-223 的
+  decimalMin/MaxPrecision 字段）；`.0` 后缀臂（cc:1407-1419 首个 '.'/'e'
+  扫描）；`force_scinote` mod 臂（cc:1404-1406）。双侧 fixture
+  `printc_singleton_emission_1204`（21 float case 字节恒等）。
 - 其余 metatype → default cast。
 
 直接发射 helper（`push_integer`/`push_char_constant_fmt`/
@@ -3647,3 +3654,89 @@ docs/api/arch.md 2026-09-26 节 + 双侧 fixture
 coreaction_constptr_registerspace_1204）。单测
 `test_string_render_eligible_oracle_gates`（回归-only 手写期望：B2 oracle 真
 值由双侧 fixture 承担）。
+
+## 2026-09-26：单例发射族 15 项（WORKPKG-UNMAP-PRINTC-0004 / PRINTC-UNMAP-SINGLETON-0001）
+
+分诊 §P0 包规格逐项核验+处置（基=master 9ac04ade，oracle e40ed130 亲读）：
+
+**真缺失 → 全量移植**：
+- `push_float`（printc.cc:1380-1424）——`push_float_text` 双路径文本核 +
+  float_emulate.rs `print_decimal`（float.cc:427-459 %g/%e 往返环）+
+  `calc_precision`（float.cc:217-223，decimalMin/MaxPrecision 字段）+
+  `get_float_format`（translate.cc:962-970 默认 4/8 IEEE 形态）。语料休眠
+  （curl/httpd 零浮点常量），双侧 fixture 激活。
+- `checkAddressOfCast`（printc.cc:376-418）——全量替换
+  `rpn_op_type_cast`/`op_type_cast` 两处旧 in0-is-array 简化启发；typedef
+  剥离环（cc:390-393）为恒等形态（Rugra 类型系统无 typedefImm 链，
+  type_system 在飞租约 handover）；类型相等以 `Datatype::compare==0`
+  （Ghidra 工厂驻留指针相等的非驻留等价）。单测五例矩阵
+  `test_check_address_of_cast_matrix`；双侧全 IR fixture 登记
+  PRINTC-SINGLETON-IRFIX-0001。
+- `emitSymbolScope`（printc.cc:233-259）——`emit_symbol_scope`，函数自身
+  符号的作用域前缀（emitFunctionDeclaration cc:2591 在 tagFuncName 前）；
+  全局作用域深度 0 快路径 + 局部名影子 `::` 臂（symbol_scope_prefix 同规）。
+- `setCommentStyle`（printc.cc:2350-2361）——`set_comment_style` +
+  `set_c_style_comments`/`set_c_plus_plus_style_comments`（printc.hh:242-243）
+  + `set_comment_delimeter`（printlanguage.cc:98-110）+ `commentstart`/
+  `commentend` 字段（emit_line_comment 消费，cc:601/645-646）；options.rs
+  OptionCommentStyle 接线为 handover（Architecture 无 printlist 字段）。
+- `initializeFromArchitecture`（printc.cc:2332-2340）——doc_function 入口
+  幂等求值 size_suffix（见上）。
+- `adjustTypeOperators`（printc.cc:2342-2348）——文档化 no-op 端口：三件
+  （scope.print1="::" / shift_right.print1=">>" / selectJavaOperators(false)）
+  均为 Rugra 已固化的 C 默认。
+- `resetDefaults`（printc.cc:2325-2330）——`reset_defaults` 链
+  PrintLanguage::resetDefaultsInternal（printlanguage.cc:575-583 字段逐项）+
+  resetDefaultsPrintC；emit 半为 emitter 域 handover（Rugra emitter 无跨文档
+  选项）；Architecture printlist 循环保持既有结构缺口注记。
+- `pushTypePointerRel`（printc.hh:365-370）+ opPtrsub ptrel 臂
+  （cc:947-976/966/1023/1030/1042/1048/1109/1115/1124/1132）——RPN 生产
+  路径全量：ptrel 解析（isFormalPointerRel=IS_PTRREL&&!HAS_STRIPPED +
+  evaluateThruParent）、parent 再定基 suboff（+getAddressOffset 后
+  calc_mask 折叠）、suboff==0 特例臂、四 struct/union 发射形与四 array
+  发射形的 ADJ 前插。TypePointerRel 状态在 PointerRelState（datatype.rs）
+  ——旧 "Rugra has no TypePointerRel" 注释已过期，同批更正。legacy
+  direct-emit op_ptrsub 保持塌缩形（非生产路径注记）。
+- `pushImpliedField`（printc.cc:2085-2116）——消费半
+  `rpn_push_implied_field`（rpn_recurse 的 hasImpliedField 臂，
+  printlanguage.cc:527-529）+ varnode.rs `has_implied_field`/
+  `set_implied_field` 访问器（HAS_IMPLIED_FIELD 旗标已在位）；生产半
+  （coreaction.cc:2519 setImpliedField）为 coreaction 在飞租约 handover。
+  单测 `test_push_implied_field_union_arm`。
+- `PrintCCapability`（printc.cc:108-119）——`capability()` 注册记录
+  （name="c-language", isdefault=true）。
+
+**已在（核验修正票面）**：`pushMismatchSymbol`（2067，partial_symbol_text
+内 `_name`/unnamed-location 双臂）、`genericFunctionName`（3359，提取为
+具名 `generic_function_name`——纯 oracle "func_"+printRaw 形；FUN_ 层适配
+移至 opCall 未名被调臂调用点）、`emitSwitchCase`（3129，标签+default+goto+
+break 四臂已在 emit_structured_switch；pushConstant→push_integer+CHAR 近似
+修正为 char_constant_text(DEFAULT)——cc:1630-1640 的 vn=0 ≥0x80 回退整数
+语义）、`doEmitWideCharPrefix`（1504，方法化 `do_emit_wide_char_prefix`，
+三消费点接线）、`PendingBrace::callback`（2872，PENDINGBRACE 车道已处理——
+emit_pending 即 open_brace_indent(style)，核验答案=是）。
+
+**B2 双侧 fixture**：`printc_singleton_emission_1204`（36 case 字节恒等，
+runner tools/run_printc_singleton_emission_oracle.sh + metadata 三件套）——
+push_float 21 例（含 scinote/subnormal/往返精度）、setCommentStyle 5 例、
+genericFunctionName 3 例（printRaw 位数规则 32/64 位）、emitSymbolScope 2 例
+（BFD 函数符号深度 0）、pushMismatchSymbol 2 例、pushTypePointerRel 1 例
+（ADJ(base)0 形）、wide-char 2 例。checkAddressOfCast/pushImpliedField 的
+全 IR 双侧 fixture 登记 PRINTC-SINGLETON-IRFIX-0001（Rust 单测先行）。
+
+**镜面杠杆（F-STRFOLD/F-PLTNAME）**：printc.rs 的 pushPtrCharConstant 链
+（1698-1722）经探针核验**完整且行为正确**——F-STRFOLD 断点在驱动侧 readonly
+通道：镜面 print_db 无 BfdArchitecture fillinReadOnlyFromLoader
+（architecture.cc:1371-1381）装的 SEC_READONLY 属性范围，isReadOnly 门
+（cc:1709）恒拒。httpd 驱动镜面 print_db 补装（SHF_ALLOC&&!SHF_WRITE 段，
+20 范围）→ httpd 镜 156→**152**（pcVar19="0.0.0.0"/pcVar19="255.255.255.255"
+两折叠点与 golden 逐字同形；golden 其余折叠点的常量在 Rugra IR 未获 char*
+型=varmap/SSA merge 上游域残差，如实登记）。F-PLTNAME：curl 驱动镜面
+bare-load 过滤器排除 .plt.got 槽（oracle registerPltStubs 只走 .rela.plt
+JUMP_SLOT）→ curl 镜 52→**50**（`func_0x000022e0` 与 golden 逐字，
+__do_global_dtors_aux diff=0）。
+
+**验收（fast-release 亲测）**：canon curl 200/0/0、canon httpd 229/0/0
+（双基线字节恒等）；镜面 curl 50·74 matched、httpd 152·29、vsh 15/16·71、
+sq 4479/7500·810（sq 较基线 4481 又改善 2 行）、sqlite 见终报；bank
+391/391；cargo test --lib **1808P/0F**（+3 新测）；三门禁绿。

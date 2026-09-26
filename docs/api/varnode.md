@@ -1294,3 +1294,17 @@ compute_varnode_covers 的显式传播简化为字面 setFlags 调用（merge.cc
   unionresolve.rs 的 `vn_type_read_facing` / `vn_type_def_facing` /
   `vn_high_type_read_facing` / `vn_high_type_def_facing`（持 fd 的消费者使用,
   map 命中时返回 interned 字段类型）。
+
+## 2026-09-26：hasImpliedField/setImpliedField 访问器（PRINTC-UNMAP-SINGLETON-0001）
+
+- `has_implied_field()` / `set_implied_field()`（`// Ghidra: varnode.hh:268 /
+  varnode.hh:335`）——`addl_flags::HAS_IMPLIED_FIELD`（0x1000）旗标自
+  UNIONRESOLVE 车道起已在位但无访问 seam；本批补齐内联访问器对（varnode.hh:268
+  `hasImpliedField` / :335 `setImpliedField` 逐字形态）。消费半=printc.rs
+  `rpn_push_implied_field`（printlanguage.cc:527-529 的 recurse 分支 →
+  PrintC::pushImpliedField printc.cc:2085-2116）；生产半=coreaction.cc:2519
+  `vn->setImpliedField()`（ActionSetCasts::resolveHeir 的 implied 臂）——
+  coreaction 在飞租约 handover（该处既有注记称旗标不存在已过期，本批未触碰
+  coreaction.rs 域，落地后 3 行接线即可激活）。单测
+  `printc::tests::test_push_implied_field_union_arm` 以手工置旗+union 解析
+  快照锁定消费侧行为。

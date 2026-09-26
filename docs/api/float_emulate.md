@@ -112,3 +112,23 @@ IEEE754 浮点格式描述。对应 Ghidra `FloatFormat`。
 
 现在覆盖 Ghidra FloatFormat 的全部 17 个 op 方法。
 <!-- annotation-pass: 2026-08-23 -->
+
+## 2026-09-26：printDecimal + calcPrecision（PRINTC-UNMAP-SINGLETON-0001，push_float 依赖）
+
+- `calc_precision()`（`// Ghidra: float.cc:217 FloatFormat::calcPrecision`）——
+  `decimalMinPrecision = floor(frac_size * 0.30103)`（log10(2) 截断）、
+  `decimalMaxPrecision = ceil((frac_size + 1) * 0.30103) + 1`（IEEE 754
+  二进制→十进制→二进制往返保真界）；两字段入 `FloatFormat` 结构
+  （float.hh:51-52），`new` 尾调用（float.cc:66 ctor 同位）。
+- `print_decimal(host, forcesci)`（`// Ghidra: float.cc:427
+  FloatFormat::printDecimal`）——最小数字唯一表示环：`prec` 自
+  decimalMinPrecision 起，`%.*g`（默认 floatfield）/`%.*e`（scientific，
+  precision=prec-1 不计首位）渲染后按目标格式往返解析（size<=4 走 f32
+  宽化，float.cc:451-457），相等即返；prec==decimalMaxPrecision 无条件返
+  当前串（float.cc:442-443）。Rust 无 %g——`printf_g` 复刻 printf 算法
+  （%e 读指数 → exp<-4||exp>=p 保 %e 否则 %f(p-1-exp) → 尾零剥离），指数尾
+  规范化为 C 的 `e±NN` 形（Rust LowerExp 原生 `e<N>`）。
+- 消费方：printc.rs `push_float_text`（printc.cc:1380-1424 全量移植的
+  print 侧）；双侧 fixture `printc_singleton_emission_1204` 21 float case
+  字节恒等（含 subnormal `1.4013e-45`、scinote `3.1415927e+00`、
+  `1.00000000000000e-01` 往返精度形态）。

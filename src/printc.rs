@@ -907,6 +907,15 @@ pub struct PrintC {
     /// `PrintC::option_unplaced` (printc.hh:154), defaulting to false
     /// (printc.cc:1589 `resetDefaultsPrintC`).
     option_unplaced: bool,
+    /// Comment start delimiter (printlanguage.hh:266 `commentstart`),
+    /// installed by `setCommentDelimeter` (printlanguage.cc:96-110) via
+    /// `setCStyleComments`/`setCPlusPlusStyleComments` (printc.hh:242-243)
+    /// and `setCommentStyle` (printc.cc:2350). Default `"/* "`
+    /// (printc.cc:1594 resetDefaultsPrintC -> setCStyleComments).
+    commentstart: String,
+    /// Comment end delimiter (printlanguage.hh:267 `commentend`). Empty
+    /// for the C++ `//` style (no end token). Default `" */"`.
+    commentend: String,
     /// Brace formatting style for a function body opening brace. Faithful to
     /// `PrintC::option_brace_func` (printc.hh:146), defaulting to
     /// `skip_line` (printc.cc:1590 `resetDefaultsPrintC`): the `{` goes two
@@ -1149,6 +1158,8 @@ impl PrintC {
             option_hide_exts: true,    // printc.cc:1585 resetDefaultsPrintC
             option_inplace_ops: false, // printc.cc:1586 resetDefaultsPrintC
             option_unplaced: false,    // printc.cc:1589 resetDefaultsPrintC
+            commentstart: "/* ".to_string(), // printlanguage.cc:98 via printc.cc:1594
+            commentend: " */".to_string(),  // printlanguage.cc:98 via printc.cc:1594
             option_brace_func: crate::prettyprint::BraceStyle::SkipLine, // printc.cc:1590
             // printlanguage.cc:575-583 resetDefaultsInternal comment-type
             // masks (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ③ — the two were
@@ -1575,7 +1586,7 @@ impl PrintC {
     /// pending entries — dropping operands mid-expression. Route the
     /// drain through PrintC's real dispatcher first (same single
     /// `if (pending < nodepend.size()) recurse();` semantics).
-    fn rpn_push_op(&mut self, tok_index: usize) {
+    pub fn rpn_push_op(&mut self, tok_index: usize) {
         if self.rpn_pending < self.nodepend.len() {
             self.rpn_recurse();
         }
@@ -1597,7 +1608,7 @@ impl PrintC {
     /// Same real-recurse routing as `rpn_push_op` above (printlanguage.cc:
     /// 165-166): a pending implied input must be dispatched through the real
     /// opcode dispatcher before this atom is emitted, or it is lost.
-    fn rpn_push_atom(&mut self, atom: &crate::printlanguage::Atom) {
+    pub fn rpn_push_atom(&mut self, atom: &crate::printlanguage::Atom) {
         if self.rpn_pending < self.nodepend.len() {
             self.rpn_recurse();
         }
@@ -1708,11 +1719,18 @@ impl PrintC {
             let is_implied = vn_guard.is_implied();
             // printlanguage.cc:525-534: implied-vs-explicit dispatch.
             if is_implied {
-                // Rugra has no pushImpliedField / hasImpliedField yet — Ghidra
-                // only takes that branch when a partial-symbol implied field
-                // exists, which Rugra's symbol model does not produce, so we
-                // go straight to defOp->getOpcode()->push(this, defOp, op).
-                if let Some(def_op_arc) = vn_guard.get_def() {
+                // printlanguage.cc:527-529: if (vn->hasImpliedField())
+                //   pushImpliedField(vn, op); — the partial-symbol implied
+                //   field (printc.cc:2085-2116, ported below). The flag's
+                //   producer is ActionSetCasts::resolveHeir's
+                //   setImpliedField (coreaction.cc:2519 — in-flight lease
+                //   handover); fixtures set it directly.
+                if vn_guard.has_implied_field() {
+                    drop(vn_guard);
+                    drop(op_guard);
+                    self.rpn_push_implied_field(&np.vn, &np.op);
+                }
+                else if let Some(def_op_arc) = vn_guard.get_def() {
                     // Drop the locks on np.vn / np.op before any &mut self call
                     // that might re-lock a PcodeOp (def_op_arc is a distinct op
                     // from np.op, but dropping keeps the borrow graph simple).
@@ -1780,6 +1798,172 @@ impl PrintC {
         crate::printlanguage::rpn_push_vn(&mut self.nodepend, vn, op, m);
     }
 
+
+    // Ghidra: printc.cc:2067 PrintC::pushMismatchSymbol
+    /// The text form of the symbol-size mismatch fallback, mirroring
+    /// `pushMismatchSymbol` (printc.cc:2067-2083) for the fixture seam
+    /// (the production path renders it through
+    /// [`Self::partial_symbol_text`]): `off == 0` prepends an underscore
+    /// to the display name (cc:2078, the "close but not quite match"
+    /// marker); any other offset prints the Varnode's OWN unnamed
+    /// location label (cc:2082, pushUnnamedLocation of vn->getAddr()).
+    pub fn push_mismatch_symbol_text(
+        &self,
+        sym_display_name: &str,
+        off: i64,
+        vn: Option<&Varnode>,
+    ) -> String {
+        if off == 0 {
+            format!("_{}", sym_display_name)
+        } else {
+            let (space, offset) = match vn {
+                Some(v) => (v.get_space(), v.get_offset()),
+                None => (crate::space::AddressSpace::Ram, 0),
+            };
+            Self::unnamed_location_token(space, offset)
+        }
+    }
+
+    // Ghidra: printc.cc:2085 PrintC::pushImpliedField
+    /// Push an implied field access: when an implied Varnode's high type
+    /// needs resolution (a union, or a struct whose resolution picked
+    /// field 0), the field's name prints as a member suffix on the
+    /// defining op's expression — `defop_expr.field` — instead of the
+    /// bare defining-op expression. Faithful port of `pushImpliedField`
+    /// (printc.cc:2085-2116):
+    /// - `parent = vn->getHigh()->getType()` (2089); the proceed gate is
+    ///   `parent->needsResolution() && parent->getMetatype() != TYPE_PTR`
+    ///   (2091).
+    /// - the resolution comes from `fd->getUnionField(parent, op, slot)`
+    ///   (2092-2094) with `slot = op->getSlot(vn)` — the doc_function-time
+    ///   `union_resolutions` snapshot keyed on the same ResolveEdge.
+    /// - TYPE_STRUCT with fieldNum==0 takes the FIRST field
+    ///   (`beginField()`, 2096-2099); TYPE_UNION takes the resolved
+    ///   field number (2100-2103).
+    /// - `!proceed` pushes the defining op plain (2108-2111); the proceed
+    ///   path pushes object_member, then the defining op, then the field
+    ///   atom (2113-2115).
+    ///
+    /// Four decisive semantics (printc.cc:2085-2116):
+    /// - References: `vn`/`op` read-only; `defOp` is the vn's defining
+    ///   op (never the consuming op).
+    /// - Loop bounds: none — the two field lookups are direct.
+    /// - Counters: `proceed` starts false, set only by the two metatype
+    ///   arms.
+    /// - Comparison keys: fieldNum >= 0 gate (2095); struct requires
+    ///   fieldNum == 0 exactly (2096).
+    fn rpn_push_implied_field(
+        &mut self,
+        vn_arc: &Arc<RwLock<Varnode>>,
+        op_arc: &Arc<RwLock<PcodeOp>>,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        let vn = vn_arc.read().unwrap();
+        let op = op_arc.read().unwrap();
+        let mut proceed = false;
+        let mut field_name: Option<String> = None;
+        // printc.cc:2089: parent = vn->getHigh()->getType().
+        let parent: Option<Arc<Datatype>> = vn
+            .high
+            .as_ref()
+            .map(|h| h.read().unwrap().get_type());
+        let parent = match parent {
+            Some(p) => p,
+            // No high: the proceed gate cannot open; fall through to the
+            // plain defining-op push below (the !proceed arm).
+            None => {
+                self.rpn_push_implied_field_plain(&vn, op_arc);
+                return;
+            }
+        };
+        // printc.cc:2091: if (parent->needsResolution() &&
+        //   parent->getMetatype() != TYPE_PTR)
+        if parent.needs_resolution() && parent.get_metatype() != TypeMetatype::Pointer {
+            // printc.cc:2092-2093: slot = op->getSlot(vn); the resolution
+            //   keyed on (parent, op, slot).
+            let slot = op
+                .slot_of_input(vn_arc)
+                .map(|s| s as i32)
+                .unwrap_or(-1);
+            let res = self
+                .union_resolutions
+                .get(&crate::unionresolve::ResolveEdge::new(&parent, &op, slot));
+            // printc.cc:2095: if (res != 0 && res->getFieldNum() >= 0)
+            if let Some(res) = res {
+                let field_num = res.get_field_num();
+                if field_num >= 0 {
+                    match parent.as_ref() {
+                        // printc.cc:2096-2099: TYPE_STRUCT &&
+                        //   res->getFieldNum() == 0 -> beginField().
+                        Datatype::Struct(st) if field_num == 0 => {
+                            if let Some(fld) = st.fields.first() {
+                                field_name = Some(fld.name.clone());
+                                proceed = true;
+                            }
+                        }
+                        // printc.cc:2100-2103: TYPE_UNION ->
+                        //   getField(res->getFieldNum()).
+                        Datatype::Union(u) => {
+                            if let Some(fld) = u.fields.get(field_num as usize) {
+                                field_name = Some(fld.name.clone());
+                                proceed = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if !proceed {
+            // printc.cc:2107-2111: just push original op.
+            self.rpn_push_implied_field_plain(&vn, op_arc);
+            return;
+        }
+        // printc.cc:2113: pushOp(&object_member,op);
+        self.rpn_push_op(self.rpn_tok_object_member);
+        // printc.cc:2114: defOp->getOpcode()->push(this,defOp,op);
+        self.rpn_push_implied_field_plain(&vn, op_arc);
+        // printc.cc:2115: pushAtom(Atom(field->name,fieldtoken,
+        //   no_color,parent,field->ident,op)).
+        if let Some(name) = field_name {
+            let field_atom = Atom::with_field(
+                &name,
+                TagType::FieldToken,
+                SyntaxHighlight::NoColor,
+                0,
+                0,
+                -1,
+            );
+            self.rpn_push_atom(&field_atom);
+        }
+    }
+
+    // RUGRA-GLUE: the defOp->getOpcode()->push(this,defOp,op) dispatch
+    /// shared by pushImpliedField's two arms (printc.cc:2110/2114) —
+    /// the same inline-vs-leaf decision the plain implied branch of
+    /// rpn_recurse makes (printlanguage.cc:530-532).
+    fn rpn_push_implied_field_plain(
+        &mut self,
+        vn: &Varnode,
+        read_op_arc: &Arc<RwLock<PcodeOp>>,
+    ) {
+        if let Some(def_op_arc) = vn.get_def() {
+            let read_op_arc = read_op_arc.clone();
+            let inline_ok = {
+                let def_guard = def_op_arc.read().unwrap();
+                !def_guard.is_dead() && Self::rpn_def_inline_reachable(&def_guard)
+            };
+            if inline_ok {
+                let def_guard = def_op_arc.read().unwrap();
+                self.dispatch_op_rpn(&def_op_arc, &def_guard, Some(&read_op_arc));
+            } else {
+                let read_op = read_op_arc.read().unwrap();
+                let atom = self.make_atom_for_vn(vn, &read_op);
+                self.rpn_push_atom(&atom);
+            }
+        }
+    }
+
     // Ghidra: printlanguage.cc:197 PrintLanguage::pushVn (slot-based helper)
     /// Faithful in-spirit equivalent of `pushVn(op->getIn(slot), op, m)`: record
     /// the input Varnode at `slot` into `nodepend`. `rpn_recurse` then either
@@ -1796,6 +1980,7 @@ impl PrintC {
     /// call (or `emit_expression_rpn`'s trailing `rpn_recurse`) drains it.
     ///
     /// No-op if the slot is absent, so callers can use it unconditionally.
+
     fn rpn_push_in(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -1806,6 +1991,25 @@ impl PrintC {
         if let Some(vn_arc) = op.get_in(slot) {
             self.rpn_push_vn(vn_arc.clone(), op_arc.clone(), m);
         }
+    }
+
+    // Ghidra: printc.hh:365 PrintC::pushTypePointerRel
+    /// Push a token indicating a PTRSUB (a -> operator) is acting at an
+    /// offset from the original pointer. Faithful to the inline
+    /// `pushTypePointerRel` (printc.hh:365-370):
+    /// `pushOp(&function_call,op); pushAtom(Atom(typePointerRelToken,
+    /// optoken, funcname_color, op));` — the `ADJ` token
+    /// (`typePointerRelToken`, printc.cc:103) wrapped in function-call
+    /// parens around the base operand, e.g. `ADJ(in0)->field`.
+    pub fn rpn_push_type_pointer_rel(&mut self) {
+        self.rpn_push_op(self.rpn_tok_function_call);
+        let adj_atom = crate::printlanguage::Atom::with_type(
+            "ADJ",
+            crate::printlanguage::TagType::OpToken,
+            crate::printlanguage::SyntaxHighlight::FuncnameColor,
+            0,
+        );
+        self.rpn_push_atom(&adj_atom);
     }
 
     // RUGRA-GLUE: rpn_def_inline_reachable (Ghidra counterpart is the total
@@ -2201,10 +2405,8 @@ impl PrintC {
                 "/* void constant */".to_string()
             }
             TypeMetatype::Float => {
-                // push_float (printc.cc:1791-1793 -> 1380-1424): Rugra has
-                // no FloatFormat; FLOAT_UNKNOWN is the sentinel printc.cc
-                // 1386 itself emits — same form as the direct-emit path.
-                "FLOAT_UNKNOWN".to_string()
+                // push_float (printc.cc:1791-1793 -> 1380-1424), text form.
+                self.push_float_text(val, sz as i32)
             }
             TypeMetatype::Pointer => {
                 // printc.cc:1775-1790 (TYPE_PTR/TYPE_PTRREL arm).
@@ -3562,28 +3764,15 @@ impl PrintC {
                         .unwrap_or_else(|| {
                             // printc.cc:596-605 opCall's unnamed-callee arm:
                             // genericFunctionName(fc->getEntryAddress())
-                            // (cc:3359-3366) = "func_" + addr.printRaw —
-                            // AddrSpace::printRaw (space.cc:206-222) zero-
-                            // pads to 2*addrsize (sz shrunk to 4 below
-                            // 2^32), so the direct-runner golden spells
-                            // `func_0x00003190`. The `FUN_` face is the
-                            // headless FRONTEND's database name (analyzeHeadless
-                            // symbol manager), which the decompiler library
-                            // never generates — Rugra's canon-tier fallback
-                            // keeps it for the headless golden, spelled with
-                            // the same printRaw digit rule (`FUN_00102020`),
-                            // and the direct-runner tier (GENSMOKE-S3 /
-                            // MIRROR2-S3 callee-naming family) takes the
-                            // oracle's generic name (tier probe:
-                            // typefactory direct_runner_tier_active, the
-                            // MIRROR-ENVS-CANONICAL-0001 bundle). Both faces
-                            // take (addrsize, wordsize) from the entry
-                            // space channel, not a hardwired Ram.
+                            // (cc:3359-3366). The direct-runner tier takes
+                            // the oracle's generic name; the canon-tier
+                            // fallback keeps the headless FRONTEND's FUN_
+                            // database spelling (the decompiler library
+                            // never generates it — the driver face
+                            // adaptation lives HERE, not in the library
+                            // function).
                             if crate::type_system::typefactory::direct_runner_tier_active() {
-                                format!(
-                                    "func_{}",
-                                    Self::addr_space_print_raw_dims(addr_size, word_size, off)
-                                )
+                                Self::generic_function_name(addr_size, word_size, off)
                             } else {
                                 format!(
                                     "FUN_{}",
@@ -3657,13 +3846,14 @@ impl PrintC {
             // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
             // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
             // Faithful port of `PrintC::opPtrsub(const PcodeOp*)`
-            // (printc.cc:929-1143). Rugra has no TypePointerRel, so the
-            // `ptrel` formal-relative branches collapse to the plain
-            // `ct = ptype->getPtrTo()` arm, exactly as the legacy op_ptrsub
-            // does. The four struct/union emit shapes (printc.cc:1018-1052)
-            // and the two array shapes (1098-1137) are reproduced via the
-            // RPN stack using the pointer_member/object_member/dereference/
-            // addressof tokens defined above.
+            // (printc.cc:929-1143) — including the `ptrel` formal-relative
+            // branches (cc:947-976/966/1023/1030/1042/1048/1109/1115/1124/
+            // 1132, pushTypePointerRel + the parent-rebased suboff) now
+            // that TypePointerRel state lives on the pointer's base record
+            // (PointerRelState, datatype.rs). The four struct/union emit
+            // shapes (printc.cc:1018-1052) and the two array shapes
+            // (1098-1137) are reproduced via the RPN stack using the
+            // pointer_member/object_member/dereference/addressof tokens.
             OpCode::CPUI_PTRSUB => {
                 use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
                 // printc.cc:929 opPtrsub: struct/union field access
@@ -3672,13 +3862,12 @@ impl PrintC {
                 // (printc.cc:929-1143): the flex decision (cc:958,
                 // isValueFlexible cc:894-911 — PRINTC-C3FLEX-DOTFORM-0001)
                 // selects object_member (`.`) + the base load-value flip;
-                // Rugra has no TypePointerRel, so the `ptrel` branches
-                // (cc:946-950/966-976) collapse to the plain
-                // `ct = ptype->getPtrTo()` arm. The four struct/union emit
-                // shapes (printc.cc:1018-1055) and the four array shapes
-                // (1098-1141) are reproduced via the RPN stack using the
-                // pointer_member/object_member/dereference/addressof/
-                // subscript tokens.
+                // the `ptrel` branches (cc:947-976) resolve through the
+                // pointer's PointerRelState (see the ptrel block below).
+                // The four struct/union emit shapes (printc.cc:1018-1055)
+                // and the four array shapes (1098-1141) are reproduced via
+                // the RPN stack using the pointer_member/object_member/
+                // dereference/addressof/subscript tokens.
                 // printc.cc:940-942: in0 = op->getIn(0); in1const = in1 offset.
                 let in1const: u64 = op
                     .get_in(1)
@@ -3701,15 +3890,82 @@ impl PrintC {
                     .get_in(0)
                     .map(|a| Self::is_value_flexible(&a.read().unwrap()))
                     .unwrap_or(false);
-                // printc.cc:951-954: ct = ptype->getPtrTo() (no TypePointerRel).
-                let ct = ptype.as_ref().and_then(|pt| match &**pt {
-                    Datatype::Pointer(p) => Some(p.ptr_to.clone()),
-                    _ => None,
-                });
+                // printc.cc:947-954: ptrel/ct resolution.
+                //   if (ptype->isFormalPointerRel() &&
+                //       ((TypePointerRel *)ptype)->evaluateThruParent(in1const)) {
+                //     ptrel = ptype; ct = ptrel->getParent();
+                //   } else { ptrel = 0; ct = ptype->getPtrTo(); }
+                // TypePointerRel state lives on the pointer's base record
+                // (PointerRelState, datatype.rs); isFormalPointerRel
+                // (type.hh:228) = IS_PTRREL set and HAS_STRIPPED clear.
+                let mut ptrel_parent: Option<Arc<Datatype>> = None;
+                let mut ptrel_addr_offset: i64 = 0;
+                if let Some(pt) = ptype.as_ref() {
+                    if let Datatype::Pointer(p) = pt.as_ref() {
+                        if let Some(rel) = p.base.pointer_rel.as_ref() {
+                            let flags = p.base.flags;
+                            let is_formal = (flags & crate::type_system::datatype::type_flags::IS_PTRREL) != 0
+                                && (flags & crate::type_system::datatype::type_flags::HAS_STRIPPED) == 0;
+                            if is_formal
+                                && crate::type_system::datatype::pointer_rel_evaluate_thru_parent(
+                                    &p.ptr_to,
+                                    &rel.parent,
+                                    p.wordsize,
+                                    rel.offset,
+                                    p.base.size,
+                                    in1const,
+                                )
+                            {
+                                ptrel_parent = Some(rel.parent.clone());
+                                // type.hh:670 getAddressOffset =
+                                //   byteToAddressInt(offset, wordsize).
+                                ptrel_addr_offset =
+                                    crate::space::AddrSpace::byte_to_address_int(
+                                        rel.offset,
+                                        p.wordsize as u32,
+                                    );
+                            }
+                        }
+                    }
+                }
+                let ct = if ptrel_parent.is_some() {
+                    ptrel_parent.clone()
+                } else {
+                    ptype.as_ref().and_then(|pt| match &**pt {
+                        Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+                        _ => None,
+                    })
+                };
                 // printc.cc:959-1056: struct/union field access.
                 let meta = ct.as_ref().map(|c| c.get_metatype());
                 if let Some(meta) = meta {
                     if matches!(meta, TypeMetatype::Struct | TypeMetatype::Union) {
+                        // printc.cc:959-973: suboff = (int4)in1const, and a
+                        // formal-relative pointer re-bases it through the
+                        // parent: suboff += getAddressOffset(); suboff &=
+                        // calc_mask(ptype->getSize()); the folded suboff==0
+                        // case prints ONLY the ADJ-wrapped base (cc:964-971:
+                        // pushTypePointerRel + pushVn, no field atom).
+                        let mut suboff: i64 = in1const as i32 as i64;
+                        if let Some(parent) = ptrel_parent.as_ref() {
+                            let _ = parent;
+                            suboff += ptrel_addr_offset;
+                            let mask = crate::address::calc_mask(
+                                ptype.as_ref().map(|pt| pt.get_size()).unwrap_or(8),
+                            ) as i64;
+                            suboff &= mask;
+                            if suboff == 0 {
+                                // cc:966-971: pushTypePointerRel(op); then the
+                                // base under the flex-selected mods.
+                                self.rpn_push_type_pointer_rel();
+                                self.rpn_push_in(op_arc, op, 0, if flex {
+                                    m | print_mods::PRINT_LOAD_VALUE
+                                } else {
+                                    m
+                                });
+                                return;
+                            }
+                        }
                         // printc.cc:977-1010: the field-name resolution splits
                         // on the pointee metatype. TYPE_UNION (cc:977-990):
                         // a PTRSUB into a union must have suboff == 0 (else
@@ -3743,7 +3999,7 @@ impl PrintC {
                                         }
                                     })
                             });
-                            resolved.unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                            resolved.unwrap_or_else(|| (format!("field_0x{:x}", suboff), None))
                         } else {
                             // printc.cc:991-1010 (TYPE_STRUCT): resolve the
                             // field name via findTruncation(suboff,0,op,0).
@@ -3754,14 +4010,14 @@ impl PrintC {
                             // (DataTypeComponent::getDefaultFieldName).
                             ct.unwrap()
                                 .find_truncation(
-                                    in1const as i64,
+                                    suboff,
                                     0,
                                     None,
                                     0,
                                     Some(&self.union_resolutions),
                                 )
                                 .map(|(f, _)| (f.name, Some(f.type_ptr)))
-                                .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
+                                .unwrap_or_else(|| (format!("field_0x{:x}", suboff), None))
                         };
                         // printc.cc:1011-1016: arrayvalue = false; if the
                         // field's type is an ARRAY, the '&' is dropped (the
@@ -3822,6 +4078,12 @@ impl PrintC {
                             // bracket pairing is byte-identical).
                             self.rpn_push_op(member_tok);
                         }
+                        // printc.cc:1022-1024/1030-1032/1041-1043/1047-1049:
+                        //   if (ptrel != 0) pushTypePointerRel(op); — the
+                        //   ADJ wrapper between the member op and the base.
+                        if ptrel_parent.is_some() {
+                            self.rpn_push_type_pointer_rel();
+                        }
                         // pushVn(in0): record into nodepend so an implied in0
                         // (e.g. nested PTRSUB/CAST) is inlined by rpn_recurse.
                         self.rpn_push_in(op_arc, op, 0, base_mods);
@@ -3852,8 +4114,13 @@ impl PrintC {
                                 // cc:1118-1122: EMIT *( ).
                                 self.rpn_push_op(self.rpn_tok_dereference);
                             }
-                            // cc:1113-1117: EMIT ( ) — flex absorbs the
-                            // dereference into in0's defining op.
+                            // cc:1109-1110/1113-1117: if (ptrel)
+                            //   pushTypePointerRel(op); then EMIT ( ) —
+                            //   flex absorbs the dereference into in0's
+                            //   defining op.
+                            if ptrel_parent.is_some() {
+                                self.rpn_push_type_pointer_rel();
+                            }
                             self.rpn_push_in(op_arc, op, 0, if flex {
                                 m | print_mods::PRINT_LOAD_VALUE
                             } else {
@@ -3863,6 +4130,11 @@ impl PrintC {
                             // cc:1125-1141: EMIT ( )[0] / (* )[0].
                             if !flex {
                                 self.rpn_push_op(self.rpn_tok_dereference);
+                            }
+                            // cc:1124-1125/1128-1133: if (ptrel)
+                            //   pushTypePointerRel(op) before the base.
+                            if ptrel_parent.is_some() {
+                                self.rpn_push_type_pointer_rel();
                             }
                             self.rpn_push_in(op_arc, op, 0, if flex {
                                 m | print_mods::PRINT_LOAD_VALUE
@@ -4130,6 +4402,149 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:376 PrintC::checkAddressOfCast
+    /// Check that the output data-type is a pointer to an array and then
+    /// that the second data-type is a pointer to the element type (of the
+    /// array); if this holds and the input variable represents a symbol
+    /// with an \e array data-type, the CAST can be rendered as `&`.
+    /// Faithful port of `checkAddressOfCast` (printc.cc:376-418):
+    /// - dt0 = the CAST output's def-facing high type, dt1 = the input's
+    ///   read-facing high type (379-381); both must be TYPE_PTR (382-383).
+    /// - base0 = dt0's pointee must be TYPE_ARRAY (384-388);
+    ///   `arraySize` is the ARRAY's size, then base0 becomes the array's
+    ///   element type (388-389).
+    /// - the typedef strips (390-393) — `while(base->getTypedef() != 0)`
+    ///   — are the identity on Rugra's type model: `Datatype::typedefImm`
+    ///   (type.hh:196) has no Rugra counterpart (the type_system keeps no
+    ///   typedef parent chain), so the loop body never runs, exactly the
+    ///   oracle's behavior for types with no typedef layer.
+    /// - the stripped bases must be the same type (394-395) — Ghidra
+    ///   compares interned-type pointers; the non-interned Rust equivalent
+    ///   is `Datatype::compare(...) == 0` (type.cc:1091, the same
+    ///   structural equality interning guarantees).
+    /// - the symbol type comes from the input's whole-map symbol entry
+    ///   (397-399, `getSymbolOffset() == -1` = whole symbol) or, for a
+    ///   written input defined by PTRSUB, from the field the PTRSUB
+    ///   selects (400-412, `getSubType(off,&off)` with the residue
+    ///   required to be 0).
+    /// - the symbol type must be an array of exactly `arraySize` bytes
+    ///   (413-417).
+    ///
+    /// Four decisive semantics (printc.cc:376-418):
+    /// - References: `op` is read-only; `off` is passed by reference into
+    ///   getSubType and re-tested (`off != 0` rejects a partial-field
+    ///   hit, 408-409).
+    /// - Loop bounds: the typedef strips run while a parent exists
+    ///   (identity here); no other iteration.
+    /// - Counters: none.
+    /// - Comparison keys: metatype equality first, then type identity
+    ///   (compare==0), then size equality (`arraySize` from the CAST
+    ///   target's array, 388/415).
+    fn check_address_of_cast(&self, op: &PcodeOp) -> bool {
+        // printc.cc:379-381: dt0/dt1 with their facing flavors.
+        let Some(dt0) = op
+            .get_out()
+            .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()))
+        else {
+            return false;
+        };
+        let Some(vnin_arc) = op.get_in(0) else {
+            return false;
+        };
+        let vnin = vnin_arc.read().unwrap();
+        let Some(dt1) = self.vn_high_type_read_facing_snap(&vnin, op, 0) else {
+            return false;
+        };
+        // printc.cc:382-383: if (dt0->getMetatype() != TYPE_PTR ||
+        //   dt1->getMetatype() != TYPE_PTR) return false;
+        if dt0.get_metatype() != TypeMetatype::Pointer
+            || dt1.get_metatype() != TypeMetatype::Pointer
+        {
+            return false;
+        }
+        // printc.cc:384-385: base0/base1 = the pointees.
+        let pointee_of = |dt: &Datatype| match dt {
+            Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+            _ => None,
+        };
+        let (Some(base0), Some(base1)) = (pointee_of(&dt0), pointee_of(&dt1)) else {
+            return false;
+        };
+        // printc.cc:386-387: if (base0->getMetatype() != TYPE_ARRAY)
+        //   return false;
+        if base0.get_metatype() != TypeMetatype::Array {
+            return false;
+        }
+        // printc.cc:388: int4 arraySize = base0->getSize();
+        let array_size = base0.get_size();
+        // printc.cc:389: base0 = ((const TypeArray *)base0)->getBase();
+        let base0_elem = match base0.as_ref() {
+            Datatype::Array(a) => a.array_of.clone(),
+            _ => return false,
+        };
+        // printc.cc:390-393: the typedef strips — identity on Rugra's
+        // model (no typedefImm chain; see the doc comment).
+        // printc.cc:394-395: if (base0 != base1) return false;
+        if base0_elem.compare(&base1) != 0 {
+            return false;
+        }
+        // printc.cc:396-399: the whole-map symbol entry arm.
+        let mut symbol_type: Option<Arc<Datatype>> = None;
+        let symbol_offset_is_whole = vnin
+            .high
+            .as_ref()
+            .is_some_and(|h| h.read().unwrap().get_symbol_offset() == -1);
+        if vnin.get_symbol_entry().is_some() && symbol_offset_is_whole {
+            let entry = vnin.get_symbol_entry().expect("checked");
+            let sym = entry.read().unwrap().get_symbol();
+            symbol_type = sym.read().unwrap().dtype.clone();
+        } else if vnin.is_written() {
+            // printc.cc:400-412: the PTRSUB-def arm.
+            if let Some(def_arc) = vnin.get_def() {
+                let ptrsub = def_arc.read().unwrap();
+                // printc.cc:402: if (ptrsub->code() == CPUI_PTRSUB)
+                if ptrsub.opcode == OpCode::CPUI_PTRSUB {
+                    let Some(in0_arc) = ptrsub.get_in(0) else {
+                        return false;
+                    };
+                    let in0 = in0_arc.read().unwrap();
+                    let Some(root_type) = self.vn_high_type_read_facing_snap(&in0, &ptrsub, 0)
+                    else {
+                        return false;
+                    };
+                    // printc.cc:404-405: if (rootType->getMetatype() ==
+                    //   TYPE_PTR) rootType = ptrTo
+                    if root_type.get_metatype() == TypeMetatype::Pointer {
+                        let root_pointee = match root_type.as_ref() {
+                            Datatype::Pointer(p) => p.ptr_to.clone(),
+                            _ => return false,
+                        };
+                        // printc.cc:406: int8 off = ptrsub->getIn(1)->getOffset();
+                        let off = ptrsub
+                            .get_in(1)
+                            .map(|a| a.read().unwrap().get_offset() as i64)
+                            .unwrap_or(0);
+                        // printc.cc:407: symbolType = rootType->getSubType(off, &off);
+                        let (sub, newoff) = root_pointee.get_sub_type(off);
+                        // printc.cc:408-409: if (off != 0) return false;
+                        if newoff != 0 {
+                            return false;
+                        }
+                        symbol_type = sub;
+                    }
+                }
+            }
+        }
+        // printc.cc:413-414: if (symbolType == (Datatype *)0) return false;
+        let Some(symbol_type) = symbol_type else {
+            return false;
+        };
+        // printc.cc:415-417: if (symbolType->getMetatype() != TYPE_ARRAY ||
+        //   symbolType->getSize() != arraySize) return false; return true;
+        symbol_type.get_metatype() == TypeMetatype::Array
+            && symbol_type.get_size() == array_size
+    }
+
     // Ghidra: printc.cc:448 PrintC::opTypeCast
     /// RPN-path port of `PrintC::opTypeCast(const PcodeOp*)`
     /// (printc.cc:448-464). Shared by the CPUI_CAST dispatch arm and the
@@ -4150,26 +4565,14 @@ impl PrintC {
             .get_out()
             .and_then(|o| self.vn_high_type_def_facing_snap(&o.read().unwrap()));
         // printc.cc:452-458: array-decay address-of shortcut.
-        // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
-        // does not port; we take the common case where in0 is itself an
-        // array lvalue decaying into the pointer-to-array target. This
-        // matches the legacy op_type_cast behaviour.
+        // checkAddressOfCast (printc.cc:376-418) — the full port above
+        // (the former in0-is-array heuristic is retired).
         if let Some(ref dt) = out_dt {
-            if Self::is_pointer_to_array(dt) {
-                let in0_is_array = op
-                    .get_in(0)
-                    .map(|a| {
-                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
-                        .map(|t| t.get_metatype() == TypeMetatype::Array)
-                        .unwrap_or(false)
-                })
-                    .unwrap_or(false);
-                if in0_is_array {
-                    // pushOp(&addressof,op); pushVn(in0).
-                    self.rpn_push_op(self.rpn_tok_addressof);
-                    self.rpn_push_in(op_arc, op, 0, self.mods);
-                    return;
-                }
+            if Self::is_pointer_to_array(dt) && self.check_address_of_cast(op) {
+                // pushOp(&addressof,op); pushVn(in0).
+                self.rpn_push_op(self.rpn_tok_addressof);
+                self.rpn_push_in(op_arc, op, 0, self.mods);
+                return;
             }
         }
         // printc.cc:459-462: if (!option_nocasts) {
@@ -7155,9 +7558,21 @@ impl PrintC {
                             if !emitted_case_values.insert(*val) { continue; }
                             self.emit.tag_line(0);
                             self.emit.print("case ");
+                            // cc:3153: pushConstant(val,ct,casetoken,
+                            //   (Varnode *)0,op) — the FULL pushConstant
+                            //   dispatch with a null vn (no equate-symbol
+                            //   arm, displayFormat 0). The charprint arm is
+                            //   pushCharConstant's vn-null shape:
+                            //   char_constant_text with DEFAULT format (the
+                            //   >=0x80 one-byte labels fall back to the
+                            //   plain integer exactly like printc.cc:1630-
+                            //   1640, not the hex-escaped CHAR forcing the
+                            //   former code applied).
                             if is_char_print {
-                                self.push_integer(*val, switch_sz, switch_signed,
-                                    display_format::CHAR);
+                                self.emit.print(&self.char_constant_text(
+                                    *val, switch_sz, switch_signed,
+                                    display_format::DEFAULT,
+                                ));
                             } else {
                                 self.push_integer(*val, switch_sz, switch_signed,
                                     display_format::DEFAULT);
@@ -7570,15 +7985,15 @@ impl PrintC {
     fn is_set(&self, m: u32) -> bool { (self.mods & m) != 0 }
     // Ghidra: printlanguage.hh:287 PrintLanguage::pushMod
     /// Push current mods onto the mod stack (save).
-    fn push_mod(&mut self) { self.mod_stack.push(self.mods); }
+    pub fn push_mod(&mut self) { self.mod_stack.push(self.mods); }
     // Ghidra: printlanguage.hh:288 PrintLanguage::popMod
     /// Pop to the previously saved mods (restore).
-    fn pop_mod(&mut self) {
+    pub fn pop_mod(&mut self) {
         if let Some(m) = self.mod_stack.pop() { self.mods = m; }
     }
     // Ghidra: printlanguage.hh:289 PrintLanguage::setMod
     /// Activate the given modification.
-    fn set_mod(&mut self, m: u32) { self.mods |= m; }
+    pub fn set_mod(&mut self, m: u32) { self.mods |= m; }
     // Ghidra: printlanguage.hh:290 PrintLanguage::unsetMod
     /// Deactivate the given modification.
     fn unset_mod(&mut self, m: u32) { self.mods &= !m; }
@@ -8279,6 +8694,54 @@ impl PrintC {
             return "::".to_string();
         }
         String::new()
+    }
+
+    // Ghidra: printc.cc:233 PrintC::emitSymbolScope
+    /// Emit the elements of the given symbol's namespace path that
+    /// distinguish it within the current scope — the emit-direct twin of
+    /// `pushSymbolScope` (printc.cc:202-228), used by
+    /// `emitFunctionDeclaration` (printc.cc:2591) for the FUNCTION's own
+    /// symbol, ahead of the function-name token. Faithful to
+    /// `emitSymbolScope` (printc.cc:233-259):
+    /// - `namespc_strategy` is MINIMAL_NAMESPACES (the printlanguage.cc:581
+    ///   default; Rugra has no option channel that changes it), so the
+    ///   depth is `Symbol::getResolutionDepth(curscope)`
+    ///   (database.cc:323-359).
+    /// - The function Symbol lives in the GLOBAL scope; `curscope` at
+    ///   printc.cc:2591 is the scope stack's bottom (the global scope —
+    ///   `pushScope(fd->getScopeLocal())` runs at cc:2597 AFTER this), so
+    ///   database.cc:326 `scope == useScope` answers depth 0 and nothing
+    ///   prints. The one nonzero case on this path mirrors
+    ///   [`Self::symbol_scope_prefix`]: a global name shadowed by the
+    ///   function's local nametree prints the global scope's EMPTY
+    ///   display name (database.cc:2951) under the `::` operator
+    ///   (`scope.print1`, printc.cc:24).
+    /// - The scopeList walk (cc:248-253) collects `scopedepth` scopes
+    ///   innermost-first, then the emit loop (cc:254-257) prints them
+    ///   outermost-first as `displayName + "::"` pairs — for the global
+    ///   scope that is exactly one `::` token.
+    ///
+    /// Four decisive semantics (printc.cc:233-259):
+    /// - References: `symbol` read-only; `emit` borrowed mutably.
+    /// - Loop bounds: collect `0..scopedepth`, emit `scopedepth-1..=0`
+    ///   (reverse order, inclusive).
+    /// - Counters: `scopedepth` computed once, never mutated.
+    /// - Comparison keys: `symbol->getScope() == curscope` under
+    ///   ALL_NAMESPACES (unreachable here); the MINIMAL path's depth from
+    ///   getResolutionDepth.
+    pub fn emit_symbol_scope(&mut self, func_display_name: &str) {
+        // The depth-0 fast path: a function name never collides with the
+        // local nametree on the locked corpora (locals are param_N/stack
+        // spellings), and precomposed `ns::name` function names already
+        // carry their scope elements (the symbol_scope_prefix rule).
+        let shadowed = !func_display_name.contains("::")
+            && self.local_scope_names.contains(func_display_name);
+        if !shadowed {
+            return; // scopedepth == 0: nothing prints (printc.cc:247)
+        }
+        // scopedepth == 1: the global scope's empty display name + "::"
+        // (printc.cc:254-257, one scopeList element).
+        self.emit.print("::");
     }
 
     // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
@@ -10886,6 +11349,15 @@ impl PrintLanguage for PrintC {
         // `set_space_manager`.
         self.string_manager = fd.arch.as_ref().and_then(|a| a.string_manager.clone());
         self.symboltab = fd.arch.as_ref().and_then(|a| a.symboltab.clone());
+        // printc.cc:2332 initializeFromArchitecture — the oracle runs it
+        // once at Architecture init (architecture.cc:1407); Rugra's PrintC
+        // reaches the TypeFactory only through fd.arch, so the idempotent
+        // size-suffix computation runs here (x86-64: long=8, int=4 -> "L",
+        // byte-identical to the former constructor pin).
+        if let Some(types) = fd.arch.as_ref().and_then(|a| a.types.clone()) {
+            let types_guard = types.read().unwrap();
+            self.initialize_from_architecture(&types_guard);
+        }
         // Snapshot the union-resolution cache for the walk's findResolve and
         // findTruncation consults (see field doc).
         self.snapshot_union_resolutions(fd);
@@ -12207,7 +12679,7 @@ impl PrintLanguage for PrintC {
         // bytes above already reproduce the lowlevel stream.
         let comment_id = self.emit.start_comment();
         // cc:601: emit->tagComment(commentstart, comment_color, spc, off);
-        self.emit.tag_comment("/* ");
+        self.emit.tag_comment(&self.commentstart.clone());
         // cc:603-644: byte token walk over the comment text.
         let chars: Vec<char> = text.chars().collect();
         let mut pos = 0usize;
@@ -12266,7 +12738,10 @@ impl PrintLanguage for PrintC {
             }
         }
         // cc:645-646: if (commentend.size() != 0) tagComment(commentend, ...).
-        self.emit.tag_comment(" */");
+        let commentend = self.commentend.clone();
+        if !commentend.is_empty() {
+            self.emit.tag_comment(&commentend);
+        }
         // cc:647: emit->stopComment(id); — closes the comment group: the
         // end_comment token clears commentmode (prettyprint.cc:652-653), so
         // forced breaks after this comment get no fill.
@@ -13592,6 +14067,30 @@ impl PrintLanguage for PrintC {
     }
 }
 
+// Ghidra: printc.cc:108 PrintCCapability
+/// The c-language printer capability — the registration record
+/// `PrintCCapability` (printc.cc:106-119) whose static singleton
+/// (`PrintCCapability::printCCapability`, printc.cc:106) auto-registers
+/// with the `PrintLanguageCapability` list at static-init time in the C++
+/// tree. Faithful shape: `name = "c-language"`, `isdefault = true`
+/// (printc.cc:111-112), and `buildLanguage` constructs a `PrintC` over
+/// the architecture (printc.cc:115-119). Rust has no static
+/// initializers — registration is explicit — so this record is the value
+/// the registry path consumes; the corpus drivers construct `PrintC`
+/// directly (the same object `buildLanguage` would return).
+pub struct PrintCCapability;
+
+impl PrintCCapability {
+    // Ghidra: printc.cc:108 PrintCCapability::PrintCCapability
+    /// The capability record: name "c-language", default language.
+    pub fn capability() -> crate::printlanguage::PrintLanguageCapability {
+        crate::printlanguage::PrintLanguageCapability {
+            name: "c-language".to_string(),
+            isdefault: true,
+        }
+    }
+}
+
 impl PrintC {
     // ===== Missing printc.cc methods (batch 1) =====
     // Ghidra: printc.cc:536 PrintC::opCbranch
@@ -14604,9 +15103,11 @@ impl PrintC {
         // printc.cc:943-946: if (ptype->meta != TYPE_PTR) throw.
         // (Rugra cannot throw from the printer without disrupting output; we
         //  fall through to the generic field-name fallback instead.)
-        // printc.cc:947-954: ptrel/ct resolution. ct = ptype->getPtrTo() when
-        // there is no formal-relative pointer; Rugra has no TypePointerRel, so
-        // we always take the `ct = ptype->getPtrTo()` branch.
+        // printc.cc:947-954: ptrel/ct resolution. The production (RPN)
+        // path carries the full formal-relative port (see the PTRSUB arm
+        // in dispatch_op_rpn); this legacy direct-emit fallback keeps the
+        // collapsed `ct = ptype->getPtrTo()` arm — the non-production
+        // route (rpn_enabled=false tests only).
         let ct = in0_type.as_ref().and_then(|pt| match &**pt {
             Datatype::Pointer(p) => Some(p.ptr_to.clone()),
             _ => None,
@@ -14957,27 +15458,15 @@ impl PrintC {
             .and_then(|a| self.vn_high_type_def_facing_snap(&a.read().unwrap()));
         // printc.cc:452-458: if (dt->isPointerToArray()) { if (checkAddressOfCast(op)) {...} }
         if let Some(ref dt) = out_dt {
-            if Self::is_pointer_to_array(dt) {
-                // checkAddressOfCast(op): the input is an array lvalue being
-                // decayed to a pointer (printc.cc:376-405). Rugra does not port
-                // the full heuristic; we take the common decay case where the
-                // cast target pointer-type matches the array's element pointer.
-                let in0_is_array = op
-                    .get_in(0)
-                    .map(|a| {
-                    self.vn_high_type_read_facing_snap(&a.read().unwrap(), op, 0)
-                        .map(|t| t.get_metatype() == TypeMetatype::Array)
-                        .unwrap_or(false)
-                })
-                    .unwrap_or(false);
-                if in0_is_array {
-                    // pushOp(&addressof,op); pushVn(op->getIn(0),op,mods);
-                    self.emit.print("&");
-                    if let Some(in0) = op.get_in(0) {
-                        self.push_varnode(&in0.read().unwrap(), Some(op));
-                    }
-                    return;
+            if Self::is_pointer_to_array(dt) && self.check_address_of_cast(op) {
+                // checkAddressOfCast (printc.cc:376-418) — the full port
+                // (the former in0-is-array heuristic is retired).
+                // pushOp(&addressof,op); pushVn(op->getIn(0),op,mods);
+                self.emit.print("&");
+                if let Some(in0) = op.get_in(0) {
+                    self.push_varnode(&in0.read().unwrap(), Some(op));
                 }
+                return;
             }
         }
         // printc.cc:459-462: if (!option_nocasts) { pushOp(&typecast); pushType(dt); }
@@ -15203,6 +15692,147 @@ impl PrintC {
         false
     }
 
+    // Ghidra: translate.cc:979 Translate::getFloatFormat (default formats)
+    /// The FloatFormat for a given encoding size — the print-side stand-in
+    /// for `glb->translate->getFloatFormat(sz)` (printc.cc:1384). Rugra's
+    /// transitional Architecture owns no Translate, so the formats come
+    /// from the oracle's own default registration:
+    /// `Translate::setDefaultFloatFormats` (translate.cc:962-970) installs
+    /// the 4-byte and 8-byte IEEE 754 formats whenever the language
+    /// registers none, so every oracle Translate answers sizes 4 and 8.
+    /// Any other size returns `None` — the caller emits the FLOAT_UNKNOWN
+    /// sentinel exactly like printc.cc:1385-1387.
+    fn get_float_format(&self, sz: i32) -> Option<crate::float_emulate::FloatFormat> {
+        match sz {
+            4 | 8 => Some(crate::float_emulate::FloatFormat::new(sz as usize)),
+            _ => None,
+        }
+    }
+
+    // Ghidra: printc.cc:1380 PrintC::push_float
+    /// Push a constant with a floating-point data-type — the text core
+    /// shared by the RPN constant leaf (make_atom_for_vn's pushConstant
+    /// dispatch) and the direct-emit `push_constant_typed` arm, so both
+    /// paths print one form. Faithful to `push_float`
+    /// (printc.cc:1380-1424):
+    /// - the encoding is drawn from the Translate's FloatFormat
+    ///   (1384), FLOAT_UNKNOWN when absent (1385-1387);
+    /// - `getHostFloat` classifies (1389-1390): infinity and NaN print
+    ///   the sign-prefixed tokens (1391-1402);
+    /// - otherwise `printDecimal` renders the value — scientific when
+    ///   the force_scinote mod is set (1404-1406), else the default form
+    ///   with the ".0" suffix forced whenever the token holds neither
+    ///   '.' nor 'e' (1407-1419).
+    ///
+    /// Four decisive semantics (printc.cc:1380-1424):
+    /// - References: none — `format` is a local value; `val` is the raw
+    ///   encoding, never mutated.
+    /// - Loop bounds: the looks-like-float scan is `i < token.size()`
+    ///   with an early break (1410-1416) — first '.' or 'e' wins.
+    /// - Counters: none persist; `prec` lives inside printDecimal.
+    /// - Comparison keys: the FloatClass match is ordered infinity ->
+    ///   nan -> default (1391/1397/1403), sign via extractSign.
+    pub fn push_float_text(&mut self, val: u64, sz: i32) -> String {
+        // printc.cc:1384-1387: const FloatFormat *format =
+        //   glb->translate->getFloatFormat(sz); if (format == 0) token =
+        //   "FLOAT_UNKNOWN";
+        let Some(format) = self.get_float_format(sz) else {
+            return "FLOAT_UNKNOWN".to_string();
+        };
+        // printc.cc:1389-1390: FloatFormat::floatclass type; double
+        //   floatval = format->getHostFloat(val,&type);
+        let mut ftype = crate::float_emulate::FloatClass::Zero;
+        let floatval = format.get_host_float(val, &mut ftype);
+        match ftype {
+            crate::float_emulate::FloatClass::Infinity => {
+                // printc.cc:1391-1396: if (format->extractSign(val)) token
+                //   = "-INFINITY"; else token = "INFINITY";
+                if format.extract_sign(val) {
+                    "-INFINITY".to_string()
+                } else {
+                    "INFINITY".to_string()
+                }
+            }
+            crate::float_emulate::FloatClass::Nan => {
+                // printc.cc:1397-1402: if (format->extractSign(val)) token
+                //   = "-NAN"; else token = "NAN";
+                if format.extract_sign(val) {
+                    "-NAN".to_string()
+                } else {
+                    "NAN".to_string()
+                }
+            }
+            _ => {
+                // printc.cc:1403-1421: the decimal renderings.
+                if self.is_set(crate::printlanguage::modifiers::FORCE_SCINOTE) {
+                    // printc.cc:1404-1406: token =
+                    //   format->printDecimal(floatval, true);
+                    format.print_decimal(floatval, true)
+                } else {
+                    // printc.cc:1407-1419: token =
+                    //   format->printDecimal(floatval, false); then the
+                    //   looks-like-float scan (1409-1416) and the ".0"
+                    //   suffix (1417-1419).
+                    let mut token = format.print_decimal(floatval, false);
+                    let looks_like_float = token.contains('.') || token.contains('e');
+                    if !looks_like_float {
+                        token.push_str(".0"); // Force token to look like a floating-point value
+                    }
+                    token
+                }
+            }
+        }
+        // printc.cc:1423: pushAtom(Atom(token,tag,EmitMarkup::const_color,
+        //   op,vn,val)); — text form.
+    }
+
+    // Ghidra: printc.cc:3359 PrintC::genericFunctionName
+    /// Create a generic function name based on the entry point address.
+    /// Faithful to `genericFunctionName` (printc.cc:3359-3366):
+    /// `"func_" + addr.printRaw(s)` — `AddrSpace::printRaw`
+    /// (space.cc:206-222) zero-pads to `2*addrsize` (sz shrunk to 4 below
+    /// 2^32), so the direct-runner golden spells `func_0x00003190`.
+    /// This is the library function's ONE form — the oracle has no tier
+    /// split here.
+    ///
+    /// The `FUN_` face is the headless FRONTEND's database name
+    /// (analyzeHeadless symbol manager), which the decompiler library
+    /// never generates — Rugra's canon-tier fallback applies it at the
+    /// opCall consumer (the unnamed-callee arm of the RPN dispatch),
+    /// spelled with the same printRaw digit rule (`FUN_00102020`), while
+    /// the direct-runner tier (GENSMOKE-S3 / MIRROR2-S3 callee-naming
+    /// family) takes this oracle form (tier probe: typefactory
+    /// direct_runner_tier_active, the MIRROR-ENVS-CANONICAL-0001
+    /// bundle). Both faces take (addrsize, wordsize) from the entry
+    /// space channel, not a hardwired Ram.
+    ///
+    /// Four decisive semantics (printc.cc:3359-3366):
+    /// - References: none — pure string assembly over the address.
+    /// - Loop bounds: none.
+    /// - Counters: none.
+    /// - Comparison keys: none — the printRaw digit rule is the only
+    ///   spelling decision.
+    pub fn generic_function_name(addr_size: usize, word_size: u64, off: u64) -> String {
+        format!(
+            "func_{}",
+            Self::addr_space_print_raw_dims(addr_size, word_size, off)
+        )
+    }
+
+    // Ghidra: printc.cc:1504 PrintC::doEmitWideCharPrefix
+    /// Return \b true if this language requires a prefix when expressing
+    /// \e wide characters. Faithful to `doEmitWideCharPrefix`
+    /// (printc.cc:1504-1507): unconditionally true for the c-language —
+    /// the 'L' prefix before wide character constants (printc.cc:1349,
+    /// push_integer's force_char arm) and wide string literals
+    /// (printc.cc:1544, printCharacterConstant; printc.cc:1645,
+    /// pushCharConstant). The virtual exists so derived languages can
+    /// tailor their strings; Rust's PrintC has no derived language, so
+    /// the method is the constant the call sites read.
+    fn do_emit_wide_char_prefix(&self) -> bool {
+        true
+    }
+
     // Ghidra: printc.cc:1534 PrintC::printCharacterConstant
     /// Print a quoted (unicode) string at the given address. Faithful port
     /// of `printCharacterConstant` (printc.cc:1534-1553): retrieve the UTF8
@@ -15240,9 +15870,7 @@ impl PrintC {
         }
         // printc.cc:1544-1545: if (doEmitWideCharPrefix() &&
         //   charType->getSize() > 1 && !charType->isOpaqueString()) s << 'L';
-        // (doEmitWideCharPrefix() is unconditionally true for C,
-        // printc.cc:1504-1507.)
-        if charsize > 1 && !opaque {
+        if self.do_emit_wide_char_prefix() && charsize > 1 && !opaque {
             out.push('L');
         }
         // printc.cc:1546-1547: s << '"';
@@ -16661,12 +17289,16 @@ impl PrintC {
         }
         // int4 id1 = emit->openGroup();
         let id1 = self.emit.open_group();
-        // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
         // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
         // The name is emitted VERBATIM (printc.cc:2592) — no identifier
         // scrubbing, so `parseconfig.constprop.0` keeps its dots.
         // STUBLEAK-DOTNAME-SANITIZE-0001.
         let display_name = fd.get_name().to_string();
+        // emitSymbolScope(fd->getSymbol()); (printc.cc:2591) — the
+        // FUNCTION's own symbol scope prefix, the emit-direct twin of
+        // pushSymbolScope (see emit_symbol_scope), printed BEFORE the
+        // function name token.
+        self.emit_symbol_scope(&display_name);
         self.emit.tag_func_name(&display_name, 0);
         // emit->spaces(function_call.spacing,function_call.bump);
         // printc.cc:2594: the tokenbreak between funcname and '('.
@@ -17733,7 +18365,7 @@ impl PrintC {
     /// never carry the explicit-print flags (charPrint/enum constants —
     /// cast.cc:50-51 rejects both in markExplicitUnsigned), so the
     /// unsigned/long suffixes are provably absent and default to false.
-    fn integer_text(&self, val: u64, sz: usize, sign: bool,
+    pub fn integer_text(&self, val: u64, sz: usize, sign: bool,
                     display_format: u32) -> String {
         self.integer_text_flagged(val, sz, sign, display_format, false, false)
     }
@@ -17827,7 +18459,9 @@ impl PrintC {
             display_format::DEC => { t.push_str(&format!("{}", v)); }
             display_format::OCT => { t.push('0'); t.push_str(&format!("{:o}", v)); }
             display_format::CHAR => {
-                if sz > 1 { t.push('L'); } // doEmitWideCharPrefix() == true for C
+                // printc.cc:1349-1350: if (doEmitWideCharPrefix() && sz > 1)
+                //   t << 'L';
+                if self.do_emit_wide_char_prefix() && sz > 1 { t.push('L'); }
                 t.push('\'');
                 if sz == 1 && v >= 0x80 {
                     Self::print_char_hex_escape(&mut t, v as i32);
@@ -17891,7 +18525,9 @@ impl PrintC {
         }
         // printc.cc:1641-1654.
         let mut t = String::new();
-        if sz > 1 { t.push('L'); }
+        // printc.cc:1645-1646: if (doEmitWideCharPrefix() && ct->getSize() > 1)
+        //   t << 'L';
+        if self.do_emit_wide_char_prefix() && sz > 1 { t.push('L'); }
         t.push('\'');
         if fmt == display_format::HEX {
             Self::print_char_hex_escape(&mut t, val as i32);
@@ -18023,9 +18659,10 @@ impl PrintC {
                 self.emit.print(&t);
             }
             TypeMetatype::Float => {
-                // push_float (printc.cc:1380-1424): Rugra has no FloatFormat;
-                // emit FLOAT_UNKNOWN (printc.cc:1386 sentinel).
-                self.emit.print("FLOAT_UNKNOWN");
+                // push_float (printc.cc:1380-1424), direct-emit form.
+                // cc:1792 passes ct->getSize() as the encoding size.
+                let t = self.push_float_text(val, sz as i32);
+                self.emit.print(&t);
             }
             // Rugra's Enum metatype is Ghidra's enum-int/uint collapse
             // (stored as TYPE_INT/TYPE_UINT + enumtype flag, type.hh:490-494),
@@ -18893,8 +19530,185 @@ impl PrintC {
         //   structured-block emitter (` {`), matching the oracle defaults
         //   (printc.cc:1591-1593), so no separate fields are needed yet.
         self.option_brace_func = crate::prettyprint::BraceStyle::SkipLine;
-        // printc.cc:1594: setCStyleComments() - Rugra emits C-style comments
-        //   unconditionally; no style flag to reset.
+        // printc.cc:1594: setCStyleComments() (printc.hh:242 ->
+        //   setCommentDelimeter("/* "," */",false), printlanguage.cc:96-110).
+        self.set_c_style_comments();
+    }
+
+    // Ghidra: printc.cc:2332 PrintC::initializeFromArchitecture
+    /// Initialize architecture specific aspects of the printer. Faithful
+    /// to `initializeFromArchitecture` (printc.cc:2332-2340):
+    /// - `castStrategy->setTypeFactory(glb->types)` (2335) — the
+    ///   strategy's only factory-derived state is `promoteSize`
+    ///   (`getSizeOfInt()`, cast.cc:27), which Rugra materializes at
+    ///   `CastStrategyC::new`; the call is a structural no-op here
+    ///   (cast.rs keeps no factory handle).
+    /// - the integer size suffix (2336-2339): `"LL"` when the type
+    ///   factory's long size equals the int size (the "long long"
+    ///   distinction is needed), else `"L"`.
+    ///
+    /// The oracle invokes this once at Architecture init
+    /// (architecture.cc:1407, after buildCoreTypes); Rugra's PrintC
+    /// reaches the TypeFactory only through `fd.arch`, so the (idempotent)
+    /// computation runs at doc_function entry — the same observable for
+    /// every architecture (the x86-64 corpus: long=8, int=4 -> `"L"`,
+    /// byte-identical to the former constructor pin).
+    pub fn initialize_from_architecture(&mut self, types: &crate::type_system::typefactory::TypeFactory) {
+        // printc.cc:2335: castStrategy->setTypeFactory(glb->types);
+        //   — see the doc comment: promoteSize is already materialized.
+        // printc.cc:2336-2339: the size suffix.
+        self.size_suffix = if types.get_size_of_long() == types.get_size_of_int() {
+            "LL" // Use "long long" suffix to indicate large integer
+        } else {
+            "L" // Otherwise just use long suffix
+        };
+    }
+
+    // Ghidra: printc.cc:2342 PrintC::adjustTypeOperators
+    /// Set basic data-type information for p-code operators. Faithful to
+    /// `adjustTypeOperators` (printc.cc:2342-2348), whose three actions
+    /// are all re-assertions of the C defaults on this face:
+    /// - `scope.print1 = "::"` (2345) — Rugra's scope element prints the
+    ///   literal `"::"` (symbol_scope_prefix / emit_symbol_scope; the
+    ///   RPN table carries no separate scope token to reset);
+    /// - `shift_right.print1 = ">>"` (2346) — the binary token table
+    ///   already pins `">>"` (BINARY_TOKENS ids 6/7, printc.cc:42-43);
+    /// - `TypeOp::selectJavaOperators(glb->inst,false)` (2347) — the C
+    ///   operator selection (typeop.cc:114-141 `else` arm: ZEXT/NEGATE/
+    ///   XOR/OR/AND/RIGHT metatypes TYPE_UINT, INT_RIGHT symbol ">>").
+    ///   Rugra's typeop emitters carry exactly these C defaults baked in
+    ///   (the Java arm is the PrintJava override); the `inst`-table
+    ///   mutation itself is the typeop domain (in-flight lease) — the
+    ///   C-selection state it would assert is already the operative
+    ///   state, so the call is a structural no-op here.
+    ///
+    /// The oracle invokes this from `Architecture::setPrintLanguage`
+    /// (architecture.cc:417/432); Rugra's PrintC is driver-constructed,
+    /// so the method stands as the faithful entry point for the day the
+    /// architecture-side printlist lands (same structural gap as
+    /// `resetDefaults`'s caller note).
+    pub fn adjust_type_operators(&mut self) {
+        // printc.cc:2345: scope.print1 = "::"; — the "::" the scope
+        //   element printers emit (no table token to re-assert).
+        // printc.cc:2346: shift_right.print1 = ">>"; — already the
+        //   BINARY_TOKENS spelling.
+        // printc.cc:2347: TypeOp::selectJavaOperators(glb->inst,false);
+        //   — the C selection is the baked-in default (see doc comment).
+    }
+
+    // Ghidra: printc.cc:2325 PrintC::resetDefaults
+    /// Reset all print options to their defaults. Faithful to the
+    /// `PrintC::resetDefaults` override (printc.cc:2325-2330):
+    /// `PrintLanguage::resetDefaults()` (printlanguage.cc:671-675 =
+    /// `emit->resetDefaults(); resetDefaultsInternal();`) followed by
+    /// `resetDefaultsPrintC()` (printc.cc:2329).
+    ///
+    /// The emitter half of `PrintLanguage::resetDefaults`
+    /// (`EmitPrettyPrint::resetDefaults`, prettyprint.cc:1237-1241 ->
+    /// `EmitNoMarkup::resetDefaults` + the pretty-print internals) has no
+    /// Rust `Emit`-trait counterpart: Rugra's emitters carry no
+    /// cross-document print options (indent state is per-document), so
+    /// the call is a structural no-op here — registered as the
+    /// emitter-domain handover. The `PrintLanguage::resetDefaultsInternal`
+    /// half (printlanguage.cc:575-583) is applied field-for-field below.
+    ///
+    /// Caller note: the oracle invokes this from
+    /// `Architecture::resetDefaults` (architecture.cc:1444,
+    /// `printlist[i]->resetDefaults()`); Rugra's `Architecture` owns no
+    /// PrintLanguage list (the same structural gap documented at
+    /// `Architecture::resetDefaults`), so the driver calls this directly
+    /// when it needs an options reset.
+    pub fn reset_defaults(&mut self) {
+        // PrintLanguage::resetDefaultsInternal (printlanguage.cc:578-582):
+        // printlanguage.cc:578: mods = 0;
+        self.mods = 0;
+        // printlanguage.cc:579: head_comment_type = header|warningheader;
+        self.head_comment_type = crate::comment::comment_type::HEADER
+            | crate::comment::comment_type::WARNINGHEADER;
+        // printlanguage.cc:580: line_commentindent = 20;
+        self.line_commentindent = 20;
+        // printlanguage.cc:581: namespc_strategy = MINIMAL_NAMESPACES;
+        //   Rugra has no strategy field — MINIMAL is the only strategy in
+        //   play (see symbol_scope_prefix), so this is a no-op.
+        // printlanguage.cc:582: instr_comment_type = user2|warning;
+        self.instr_comment_type = crate::comment::comment_type::USER2
+            | crate::comment::comment_type::WARNING;
+        // printc.cc:2329: resetDefaultsPrintC();
+        self.reset_defaults_print_c();
+    }
+
+    // Ghidra: printlanguage.cc:98 PrintLanguage::setCommentDelimeter
+    /// Set the comment delimiters. Faithful to `setCommentDelimeter`
+    /// (printlanguage.cc:96-110): store the start/stop delimiters, then
+    /// arm the emitter's comment fill — with the start delimiter itself
+    /// when `usecommentfill` is set (the `//` style repeats its delimiter
+    /// after every forced line break), else a blank run of the start
+    /// delimiter's width (`"/* "` -> `"   "`).
+    fn set_comment_delimeter(&mut self, start: &str, stop: &str, usecommentfill: bool) {
+        // printlanguage.cc:98-99: commentstart = start; commentend = stop;
+        self.commentstart = start.to_string();
+        self.commentend = stop.to_string();
+        // printlanguage.cc:100-109: the emitter fill.
+        if usecommentfill {
+            // printlanguage.cc:101-102: emit->setCommentFill(start);
+            self.emit.set_comment_fill(start);
+        } else {
+            // printlanguage.cc:104-108: spaces = start.size() blanks;
+            //   emit->setCommentFill(spaces);
+            let fill: String = " ".repeat(start.len());
+            self.emit.set_comment_fill(&fill);
+        }
+    }
+
+    // Ghidra: printc.hh:242 PrintC::setCStyleComments
+    /// Set c-style `/* */` comment delimiters. Faithful to the inline
+    /// `setCStyleComments` (printc.hh:242):
+    /// `setCommentDelimeter("/* "," */",false)`.
+    pub fn set_c_style_comments(&mut self) {
+        self.set_comment_delimeter("/* ", " */", false);
+    }
+
+    // Ghidra: printc.hh:243 PrintC::setCPlusPlusStyleComments
+    /// Set c++-style `//` comment delimiters. Faithful to the inline
+    /// `setCPlusPlusStyleComments` (printc.hh:243):
+    /// `setCommentDelimeter("// ","",true)` — the empty end delimiter
+    /// suppresses the closing token and the fill repeats the delimiter.
+    pub fn set_c_plus_plus_style_comments(&mut self) {
+        self.set_comment_delimeter("// ", "", true);
+    }
+
+    // Ghidra: printc.cc:2350 PrintC::setCommentStyle
+    /// Set the comment style from its name. Faithful to `setCommentStyle`
+    /// (printc.cc:2350-2361): `"c"` or any string starting `"/*"` selects
+    /// the C style; `"cplusplus"` or any string starting `"//"` selects the
+    /// C++ style; anything else is the oracle's
+    /// `throw LowlevelError("Unknown comment style. Use \"c\" or
+    /// \"cplusplus\"")` — returned as `Err` here (the print path never
+    /// panics).
+    ///
+    /// The option-database wiring (options.cc:526
+    /// `OptionCommentStyle::apply` -> `glb->print->setCommentStyle(p1)`)
+    /// remains a handover: Rugra's `Architecture` owns no PrintLanguage
+    /// field, so `OptionCommentStyle::apply` cannot reach this method
+    /// until the printlist hookup lands (the same structural gap noted at
+    /// `Architecture::resetDefaults`'s printlist loop).
+    pub fn set_comment_style(&mut self, nm: &str) -> Result<(), String> {
+        // printc.cc:2353-2355: if ((nm=="c")||((nm.size()>=2)&&
+        //   (nm[0]=='/')&&(nm[1]=='*'))) setCStyleComments();
+        if nm == "c" || (nm.len() >= 2 && nm.starts_with("/*")) {
+            self.set_c_style_comments();
+        }
+        // printc.cc:2356-2358: else if ((nm=="cplusplus")||
+        //   ((nm.size()>=2)&&(nm[0]=='/')&&(nm[1]=='/')))
+        //   setCPlusPlusStyleComments();
+        else if nm == "cplusplus" || (nm.len() >= 2 && nm.starts_with("//")) {
+            self.set_c_plus_plus_style_comments();
+        }
+        // printc.cc:2359-2360: else throw LowlevelError(...);
+        else {
+            return Err("Unknown comment style. Use \"c\" or \"cplusplus\"".to_string());
+        }
+        Ok(())
     }
 
     // Ghidra: printc.cc:2418 PrintC::emitInplaceOp
@@ -20233,6 +21047,340 @@ mod tests {
         assert!(
             !printer.string_render_eligible(&mk_arg(), Some(&op2)),
             "unlocked prototype param confers no type"
+        );
+    }
+
+    // PRINTC-UNMAP-SINGLETON-0001: checkAddressOfCast (printc.cc:376-418)
+    // unit matrix — the full port's five decisive arms. The bilateral
+    // full-IR fixture is registered as PRINTC-SINGLETON-IRFIX-0001; these
+    // unit cases pin the Rust predicate against the oracle semantics read
+    // at printc.cc:376-418.
+    #[test]
+    fn test_check_address_of_cast_matrix() {
+        use crate::address::Address;
+        use crate::op::PcodeOp;
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer, TypeStruct,
+        };
+        use crate::varnode::Varnode;
+
+        let emit: Box<dyn crate::prettyprint::Emit> =
+            Box::new(crate::prettyprint::EmitNoMarkup::new());
+        let printer = PrintC::new(emit);
+
+        // Type graph: struct S { int x[4]; }; int* / uint* pointers.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".to_string(), 4, TypeMetatype::Uint,
+        )));
+        let int_arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("int[4]".to_string(), 16, TypeMetatype::Array),
+            array_of: int_t.clone(),
+            num_elements: 4,
+        }));
+        let mk_ptr = |name: &str, pointee: Arc<Datatype>| {
+            Arc::new(Datatype::Pointer(TypePointer {
+                base: TypeBase::new(name.to_string(), 8, TypeMetatype::Pointer),
+                ptr_to: pointee,
+                wordsize: 1,
+            }))
+        };
+        let int_arr_ptr = mk_ptr("int (*)[4]", int_arr.clone());
+        let int_elem_ptr = mk_ptr("int *", int_t.clone());
+        let uint_elem_ptr = mk_ptr("uint *", uint_t.clone());
+        let struct_s = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".to_string(), 16, TypeMetatype::Struct),
+            fields: vec![crate::type_system::datatype::TypeField {
+                name: "x".to_string(),
+                offset: 0,
+                type_ptr: int_arr.clone(),
+            }],
+        }));
+        let struct_ptr = mk_ptr("S *", struct_s.clone());
+
+        // High-typed varnodes (the facing snaps read vn.high).
+        let mk_high_vn = |size: usize, ty: Arc<Datatype>| {
+            let mut vn = Varnode::new(size, Address::new(0x100));
+            vn.high = Some(Arc::new(std::sync::RwLock::new(
+                crate::variable::HighVariable::new(ty),
+            )));
+            vn
+        };
+
+        // (a) Positive PTRSUB-def arm: out = int(*)[4], in0 defined by
+        //     PTRSUB(S*, 0) whose read-facing type is int* — the field at
+        //     offset 0 is int[4], size 16 == arraySize → true.
+        {
+            let mut cast_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 1),
+                OpCode::CPUI_CAST,
+            );
+            let out_vn = mk_high_vn(8, int_arr_ptr.clone());
+            let mut in0_vn = mk_high_vn(8, int_elem_ptr.clone());
+            in0_vn.flags |= crate::varnode::varnode_flags::WRITTEN;
+            // in0's def: PTRSUB(struct_ptr, 0).
+            let mut ptrsub_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 0),
+                OpCode::CPUI_PTRSUB,
+            );
+            let root_vn = mk_high_vn(8, struct_ptr.clone());
+            let off_vn = Varnode::new_constant(0, 8);
+            ptrsub_op.inrefs = vec![
+                Arc::new(std::sync::RwLock::new(root_vn)),
+                Arc::new(std::sync::RwLock::new(off_vn)),
+            ];
+            let ptrsub_arc = Arc::new(std::sync::RwLock::new(ptrsub_op));
+            let in0_arc = Arc::new(std::sync::RwLock::new(in0_vn));
+            in0_arc.write().unwrap().def =
+                Some(std::sync::Arc::downgrade(&ptrsub_arc));
+            cast_op.output = Some(Arc::new(std::sync::RwLock::new(out_vn)));
+            cast_op.inrefs = vec![in0_arc.clone()];
+            assert!(
+                printer.check_address_of_cast(&cast_op),
+                "PTRSUB-def arm: int(*)[4] cast of S*->x[4] renders as &"
+            );
+        }
+
+        // (b) Negative: dt1 not a pointer (plain int high on in0).
+        {
+            let mut cast_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 2),
+                OpCode::CPUI_CAST,
+            );
+            let out_vn = mk_high_vn(8, int_arr_ptr.clone());
+            let in0_vn = mk_high_vn(4, int_t.clone());
+            cast_op.output = Some(Arc::new(std::sync::RwLock::new(out_vn)));
+            cast_op.inrefs = vec![Arc::new(std::sync::RwLock::new(in0_vn))];
+            assert!(
+                !printer.check_address_of_cast(&cast_op),
+                "printc.cc:382-383: non-pointer dt1 rejects"
+            );
+        }
+
+        // (c) Negative: base0 not an array (out = int*).
+        {
+            let mut cast_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 3),
+                OpCode::CPUI_CAST,
+            );
+            let out_vn = mk_high_vn(8, int_elem_ptr.clone());
+            let in0_vn = mk_high_vn(8, int_elem_ptr.clone());
+            cast_op.output = Some(Arc::new(std::sync::RwLock::new(out_vn)));
+            cast_op.inrefs = vec![Arc::new(std::sync::RwLock::new(in0_vn))];
+            assert!(
+                !printer.check_address_of_cast(&cast_op),
+                "printc.cc:386-387: non-array base0 rejects"
+            );
+        }
+
+        // (d) Negative: element type mismatch (base1 = uint*).
+        {
+            let mut cast_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 4),
+                OpCode::CPUI_CAST,
+            );
+            let out_vn = mk_high_vn(8, int_arr_ptr.clone());
+            let mut in0_vn = mk_high_vn(8, uint_elem_ptr.clone());
+            in0_vn.flags |= crate::varnode::varnode_flags::WRITTEN;
+            let mut ptrsub_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 0),
+                OpCode::CPUI_PTRSUB,
+            );
+            let root_vn = mk_high_vn(8, struct_ptr.clone());
+            let off_vn = Varnode::new_constant(0, 8);
+            ptrsub_op.inrefs = vec![
+                Arc::new(std::sync::RwLock::new(root_vn)),
+                Arc::new(std::sync::RwLock::new(off_vn)),
+            ];
+            let ptrsub_arc = Arc::new(std::sync::RwLock::new(ptrsub_op));
+            let in0_arc = Arc::new(std::sync::RwLock::new(in0_vn));
+            in0_arc.write().unwrap().def =
+                Some(std::sync::Arc::downgrade(&ptrsub_arc));
+            cast_op.output = Some(Arc::new(std::sync::RwLock::new(out_vn)));
+            cast_op.inrefs = vec![in0_arc.clone()];
+            assert!(
+                !printer.check_address_of_cast(&cast_op),
+                "printc.cc:394-395: base element mismatch rejects"
+            );
+        }
+
+        // (e) Negative: symbol type size mismatch — the PTRSUB selects a
+        //     field whose size != the cast array's size. Field x is int[4]
+        //     (16 bytes); a cast to a DIFFERENT array size (int[2], 8
+        //     bytes) must reject (printc.cc:415-417).
+        {
+            let int_arr2 = Arc::new(Datatype::Array(TypeArray {
+                base: TypeBase::new("int[2]".to_string(), 8, TypeMetatype::Array),
+                array_of: int_t.clone(),
+                num_elements: 2,
+            }));
+            let int_arr2_ptr = mk_ptr("int (*)[2]", int_arr2);
+            let mut cast_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 5),
+                OpCode::CPUI_CAST,
+            );
+            let out_vn = mk_high_vn(8, int_arr2_ptr);
+            let mut in0_vn = mk_high_vn(8, int_elem_ptr.clone());
+            in0_vn.flags |= crate::varnode::varnode_flags::WRITTEN;
+            let mut ptrsub_op = PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x2000), 0),
+                OpCode::CPUI_PTRSUB,
+            );
+            let root_vn = mk_high_vn(8, struct_ptr.clone());
+            let off_vn = Varnode::new_constant(0, 8);
+            ptrsub_op.inrefs = vec![
+                Arc::new(std::sync::RwLock::new(root_vn)),
+                Arc::new(std::sync::RwLock::new(off_vn)),
+            ];
+            let ptrsub_arc = Arc::new(std::sync::RwLock::new(ptrsub_op));
+            let in0_arc = Arc::new(std::sync::RwLock::new(in0_vn));
+            in0_arc.write().unwrap().def =
+                Some(std::sync::Arc::downgrade(&ptrsub_arc));
+            cast_op.output = Some(Arc::new(std::sync::RwLock::new(out_vn)));
+            cast_op.inrefs = vec![in0_arc.clone()];
+            assert!(
+                !printer.check_address_of_cast(&cast_op),
+                "printc.cc:415-417: symbol array size mismatch rejects"
+            );
+        }
+    }
+
+    // PRINTC-UNMAP-SINGLETON-0001: pushImpliedField (printc.cc:2085-2116)
+    // consumer — the union-resolution proceed arm and the !proceed plain
+    // arm. The producer (coreaction.cc:2519 setImpliedField) is the
+    // in-flight-lease handover; the fixture sets the flag directly.
+    #[test]
+    fn test_push_implied_field_union_arm() {
+        use crate::address::Address;
+        use crate::op::PcodeOp;
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeField, TypeMetatype, TypeUnion,
+        };
+        use crate::varnode::{addl_flags, Varnode};
+
+        let emit: Box<dyn crate::prettyprint::Emit> =
+            Box::new(crate::prettyprint::EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        // union U { int a; uint b; } — needsResolution.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".to_string(), 4, TypeMetatype::Uint,
+        )));
+        // TypeUnion::new sets NEEDS_RESOLUTION (datatype.rs:5554); the
+        // literal construction must set it the same way or the
+        // pushImpliedField gate (printc.cc:2091) never opens.
+        let mut u_base = TypeBase::new("U".to_string(), 4, TypeMetatype::Union);
+        u_base.flags |= crate::type_system::datatype::type_flags::NEEDS_RESOLUTION;
+        let union_u = Arc::new(Datatype::Union(TypeUnion {
+            base: u_base,
+            fields: vec![
+                TypeField {
+                    name: "a".to_string(),
+                    offset: 0,
+                    type_ptr: int_t.clone(),
+                },
+                TypeField {
+                    name: "b".to_string(),
+                    offset: 0,
+                    type_ptr: uint_t.clone(),
+                },
+            ],
+        }));
+
+        // The implied vn: high type U, defined by COPY(const), flag set.
+        let mut vn = Varnode::new(4, Address::new(0x100));
+        vn.high = Some(Arc::new(std::sync::RwLock::new(
+            crate::variable::HighVariable::new(union_u.clone()),
+        )));
+        vn.addlflags |= addl_flags::HAS_IMPLIED_FIELD;
+        vn.flags |= crate::varnode::varnode_flags::IMPLIED;
+        let mut def_op = PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        );
+        let const_vn = Varnode::new_constant(5, 4);
+        def_op.inrefs = vec![Arc::new(std::sync::RwLock::new(const_vn))];
+        let def_arc: Arc<std::sync::RwLock<PcodeOp>> =
+            Arc::new(std::sync::RwLock::new(def_op));
+        let vn_arc = Arc::new(std::sync::RwLock::new(vn));
+        vn_arc.write().unwrap().def = Some(std::sync::Arc::downgrade(&def_arc));
+
+        // The consuming op: a STORE-ish op holding the vn at slot 1.
+        let mut op = PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_STORE,
+        );
+        let space_vn = Varnode::new_constant(0, 8);
+        op.inrefs = vec![
+            Arc::new(std::sync::RwLock::new(space_vn)),
+            vn_arc.clone(),
+        ];
+        let op_arc = Arc::new(std::sync::RwLock::new(op));
+
+        // The union resolution: (U, op, slot 1) -> field 1 ("b").
+        printer.union_resolutions.insert(
+            crate::unionresolve::ResolveEdge::new(&union_u, &op_arc.read().unwrap(), 1),
+            crate::unionresolve::ResolvedUnion {
+                resolve: uint_t.clone(),
+                base_type: union_u.clone(),
+                field_num: 1,
+                lock: false,
+            },
+        );
+
+        printer.rpn_push_implied_field(&vn_arc, &op_arc);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .expect("fixture emitter")
+            .get_output();
+        assert!(
+            text.contains(".b"),
+            "union resolution arm prints the member suffix, got: {text:?}"
+        );
+    }
+
+    // PRINTC-UNMAP-SINGLETON-0001: pushTypePointerRel (printc.hh:365-370)
+    // — the ADJ function-call token pair (bilateral form observed in the
+    // printc_singleton_emission_1204 fixture: "ADJ(base)0").
+    #[test]
+    fn test_push_type_pointer_rel_token_pair() {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+
+        let emit: Box<dyn crate::prettyprint::Emit> =
+            Box::new(crate::prettyprint::EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+        printer.rpn_push_type_pointer_rel();
+        printer.rpn_push_atom(&Atom::with_type(
+            "base",
+            TagType::VarToken,
+            SyntaxHighlight::NoColor,
+            0,
+        ));
+        let index_text = printer.integer_text(0, 4, false, 0);
+        printer.rpn_push_atom(&Atom::with_type(
+            &index_text,
+            TagType::Syntax,
+            SyntaxHighlight::ConstColor,
+            0,
+        ));
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .expect("fixture emitter")
+            .get_output();
+        assert_eq!(
+            text, "ADJ(base)0",
+            "the ADJ token pair matches the bilateral fixture form"
         );
     }
 }
