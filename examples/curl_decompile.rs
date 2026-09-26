@@ -7530,6 +7530,11 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // chain). PT_GNU_RELRO covers the section in the locked input.
     let mut got_span: Option<(u64, u64)> = None;
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
+    // MIRATTR-F-PLTNAME-0001: the .plt.got slot addresses (GLOB_DAT-backed
+    // thunks) — excluded from the bare-load mirror's loader function set
+    // because the direct-runner oracle's registerPltStubs walks .rela.plt
+    // JUMP_SLOT relocations only (see the .plt.got loop below).
+    let mut plt_got_slots: std::collections::HashSet<u64> = std::collections::HashSet::new();
     // MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
     // name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
     // PTR_DAT_ pointer labels (see the collection block below).
@@ -7644,6 +7649,21 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         });
                     if let Some(name) = name {
                         let plt_addr = slot_vaddr + slot as u64;
+                        // MIRATTR-F-PLTNAME-0001: record the .plt.got slot
+                        // set separately — the direct-runner oracle's
+                        // registerPltStubs (regen_ghidra_golden.py:281-332)
+                        // walks .rela.plt JUMP_SLOT relocations ONLY, so
+                        // .plt.got slots (GLOB_DAT-backed, .rela.dyn) never
+                        // register as loader functions and the mirror
+                        // golden prints the generic func_0x<addr> form at
+                        // their call sites (witness: golden 1026
+                        // `func_0x000022e0(...)` vs the name-injected
+                        // `__cxa_finalize(...)`). The bare-load symbol
+                        // filter below excludes exactly these slots; the
+                        // canon face (headless PLT analyzer names them,
+                        // canon golden `__cxa_finalize(__dso_handle)`)
+                        // keeps the full set.
+                        plt_got_slots.insert(plt_addr);
                         plt_symbols.insert(plt_addr, name.to_string());
                         symbol_table.insert(plt_addr, name.to_string());
                     }
@@ -8259,7 +8279,13 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         for &plt_addr in plt_symbols.keys() {
-            loader_function_addrs.insert(plt_addr);
+            // MIRATTR-F-PLTNAME-0001: JUMP_SLOT-backed .plt.sec/.plt stubs
+            // only — the oracle harness's registerPltStubs set. The
+            // .plt.got slots stay out (their call sites print the generic
+            // func_0x<addr> form in the direct-runner golden).
+            if !plt_got_slots.contains(&plt_addr) {
+                loader_function_addrs.insert(plt_addr);
+            }
         }
         symbol_entries.retain(|(address, _)| loader_function_addrs.contains(address));
         eprintln!(
