@@ -1,5 +1,26 @@
 # `varmap.rs` API Reference
 
+## 2026-09-26：ScopeLocal::decodeWrappingAttributes 覆写移植（VARMAP-DECODEWRAP-0001，wt/varmapdecode）
+
+DATABASE7 车道移交票（MIGW1-DATABASE-0005 phase 3 裁决 R5：数据库层基类体逐字
+`{}` 双侧同构免修；唯一覆写在 varmap 域）。三件交付：
+
+1. `range_locked` 字段（varmap.hh:220，构造 init false = varmap.cc:347）+
+   `decode_wrapping_attributes` 方法（varmap.cc:479-486 逐字语义：复位→
+   ATTRIB_LOCK→ATTRIB_MAIN→space 重指，见 API 节）；
+2. `reset_local_window` 的 `if (rangeLocked) return;` 守卫（varmap.cc:439）——
+   cc:435-437 的 stackGrowsNegative/min/max 复位仍在守卫**之前**运行，仅并集
+   窗口安装被跳过；生产路径 `range_locked` 恒 false（无写入方），行为零变化；
+3. B2 双侧 fixture `tests/oracle/varmap_decodewrap_1204.{cc,rs}`（runner
+   `tools/run_varmap_decodewrap_oracle.sh`）：oracle 侧经生产调用点
+   `Database::decodeScope`（database.cc:3385 分发）驱动真实 ScopeLocal，九 case
+   双侧 stdout 字节恒等——lock true/false/"1" 解析、main stack/ram 空间重指、
+   main other 非规范名（Rust 值模型 `Other(index)` 回退臂，oracle 观察面
+   `getName()=="other"`）、未知空间名（marshal.cc:421）与缺失 main
+   （marshal.cc:275）的逐字 DecoderError 文本、锁定/解锁下 resetLocalWindow
+   的守卫语义（空窗存活 + 刷新仍跑 vs 并集安装）。cargo 单测 3 项（lock/space
+   摄入含 Other 臂、错误通道、守卫）。
+
 ## 2026-09-25：create_entry 数组壳改走 TypeFactory::get_type_array（GENSMOKE-T5，wt/vshfix）
 
 `create_entry`（varmap.cc:617-628）num>1 分支不再本地铸造**带名**数组壳
@@ -211,9 +232,10 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `clear_category(cat)` — `ScopeInternal::clearCategory` (database.cc:2022-2029) 的 cat>=0 分支（varmap.cc:1276 对 fake_input 调用）
 - `check_unaliased_return(fd, alias)` — **2026-08-25** `ScopeLocal::checkUnaliasedReturn` (varmap.cc:414-428)：首个 RETURN 的值输入在栈空间且无别名（有序表的 lower_bound）触达 `[off, off+size-1]` 时 `mark_not_mapped(off, size, false)`（删重叠符号 + 并集树去范围）
 - `annotate_raw_stack_ptr(fd)` — **2026-08-25** `ScopeLocal::annotateRawStackPtr` (varmap.cc:386-408)：type recovery 已开始时，栈指针的非加法读者（跳过 eval-special 非调用与 INT_ADD/PTRSUB/PTRADD）改为消费占位 `PTRSUB(sp,#0)`（newOpBefore + opSetInput 到 getSlot 槽位）
-- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437；**2026-09-23 SB-MATCHURL-ORD70-0001 起等价性完整**：Ghidra 只在构造/`Funcdata::clear`/decode 调 resetLocalWindow（funcdata.cc:70/96/836），RULE_REPEATAPPLY 重启不 clear（action.cc:539-570）；Rugra 现在 scope 跨趟持久（coreaction.rs ActionRestructureVarnode 构造时创建+reset_local_window，之后每趟复用），markNotMapped 窄化窗口与跨趟累积 min/max 与 oracle 一致——`VARMAP-CROSSPASS-PERSISTENCE-0001` 就此关闭），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
-- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437。**2026-09-23 VARMAP-CROSSPASS-PERSISTENCE-0001 已修**（VARGROUP-ABSORB-0001 §4-4）：`restructure_varnode` 不再每趟调用本函数，`ActionRestructureVarnode` 复用 `fd.scope` 持久 ScopeLocal（Ghidra localmap 是 Funcdata 生命周期单一对象，resetLocalWindow 仅在 funcdata.cc:70/96/836 生命周期点运行）；窗口只在首趟构造时安装一次，ActionRestrictLocal 的 markNotMapped 窄化跨趟存活——此前每趟全量重装把 30d6 出参影子区复活回局部窗口，字段件全部 addr-tied、`Stack_388` 符号复活，吸收链整体失效。`is_first_pass_construct` 标志门住首趟的平台参数符号 seed + 窗口安装），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
+- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437；**2026-09-23 SB-MATCHURL-ORD70-0001 起等价性完整**：Ghidra 只在构造/`Funcdata::clear`/decode 调 resetLocalWindow（funcdata.cc:70/96/836），RULE_REPEATAPPLY 重启不 clear（action.cc:539-570）；Rugra 现在 scope 跨趟持久（coreaction.rs ActionRestructureVarnode 构造时创建+reset_local_window，之后每趟复用），markNotMapped 窄化窗口与跨趟累积 min/max 与 oracle 一致——`VARMAP-CROSSPASS-PERSISTENCE-0001` 就此关闭），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）守卫已补（**2026-09-26 VARMAP-DECODEWRAP-0001**：`<localdb lock>` 属性经 `decode_wrapping_attributes` 摄入，锁定时跳过并集安装）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
+- `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437。**2026-09-23 VARMAP-CROSSPASS-PERSISTENCE-0001 已修**（VARGROUP-ABSORB-0001 §4-4）：`restructure_varnode` 不再每趟调用本函数，`ActionRestructureVarnode` 复用 `fd.scope` 持久 ScopeLocal（Ghidra localmap 是 Funcdata 生命周期单一对象，resetLocalWindow 仅在 funcdata.cc:70/96/836 生命周期点运行）；窗口只在首趟构造时安装一次，ActionRestrictLocal 的 markNotMapped 窄化跨趟存活——此前每趟全量重装把 30d6 出参影子区复活回局部窗口，字段件全部 addr-tied、`Stack_388` 符号复活，吸收链整体失效。`is_first_pass_construct` 标志门住首趟的平台参数符号 seed + 窗口安装），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）守卫已补（**2026-09-26 VARMAP-DECODEWRAP-0001**：`<localdb lock>` 属性经 `decode_wrapping_attributes` 摄入，锁定时跳过并集安装）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
 - `build_map_state(fd, types)` — varmap.cc:1260-1261 的 MapState 组装：分析窗口 = 并集树逐条减 paramrange（varmap.cc:870-875 "Clear possible input symbols"）+ `getBase(1,TYPE_UNKNOWN)` 默认类型
+- `decode_wrapping_attributes(decoder, spc_manager)` — **2026-09-26 VARMAP-DECODEWRAP-0001** `ScopeLocal::decodeWrappingAttributes` (varmap.cc:479-486)，基类空体 `Scope::decodeWrappingAttributes` (database.hh:719) 的唯一覆写：`range_locked` 无条件复位（:482）→ ATTRIB_LOCK（属性 id 133）读入（:483-484，`xml_readbool` 首字符解析）→ ATTRIB_MAIN（id 134）经 `read_space` 管理器解析并重指 `space`（:485，解析名→`AddressSpace` 枚举，非规范名回退 `Other(index)`）。调用面（oracle）：`Database::decodeScope` 在打开元素非 `<scope>` 时分发 `newScope->decodeWrappingAttributes`（database.cc:3385），即 `Funcdata::decode` 的 `<localdb>` 传输（funcdata.cc:804-810），属性在 `<scope>` 子元素打开**之前**摄入（database.hh:714-718）；Rust 值模型 ScopeLocal 不入 `Database::scopes`（Funcdata 直拥有的所有权 seam），committed_locals 传输尚不携带 lock/main 属性，故本方法为该通道的摄入钩子（双侧 fixture `tools/run_varmap_decodewrap_oracle.sh` 九 case 全 MATCH：lock true/false/1、main stack/ram/other（非规范名→`Other(index)` 回退臂）、未知空间名与缺失 main 的逐字 DecoderError 文本（marshal.cc:421/275）、锁定时 reset 的 cc:435-437 刷新+cc:439 守卫、解锁时并集安装）。marshal glue 双分歧（登记，均限 legacy/畸形流——生产 encode 经 writeBool 恒写 "true"/"false" 双属性（varmap.cc:466-467+marshal.cc:508-510），均属 marshal 租约）：①`TreeDecoder::read_bool_attr` 对缺失 lock 返回 false 而 oracle 抛 `DecoderError("Attribute missing: lock")`；②值域——oracle `xml_readbool` 取首字符且大小写敏感（t/1/y 为真，xml.hh:391-396），`read_bool_attr` 只认 "1" 或大小写不敏感 "true"："yes"/"y" 族 oracle 真/Rust 假，"True"/"TRUE" oracle 假/Rust 真；双侧 fixture 覆盖一致的生产值域（true/false/1）。
 - `restructure(state, types)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with(工厂句柄)，不相交→attempt_join/adjust_fit/create_entry
 - `adjust_fit(a)` — `ScopeLocal::adjustFit` (varmap.cc:587)，typelock/size0 拒绝 + 符号重叠收缩
 - `create_entry(hint, types)` — `ScopeLocal::createEntry` (varmap.cc:617)：空名 addSymbol（$$undef 占位）+ `concretize`（工厂，varmap.cc:622）+ 数组类型包装（varmap.cc:625——Rust 无 `TypeFactory::getTypeArray`，数组壳仍本地构造，元素类型为工厂对象；登记 TYPE-WIRING-0001 残差）；命名推迟到 assign_default_names

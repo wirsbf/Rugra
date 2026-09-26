@@ -2482,6 +2482,14 @@ pub struct ScopeLocal {
     /// Ghidra ScopeLocal::stackGrowsNegative (varmap.cc:348): init true.
     /// Kept in lockstep with `stack_direction` (1 == grows negative).
     pub stack_grows_negative: bool,
+    /// Ghidra ScopeLocal::rangeLocked (varmap.hh:220): true when the subset
+    /// of addresses mapped to this scope is locked — ingested from the
+    /// `<localdb lock>` attribute by [`Self::decode_wrapping_attributes`]
+    /// (varmap.cc:479-486, the only override of the base-class no-op
+    /// `Scope::decodeWrappingAttributes`, database.hh:719) and honored by
+    /// [`Self::reset_local_window`]'s early return (varmap.cc:439). The
+    /// constructor initializes it to false (varmap.cc:347).
+    pub range_locked: bool,
     /// Register-name lookup table standing in for
     /// `glb->translate->getRegisterName(space, off, size)`
     /// (translate.hh:380). Rugra's ScopeLocal is a plain struct without an
@@ -2564,6 +2572,7 @@ impl ScopeLocal {
             min_param_offset: u64::MAX,
             max_param_offset: 0,
             stack_grows_negative: true,
+            range_locked: false,
             register_names: std::collections::BTreeMap::new(),
             arch_lookup: None,
             pending_warnings: Vec::new(),
@@ -3402,9 +3411,12 @@ impl ScopeLocal {
     /// hardcoded a positive `[0, 0x100000)` window here — the PARAMETER
     /// side — which dropped every negative-offset local/open hint at the
     /// add_range gate (varmap.cc:902). Ghidra's `if (rangeLocked) return`
-    /// (varmap.cc:439) has no Rugra counterpart: the `<localdb lock>`
-    /// decode path that can lock the window is not ported, so the
-    /// unconditional install is the only reachable behavior.
+    /// (varmap.cc:439) guards the window install below: a scope decoded
+    /// with `<localdb lock="true">`
+    /// ([`decode_wrapping_attributes`](Self::decode_wrapping_attributes),
+    /// varmap.cc:479-486) keeps its decoded window across the reset, while
+    /// the `stackGrowsNegative` and min/maxParamOffset refresh above
+    /// (varmap.cc:435-437) still runs.
     pub fn reset_local_window(&mut self, fd: &crate::funcdata::Funcdata) {
         // stackGrowsNegative = fd->getFuncProto().isStackGrowsNegative();
         // (varmap.cc:435)
@@ -3416,6 +3428,10 @@ impl ScopeLocal {
         // minParamOffset = ~(uintb)0; maxParamOffset = 0;
         self.min_param_offset = u64::MAX;
         self.max_param_offset = 0;
+        // if (rangeLocked) return; (varmap.cc:439)
+        if self.range_locked {
+            return;
+        }
         let localrange = func_proto_local_range(fd);
         let paramrange = func_proto_param_range(fd);
         // RangeList newrange; localRange ranges first, then paramrange
@@ -3440,6 +3456,114 @@ impl ScopeLocal {
             .iter()
             .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
             .collect();
+    }
+
+    // Ghidra: varmap.cc:479 ScopeLocal::decodeWrappingAttributes
+    /// Restore attributes for this scope from a parent element that is not
+    /// a `<scope>` — the `<localdb>` wrapper. Faithful to
+    /// `ScopeLocal::decodeWrappingAttributes` (varmap.cc:479-486), the only
+    /// override of the base-class no-op `Scope::decodeWrappingAttributes`
+    /// (database.hh:719): `range_locked` resets unconditionally, then takes
+    /// ATTRIB_LOCK's truth, then ATTRIB_MAIN's space replaces `space`.
+    ///
+    /// Call face (Ghidra): `Database::decodeScope` invokes
+    /// `newScope->decodeWrappingAttributes(decoder)` when the opened
+    /// element is not `<scope>` (database.cc:3385), i.e. on the
+    /// `<localdb>` transport of `Funcdata::decode` (funcdata.cc:804-810) —
+    /// the attributes are read from the already-opened wrapper BEFORE the
+    /// `<scope>` child is opened (database.hh:714-718). Rugra's value model
+    /// keeps `ScopeLocal` outside `Database::scopes` and its localdb
+    /// transport (Funcdata::committed_locals, materialized at the
+    /// coreaction.rs scope-construction boundary) carries no lock/main
+    /// attributes yet, so this method is the ingestion hook for that
+    /// channel (fixture-observed bilaterally in
+    /// tests/oracle/varmap_decodewrap_1204).
+    ///
+    /// Decoder semantics (four decisive categories):
+    /// - references/output params: `decoder` is only read (both attribute
+    ///   reads go by name, `XmlDecode::readBool`/`readSpace` via
+    ///   `findMatchingAttribute`, marshal.cc:286-293/412-424); the members
+    ///   `range_locked` and `space` mutate; no return value in the oracle.
+    /// - traversal order: LOCK first (varmap.cc:483), MAIN second
+    ///   (varmap.cc:485); no loops, no other reads.
+    /// - counters/accumulators: `rangeLocked = false` precedes the read
+    ///   (varmap.cc:482) — a stale lock never survives a re-decode.
+    /// - sort/comparison keys: none — pure attribute ingestion.
+    ///
+    /// Error channels: a missing `main` attribute is the oracle's
+    /// `DecoderError("Attribute missing: main")` (marshal.cc:275) and an
+    /// unresolvable space name its
+    /// `DecoderError("Unknown address space name: <nm>")` (marshal.cc:421);
+    /// both surface as `Err` carrying the exact message. Two marshal-glue
+    /// divergences, both confined to legacy/malformed streams — production
+    /// `ScopeLocal::encode` always writes both attributes with
+    /// `writeBool`'s exact "true"/"false" spellings (varmap.cc:466-467 +
+    /// marshal.cc:508-510) — and both belong to the marshal lease:
+    /// (1) Rust `TreeDecoder::read_bool_attr` returns false for a MISSING
+    /// `lock` where the oracle throws
+    /// `DecoderError("Attribute missing: lock")`;
+    /// (2) the accepted VALUE domains differ — the oracle's
+    /// `xml_readbool` takes the first character case-sensitively
+    /// ('t'/'1'/'y' true, xml.hh:391-396) while `read_bool_attr` accepts
+    /// exactly "1" or a case-insensitive "true": the legacy "yes"/"y"
+    /// family under-parses (oracle true, Rust false) and "True"/"TRUE"
+    /// over-parses (oracle false, Rust true). The bilateral fixture
+    /// covers the agreeing production domain ("true"/"false"/"1").
+    pub fn decode_wrapping_attributes(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        spc_manager: &crate::space::SpaceRegistry,
+    ) -> Result<(), String> {
+        // rangeLocked = false; (varmap.cc:482)
+        self.range_locked = false;
+        // if (decoder.readBool(ATTRIB_LOCK)) rangeLocked = true;
+        // (varmap.cc:483-484) — ATTRIB_LOCK is attribute id 133.
+        if decoder.read_bool_attr(&crate::marshal::AttributeId::new("lock", 133)) {
+            self.range_locked = true;
+        }
+        // space = decoder.readSpace(ATTRIB_MAIN); (varmap.cc:485) —
+        // ATTRIB_MAIN is attribute id 134. The TreeDecoder reads the
+        // attribute at its cursor, so position the cursor on the "main"
+        // attribute first; the C++ XmlDecode form looks the name up
+        // directly (marshal.cc:412-417).
+        let mut main_result: Option<Result<crate::space::AddrSpace, String>> = None;
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            if decoder.attribute_name(aid).as_deref() == Some("main") {
+                main_result = Some(decoder.read_space(spc_manager));
+                break;
+            }
+            let _ = decoder.read_string();
+        }
+        match main_result {
+            Some(Ok(spc)) => {
+                // The value-model scope space is the `AddressSpace` enum —
+                // map the resolved manager space by name (RUGRA-GLUE: the
+                // enum stand-in for Ghidra's `AddrSpace*` field,
+                // varmap.hh:213; a non-canonical name falls back to
+                // `Other(index)`).
+                self.space = match spc.get_name().as_str() {
+                    "ram" => crate::space::AddressSpace::Ram,
+                    "register" => crate::space::AddressSpace::Register,
+                    "unique" => crate::space::AddressSpace::Unique,
+                    "const" => crate::space::AddressSpace::Const,
+                    "stack" => crate::space::AddressSpace::Stack,
+                    "join" => crate::space::AddressSpace::Join,
+                    "iop" => crate::space::AddressSpace::Iop,
+                    _ => crate::space::AddressSpace::Other(spc.get_index().max(0) as u8),
+                };
+                Ok(())
+            }
+            // DecoderError("Unknown address space name: "+nm) — the exact
+            // oracle message (marshal.cc:421) rides through read_space.
+            Some(Err(message)) => Err(message),
+            // DecoderError("Attribute missing: main") — the exact oracle
+            // message from findMatchingAttribute (marshal.cc:275).
+            None => Err("Attribute missing: main".to_string()),
+        }
     }
 
     // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode (MapState construction)
@@ -6804,6 +6928,191 @@ mod tests {
             range_flags::TYPE_LOCK, RangeType::Fixed, -1,
         );
         assert!(!a3.merge_with(&b3, &types).unwrap());
+    }
+
+    // --- ScopeLocal::decodeWrappingAttributes (varmap.cc:479-486) ---
+
+    /// Fixture space registry: other (index 1) + ram (index 3) + an
+    /// 8-byte negative-growth stack (index 5) — the resolve domain of
+    /// readSpace(ATTRIB_MAIN).
+    fn wrap_registry() -> crate::space::SpaceRegistry {
+        let mut m = crate::space::SpaceRegistry::new();
+        m.insert_space(crate::space::AddrSpace::new_space(
+            crate::space::SpaceType::Processor,
+            "other",
+            false,
+            8,
+            1,
+            1,
+            crate::space::space_flags::HASPHYSICAL,
+            0,
+            0,
+        ))
+        .unwrap();
+        m.insert_space(crate::space::AddrSpace::new_space(
+            crate::space::SpaceType::Processor,
+            "ram",
+            false,
+            8,
+            1,
+            3,
+            crate::space::space_flags::HASPHYSICAL,
+            0,
+            0,
+        ))
+        .unwrap();
+        let ram = m.get_space_by_name("ram").unwrap();
+        m.insert_space(crate::space::AddrSpace::new_spacebase_space(
+            "stack", 5, 8, &ram, 1, true, false,
+        ))
+        .unwrap();
+        m
+    }
+
+    /// Build a `<localdb>` element tree with the given attributes (the
+    /// wrapper `ScopeLocal::encode` writes, varmap.cc:465-467).
+    fn wrap_element(attrs: &[(&str, &str)]) -> std::sync::Arc<
+        std::sync::RwLock<crate::marshal::Element>,
+    > {
+        let mut element = crate::marshal::Element::new();
+        element.set_name("localdb");
+        for (key, value) in attrs {
+            element.add_attribute(key, value);
+        }
+        std::sync::Arc::new(std::sync::RwLock::new(element))
+    }
+
+    /// Open the wrapper with a TreeDecoder positioned on it, mirroring the
+    /// state `Database::decodeScope` (database.cc:3378-3385) hands the
+    /// override: the wrapper element already opened.
+    fn wrap_decoder(
+        attrs: &[(&str, &str)],
+    ) -> crate::marshal::TreeDecoder {
+        use crate::marshal::Decoder as _;
+        let root = wrap_element(attrs);
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::marshal::IdRegistry::new(),
+        ));
+        let mut decoder = crate::marshal::TreeDecoder::new(root, registry);
+        assert_ne!(decoder.open_element(), 0, "wrapper element must open");
+        decoder
+    }
+
+    #[test]
+    fn test_decode_wrapping_attributes_lock_and_space() {
+        // varmap.cc:479-486: rangeLocked takes ATTRIB_LOCK's truth;
+        // ATTRIB_MAIN's space replaces the scope space.
+        let reg = wrap_registry();
+        let mut scope = ScopeLocal::new();
+        assert!(!scope.range_locked, "ctor inits false (varmap.cc:347)");
+        // lock="true" main="stack"
+        let mut decoder = wrap_decoder(&[("main", "stack"), ("lock", "true")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        assert!(scope.range_locked);
+        assert_eq!(scope.space, crate::space::AddressSpace::Stack);
+        // lock="false" main="stack" — the unconditional reset (varmap.cc:482)
+        // clears a stale lock before the read.
+        let mut decoder = wrap_decoder(&[("main", "stack"), ("lock", "false")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        assert!(!scope.range_locked);
+        assert_eq!(scope.space, crate::space::AddressSpace::Stack);
+        // lock="1" — the value both parsers agree on (the oracle's
+        // xml_readbool first-char parse, xml.hh:391-396; the Rust
+        // read_bool_attr exact-"1" arm).
+        let mut decoder = wrap_decoder(&[("main", "stack"), ("lock", "1")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        assert!(scope.range_locked);
+        // main="ram" — the space is REASSIGNED from the stack default.
+        let mut decoder = wrap_decoder(&[("main", "ram"), ("lock", "true")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        assert!(scope.range_locked);
+        assert_eq!(scope.space, crate::space::AddressSpace::Ram);
+        // main="other" — a non-canonical name falls to the Other(index)
+        // arm of the enum mapping (value-model glue for varmap.hh:213's
+        // AddrSpace* field); the oracle observation is getName()=="other".
+        let mut decoder = wrap_decoder(&[("main", "other"), ("lock", "true")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        assert!(scope.range_locked);
+        assert_eq!(scope.space, crate::space::AddressSpace::Other(1));
+        assert_eq!(scope.space.name(), "other");
+    }
+
+    #[test]
+    fn test_decode_wrapping_attributes_error_channels() {
+        // The exact oracle DecoderError messages: an unresolvable space
+        // name (marshal.cc:421) and a missing main attribute
+        // (marshal.cc:275).
+        let reg = wrap_registry();
+        let mut scope = ScopeLocal::new();
+        let mut decoder = wrap_decoder(&[("main", "nosuch"), ("lock", "true")]);
+        assert_eq!(
+            scope.decode_wrapping_attributes(&mut decoder, &reg),
+            Err("Unknown address space name: nosuch".to_string())
+        );
+        let mut decoder = wrap_decoder(&[("lock", "true")]);
+        assert_eq!(
+            scope.decode_wrapping_attributes(&mut decoder, &reg),
+            Err("Attribute missing: main".to_string())
+        );
+        // rangeLocked was already reset and re-read before the failing
+        // main read (varmap.cc:482-484 precede varmap.cc:485) — the
+        // partial-mutation state at the throw matches the oracle.
+        assert!(scope.range_locked);
+    }
+
+    #[test]
+    fn test_reset_local_window_range_locked_guard() {
+        // varmap.cc:439 `if (rangeLocked) return;`: the min/maxParamOffset
+        // and stackGrowsNegative refresh (varmap.cc:435-437) runs BEFORE
+        // the guard; the union window install is skipped when locked.
+        let reg = wrap_registry();
+        // The Funcdata harness of tests/oracle/varmap_localwindow_1204.rs:
+        // a default ProtoModelFull on a fresh Funcdata.
+        let mut model = crate::fspec::ProtoModelFull::new(
+            Some(crate::space::AddressSpace::Stack),
+            8,
+        );
+        model.name = "dw_default".to_string();
+        let model = std::sync::Arc::new(model);
+        let mut arch = crate::arch::Architecture::new();
+        let mut proto_models = std::collections::BTreeMap::new();
+        proto_models.insert("dw_default".to_string(), model.clone());
+        arch.proto_models = proto_models;
+        arch.defaultfp = Some(model.clone());
+        let mut fd = crate::funcdata::Funcdata::new("dw", crate::address::Address::new(0x1000), 0x20);
+        fd.set_arch(std::sync::Arc::new(arch));
+        fd.get_func_proto_mut().set_model(Some(model.clone()));
+
+        // Locked scope: sentinel min/max + flipped growth flag still reset,
+        // the (empty) window survives.
+        let mut scope = ScopeLocal::new();
+        let mut decoder = wrap_decoder(&[("main", "stack"), ("lock", "true")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        scope.min_param_offset = 0x10;
+        scope.max_param_offset = 0x20;
+        scope.stack_grows_negative = false;
+        scope.stack_direction = -1;
+        scope.reset_local_window(&fd);
+        assert!(scope.range_locked);
+        assert_eq!(scope.min_param_offset, u64::MAX);
+        assert_eq!(scope.max_param_offset, 0);
+        assert!(scope.stack_grows_negative);
+        assert_eq!(scope.stack_direction, 1);
+        assert!(
+            scope.local_range.is_empty(),
+            "locked window install is skipped (varmap.cc:439)"
+        );
+        // Unlocked scope: the union of the default windows installs
+        // ([0, 511] ∪ [highest-999999, highest] in RangeList tree order —
+        // ascending by first — on the 8-byte stack).
+        let mut decoder = wrap_decoder(&[("main", "stack"), ("lock", "false")]);
+        scope.decode_wrapping_attributes(&mut decoder, &reg).unwrap();
+        scope.reset_local_window(&fd);
+        assert!(!scope.range_locked);
+        assert_eq!(
+            scope.local_range,
+            vec![(0, 0x1ff), (0xfffffffffff0bdc0, u64::MAX)]
+        );
     }
 
 }

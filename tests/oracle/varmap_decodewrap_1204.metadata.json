@@ -1,0 +1,124 @@
+{
+ "schema_version": 1,
+ "fixture_id": "VARMAP-DECODEWRAP-0001",
+ "todo_ids": [
+  "VARMAP-DECODEWRAP-0001"
+ ],
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/varmap.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/varmap.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/marshal.cc"
+  ]
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture (localwindow harness): const=0, other=1, unique=2, ram=3, register=4, stack=5 (8-byte SpacebaseSpace, stack pointer register:0), join=6, iop=7; global ScopeInternal id 0x101; default prototype model dw_default decoded from <prototype name=\"dw_default\" extrapop=\"0\"><input/><output/></prototype>",
+ "compiler_spec": {
+  "id": "synthetic-default",
+  "path": "none (self-contained FixtureArchitecture; no cspec file is read)"
+ },
+ "analysis_options": {
+  "oracle_side": "per case a fresh Funcdata + ScopeLocal(id, stack, fd, arch) constructed outside the Database and decoded through the PRODUCTION call point Database::decodeScope (database.cc:3375-3393, the decodeWrappingAttributes dispatch at :3385) over an XML <localdb main lock><scope><parent id=\"257\"/><symbollist/></scope></localdb> stream ingested by XmlDecode; reset cases then set sentinel min/maxParamOffset + flipped stackGrowsNegative and call resetLocalWindow (varmap.cc:432); observations read the members through the fixture's class-default-public access (the value model exposes the same fields publicly)",
+  "rugra_side": "production src/varmap.rs ScopeLocal value model: decode_wrapping_attributes (the varmap.cc:479-486 port) over the same attribute set through TreeDecoder on an identically shaped <localdb> element, then the same reset_local_window observation; the value model keeps ScopeLocal outside Database::scopes (Funcdata-owned struct), so the comparand drives the ported override at the equivalent boundary rather than through Database::decode_scope (which cannot carry a ScopeLocal)",
+  "pipeline": "none; direct function calls only"
+ },
+ "input": {
+  "spaces": [
+   {
+    "name": "other",
+    "addrsize": 8,
+    "wordsize": 1,
+    "index": 1
+   },
+   {
+    "name": "ram",
+    "addrsize": 8,
+    "wordsize": 1,
+    "index": 3
+   },
+   {
+    "name": "stack",
+    "addrsize": 8,
+    "wordsize": 1,
+    "index": 5,
+    "form": "spacebase on ram, negative growth"
+   }
+  ],
+  "global_scope_id": 257,
+  "case_scope_ids": [
+   258,
+   259,
+   260,
+   261,
+   266,
+   262,
+   263,
+   264,
+   265
+  ],
+  "case_fd_offsets": [
+   36864,
+   36896,
+   36928,
+   36960,
+   37120,
+   36992,
+   37024,
+   37056,
+   37088
+  ],
+  "wrapper_xml": "<localdb main lock><scope><parent id=\"257\"/><symbollist/></scope></localdb>",
+  "attribute_cases": [
+   "main=stack lock=true",
+   "main=stack lock=false",
+   "main=stack lock=1",
+   "main=ram lock=true",
+   "main=other lock=true",
+   "main=nosuch lock=true",
+   "lock=true (main absent)",
+   "main=stack lock=true + reset sentinels",
+   "main=stack lock=false + reset sentinels"
+  ],
+  "reset_sentinels": {
+   "min_param_offset": 16,
+   "max_param_offset": 32,
+   "stack_grows_negative": false
+  },
+  "cases": 9
+ },
+ "observation": {
+  "functions": [
+   "ScopeLocal::decodeWrappingAttributes unconditional rangeLocked reset (varmap.cc:482)",
+   "ScopeLocal::decodeWrappingAttributes ATTRIB_LOCK ingestion incl. xml_readbool first-char parse (varmap.cc:483-484, xml.hh:391-396)",
+   "ScopeLocal::decodeWrappingAttributes ATTRIB_MAIN space reassignment (varmap.cc:485)",
+   "ScopeLocal::decodeWrappingAttributes non-canonical space name resolution (varmap.cc:485; Rust value-model Other(index) fallback arm, oracle observation getName()==\"other\")",
+   "DecoderError text for unknown space name (marshal.cc:421 via Database::decodeScope database.cc:3385)",
+   "DecoderError text for missing main attribute (marshal.cc:275 findMatchingAttribute)",
+   "ScopeLocal::resetLocalWindow rangeLocked guard position: cc:435-437 refresh runs, cc:439 skips the union install (varmap.cc:432-460)",
+   "ScopeLocal::resetLocalWindow unlocked union install in RangeList tree order (varmap.cc:441-459)"
+  ],
+  "overall_status": "MATCH"
+ },
+ "expected_stdout_sha256": "7db33f2305878d7687560139772bcc2264114bacd759366694549ee8d7aca461",
+ "comparand": {
+  "rugra_base_commit": "9ac04ade0e6ef5665295e71022388597ca96b33f",
+  "rugra_base_tree": "5e0e879a164e8f065f2da888a6bc43b02588e40b",
+  "cpp_fixture_sha256": "b3899376f0ec11040d4faca709e62f9c24da2e4269a7b4bbc56c056e44648ab0",
+  "rust_fixture_sha256": "b5ee8b921ef0d56e102f41ce62bf42208d9f963fb48aaacd9bc173899bb9cf86",
+  "runner_sha256": "dc0a689791c64f05091dfb7d61ad9e693d1c9e8d51cb47ff5af5a30b7de305dd",
+  "varmap_rs_sha256": "0093e2404fd7c2ea64c1168103d1eaadcb28573a8031160da3375720a7d731c5",
+  "varmap_doc_sha256": "af8985063c490c0c695c879d94dc6245288aae2fe9d2ac15b6f15cc8b21035f1",
+  "cargo_toml_sha256": "ad6ce58ea4e3b78e59e8cba78dc731913e8619136b36c19d6f718bb1f28f9f6d",
+  "cargo_lock_sha256": "860cece84b06fe0452b02196c14f71d0ddc29d748c105b5c578785be74cb162a",
+  "ghidra_varmap_cc_blob": "27330a23c0221d459136a8312846bff614a7f433",
+  "ghidra_varmap_hh_blob": "5143b24b18bfabcd4d26e5ce9e593ad48441e3dc",
+  "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
+  "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
+  "ghidra_marshal_cc_blob": "1c138774acbd321fdec6bb97d5e74e2a21fe7ded"
+ },
+ "input_fingerprint": "sha256:72435ff8e28c08fe5d2e89a062dd6614c58f7fb6c31d32984b139d37e7331144"
+}
