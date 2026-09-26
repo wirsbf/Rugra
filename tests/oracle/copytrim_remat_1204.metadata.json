@@ -1,0 +1,235 @@
+{
+ "schema_version": 2,
+ "fixture_id": "COPYTRIM-REMAT-0001",
+ "status_note": "KUNABUGS-COPYTRIM-REMAT-0001 verification fixture: Merge::allocateCopyTrim does NOT re-materialize an explicit COPY for dynamic-hash temps at firstuse in the locked oracle — merge.cc has zero DynamicHash references, the dynamic-mapping chain never allocates ops, and a folded COPY breaks the use-anchored hash so the entry silently detaches on BOTH runtimes (fold_relocate_fn is byte-identical). The five MISMATCH residuals are adjacent real gaps found by the same fixture (Rugra unique-hash anchor divergence, setSymbolProperties return surfacing, late implied-CAST retarget omission, and the two inert dynamic-mapping Action stubs), all outside merge.rs.",
+ "decisive_semantics": {
+  "reference_output_parameters": "attemptDynamicMapping/attemptDynamicMappingLate take SymbolEntry* + DynamicHash& by reference and mutate the located Varnode through vn->setSymbolProperties/vn->setSymbolEntry; the Action perform(Funcdata&) walks the ScopeLocal dynamic list by iterator (entry addresses taken with ++iter before the call). The Rust twin passes (first_use_addr, hash, size, equate, union_facet, name) by value and mutates via MAPPED flag + symbol_table insert; the action-level twin calls the registered stubs.",
+  "loop_bounds_traversal_order": "gatherFirstLevelVars iterates fd->beginOp(addr)..endOp(addr) matching transtable[opcode]==opcVal with slot<0 taking op output (isnotattached follows loneDescend through skipped ops) and 0<=slot<numInput taking the input (isnotattached follows getDef through skipped ops); attemptDynamicMapping/Late run per dynamic entry in list order; the fixture censuses ops via beginOpAlive..endOpAlive sorted by (name,address) or opcode-only where addresses are not fixture-controlled (merge trims take the incoming block stop).",
+  "counter_accumulator_lifecycle": "Action::count increments only when attemptDynamicMapping/Late returns true (merge.cc has no counter here; coreaction.cc:4862/4879); attemptDynamicMapping's boolean return is Varnode::setSymbolProperties' return value, which can be false even when the mapped flag was set — the C4 case shows count=0 while mapped=1. The Rust stubs have no counting state and report 0.",
+  "sorting_comparison_keys": "DynamicHash::pieceTogetherHash folds edges in ToOpEdge::operator< order (SeqNum address, then order, then slot) and anchors at the FIRST edge whose slot varnode is the root (else op_edge[0] with the not-attached bit); the hash carries [attached:1][method:4][translated-opcode:7][slot:5][reg:32] plus collision total/position bits; CAST and COPY-adjacent skip walks differ between the runtimes (DYNHASH-UNIQUE-ANCHOR-0001). The op censuses sort by (opcode-name, address) / opcode-name for byte-stable projections."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "instrumentation_policy": "No oracle source changes: the fixture only calls public APIs (Funcdata::attemptDynamicMapping/Late, Scope::addDynamicSymbol, DynamicHash::uniqueHash/calcHash, Merge::mergeAddrTied/mergeMarker, Action::perform, Action::count read through the varmap_dynamicsym-style private/protected access shim that never edits production behavior)."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "entry": "Direct construction per case: hand-built SSA bodies on fresh fd.clear() state (BfdArchitecture+real GetStr Funcdata on the Ghidra side; bare Funcdata+ScopeLocal with the production gcc localrange window on the Rust side). Dynamic entries minted through the production uniqueHash/calcHash + addDynamicSymbol path with the runtime-computed (hash, firstUseAddress) pair. Merges driven through Merge::mergeAddrTied + Merge::mergeMarker (LowlevelError caught to inspect the trims, mirroring merge_trim_lane). Function-level cases call Funcdata::attemptDynamicMapping/attemptDynamicMappingLate directly; action-level cases call ActionDynamicMapping/ActionDynamicSymbols perform.",
+  "funcproto_state": "none (no prototype locking; register temporaries chosen outside the cspec [8,39) param range and outside the stack window so no static symbol interferes)",
+  "cases": [
+   "fold_relocate_fn",
+   "refind_attach_fn",
+   "late_cast_retarget",
+   "trim_dynamic_high",
+   "action_walk_level",
+   "action_late_walk"
+  ]
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+  },
+  "bfd": {
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "rugra_source": {
+  "base_commit": "f3499354f1faa6b7a2e5ea29cb7a01530d7fdc33",
+  "base_merge_blob": "87bda740fb72f42c070fdef4fb32d34a8bd55ada",
+  "base_funcdata_blob": "beb7c99e59d3e0ba1ed94608a2c8901267bdf86e",
+  "base_coreaction_blob": "57d7747d9f7ef690b14a13c2e499ad2f901362d4",
+  "base_dynamic_blob": "ffff773852fe8d28ef7541b427c58fe811b4897d",
+  "base_varmap_blob": "f2351eec1f7c7b39bac3d1117e400e62cc033e47",
+  "cargo_toml_blob": "ee257b7b06893499ea0011b34e4daf037c4222fb",
+  "cargo_lock_blob": "dcb52f7bca56892266b532c30994bb5147a37f58",
+  "archive_policy": "Snapshot Cargo.toml + Cargo.lock + src/** + crates/** from the pinned base commit; the fixtures and this metadata are overlaid from the working tree."
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "platform": "Linux 7.1.8-arch1-3 x86_64 (worktree host)"
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+  },
+  "function": {
+   "name": "GetStr",
+   "entry": 14032,
+   "size": 0
+  },
+  "cases": [
+   {
+    "id": "fold_relocate_fn"
+   },
+   {
+    "id": "refind_attach_fn"
+   },
+   {
+    "id": "late_cast_retarget"
+   },
+   {
+    "id": "trim_dynamic_high"
+   },
+   {
+    "id": "action_walk_level"
+   },
+   {
+    "id": "action_late_walk"
+   }
+  ],
+  "sha256": "d6c3ba8102f5d53f4f5c8a58d9ac6ebc1e342926832747abb0e5ca43d269de40"
+ },
+ "coverage": {
+  "fold_relocate_fn": {
+   "status": "MATCH",
+   "covers": "Use-anchored dynamic entry (calcHash(op3,0,0)) + RulePropagateCopy fold: relocation fails bilaterally (recomputed position hash of the folded-through varnode never equals the minted hash), nothing mapped, ZERO ops created, dynamic entry survives untouched. CASTFUSE-A candidate ③ literal falsification: the oracle has no COPY re-materialization for dynamic-hash temps.",
+   "residual_todo_ids": [],
+   "pinned_divergence_kinds": []
+  },
+  "refind_attach_fn": {
+   "status": "MISMATCH",
+   "covers": "Def-anchored uniqueHash re-find: attach (mapped=1), already-labelled guard on the second call, and zero new ops all MATCH; the boolean return diverges (oracle surfaces Varnode::setSymbolProperties' false; Rugra returns true unconditionally) and the minted hash value itself diverges (same anchor address, different H).",
+   "residual_todo_ids": [
+    "DYNMAP-SETPROPS-RET-0001",
+    "DYNHASH-UNIQUE-ANCHOR-0001"
+   ],
+   "pinned_divergence_kinds": [
+    "mint_hash",
+    "call"
+   ]
+  },
+  "late_cast_retarget": {
+   "status": "MISMATCH",
+   "covers": "attemptDynamicMappingLate on an implied CAST-adjacent temp: oracle anchors tmp NOT-ATTACHED at the reading op (CAST is a skipped hash op) and attaches the explicit c0 across the CAST; Rugra anchors at c0's defining COPY output and attaches the implied tmp itself. Mint hash+address and both after-census rows diverge.",
+   "residual_todo_ids": [
+    "DYNHASH-UNIQUE-ANCHOR-0001",
+    "DYNMAP-LATE-CAST-RETARGET-0001"
+   ],
+   "pinned_divergence_kinds": [
+    "mint_hash",
+    "vnc"
+   ]
+  },
+  "trim_dynamic_high": {
+   "status": "MISMATCH",
+   "covers": "CMOV diamond (phi(X,fX)) with a dynamic entry on X: mergeAddrTied+mergeMarker trims MATCH exactly (lane rewires copy@b1(X)/copy@b2(fX), 4-COPY census, dynamic entry count untouched by merge, no dynamic-driven op anywhere) — merge-side candidate ③ falsification; only the minted hash value line diverges.",
+   "residual_todo_ids": [
+    "DYNHASH-UNIQUE-ANCHOR-0001"
+   ],
+   "pinned_divergence_kinds": [
+    "mint_hash"
+   ]
+  },
+  "action_walk_level": {
+   "status": "MISMATCH",
+   "covers": "ActionDynamicMapping::perform on the resolvable shape: the oracle walks beginDynamic()/endDynamic() and attaches from the action level (mapped=1; count stays 0 only because attemptDynamicMapping returns setSymbolProperties' false); Rugra's registered stub is inert (mapped stays 0).",
+   "residual_todo_ids": [
+    "DYNHASH-UNIQUE-ANCHOR-0001",
+    "COREACT-DYNMAP-STUB-0001"
+   ],
+   "pinned_divergence_kinds": [
+    "mint_hash",
+    "vnc"
+   ]
+  },
+  "action_late_walk": {
+   "status": "MISMATCH",
+   "covers": "ActionDynamicSymbols::perform on the clean C1b shape (the production state — a thrown mergeMarker aborts the decompile so the late action never sees the trims): oracle count=1/status=1 with the late attach (mapped=1); Rugra's registered stub is inert (count=0/status=0, mapped=0).",
+   "residual_todo_ids": [
+    "DYNHASH-UNIQUE-ANCHOR-0001",
+    "COREACT-DYNSYM-STUB-0001"
+   ],
+   "pinned_divergence_kinds": [
+    "mint_hash",
+    "act",
+    "vnc"
+   ]
+  }
+ },
+ "residual_union": [
+  {
+   "id": "DYNHASH-UNIQUE-ANCHOR-0001",
+   "domain": "src/dynamic.rs",
+   "detail": "DynamicHash::unique_hash_vn produces a different H than oracle DynamicHash::uniqueHash on the same IR for every vn-rooted mint in this fixture (same anchor address for the non-CAST shapes, different 17-bit header and/or reg CRC; for the CAST-adjacent tmp even the anchor differs: oracle not-attached at the reading op 0x2020, Rugra attached at c0's defining COPY output 0x2000). calc_hash_op(op, slot, 0) is byte-exact (fold_relocate_fn mint H identical), so the divergence is inside the calcHash(Varnode*, method) walk / champion loop (skip-op traversal and/or attached-edge pick), not in the bit packing or CRC. Self-consistent (Rugra locates its own hash in its own IR), but cross-run identity with the oracle is broken — affects buildDynamicSymbol minting quality and hash-stability across passes.",
+   "evidence": "mint lines of cases refind_attach_fn/late_cast_retarget/trim_dynamic_high/action_walk_level/action_late_walk"
+  },
+  {
+   "id": "DYNMAP-SETPROPS-RET-0001",
+   "domain": "src/funcdata.rs",
+   "detail": "Funcdata::attemptDynamicMapping returns true whenever size matches (funcdata.rs:12901-12908); Ghidra returns Varnode::setSymbolProperties(entry)'s boolean, which is false in the C1b shape even though the mapped flag was set — the false return also keeps ActionDynamicMapping's count at 0 while the attach happened (visible in action_walk_level).",
+   "evidence": "call|case=refind_attach_fn|fn=attemptDynamicMapping|res oracle=0 rugra=1; act count oracle=0 with mapped=1"
+  },
+  {
+   "id": "DYNMAP-LATE-CAST-RETARGET-0001",
+   "domain": "src/funcdata.rs",
+   "detail": "attempt_dynamic_mapping_late omits funcdata_varnode.cc:1373-1386 (documented RUGRA-GAP at funcdata.rs:12971): when the hash-located varnode is implied and CAST-adjacent with an explicit other side, the oracle attaches the symbol to that explicit varnode; Rugra attaches the implied varnode. Output-visible whenever a dynamic symbol lands on an implied cast temp — the named variable the oracle keeps explicit is exactly the over-inlining shape of CASTFUSE-A.",
+   "evidence": "vnc|case=late_cast_retarget|stage=after oracle c0.mapped=1/tmp.mapped=0 vs rugra c0.mapped=0/tmp.mapped=1"
+  },
+  {
+   "id": "COREACT-DYNMAP-STUB-0001",
+   "domain": "src/coreaction.rs",
+   "detail": "ActionDynamicMapping::apply is an empty no-op stub (coreaction.rs:14841-14849, not registered): the oracle walks ScopeLocal's dynamic entries each mainloop pass (before restructurevarnode) and re-attaches by hash; the coreaction.rs:17938-17940 comment claims registration is observably inert either way — action_walk_level disproves that for every resolvable dynamic entry.",
+   "evidence": "vnc|case=action_walk_level|stage=after oracle t.mapped=1 vs rugra t.mapped=0"
+  },
+  {
+   "id": "COREACT-DYNSYM-STUB-0001",
+   "domain": "src/coreaction.rs",
+   "detail": "ActionDynamicSymbols::apply is an empty no-op stub registered at both oracle slots (:5724 merge phase after DominantCopy, :5733 before NameVars): the oracle performs the late name attach from the action level (count=1/status=1); Rugra never runs it, so hash-located use points never receive their dynamic names.",
+   "evidence": "act|case=action_late_walk count/status oracle=1/1 vs rugra=0/0; vnc t.mapped 1 vs 0"
+  }
+ ],
+ "projection_status": "MISMATCH",
+ "overall_status": "MISMATCH: candidate ③ literally EXCLUDED bilaterally (fold_relocate_fn MATCH + trim_dynamic_high merge structure MATCH); five adjacent residuals pinned in dynamic.rs/funcdata.rs/coreaction.rs (all outside this lane's merge.rs write domain)",
+ "comparand": {
+  "cpp_fixture_sha256": "ef95653033c10ca95ec52f9098fa1ed9852392d83c1e1e3905059d7709fad65f",
+  "rust_fixture_sha256": "afd6975dbb8c4e0312d0da3bb712a9d645bb4a07f8b18b566a952af34540d9e8",
+  "runner_sha256": "a09e565e46792c2742adc5c7ceea603b4e10c3d5fd8cb78f3b01591c38ecf4f0",
+  "rust_crate_tree_sha256": "adda5e56db9fd9328025f568f092882ef965fb763c85ec8c5d7cf3b550656d62",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-copytrim-remat-base-v1 plus base commit and sorted length-prefixed paths and contents"
+ },
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "ghidra_stdout_sha256": "4910bcdff6a283e042a84f96a35fe4cb94b79e866163a5a546aaeeb896e62457",
+  "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+  "rugra_stdout_sha256": "3764029da908b6ccd7c6e1c0f1b1583ed9bbbe691d016543b04f56c10bbe5918",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "diff_exit_code": 1,
+  "record_count": 63,
+  "divergence_line_count": 11
+ }
+}
