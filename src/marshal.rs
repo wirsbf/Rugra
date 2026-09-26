@@ -1277,8 +1277,13 @@ fn convert_char_ref(text: &str) -> i32 {
         } else {
             10 + (bytes[i] - b'a') as i32
         };
-        val *= mult;
-        val += cur;
+        // KUNAUB-CHARREF-0001: the C++ `int4` accumulator overflows silently
+        // on hostile long digit runs (xml.cc:2356-2357 has no cap); the de
+        // facto oracle behavior on the locked x86-64 build is two's-complement
+        // wraparound, which Rust release mirrors but debug panics on. Use
+        // explicit wrapping ops so debug == release == de-facto-C++.
+        val = val.wrapping_mul(mult);
+        val = val.wrapping_add(cur);
         i += 1;
     }
     val
@@ -3767,6 +3772,42 @@ mod tests {
         let root = doc.get_root().unwrap().read().unwrap();
         assert_eq!(root.get_attribute_value("a"), Some("<&\""));
         assert_eq!(root.get_content(), "AB&");
+    }
+
+    #[test]
+    fn test_convert_char_ref_wraparound_de_facto_cpp() {
+        // KUNAUB-CHARREF-0001: the C++ `int4 val` accumulator in
+        // convertCharRef (xml.cc:2337-2360) has no digit-count cap; on the
+        // locked x86-64 oracle build the signed overflow wraps silently
+        // (two's complement). These assertions pin hand-computed de-facto-C++
+        // wrap values; with wrapping_mul/wrapping_add the result is
+        // profile-independent (debug == release == de-facto oracle).
+        // Non-overflow sanity first.
+        assert_eq!(convert_char_ref("x41"), 0x41);
+        assert_eq!(convert_char_ref("65"), 65);
+        assert_eq!(convert_char_ref("x7fffffff"), i32::MAX);
+        // Decimal 2^31 wraps to INT_MIN (classic signed wrap).
+        assert_eq!(convert_char_ref("2147483648"), i32::MIN);
+        // Decimal 2^32 wraps to 0.
+        assert_eq!(convert_char_ref("4294967296"), 0);
+        // Decimal 10^10-1 = 9999999999 wraps to 1410065407 (classic value).
+        assert_eq!(convert_char_ref("9999999999"), 1410065407);
+        // Hex 2^32 wraps to 0.
+        assert_eq!(convert_char_ref("x100000000"), 0);
+        // Hex 2^33-1 wraps to -1 (all ones).
+        assert_eq!(convert_char_ref("x1ffffffff"), -1);
+        // Nine hex 1s: 0x11111111*16 wraps back onto itself then +1.
+        assert_eq!(convert_char_ref("x111111111"), 0x11111111);
+    }
+
+    #[test]
+    fn test_convert_char_ref_overflow_push_truncates_low_byte() {
+        // Downstream of the wrap: the grammar action appends the value via
+        // string::operator+=(char) (xml.cc:1610/1628/1790), truncating to the
+        // low byte. 0x141 = 321 -> low byte 0x41 = 'A' (ASCII identity).
+        let mut buffer = String::new();
+        push_reference_char(&mut buffer, convert_char_ref("x141"));
+        assert_eq!(buffer, "A");
     }
 
     #[test]

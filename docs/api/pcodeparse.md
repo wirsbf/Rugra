@@ -121,9 +121,12 @@ test exercises both parser paths with distinct non-zero indices.
 ### `PCODE_IDENTS` (static, `IDENTREC_SIZE = 46`)
 Sorted table of p-code keywords/multi-char operators, faithful to
 `PcodeLexer::idents[]` (pcodeparse.y:229-276). Lexicographically ordered so
-`find_identifier`'s binary search matches Ghidra. Uses inlined integer ids
-because Rust statics cannot call non-const fn; the values are identical to
-`PcodeTokenKind::as_token_id`.
+`find_identifier`'s binary search matches Ghidra — except the oracle's own
+single inversion (`"||"` before `"abs"`, the only strcmp-inverted pair),
+which is mirrored deliberately so the binary search misses both entries
+exactly like the oracle (KUNAUB-IDENTS-PIN-0001; do NOT reorder). Uses
+inlined integer ids because Rust statics cannot call non-const fn; the
+values are identical to `PcodeTokenKind::as_token_id`.
 
 ### `SleighSymbol`
 `{ name: String, kind: SleightSymbolKind }` — a resolved SLEIGH symbol
@@ -200,6 +203,23 @@ Faithful to `PcodeEmit::decodeOp` (translate.cc:996-1016): opens `<op>`, reads
 
 ### `find_identifier(s) -> Option<usize>`
 Binary search of `PCODE_IDENTS` (pcodeparse.y:278).
+
+### KUNAUB-IDENTS-PIN-0001：`"||"`/`"abs"` 双 miss 正典钉死（2026-09-26，wt/kunaub2）
+
+Oracle 表 `PcodeLexer::idents[]`（pcodeparse.y:229-276，自注 "Sorted list of
+identifiers"）含唯一一处排序违规：索引 8 `"||"`（0x7C,0x7C）先于索引 9
+`"abs"`（0x61..）——`'|'=124 > 'a'=97`，任何字节序语义下均逆序。
+`findIdentifier`（pcodeparse.y:278-295）对该表做朴素二分，且
+`getNextToken`（pcodeparse.y:579-586）对**一切** identifier 态 token 查表
+（miss → 返回 STRING），因此 `"||"` 与 `"abs"` **双双 miss**：pcode snippet
+里 `a || b` 与 `abs(x)` 无法用作关键字（降级为标识符 token）。
+
+Rugra `PCODE_IDENTS` **逐字节镜像表序**（含该违规对），`find_identifier`
+同二分算法 ⇒ 同样的双 miss，行为与 oracle 等价。**表序禁改**（"好心排序"
+会制造分歧）；回归锁 = `test_find_identifier_canonical_double_miss`
+（断言 `find_identifier("||") == None && find_identifier("abs") == None`）。
+同批订正了 `test_find_identifier_hits` 的错误注释（原称 "abs 由状态机匹配、
+lexer 从不查表"——与 pcodeparse.y:582 矛盾，真因是排序逆序导致的 miss）。
 
 ## L3 gaps
 - Mandatory punctuation and parser failure state are not yet equivalent to

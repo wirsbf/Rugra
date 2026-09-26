@@ -85,6 +85,33 @@ RUGRA-GLUE 工厂：为某空间构造默认 `MemoryBank`。Ghidra 在 `Architec
 - `MemState`：value/chunk 操作、IPTR_CONSTANT 快路径、`setMemoryBank` 按名索引
 - `construct_memory_bank` 工厂
 
+## KUNAUB-PAGECOPY-0001：get_page/set_page 死修剪裁决 (a) 维持 panic（2026-09-26，wt/kunaub2）
+
+Oracle 默认实现 `MemoryBank::getPage`（memstate.cc:93-123）/`setPage`
+（:136-171）的头部修剪条件写错比较对象：`if (startalign < addr)`
+（getPage :113 / setPage :153）——`addr` 是 getChunk/setChunk（:335-359 /
+:302-327）传入的**页对齐**地址，而错位量在 `ptraddr = addr + skip`
+（:97/:140）上；`startalign = ptraddr & ~(wordsize-1) ≥ addr` 恒成立 ⇒
+头部修剪恒为死代码。`skip % wordsize != 0` 时字循环多拷至多 wordsize-1
+个请求范围外字节：getPage :119 `memcpy(res,ptr,sz)` 越界写 / setPage :161
+`memcpy(ptr,val,sz)` 越界读 caller 缓冲区——**oracle 在该输入上没有已定义
+行为可对拍**（静默堆越界=UB）。受影响面：仅未覆写 getPage/setPage 的 bank
+（`MemoryHashOverlay`，memstate.hh:130-141，仿真/standalone 面）；主管线用
+page-overlay 族不受影响。
+
+Rugra `get_page/set_page`（memstate.rs）镜像同一死修剪，载体为 `Vec<u8>`/
+slice ⇒ 同输入下越界形态变为 slice range panic（全 profile 恒 panic，与
+overflow-checks 无关）。**裁决 起算原文 (a)（KUNAUB-SDIV-0001 先例）：oracle-UB
+输入无对拍义务，panic 严格安全于 oracle 的静默越界，保持 panic 形态，
+memstate.rs 零改动**。崩溃形态由 `tests/memstate_pagecopy_panic.rs` 锁定：
+2 个 `#[should_panic]`（get 侧 res[8..9]/set 侧 val[8..9]，ws=8 +
+skip=1 推演双侧同形）+ 1 个字对齐对照（对齐 skip 双侧均为已定义路径）。
+
+**约束（票面沿用）**：本裁决站立期间禁止为 `get_chunk/set_chunk` 引入
+生产调用方；选项 (b)（按 `startalign < ptraddr` 意图语义修=与
+oracle-as-written 分歧）须先记 ALIGNMENT_ROADMAP 再动。当前双侧主管线均
+零调用方（Rugra src/examples 无用户；MemState 消费方走 word 级 API）。
+
 ## Alignment Evidence
 
 - 2026-08-11 ANN-D provenance-only pass: added function-local annotations for
