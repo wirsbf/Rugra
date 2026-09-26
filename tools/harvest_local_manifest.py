@@ -49,6 +49,26 @@ DECL_PAREN = re.compile(
     r"(?P<arr>(?:\s*\[\d+\])+)?"
     r"\s*;\s*$"
 )
+# B29 VARARGS-SAVE-ANCHOR GUARD (LANE B29CONDEXE 2026-09-26, oracle-verified
+# on the locked e40ed130 tree): a body line of the form
+#   ap[0].reg_save_area = local_b8;
+# marks local_b8 as the va_list register-save-area anchor. Committing that
+# declarator as a typelocked ARRAY seed blocks the local-alias chain at the
+# anchor (ScopeLocal::markUnaliased, varmap.cc:1383: TYPE_ARRAY locks turn
+# aliason off for every later entry when alias_block_level > 1, default 2 =
+# architecture.cc:1430), the downstream varargs save slots lose their alias
+# protection, their call shadows become collapsible, and the whole
+# in_AL/in_XMM*/in_R* register-save family is removed by RuleEarlyRemoval
+# (stage stackstall:oppool1) — reproduced identically in the locked oracle
+# with the same seed set. The golden's `undefined1 local_b8 [8];` decl form
+# is the varmap's own guard-derived array (the unseeded canon-body oracle
+# prints the <t>Stack_<off> [8] family with the decayed reg_save_area
+# reference), so dropping the anchor seed costs only the bridge-invented
+# local_ name, never the array form.
+SAVE_ANCHOR = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\[\d+\]\.reg_save_area\s*=\s*"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;\s*$"
+)
 
 
 # Bases the C1 v1 seed channel can install with faithful size/metatype
@@ -98,6 +118,15 @@ def split_functions(text):
 
 
 def harvest_function(lines):
+    # B29: collect the va_list reg_save_area anchors referenced in the body
+    # BEFORE consuming the decl block (harvest_function sees the whole
+    # function text; the anchor assignment lives past the first statement).
+    save_anchors = set()
+    for line in lines:
+        m = SAVE_ANCHOR.match(line)
+        if m is not None:
+            save_anchors.add(m.group("name"))
+
     locals_ = []
     started = False
     for line in lines:
@@ -123,6 +152,12 @@ def harvest_function(lines):
         if base_of(type_expr) not in KNOWN_BASES:
             continue  # C4 composite domain: outside the v1 seed channel
         name = dm.group("name")
+        if name in save_anchors and dm.group("arr"):
+            # B29 VARARGS-SAVE-ANCHOR GUARD: never commit the va_list
+            # reg_save_area anchor as a typelocked array — the array lock
+            # blocks the local-alias chain (varmap.cc:1383) and kills the
+            # whole varargs register-save family (see SAVE_ANCHOR comment).
+            continue
         locals_.append(
             {"offset": -int(name[6:], 16), "name": name, "type": type_expr, "typelock": True}
         )
