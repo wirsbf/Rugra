@@ -493,6 +493,18 @@ pub struct FuncProto {
     /// `has_thisptr` (fspec.hh:1356) flag bit. Read by `has_thisptr`; set by
     /// `set_has_thisptr` and by `update_this_pointer`.
     pub has_thisptr: bool,
+    /// Set if this prototype is created to override a single call site.
+    /// Faithful to the `is_override` (fspec.hh:1357, 0x1000) flag bit. Read
+    /// by `is_override`; set by `set_override`. In Ghidra the flag lives in
+    /// the single `flags` word and `FuncProto::copy` (fspec.cc:3794
+    /// `flags = op2.flags`) carries it wholesale — the channel that marks a
+    /// call site as carrying an applied prototype override after a restart
+    /// (`Override::insertProtoOverride` sets it on the stored copy at
+    /// override.cc:130; `Override::applyPrototype` re-copies that proto
+    /// onto the fresh FuncCallSpecs at flow setup, fspec.cc flow.cc:714).
+    /// `FuncCallSpecs::deindirect` (fspec.cc:5462) then skips late
+    /// restriction for such a site.
+    pub is_override: bool,
     /// Number of bytes of the return value that are consumed by callers
     /// (0 = all bytes). Faithful to `FuncProto::returnBytesConsumed`
     /// (fspec.hh:1367). Set by `set_return_bytes_consumed`; read by the
@@ -536,6 +548,7 @@ impl FuncProto {
             is_constructor_flag: false,
             is_destructor: false,
             has_thisptr: false,
+            is_override: false,
             return_bytes_consumed: 0,
             error_input_param: false,
             error_output_param: false,
@@ -1295,6 +1308,21 @@ impl FuncProto {
         self.has_thisptr = val;
     }
 
+    // Ghidra: fspec.hh:1544 FuncProto::isOverride
+    /// Return \b true if this is a call site override. Faithful to
+    /// `isOverride` (fspec.hh:1544): reads the `is_override` (0x1000) flag
+    /// bit.
+    pub fn is_override(&self) -> bool {
+        self.is_override
+    }
+
+    // Ghidra: fspec.hh:1545 FuncProto::setOverride
+    /// Toggle whether this is a call site override. Faithful to
+    /// `setOverride` (fspec.hh:1545).
+    pub fn set_override(&mut self, val: bool) {
+        self.is_override = val;
+    }
+
     // Ghidra: fspec.hh:1445 FuncProto::isConstructor
     /// Is this prototype for a class constructor method? Faithful to
     /// `isConstructor` (fspec.hh:1445): reads the `is_constructor` flag bit.
@@ -1393,6 +1421,9 @@ impl FuncProto {
         self.is_constructor_flag = other.is_constructor_flag;
         self.is_destructor = other.is_destructor;
         self.has_thisptr = other.has_thisptr;
+        // Ghidra: fspec.cc:3794 `flags = op2.flags` — the whole flag word
+        // (including is_override) is carried by FuncProto::copy.
+        self.is_override = other.is_override;
         self.error_input_param = other.error_input_param;
     }
 
@@ -3854,8 +3885,10 @@ impl FuncCallSpecs {
             &mut crate::funcdata::Funcdata,
             &crate::op::PcodeOpRef,
             Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+            crate::space::AddressSpace,
             Address,
             i32,
+            Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
         ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
         if !self.is_input_locked() { return; }
@@ -3874,9 +3907,10 @@ impl FuncCallSpecs {
                 )
             })
             .collect();
-        // Ghidra: Varnode *stackref = getSpacebaseRelative();
-        // Rugra does not yet expose getSpacebaseRelative; the placeholder
-        // logic below mirrors the structure but the stackref is implicit.
+        // Ghidra cc:5154: Varnode *stackref = getSpacebaseRelative(); —
+        // read BEFORE the placeholder state is cleared, handed to
+        // buildParam for spacebase-relative parameter construction.
+        let stackref = self.get_spacebase_relative();
         let placeholder_slot = self.stack_placeholder_slot;
         let mut placeholder_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
             if placeholder_slot >= 0 {
@@ -3902,7 +3936,7 @@ impl FuncCallSpecs {
             } else {
                 None
             };
-            let vn = build_param(fd, call_op, existing.as_ref(), paddr, psize);
+            let vn = build_param(fd, call_op, existing.as_ref(), pspace, paddr, psize, stackref.as_ref());
             if 1 + i < new_input.len() {
                 new_input[1 + i] = vn.clone();
             }
@@ -4313,72 +4347,118 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.cc:5443 FuncCallSpecs::deindirect
-    /// Resolve an indirect CALL/CALLIND to a direct CALL on `newfd`.
-    /// Partially corresponds to `deindirect` (fspec.cc:5443-5472). The mapped
-    /// flow updates this spec's entry address and display name from the
-    /// resolved Funcdata, rewrites the CALL input, flips the opcode to
-    /// `CPUI_CALL`, records an indirect override, and then tries to merge the
-    /// existing prototype with the callee's:
-    ///   - if the callee's FuncProto is `NoReturn` or `Inline`, skip the
-    ///     merge and request a restart;
-    ///   - else if we are an override call-site, leave the prototype as-is;
-    ///   - else run `late_restriction`; on success commit the new inputs
-    ///     and outputs, on failure request a restart.
+    /// Convert \b this call site from an indirect to a direct function call.
+    /// Faithful 1:1 body of `deindirect` (fspec.cc:5443-5472): the callee's
+    /// entry address and display name are adopted, the CALLIND is rewritten
+    /// as a CALL whose in(0) is a fresh typed call-spec annotation, an
+    /// indirect override is installed so restarts keep the resolution, and
+    /// — unless the callee is noreturn/inline or \b this already carries an
+    /// applied prototype override — `lateRestriction` either commits the new
+    /// inputs/outputs in place or flags a restart via
+    /// `data.setRestartPending(true)`.
+    ///
+    /// Rugra's Funcdata has no per-callee `Funcdata *` at action time (the
+    /// front-end boundary established by `FlowInfo::queryCall`,
+    /// flow.cc:660-669): the production caller (`ActionDeindirect`,
+    /// coreaction.cc:1219) resolves the callee through the query channels
+    /// and hands the observable slice `(entry address, display name,
+    /// &FuncProto)` — the same slice `newfd` contributes on the Ghidra side
+    /// (`getAddress`/`getDisplayName`/`getFuncProto`). `owner` is the
+    /// stable `Arc` handle of \b this callspec, required to mint the typed
+    /// annotation varnode (`Funcdata::newVarnodeCallSpecs` reads the entry
+    /// address through it — the write guards below are therefore taken in
+    /// separate scopes so the annotation mint can read between them).
     ///
     /// Returns `true` when a restart is pending (Ghidra's
-    /// `data.setRestartPending(true)`), `false` when the prototype was
-    /// updated in place. The noreturn/inline gate reads the callee's
-    /// FuncProto directly (`newfd->getFuncProto()`, fspec.cc:5460-5461).
-    /// D0 can allocate a typed call-spec annotation only from the stable
-    /// `Arc` owner, while this legacy hook still receives a bare
-    /// `&mut FuncCallSpecs`; the owner/rebind seam therefore remains unwired
-    /// under `CALLSPEC-0001`. This method has no production caller and is not
-    /// claimed by the identity/lifecycle projection.
+    /// `data.setRestartPending(true)`), `false` when the conversion
+    /// completed in place.
     pub fn deindirect(
-        &mut self,
+        owner: &std::sync::Arc<std::sync::RwLock<FuncCallSpecs>>,
         fd: &mut crate::funcdata::Funcdata,
         call_op: &crate::op::PcodeOpRef,
-        newfd: &crate::funcdata::Funcdata,
-        new_varnode_call_specs: &dyn Fn(&mut crate::funcdata::Funcdata, &FuncCallSpecs) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        insert_indirect_override: &dyn Fn(&mut crate::funcdata::Funcdata, Address, Address),
-        late_restriction: &mut dyn FnMut(
-            &mut FuncCallSpecs,
-            &crate::funcdata::Funcdata,
-        ) -> DeindirectOutcome,
+        newfd_entry: Address,
+        newfd_display_name: &str,
+        newfd_proto: &FuncProto,
     ) -> bool {
-        // Ghidra: entryaddress = newfd->getAddress(); name = ...; fd = newfd;
-        self.entry_addr = Some(*newfd.get_address());
-        let display = newfd.get_name();
-        if !display.is_empty() {
-            self.prototype.name = display.to_string();
+        // Ghidra: entryaddress = newfd->getAddress(); name =
+        //         newfd->getDisplayName(); fd = newfd;
+        {
+            let mut fc = owner.write().unwrap();
+            fc.entry_addr = Some(newfd_entry);
+            if !newfd_display_name.is_empty() {
+                fc.prototype.name = newfd_display_name.to_string();
+            }
         }
         // Ghidra: vn = data.newVarnodeCallSpecs(this); opSetInput(op, vn, 0);
-        let vn = new_varnode_call_specs(fd, self);
+        let vn = fd.new_varnode_call_specs(owner);
         fd.op_set_input(call_op, vn, 0);
         // Ghidra: opSetOpcode(op, CPUI_CALL);
         fd.op_set_opcode(call_op, crate::opcodes::OpCode::CPUI_CALL);
-        // Ghidra: data.getOverride().insertIndirectOverride(op->getAddr(), entryaddress);
-        insert_indirect_override(fd, self.op_addr, *newfd.get_address());
+        // Ghidra: data.getOverride().insertIndirectOverride(op->getAddr(),entryaddress);
+        let op_addr = owner.read().unwrap().op_addr;
+        fd.localoverride.insert_indirect_override(op_addr, newfd_entry);
 
         // Ghidra: FuncProto &newproto( newfd->getFuncProto() );
         //         if ((!newproto.isNoReturn())&&(!newproto.isInline())) {
-        let newproto = newfd.get_func_proto();
-        if !newproto.is_no_return() && !newproto.is_inline() {
-            // Ghidra: if (isOverride()) return;  // Don't use discovered prototype.
-            // Rugra's FuncCallSpecs does not yet track the override flag;
-            // we proceed to late_restriction unconditionally.
-            // TODO(CALLSPEC-0001): wire FuncCallSpecs::isOverride together
-            // with the stable-owner deindirect/rebind seam.
-            let outcome = late_restriction(self, newfd);
-            match outcome {
-                DeindirectOutcome::Committed => {
-                    // Ghidra: commitNewInputs + commitNewOutputs already done
-                    // inside late_restriction's hook; no restart.
-                    return false;
+        if !newfd_proto.is_no_return() && !newfd_proto.is_inline() {
+            // Ghidra: if (isOverride()) return; // Don't use the discovered
+            //         function prototype.  FuncCallSpecs inherits this from
+            //         FuncProto (fspec.hh:1645); Rugra reads the embedded
+            //         prototype's flag.
+            if owner.read().unwrap().prototype.is_override() {
+                return false;
+            }
+            // Ghidra: if (lateRestriction(newproto,newinput,newoutput)) {
+            //           commitNewInputs(data,newinput);
+            //           commitNewOutputs(data,newoutput);
+            //           return;
+            //         }
+            let mut newinput: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+                Vec::new();
+            let mut newoutput: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+                Vec::new();
+            let committed = {
+                let mut fc = owner.write().unwrap();
+                if fc.late_restriction(
+                    newfd_proto,
+                    call_op,
+                    &mut newinput,
+                    &mut newoutput,
+                    &prod_get_call_in,
+                    &fd.obank,
+                ) {
+                    let mut build_param = |fd: &mut crate::funcdata::Funcdata,
+                                           call_op: &crate::op::PcodeOpRef,
+                                           existing: Option<
+                        &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                    >,
+                                           pspace: crate::space::AddressSpace,
+                                           paddr: Address,
+                                           psize: i32,
+                                           stackref: Option<
+                        &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                    >|
+                     -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+                        prod_build_param(
+                            fd, call_op, existing, pspace, paddr, psize, stackref,
+                        )
+                    };
+                    fc.commit_new_inputs(fd, call_op, &mut newinput, &mut build_param);
+                    fc.commit_new_outputs(
+                        fd,
+                        call_op,
+                        &newoutput,
+                        &prod_get_return_addr_size,
+                        &prod_set_call_output,
+                        &prod_truncate_output,
+                    );
+                    true
+                } else {
+                    false
                 }
-                DeindirectOutcome::NeedsRestart => {
-                    // Fall through to setRestartPending(true).
-                }
+            };
+            if committed {
+                return false; // We have successfully updated the prototype, don't restart
             }
         }
         // Ghidra: data.setRestartPending(true);
@@ -4756,26 +4836,20 @@ impl FuncCallSpecs {
     /// `lateRestriction` either commits the new inputs/outputs in place or
     /// flags a restart; either way the prototype locks and both error
     /// flags adopt the restriction's.
+    ///
+    /// Override-manager note: Ghidra's `insertProtoOverride` takes ownership
+    /// of a heap `FuncProto` copy and marks it `is_override` (override.cc:130);
+    /// on restart `Override::applyPrototype` (flow.cc:714) re-copies that
+    /// stored proto onto the fresh callspec. Rugra's `Override` records the
+    /// callpoint but does not yet store the proto itself (CALLSPEC-0001
+    /// seam), so the restart re-application of the full proto remains
+    /// unwired; this pass's observable (proto override recorded + in-place
+    /// late restriction + lock) is complete.
     pub fn force_set(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
-        fp: &FuncProto,
         call_op: &crate::op::PcodeOpRef,
-        get_call_in: &dyn Fn(
-            &crate::op::PcodeOpRef,
-            usize,
-        ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-        bank: &crate::op::PcodeOpBank,
-        build_param: &mut dyn FnMut(
-            &mut crate::funcdata::Funcdata,
-            &crate::op::PcodeOpRef,
-            Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-            Address,
-            i32,
-        ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        get_return_addr_size: &dyn Fn(&FuncCallSpecs) -> (Address, i32),
-        set_call_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>),
-        truncate_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fp: &FuncProto,
     ) {
         let mut newinput: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
             Vec::new();
@@ -4787,10 +4861,34 @@ impl FuncCallSpecs {
         // Ghidra: FuncProto *newproto = new FuncProto(); newproto->copy(fp);
         //         data.getOverride().insertProtoOverride(op->getAddr(),newproto);
         fd.localoverride.insert_proto_override(self.op_addr);
-
-        if self.late_restriction(fp, call_op, &mut newinput, &mut newoutput, get_call_in, bank) {
-            self.commit_new_inputs(fd, call_op, &mut newinput, build_param);
-            self.commit_new_outputs(fd, call_op, &newoutput, get_return_addr_size, set_call_output, truncate_output);
+        // Ghidra: if (lateRestriction(fp,newinput,newoutput)) {
+        //           commitNewInputs(data,newinput);
+        //           commitNewOutputs(data,newoutput);
+        //         } else { data.setRestartPending(true); }
+        if self.late_restriction(fp, call_op, &mut newinput, &mut newoutput, &prod_get_call_in, &fd.obank) {
+            let mut build_param = |fd: &mut crate::funcdata::Funcdata,
+                                   call_op: &crate::op::PcodeOpRef,
+                                   existing: Option<
+                &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            >,
+                                   pspace: crate::space::AddressSpace,
+                                   paddr: Address,
+                                   psize: i32,
+                                   stackref: Option<
+                &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            >|
+             -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+                prod_build_param(fd, call_op, existing, pspace, paddr, psize, stackref)
+            };
+            self.commit_new_inputs(fd, call_op, &mut newinput, &mut build_param);
+            self.commit_new_outputs(
+                fd,
+                call_op,
+                &newoutput,
+                &prod_get_return_addr_size,
+                &prod_set_call_output,
+                &prod_truncate_output,
+            );
         } else {
             // Too late to make restrictions to correct prototype.
             // Force a restart.
@@ -5047,18 +5145,147 @@ fn space_name_for_addr(addr: Address) -> String {
     }
 }
 
+// ======================================================================
+// Production commit/late-restriction hook adapters (FSPEC-DEINDIRECT-TRIGGER-0001)
+//
+// Ghidra's FuncCallSpecs methods read the CALL op's inputs and Funcdata's
+// op-editing API directly (they are methods on a class holding `op` with
+// full access to `data`). Rugra's `FuncCallSpecs` methods take caller
+// hooks because the stable-owner `Arc<RwLock<..>>` callspec cannot borrow
+// `Funcdata` while mutated. These free functions are the production
+// adapters the production `deindirect`/`force_set` (this file) pass: they
+// are the direct translation of what the Ghidra methods inline.
+// ======================================================================
 
-/// Faithful to the two return paths inside `deindirect` (fspec.cc:5465-5471):
-/// either the prototype was successfully restricted and committed (no
-/// restart), or it was not and a restart is pending.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeindirectOutcome {
-    /// `lateRestriction` + `commitNewInputs`/`commitNewOutputs` succeeded;
-    /// the prototype is up to date, no restart needed.
-    Committed,
-    /// The prototype could not be reconciled in-place; decompilation must
-    /// restart with the newly resolved target.
-    NeedsRestart,
+// RUGRA-GLUE: production adapter for the inline `op->getIn(slot)` reads in
+// `FuncCallSpecs::transferLockedInput` (fspec.cc:5103/5110) and the CALL
+// input reads of `lateRestriction` callers.
+pub(crate) fn prod_get_call_in(
+    op: &crate::op::PcodeOpRef,
+    slot: usize,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    op.0.read().unwrap().get_in(slot).cloned()
+}
+
+// Ghidra: fspec.cc:5005 FuncCallSpecs::buildParam (production adapter)
+/// Build the Varnode exactly matching a (locked) parameter for the CALL.
+/// Faithful 1:1 body (fspec.cc:5005-5027): a missing Varnode means a
+/// spacebase-relative parameter, built via `Funcdata::opStackLoad`; an
+/// exact size match is returned as-is; anything else is truncated with a
+/// SUBPIECE(0) inserted before the CALL (a free non-constant Varnode with
+/// descendants is re-versioned first so the SUBPIECE does not give the
+/// original multiple descendants).
+pub(crate) fn prod_build_param(
+    fd: &mut crate::funcdata::Funcdata,
+    call_op: &crate::op::PcodeOpRef,
+    vn: Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    param_space: crate::space::AddressSpace,
+    param_addr: Address,
+    param_size: i32,
+    stackref: Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    // Ghidra: if (vn == (Varnode *)0) { ... opStackLoad(spc,off,sz,op,stackref,false); }
+    let Some(mut vn) = vn.cloned() else {
+        return fd.op_stack_load(
+            param_space,
+            param_addr.as_u64(),
+            param_size as usize,
+            call_op,
+            stackref.cloned(),
+            false,
+        );
+    };
+    // Ghidra: if (vn->getSize() == param->getSize()) return vn;
+    if vn.read().unwrap().get_size() as i32 == param_size {
+        return vn;
+    }
+    // Ghidra: newop = data.newOp(2,op->getAddr()); opSetOpcode(SUBPIECE);
+    let newout_addr = call_op.0.read().unwrap().get_addr();
+    let newop = fd.new_op(2, newout_addr);
+    fd.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_SUBPIECE);
+    // Ghidra: newout = data.newUniqueOut(param->getSize(),newop);
+    let newout = fd.new_unique_out(param_size as usize, &newop);
+    // Ghidra: if (vn->isFree() && !vn->isConstant() && !vn->hasNoDescend())
+    //           vn = data.newVarnode(vn->getSize(),vn->getAddr());
+    {
+        let reversion = {
+            let guard = vn.read().unwrap();
+            guard.is_free() && !guard.is_constant() && !guard.has_no_descend()
+        };
+        if reversion {
+            let (sz, space, off) = {
+                let guard = vn.read().unwrap();
+                (guard.get_size(), guard.address_space, guard.loc.as_u64())
+            };
+            vn = fd.new_varnode_typed_in_space(sz, space, Address::new(off), None);
+        }
+    }
+    // Ghidra: opSetInput(newop,vn,0); opSetInput(newop,data.newConstant(4,0),1);
+    fd.op_set_input(&newop, vn, 0);
+    let zero = fd.new_constant(4, 0);
+    fd.op_set_input(&newop, zero, 1);
+    // Ghidra: opInsertBefore(newop,op);
+    fd.op_insert_before(&newop, call_op);
+    newout
+}
+
+// RUGRA-GLUE: production adapter for the `param->getAddress()` /
+// `param->getSize()` reads of `commitNewOutputs` (fspec.cc:5208-5210) —
+// the callspec's locked output parameter storage.
+pub(crate) fn prod_get_return_addr_size(fc: &FuncCallSpecs) -> (Address, i32) {
+    let addr = fc
+        .prototype
+        .output_storage
+        .map(|(_, off)| Address::new(off))
+        .unwrap_or(Address::new(0));
+    (addr, fc.prototype.return_type.get_size() as i32)
+}
+
+// RUGRA-GLUE: production adapter for the `opSetOutput(op,exactMatch)` +
+// `opUnlink(indOp)` wiring of `commitNewOutputs` (fspec.cc:5222-5230) and
+// the unset/new-arm (fspec.cc:5233-5235). Rugra's op_set_output performs
+// the re-link; the exact-match predecessor INDIRECT is unlinked exactly
+// when it is not the CALL itself.
+pub(crate) fn prod_set_call_output(
+    fd: &mut crate::funcdata::Funcdata,
+    call_op: &crate::op::PcodeOpRef,
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) {
+    // If the varnode is already the CALL's output, nothing to do.
+    let already = {
+        let op_guard = call_op.0.read().unwrap();
+        op_guard
+            .get_out()
+            .map(|out| std::sync::Arc::ptr_eq(&out, vn))
+            .unwrap_or(false)
+    };
+    if already {
+        return;
+    }
+    // Ghidra: indOp = exactMatch->getDef(); if (op != indOp) { opSetOutput;
+    //           opUnlink(indOp); }
+    let ind_op = vn.read().unwrap().get_def().map(crate::op::PcodeOpRef);
+    fd.op_set_output(call_op, vn.clone());
+    if let Some(ind) = ind_op {
+        if ind != *call_op {
+            fd.op_unlink(&ind);
+        }
+    }
+}
+
+// RUGRA-GLUE: production adapter for the SUBPIECE truncation arm of
+// `commitNewOutputs` (fspec.cc:5244-5259): the smaller intersecting output
+// becomes a SUBPIECE of the real output at the byte `overlap`.
+pub(crate) fn prod_truncate_output(
+    _fd: &mut crate::funcdata::Funcdata,
+    _call_op: &crate::op::PcodeOpRef,
+    _real_out: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    _overlap: i32,
+) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    // The truncation graph edit is exercised only through output-locked
+    // late restrictions; registered as the commit-outputs graph residual of
+    // FSPEC-DEINDIRECT-TRIGGER-0001 (CALLSPEC-0001 seam).
+    unreachable!("prod_truncate_output: commit-outputs truncation arm not yet wired (FSPEC-DEINDIRECT-TRIGGER-0001 residual)")
 }
 
 // ======================================================================

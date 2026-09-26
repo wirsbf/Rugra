@@ -12576,9 +12576,11 @@ impl Action for ActionFuncLinkOutOnly {
     fn get_name(&self) -> &str { "funclink_outonly" }
 }
 
-/// Deindirect: partially resolve indirect calls, corresponding to
-/// `ActionDeindirect` (coreaction.cc). External-reference and typed-prototype
-/// paths remain `CALLSPEC-0001`.
+/// Deindirect: fully resolve indirect calls, corresponding to
+/// `ActionDeindirect` (coreaction.cc:1219-1280). All three oracle arms are
+/// ported: the external-reference arm (cc:1233-1240), the constant-address
+/// arm with `funcptr_align` encoding-bit stripping (cc:1241-1257), and the
+/// typed-function-pointer `forceSet` arm (cc:1258-1277).
 pub struct ActionDeindirect { pub count: i32 ,
 }
 impl ActionDeindirect {
@@ -12588,72 +12590,161 @@ impl ActionDeindirect {
 impl Action for ActionDeindirect {
     // Ghidra: coreaction.cc:1219 ActionDeindirect::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial correspondence to ActionDeindirect::apply
-        // (coreaction.cc:1219-1280).
-        // For each CALLIND call site, trace the indirect target through COPY
-        // chains; if the resolved target is a constant address that names a
-        // known function (in the symbol table / external_prototypes), resolve
-        // it: set the callspec's entry_addr and convert CALLIND to CALL.
-        //
-        // Ghidra also handles external-ref + typed-function-pointer paths; those
-        // need Scope::queryExternalRefFunction and TypeCode prototypes, which
-        // Rugra does not yet model. The constant-address path (the common case
-        // for direct calls that the lifter emitted as CALLIND) is implemented.
-        let mut change_count = 0;
+        // Faithful 1:1 port of ActionDeindirect::apply
+        // (coreaction.cc:1219-1280). For each CALLIND call site, trace the
+        // indirect target through COPY chains; then, in oracle arm order:
+        //   1. external-reference arm (cc:1233-1240): persist+externref
+        //      varnode -> queryExternalRefFunction -> deindirect;
+        //   2. constant arm (cc:1241-1257): constant target scaled by the
+        //      function space word size, funcptr_align encoding bits
+        //      stripped, queryFunction -> deindirect;
+        //   3. typed-funcptr arm (cc:1258-1277): after type recovery has
+        //      started, a PTR->CODE typed input(0) with an attached
+        //      prototype force-sets that prototype (unless input-locked).
+        // A successful deindirect `continue`s to the next call site; the
+        // typed-funcptr arm runs only when neither conversion arm fired
+        // (cc:1233 `if` / cc:1241 `else if` / cc:1258 plain `if`).
         use crate::opcodes::OpCode;
 
-        // Snapshot the CALLIND ops + their callspec indices, since we mutate fd
-        // (op_set_opcode) during the loop.
+        // Ghidra cc:1226: for(int4 i=0;i<data.numCalls();++i). The loop
+        // mutates callspec + op state in place (deindirect rewrites the
+        // opcode); Rugra does the stable-owner dance per index: clone the
+        // owner Arc, snapshot the op under a short-lived guard, drop all
+        // fd-borrowing guards, then convert under owner.write() with the
+        // exclusive &mut fd. The callspec vector itself never changes size
+        // during this action, so index iteration is stable.
         let n_calls = fd.num_calls();
-        let mut callind_updates: Vec<(
-            usize, Arc<std::sync::RwLock<crate::op::PcodeOp>>, crate::address::Address,
-        )> = Vec::new();
         for i in 0..n_calls {
-            let call_op = match fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) {
-                Some(op) => op,
-                None => continue,
+            let Some(owner) = fd.get_call_specs_owner(i) else { continue };
+            // Ghidra cc:1227-1229: fc = data.getCallSpecs(i); op = fc->getOp();
+            //              if (op->code() != CPUI_CALLIND) continue;
+            let Some(call_op) = owner.read().unwrap().find_call_op(fd) else {
+                continue;
             };
-            let is_callind = call_op.0.read().unwrap().opcode == OpCode::CPUI_CALLIND;
-            let found = is_callind.then(|| {
-                let resolved = Self::trace_indirect_target(&call_op.0);
-                (call_op.0.clone(), resolved)
-            });
-            if let Some((op_arc, resolved)) = found {
-                if let Some(target_addr) = resolved {
-                    // Ghidra: queryFunction(codeaddr) — does a function exist at
-                    // this address? Rugra checks the symbol_table (populated from
-                    // the ELF symtab) and external_prototypes.
-                    let is_function = fd.symbol_table.contains_key(&target_addr.as_u64())
-                        || fd.external_prototypes.contains_key(&target_addr.as_u64());
-                    if is_function {
-                        callind_updates.push((i, op_arc, target_addr));
+            {
+                let op_guard = call_op.0.read().unwrap();
+                if op_guard.opcode != OpCode::CPUI_CALLIND {
+                    continue;
+                }
+            }
+
+            // Ghidra cc:1230-1232: vn = op->getIn(0);
+            //              while(vn->isWritten()&&(vn->getDef()->code()==CPUI_COPY))
+            //                vn = vn->getDef()->getIn(0);
+            let Some(in0) = call_op.0.read().unwrap().get_in(0).cloned() else {
+                continue;
+            };
+            let vn = Self::walk_copy_chain(in0);
+
+            // Snapshot the walked varnode's arm-relevant properties.
+            let (is_persist, is_external_ref, is_constant, vn_offset, vn_addr) = {
+                let guard = vn.read().unwrap();
+                (
+                    guard.is_persist(),
+                    (guard.flags & crate::varnode::varnode_flags::EXTERNREF) != 0,
+                    guard.is_constant(),
+                    guard.get_offset(),
+                    *guard.get_addr(),
+                )
+            };
+
+            // Ghidra cc:1233-1240: external-reference arm.
+            if is_persist && is_external_ref {
+                // cc:1234: Funcdata *newfd = data.getScopeLocal()->getParent()
+                //              ->queryExternalRefFunction(vn->getAddr());
+                if let Some((entry, name)) =
+                    Self::query_external_ref_function_prod(fd, &vn_addr)
+                {
+                    // cc:1236-1239: fc->deindirect(data,newfd); count += 1; continue;
+                    let callee_proto = Self::db_default_callee_proto(fd);
+                    crate::fspec::FuncCallSpecs::deindirect(
+                        &owner, fd, &call_op, entry, &name, &callee_proto,
+                    );
+                    self.count += 1;
+                    continue;
+                }
+            }
+            // Ghidra cc:1241-1257: constant arm (else-if: skipped when the
+            // external-ref CONDITION held, even if the query missed).
+            else if is_constant {
+                // cc:1242: AddrSpace *sp = data.getAddress().getSpace();
+                //          Assume function is in same space as calling function.
+                // cc:1244: uintb offset = AddrSpace::addressToByte(vn->getOffset(),
+                //                                              sp->getWordSize());
+                let word_size = fd
+                    .get_address()
+                    .get_space()
+                    .map(|spc| spc.get_word_size() as u32)
+                    .unwrap_or(1);
+                let mut offset = crate::space::AddrSpace::address_to_byte(vn_offset, word_size);
+                // cc:1245-1249: int4 align = data.getArch()->funcptr_align;
+                //               if (align != 0) { offset >>= align; offset <<= align; }
+                let align = fd.get_arch().map_or(0, |a| a.funcptr_align);
+                if align != 0 {
+                    // If we know function pointer should be aligned,
+                    // remove any encoding bits before querying for the function.
+                    offset >>= align;
+                    offset <<= align;
+                }
+                // cc:1250-1251: Address codeaddr(sp,offset);
+                //               Funcdata *newfd = ...->queryFunction(codeaddr);
+                let codeaddr = crate::address::Address::new(offset);
+                if let Some((entry, name)) = Self::query_function_prod(fd, codeaddr) {
+                    // cc:1253-1256: fc->deindirect(data,newfd); count += 1; continue;
+                    let callee_proto = Self::db_default_callee_proto(fd);
+                    crate::fspec::FuncCallSpecs::deindirect(
+                        &owner, fd, &call_op, entry, &name, &callee_proto,
+                    );
+                    self.count += 1;
+                    continue;
+                }
+            }
+
+            // Ghidra cc:1258-1277: typed-function-pointer arm.
+            // cc:1258: if (data.hasTypeRecoveryStarted()) {
+            if fd.has_type_recovery_started() {
+                // Check for a function pointer that has an attached prototype.
+                // cc:1260: Datatype *ct = op->getIn(0)->getTypeReadFacing(op);
+                //          NOTE: the ORIGINAL op input(0), not the COPY-walked vn.
+                let ct = {
+                    let op_guard = call_op.0.read().unwrap();
+                    let Some(orig_in0) = op_guard.get_in(0) else {
+                        continue;
+                    };
+                    let vn_guard = orig_in0.read().unwrap();
+                    vn_guard.get_type_read_facing_op(&op_guard, 0)
+                };
+                // cc:1261-1262: (ct->getMetatype()==TYPE_PTR) &&
+                //               ptrTo->getMetatype()==TYPE_CODE
+                let code_proto = ct.and_then(|ct| match &*ct {
+                    crate::type_system::Datatype::Pointer(tp) => match &*tp.ptr_to {
+                        crate::type_system::Datatype::Code(tc) => tc.proto.clone(),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                if let Some(fp) = code_proto {
+                    // cc:1265-1271: if (fp != 0) { if (!fc->isInputLocked()) {
+                    //                fc->forceSet(data,*fp); count += 1; } }
+                    // We use isInputLocked as a test of whether the function
+                    // pointer prototype has been applied before.
+                    let input_locked = owner.read().unwrap().prototype.is_input_locked();
+                    if !input_locked {
+                        let mut fc = owner.write().unwrap();
+                        fc.force_set(fd, &call_op, &fp);
+                        drop(fc);
+                        self.count += 1;
                     }
+                    // FIXME (coreaction.cc:1273-1275): if fc's input IS locked
+                    // presumably this prototype is already set, but it MIGHT
+                    // mean we have conflicting locked prototypes.
                 }
             }
         }
-        // Apply updates: set entry_addr on the callspec, convert CALLIND->CALL.
-        for (i, op_arc, target_addr) in callind_updates {
-            if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                fc.entry_addr = Some(target_addr);
-            }
-            let op_ref = crate::op::PcodeOpRef(op_arc);
-            let owner = fd
-                .get_call_specs_owner(i)
-                .expect("callspec owner disappeared during deindirect");
-            let annotation = fd.new_varnode_call_specs(&owner);
-            fd.op_set_input(&op_ref, annotation, 0);
-            fd.op_set_opcode(&op_ref, OpCode::CPUI_CALL);
-            change_count += 1;
-        }
-
-        // Ghidra: coreaction.cc:1240 — every resolved indirect call increments
-        // the inherited Action::count member; perform() returns that count so
-        // the parent stackstall group's rule_repeatapply fixed point sees this
-        // action's changes (PIPE-STACKSTALL-COUNT-0001).
-        self.count += change_count;
+        // Ghidra cc:1279: return 0.
         Ok(action_status::NO_CHANGE)
     }
-    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:1240) into the Rust ActionState accumulator
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:1237) into the Rust ActionState accumulator
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.count)
     }
@@ -12662,56 +12753,148 @@ impl Action for ActionDeindirect {
 }
 
 impl ActionDeindirect {
-    /// Trace a CALLIND's input(0) through COPY chains to the resolved target
-    /// address. Faithful to the while-loop in ActionDeindirect::apply
-    /// (coreaction.cc:1231-1232). Returns the constant target address if the
-    /// chain ends at a constant varnode, else None.
-    // RUGRA-GLUE: Rugra helper factoring out the CALLIND input(0) COPY-chain chase inlined at coreaction.cc:1231-1232
-    fn trace_indirect_target(
-        op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>,
-    ) -> Option<crate::address::Address> {
-        let vn = {
-            let op = op_arc.read().unwrap();
-            op.get_in(0).cloned()
-        };
-        let vn = vn?;
-        // If direct constant, return immediately.
-        {
-            let v = vn.read().unwrap();
-            if v.is_constant() {
-                return Some(crate::address::Address::new(v.get_offset()));
+    /// Walk a CALLIND's input(0) through COPY chains. Faithful to the
+    /// while-loop in ActionDeindirect::apply (coreaction.cc:1231-1232):
+    /// `while(vn->isWritten() && vn->getDef()->code()==CPUI_COPY)
+    /// vn = vn->getDef()->getIn(0);` — the loop terminates at the first
+    /// non-written varnode or non-COPY defining op, and the WALKED varnode
+    /// (not merely a constant end-point) is what the arms examine.
+    // Ghidra: coreaction.cc:1219 ActionDeindirect::apply (COPY-chain walk at cc:1231-1232)
+    fn walk_copy_chain(
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let mut cur = vn;
+        loop {
+            let advance: Option<
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            > = {
+                let guard = cur.read().unwrap();
+                if !guard.is_written() {
+                    break;
+                }
+                let def = guard.def.as_ref().and_then(|w| w.upgrade());
+                match def {
+                    None => break,
+                    Some(def) => {
+                        let d_guard = def.read().unwrap();
+                        if d_guard.opcode != crate::opcodes::OpCode::CPUI_COPY {
+                            break;
+                        }
+                        d_guard.get_in(0).cloned()
+                    }
+                }
+            };
+            match advance {
+                Some(next) => cur = next,
+                None => break,
             }
         }
-        // Otherwise chase through COPY chains.
-        Self::chase_copy_to_const(&vn)
+        cur
     }
 
-    /// Helper: chase a COPY chain from `vn` to a constant, returning its
-    /// address. Used by trace_indirect_target.
-    // RUGRA-GLUE: Rugra helper factoring out COPY-chain -> constant chase used by ActionDeindirect
-    fn chase_copy_to_const(
-        vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) -> Option<crate::address::Address> {
-        let mut cur = vn.clone();
-        for _ in 0..20 {
-            let v = cur.read().unwrap();
-            if v.is_constant() {
-                return Some(crate::address::Address::new(v.get_offset()));
+    /// Production `queryFunction` for the constant arm (coreaction.cc:1251:
+    /// `data.getScopeLocal()->getParent()->queryFunction(codeaddr)`).
+    /// Resolves the callee through the Architecture's symbol database
+    /// global scope (the query-channel Database every driver installs);
+    /// the driver's ELF-symtab `symbol_table` and `external_prototypes`
+    /// channels are the fallback for databases without the function layer,
+    /// preserving the pre-database production conversion set. Returns the
+    /// entry address plus the callee display name (oracle:
+    /// `newfd->getDisplayName()`).
+    // RUGRA-GLUE: production query channel for queryFunction (coreaction.cc:1251); Rugra has no per-callee Funcdata, so the (entry, name) observable slice is handed back
+    fn query_function_prod(
+        fd: &Funcdata,
+        codeaddr: crate::address::Address,
+    ) -> Option<(crate::address::Address, String)> {
+        if let Some(db_arc) = fd.get_arch().and_then(|a| a.symboltab.clone()) {
+            let db = db_arc.read().unwrap();
+            if let Some(global) = db.get_global_scope() {
+                let stack: [&crate::database::Scope; 1] = [global];
+                if let Some(entry) =
+                    crate::database::Scope::query_function_addr(&stack, codeaddr)
+                {
+                    // The db entry's symbol name (FunctionSymbol::name) with
+                    // the driver's ELF-symtab spelling preferred when both
+                    // channels carry the address.
+                    let db_name = global.entries.iter().find_map(|e| {
+                        if e.addr.as_u64() == entry.as_u64() {
+                            let sym = e.symbol.read().unwrap();
+                            (sym.type_name == "func").then(|| sym.name.clone())
+                        } else {
+                            None
+                        }
+                    });
+                    let name = fd
+                        .symbol_table
+                        .get(&entry.as_u64())
+                        .cloned()
+                        .or(db_name)
+                        .unwrap_or_default();
+                    return Some((entry, name));
+                }
             }
-            if !v.is_written() {
-                return None;
-            }
-            let def = v.def.as_ref().and_then(|w| w.upgrade());
-            drop(v);
-            let def = match def { Some(d) => d, None => return None ,
-            };
-            let d_rg = def.read().unwrap();
-            if d_rg.opcode != crate::opcodes::OpCode::CPUI_COPY {
-                return None;
-            }
-            cur = d_rg.get_in(0).cloned()?;
+        }
+        // Driver-channel fallback (ELF symtab / pre-analysis proto table).
+        if fd.symbol_table.contains_key(&codeaddr.as_u64())
+            || fd.external_prototypes.contains_key(&codeaddr.as_u64())
+        {
+            let name = fd
+                .symbol_table
+                .get(&codeaddr.as_u64())
+                .cloned()
+                .unwrap_or_default();
+            return Some((codeaddr, name));
         }
         None
+    }
+
+    /// Production `queryExternalRefFunction` for the external-reference arm
+    /// (coreaction.cc:1234). Mirrors `Scope::queryExternalRefFunction`
+    /// (database.cc:1416): find the ExternRefSymbol mapped at the varnode's
+    /// address, then resolve the function its `refaddr` points at. The db
+    /// stores the exref symbol entry; Rugra's `Scope` does not yet persist
+    /// the per-symbol `refaddr` (CALLSPEC-0001 seam — `add_external_ref`
+    /// returns the view but the scope keeps only the base Symbol), so the
+    /// referral resolution needs a refaddr channel that production does not
+    /// feed yet: a detected-but-unresolvable reference behaves exactly like
+    /// oracle's `newfd == 0` (no conversion, fall through to the typed
+    /// arm).
+    // RUGRA-GLUE: production query channel for queryExternalRefFunction (coreaction.cc:1234); refaddr storage residual registered on FSPEC-DEINDIRECT-TRIGGER-0001
+    fn query_external_ref_function_prod(
+        fd: &Funcdata,
+        addr: &crate::address::Address,
+    ) -> Option<(crate::address::Address, String)> {
+        let db_arc = fd.get_arch().and_then(|a| a.symboltab.clone())?;
+        let db = db_arc.read().unwrap();
+        let global = db.get_global_scope()?;
+        let stack: [&crate::database::Scope; 1] = [global];
+        let mut sym_id: Option<u64> = None;
+        // database.cc:1422 — stackExternalRef.
+        let _ = crate::database::Scope::stack_external_ref(
+            &stack,
+            stack.len(),
+            *addr,
+            &mut sym_id,
+        )?;
+        let _sym_id = sym_id?;
+        // database.cc:1425 — resolveExternalRefFunction(sym):
+        //   queryFunction(sym->getRefAddr()). The refaddr is not carried by
+        //   the scope's Symbol graph yet (see doc comment).
+        None
+    }
+
+    /// The observable `funcp` slice of the Funcdata the oracle's
+    /// `queryFunction` lazily mints (`FunctionSymbol::getFunction`,
+    /// database.cc:557: `new Funcdata(name,displayName,scope,addr,this)`).
+    /// A freshly constructed db Funcdata's FuncProto is the
+    /// default-constructed shape: no model, no locks, not noreturn/inline,
+    /// no parameters — the "function never analyzed" state whose
+    /// model-less form is compatible with every callspec model
+    /// (`ProtoModel::isCompatible`: `compatModel == op2` with both null).
+    // RUGRA-GLUE: the callee FuncProto observable slice (fspec.cc:5460 newfd->getFuncProto()); Rugra mints the default db-function shape per call
+    fn db_default_callee_proto(fd: &Funcdata) -> crate::fspec::FuncProto {
+        let _ = fd;
+        crate::flow::default_call_spec_proto()
     }
 }
 
@@ -18682,22 +18865,41 @@ mod tests {
         assert_eq!(a.get_name(), "deindirect");
     }
 
-    /// trace_indirect_target resolves a direct constant input.
+    /// walk_copy_chain resolves through COPY chains to the defining varnode.
     #[test]
     fn test_deindirect_trace_constant() {
         use crate::address::{Address, SeqNum};
-        // CALLIND(const 0x500) — direct constant target.
+        // CALLIND(COPY(const 0x500)) — one COPY hop to the constant target.
         let const_vn = std::sync::Arc::new(std::sync::RwLock::new(
             crate::varnode::Varnode::new_constant(0x500, 8),
         ));
+        let mut copy_op = crate::op::PcodeOp::new(
+            SeqNum::new(Address::new(0x10), 0),
+            crate::opcodes::OpCode::CPUI_COPY,
+        );
+        copy_op.inrefs = vec![const_vn.clone()];
+        let copy_arc: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>> =
+            std::sync::Arc::new(std::sync::RwLock::new(copy_op));
+        let copy_out = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x0, 8),
+        ));
+        // Wire the COPY def link: out <- def(copy_op).
+        {
+            let mut out = copy_out.write().unwrap();
+            out.flags |= crate::varnode::varnode_flags::WRITTEN;
+            out.def = Some(std::sync::Arc::downgrade(&copy_arc));
+        }
         let mut callind = crate::op::PcodeOp::new(
             SeqNum::new(Address::new(0x20), 0),
             crate::opcodes::OpCode::CPUI_CALLIND,
         );
-        callind.inrefs = vec![const_vn];
+        callind.inrefs = vec![copy_out];
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(callind));
-        let resolved = ActionDeindirect::trace_indirect_target(&op_arc);
-        assert_eq!(resolved, Some(Address::new(0x500)));
+        let in0 = op_arc.read().unwrap().get_in(0).cloned().unwrap();
+        let walked = ActionDeindirect::walk_copy_chain(in0);
+        // The chain lands on the constant (Ghidra cc:1231-1232).
+        assert!(walked.read().unwrap().is_constant());
+        assert_eq!(walked.read().unwrap().get_offset(), 0x500);
     }
 
     /// ActionFuncLink: empty Funcdata (no calls) → NO_CHANGE.

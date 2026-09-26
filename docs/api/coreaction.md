@@ -3796,3 +3796,40 @@ d6fd730a）已在 /dev/shm/rugra-reports/stackspill-evidence/ 执行。
 - **验证**：剂量实验 k=0..5 全部恒等 fnv `4110e793…`（=变体 A=oracle 语句序
   `pppppuVar18` 先 `param_2` 后），双进程复跑一致；7 剂量 IR 全量转储归一化后
   单一 md5（完全封闭）。canon/镜面/bank/测试门禁见车道终报。
+
+## 2026-09-26：ActionDeindirect 三臂全量重写（FSPEC-DEINDIRECT-TRIGGER-0001，Lane FSPECDEIN）
+
+以锁定 oracle 亲读 `coreaction.cc:1219-1280` 全函数体后，把部分重实现升级为
+逐句 1:1（TRIGFACE 车道测绘钉死：oracle fspec 两触发点——fspec.cc:5471/5503——
+因缺臂而生产不可达）：
+
+- **COPY 链追踪改忠实形态**（cc:1231-1232）：`walk_copy_chain` 返回**走链后的
+  varnode**（不是只返回常量终点），臂判定用 walked vn 的
+  persist/externref/constant 三性质；旧 20 跳上限与"先查常量再走链"两自创
+  结构退役。
+- **external-ref 臂**（cc:1233-1240）：`isPersist && isExternalRef` → 生产
+  `queryExternalRefFunction`（arch.symboltab 全局 scope stack_external_ref；
+  per-symbol `refaddr` 存储为 CALLSPEC-0001 seam 残差——检测可达、referral
+  解析无生产通道时行为=oracle `newfd==0` 不转换）→ `deindirect` + count+=1 +
+  continue。
+- **constant 臂**（cc:1241-1257，`else if` 语义保真）：wordsize 取函数入口空间
+  → `AddrSpace::addressToByte` 缩放 → `funcptr_align != 0` 时
+  `offset >>= align; offset <<= align` 剥编码位（x86-64 funcptr_align=0 恒等）→
+  生产 `queryFunction`（主=arch.symboltab 全局 scope `query_function_addr`
+  FunctionSymbol 层；fallback=驱动 `symbol_table`/`external_prototypes` 通道，
+  保住既有转换集）→ `deindirect`（entry/name/annotation/CALLIND→CALL/
+  indirectOverride/lateRestriction 全链）+ count+=1 + continue。
+- **typed-funcptr 臂**（cc:1258-1277，独立 `if`——前两臂条件成立但查询落空仍
+  进入）：`hasTypeRecoveryStarted()` 门（stackstall 在 ActionInferTypes 之后，
+  生产恒真）→ `op->getIn(0)->getTypeReadFacing(op)`（原始输入，非 walked vn）
+  PTR→CODE → `TypeCode::proto` 存在且 `!isInputLocked()` → `force_set` +
+  count+=1（isInputLocked 注释保留 oracle FIXME 语义）。
+- **callee proto 生产形**：`db_default_callee_proto` = 默认构造 FuncProto（无
+  model/锁/noreturn/参数）——oracle `FunctionSymbol::getFunction`
+  （database.cc:557）惰性 new 的 db 函数 `funcp` 即此形态；其 model-less 性质
+  经 `ProtoModel::isCompatible` 的 `compatModel == op2`（双 null）与任意
+  callspec model 兼容——`ActionDefaultParams`（cc:2311-2337）先行保证 callspec
+  有 model，lateRestriction 走 copy 路径，与 TRIGFACE 测到的"到达 2 次
+  lateRestriction OK 不重启"一致。
+- 循环内调用 `deindirect` 后**同一 op 的 opcode 已改 CALL**，后续迭代经
+  cc:1229 的 CALLIND 门自然跳过（与 oracle 相同的幂等闭包）。
