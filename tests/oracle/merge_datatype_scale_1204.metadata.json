@@ -79,7 +79,7 @@
   "merge_doc_sha256": "951340b30bc6e2934f3d764e9fe3472ba60eb957801c567895e98fc21059a89c",
   "runner_sha256": "2262cae17b3d44a8c37da1922b69f77f758eaf7c5a8ac7ba1d91be8c3513c50f",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",

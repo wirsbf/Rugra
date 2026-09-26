@@ -28,7 +28,7 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
@@ -101,7 +101,7 @@
   "variable_doc_sha256": "46948bf3472dc52f307444efa7f02d35f583aa09b3cf0a932869ff5bc65bf3d7",
   "funcdata_doc_sha256": "fee416136b5ba3c7786787fd4d2da4383624f333ed1d7de239098c56c9c85890",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-seqnum-identity-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
   "rust_crate_tree_sha256": "a1243618159d380002d6698599e28bf65ffe8199d6054b0baab69063a9453fcb",

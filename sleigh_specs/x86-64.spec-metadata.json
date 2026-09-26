@@ -24,19 +24,24 @@
   },
   "outputs": {
     "sla_path": "sleigh_specs/x86-64.sla",
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "sla_size": 487659,
+    "sla_sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+    "sla_size": 484937,
+    "sla_format_version": 4,
+    "sla_inflated_sha256": "2e36b32d8194a344b482dda969c1838d8d3507a3407c0021bfe1955aeead1da3",
+    "sla_inflated_size": 4124687,
+    "sla_gate": "three-part: FORMAT_VERSION + inflated element-stream sha256/size (byte-exact) + deflated size band; the zlib C vs flate2/miniz_oxide deflate backends produce different but content-equivalent compressed bytes",
     "processor_spec_path": "sleigh_specs/x86-64.pspec",
     "compiler_spec_path": "sleigh_specs/x86-64-gcc.cspec"
   },
   "generation": {
     "script": "tools/build_locked_x86_64_sla.sh",
-    "compiler_target": "sleigh_opt",
+    "compiler_target": "kuna-slacomp (vendored Rust SLEIGH compiler, crates/kuna-slacomp, upstream kuna commit 0096e984d74846e45f42c1dbe1fb95252083dda2; C++ sleigh_opt retired from this path 2026-09-26)",
+    "compiler_equivalence_evidence": "docs/alignment_docs/SLEIGH_SWEEP_146_2026-09-26.md (146/146 locked specs inflated-stream identical vs locked C++ sleigh_opt)",
     "determinism_check": "compile twice in one clean temporary extraction and require byte-identical output",
     "observed_toolchain": {
       "platform": "Ubuntu 22.04 x86_64",
-      "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "make": "GNU Make 4.3",
+      "rustc": "1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "1.96.0-nightly (cbb9bb8bd 2026-03-13)",
       "git": "2.34.1"
     }
   },

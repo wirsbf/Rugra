@@ -53,9 +53,9 @@
   },
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-   "size": 487659
+   "git_blob": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+   "size": 484937
   },
   "binary": {
    "path": "examples/curl",
@@ -100,7 +100,7 @@
   "typefactory_rs_sha256": "9c04b919088231ef2acdaf85c72c8c2d4ae542cc1565a669f11e56ff59bc1cd5",
   "typefactory_doc_sha256": "36e8414fe5bb8198dd9d4cc6f6a1acb31877bca1ba62bb58cb2439531261c2cb",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
  },
  "expected_stdout_sha256": "6158e6ab2d450f61c3a478c3ec9ec65238c0fb760fb38b97571d544d817f0675",

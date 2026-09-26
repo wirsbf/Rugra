@@ -30,7 +30,7 @@
   "source_policy": "Materialized from the pinned Rugra base commit by git archive",
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
@@ -226,7 +226,7 @@
   "rust_fixture_sha256": "51984e0cb080f4746f50f820cb8633a77b9efb4f5531cde659e2e26283cc3277",
   "datatype_rs_sha256": "7d12d27ce21af5249e010f53844832a272794aec938ba088f9687e78f3a83e12",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
   "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",

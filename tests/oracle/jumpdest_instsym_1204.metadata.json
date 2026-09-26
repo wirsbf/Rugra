@@ -13,7 +13,7 @@
  "compiler_spec": "not ingested (bare SLEIGH engine; callfixup/jumpassist pcode bodies are the payload class under test)",
  "analysis_options": "bare Sleigh + ContextInternal + zero LoadImage; snippet tempbase 0 (PcodeSnippet default)",
  "input_fingerprints": {
-  "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  "x86-64.sla": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
  },
  "comparand": {
   "rugra_head_at_capture": "032419b (WIP working tree; re-pin to the integration commit hash when committed)",

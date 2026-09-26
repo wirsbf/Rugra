@@ -34,9 +34,9 @@
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
    "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-   "size": 487659
+   "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+   "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",

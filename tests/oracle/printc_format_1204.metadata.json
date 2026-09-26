@@ -29,7 +29,7 @@
   "prettyprint_doc_sha256": "ac9371a186d80e9f20223a7c371dffc46557da9236bdf21e3544966de06a06a1",
   "runner_sha256": "fb2ea2cb8a0817ea4e4d00630f5a6f0001d6721ea85cb7088dfb739fb5696b8b",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_sha256": "0b0be6bd053eb4bd92103911a4fe4528e8e63e036e0424f09ceae444bd78179c",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-format-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",

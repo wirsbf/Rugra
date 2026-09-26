@@ -29,7 +29,7 @@
   "heritage_doc_sha256": "94b195eca7b298ca2e1f1085a133f012ca639e7d37ebe9d29d4c616087b29956",
   "runner_sha256": "c2acf9ac29ff0db49f30be53beb04f9ff152265f7b191895bd6eaebdce9c5f89",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_sha256": "fe7b537e9a2a47161c772933765bb8bf1f20b4b102cf491c5f267f34ab2329ee",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-subpiece-const-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",

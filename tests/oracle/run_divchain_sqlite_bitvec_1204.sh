@@ -46,7 +46,7 @@ one_index=55
 spec_root="$repo_root/sleigh_specs"
 spec_sha256() {
   case "$1" in
-    x86-64.sla) echo d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481 ;;
+    x86-64.sla) echo 406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a ;;
     x86-64.pspec) echo 3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f ;;
     x86-64-gcc.cspec) echo 5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e ;;
     x86.ldefs) echo b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b ;;

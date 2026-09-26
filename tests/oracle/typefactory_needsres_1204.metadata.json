@@ -36,7 +36,7 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
