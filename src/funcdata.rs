@@ -13741,7 +13741,6 @@ impl Funcdata {
 mod tests {
     use super::*;
     use crate::align::runtime_verify::{RuntimeVerifier, VerifyResult};
-    use crate::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
     use crate::ffi;
     use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
     use std::sync::Mutex;

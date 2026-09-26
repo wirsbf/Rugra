@@ -3092,3 +3092,7 @@ bootstrap lift. Three shape-assert families were re-derived from actual SLEIGH o
 `cmp` is the .sla's 10-op temp chain (`COPY tmp <- rm` leads; the iced lift computed flags
 straight off the registers in 9 ops), `mov [rbx],rax` is the engine's COPY-to-temp + STORE
 pair (2 ops vs the iced direct-register STORE), and the seq_cmp_je fixture is 27 ops.
+
+The test module's leftover `use crate::disasm::{Disassembler, X86Lifter,
+X86_64Disassembler}` import line (dead after the site migration) is removed with the
+module retirement commit — the disasm module no longer exports those types.

@@ -19,7 +19,6 @@
 //! ```
 
 use crate::{Address, Architecture, Error, Result};
-use crate::disasm::create_disassembler;
 use goblin::Object;
 
 /// Binary format type
@@ -141,67 +140,6 @@ impl Binary {
         }
 
         None
-    }
-
-    // RUGRA-GLUE: disassemble_function (no Ghidra counterpart found)
-    /// Disassemble a function at the given address
-    ///
-    /// # Arguments
-    ///
-    /// * `addr` - Function entry point address
-    /// * `arch` - Target architecture
-    ///
-    /// # Returns
-    ///
-    /// Vector of disassembled instructions
-    pub fn disassemble_function(
-        &self,
-        addr: Address,
-        arch: Architecture,
-    ) -> Result<Vec<Instruction>> {
-        // Create disassembler for the architecture
-        let mut disasm = create_disassembler(arch)?;
-
-        // Find the code section containing this address
-        // For now, we'll use a simple approach: try to disassemble from the address
-        // In a real implementation, we'd find the actual code section
-
-        // Get a reasonable amount of code (1KB for now)
-        let offset = addr.as_u64() as usize;
-        let max_size = 1024;
-
-        if offset >= self.data.len() {
-            return Err(Error::AddressNotFound(addr.as_u64()));
-        }
-
-        let end = std::cmp::min(offset + max_size, self.data.len());
-        let code = &self.data[offset..end];
-
-        // Disassemble until we hit a return or max instructions
-        let mut instructions = Vec::new();
-        let mut current_offset = 0;
-        let max_instructions = 100;
-
-        while current_offset < code.len() && instructions.len() < max_instructions {
-            match disasm.disassemble_one(&code[current_offset..], addr.offset(current_offset as i64)) {
-                Ok((inst, len)) => {
-                    let is_return = inst.is_return();
-                    instructions.push(inst);
-                    current_offset += len;
-
-                    // Stop at return
-                    if is_return {
-                        break;
-                    }
-                }
-                Err(_) => {
-                    // Stop on disassembly error
-                    break;
-                }
-            }
-        }
-
-        Ok(instructions)
     }
 
     // RUGRA-GLUE: parse_elf (no Ghidra counterpart found)
@@ -336,9 +274,6 @@ impl Binary {
         })
     }
 }
-
-// Re-export Instruction from disasm module
-pub use crate::disasm::Instruction;
 
 #[cfg(test)]
 mod tests {

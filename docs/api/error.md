@@ -12,6 +12,13 @@ We use `thiserror` for ergonomic error handling.
 
 ## 导出的公共 API (Public API)
 
+### 2026-09-26 变体清理（SLEIGH-RUSTIFY-PHASE3-0001）
+
+`Error::Capstone`（`#[cfg(feature = "capstone")]` 变体）与
+`From<capstone::Error>` 转换已删除：capstone 依赖随 iced-x86 解码器一同从
+`Cargo.toml` 退役（capstone feature flag 一并移除，default features 现为
+`["cli"]`）。该变体自引入起无生产消费方。
+
 ### `pub type Result<T> = std::result::Result<T, Error>`
 
 Result type alias for Rugra operations

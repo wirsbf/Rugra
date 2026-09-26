@@ -60,10 +60,6 @@ kuna-base = { workspace = true }
 kuna-num = { workspace = true }
 kuna-sleigh = { workspace = true }
 
-# Disassembly engines
-capstone = "0.12"
-iced-x86 = { version = "1.21", features = ["decoder", "encoder", "instr_info"] }
-
 # Data structures
 petgraph = "0.6"
 rustc-hash = "2.0"
@@ -102,9 +98,8 @@ proptest = "1.4"
 pretty_assertions = "1.4"
 
 [features]
-default = ["cli", "capstone"]
+default = ["cli"]
 cli = ["dep:clap"]
-capstone = []
 ffi-test = []
 
 [lib]
