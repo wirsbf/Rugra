@@ -396,10 +396,15 @@ pub struct IdentRec {
 
 /// Sorted keyword/operator table, faithful to `PcodeLexer::idents[]`
 /// (pcodeparse.y:229-276). Sorted lexicographically by `name` so that
-/// `find_identifier`'s binary search matches Ghidra's. The `id` fields use
-/// inlined integer literals (not `PcodeTokenKind::X.as_token_id()`) because
-/// Rust statics may not call non-const functions; the values are identical
-/// to those in `PcodeTokenKind::as_token_id`.
+/// `find_identifier`'s binary search matches Ghidra's — EXCEPT the oracle's
+/// own single inversion, which is mirrored deliberately: "||" (index 8)
+/// precedes "abs" (index 9) although 0x7C > 0x61, so the binary search
+/// misses both (canonical oracle behavior; pcodeparse.y:278-295 — see
+/// KUNAUB-IDENTS-PIN-0001 / test_find_identifier_canonical_double_miss;
+/// do NOT reorder). The `id` fields use inlined integer literals (not
+/// `PcodeTokenKind::X.as_token_id()`) because Rust statics may not call
+/// non-const functions; the values are identical to those in
+/// `PcodeTokenKind::as_token_id`.
 pub static PCODE_IDENTS: [IdentRec; IDENTREC_SIZE] = [
     IdentRec {
         name: "!=",
@@ -4591,16 +4596,35 @@ mod tests {
 
     #[test]
     fn test_find_identifier_hits() {
-        // Letter-prefixed keywords AFTER the symbol region (index >= 10)
+        // Letter-prefixed keywords AFTER the misordered pair (index >= 10)
         // are in a strictly-sorted run and must be findable via binary search.
-        // "abs" at index 9 sits right after "||" and may be missed by binary
-        // search due to the sort inversion (Ghidra's lexer never calls
-        // findIdentifier for it — abs is matched by the state machine).
+        // "abs" at index 9 is NOT findable: the oracle table places "||"
+        // (0x7C7C) before "abs" (0x61..), the only strcmp inversion
+        // (pcodeparse.y:238-239), so findIdentifier's binary search
+        // (pcodeparse.y:278-295) misses both entries — see
+        // test_find_identifier_canonical_double_miss (KUNAUB-IDENTS-PIN-0001).
         for rec in PCODE_IDENTS.iter().skip(10) {
             if rec.name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
                 assert!(find_identifier(rec.name).is_some(), "missed {}", rec.name);
             }
         }
+    }
+
+    #[test]
+    fn test_find_identifier_canonical_double_miss() {
+        // KUNAUB-IDENTS-PIN-0001: pin the oracle's sort-order violation as
+        // CANONICAL behavior. pcodeparse.y:229 declares idents[] a "Sorted
+        // list of identifiers", but entry 8 "||" (0x7C,0x7C) precedes entry
+        // 9 "abs" (0x61,0x62,0x73) — '|' (124) > 'a' (97), the only inversion.
+        // PcodeLexer::getNextToken (pcodeparse.y:579-586) routes EVERY
+        // identifier-state token through findIdentifier (pcodeparse.y:278-295,
+        // a plain binary search over the table as written), so both entries
+        // deterministically return -1: "a || b" and "abs(x)" cannot be used
+        // as keywords in a pcode snippet (they degrade to STRING tokens).
+        // Rugra mirrors the table order byte-for-byte (PCODE_IDENTS below);
+        // DO NOT "fix" the ordering — that would diverge from the oracle.
+        assert_eq!(find_identifier("||"), None, "\"||\" must miss: oracle sort inversion at idents[8]");
+        assert_eq!(find_identifier("abs"), None, "\"abs\" must miss: oracle sort inversion at idents[9]");
     }
 
     #[test]
