@@ -1,0 +1,106 @@
+{
+ "schema_version": 1,
+ "fixture_id": "TYPEUNION-RESOLVEFLOW-ARBITRATION-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default:gcc",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "usage": "Locked BfdArchitecture initialization over examples/curl; archid asserted as x86:LE:64:default:gcc by the C++ fixture"
+ },
+ "analysis_options": {
+  "apis": [
+   "TypeStruct::nearestArrayedComponentForward/Backward (type.cc:1698-1740/1669-1696)",
+   "TypePointer::testForArraySlack (type.cc:990-1005)",
+   "TypeUnion::resolveInFlow/findResolve (type.cc:2125-2135/2137-2145)",
+   "TypeUnion::resolveTruncation write side (type.cc:2147-2177)",
+   "TypeUnion::findTruncation read-only consult (type.cc:2185-2199)",
+   "TypePointer::resolveInFlow union pointee (type.cc:1177-1190)",
+   "TypeStruct::scoreSingleComponent all four arms (type.cc:1893-1927) incl. the CALL arm (1913-1925) through a REAL FuncCallSpecs",
+   "TypeArray::resolveInFlow (type.cc:1283-1296)",
+   "TypePartialUnion::resolveInFlow/findResolve container walk (type.cc:2498-2515/2517-2534)",
+   "ScoreUnionFields constructors (unionresolve.cc:990-1037/1050-1072/1083-1108)"
+  ],
+  "fixture_model": "Production BfdArchitecture TypeFactory + the GetStr Funcdata over examples/curl; ops inserted into fresh BlockBasics so op->getParent()->getFuncdata() is reachable; every fixture type built exactly once under a unique fixture_rf_* name. The call-specs cells use the PUBLIC production-shaped path only: FuncCallSpecs(op) + FuncProto::setInternal + FuncProto::setPieces with the cspec __stdcall model (assignParameterStorage provably preserves an 8-byte struct parameter/return exactly: probe_callspec param0_same=1 output_same=1) + Funcdata::newVarnodeCallSpecs wiring.",
+  "type_construction": "Base types carry the C++ SleighArchitecture DEFAULT core spellings (int4/uint4/int8/int2, sleigh_arch.cc:214-237): the C++ fixture arch has no <coretypes> element, while the Rust TypeFactory core table mirrors the Java/headless coreBuiltin; the Rust twin builds the same spellings through get_base_named (findAdd's named (name,id) lookup keeps them distinct, type.cc:3417-3425). The Rust factory decodes the curl cspec <size_alignment_map> (alignMap[0] stays -1, type.cc:4628-4640) through the production decode_data_organization entry so findAdd's size-0 incomplete probes behave identically.",
+  "debug_macros": "none",
+  "normalization": "pu4.stripped is name-independent (size + metatype token): the stripped twin is built by the factory's internal getBase(sz,TYPE_UNKNOWN) whose core name is environment-dependent (C++ default xunknown2 vs the Java coreBuiltin the Rust factory mirrors); the semantic content (the stripped 2-byte unknown twin) is identical. All other records are raw printRaw/newoff/elSize observations with no normalization."
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "source_policy": "WIP live-tree runner consumed the working-tree examples/curl; the integration runner should re-pin to the base-commit Git blob (34a3febf blob 4e26a362f92f1961bab63000215a84b4d7212dd, sha256 4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a) exactly like run_printc_symbol_decl_oracle.sh and regenerate expected_stdout_sha256 under that input"
+  },
+  "bfd": {
+   "package_version": "2.38-4ubuntu2.12",
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+  }
+ },
+ "cases": [
+  {
+   "id": "walk",
+   "records": 7,
+   "covers": "nearestArrayedComponentForward/Backward: before-first-field, middle-of-nonstruct skip (type.cc:1710-1713), middle-of-struct descent returning the subfield, 128-cutoff breaks, backward remain=size-1 tail probe (type.cc:1686)"
+  },
+  {
+   "id": "slack",
+   "records": 6,
+   "covers": "testForArraySlack: array short-circuit, struct forward/backward hits, nested hit, plain miss, cutoff miss"
+  },
+  {
+   "id": "union",
+   "records": 7,
+   "covers": "whole-member arbitration (testSimpleCases COPY arm, unionresolve.cc:130-136) vs field-win full scoring (scoreLockedType +5+3); findTruncation consult miss/hit/span"
+  },
+  {
+   "id": "ptr",
+   "records": 2,
+   "covers": "pointer-to-union arms: whole (testSimpleCases ptr arm) vs field pointer via ResolvedUnion(parent,fldNum,typegrp) (unionresolve.cc:51-54)"
+  },
+  {
+   "id": "box",
+   "records": 7,
+   "covers": "scoreSingleComponent: COPY typelock arm, LOAD/STORE ptr-typelock arm via getTypeReadFacing consult (varnode.cc:639-645), CALL locked-input arm, CALL no-specs default, CALL locked-output arm"
+  },
+  {
+   "id": "arr",
+   "records": 2,
+   "covers": "size-1 array needs_resolution COPY arms"
+  },
+  {
+   "id": "pu",
+   "records": 3,
+   "covers": "TypePartialUnion walk: implied-truncation scoring lands on int2 exactly; findResolve consult reads the cached edge; 4-byte-field union falls off to the stripped twin"
+  }
+ ],
+ "input_model_difference": "Both sides drive the REAL scoring machinery: the C++ side through the virtual methods on the production factory types, the Rust side through the free-function virtual-dispatch mirrors (unionresolve::resolve_in_flow/find_resolve, datatype::nearest_arrayed_component_*, test_for_array_slack) over a Funcdata carrying the same ops and the same fixture types. The Rust call-specs state is constructed directly (typelocked parameter + lock bits + op identity) rather than through setPieces' assignParameterStorage, which the probe proved preserves the same observable state.",
+ "cpp_fixture_sha256": "9d2b3a0dc168fe46ed24d6f79954a28e6b850c889a974b18d6513dd2a202935a",
+ "rust_fixture_sha256": "d8d3de4ae483ac7025a044b151a3a85053c2910eb17e30f5ad4484edd05d8dac",
+ "expected_stdout_sha256": "846ceb3296c6cd9868a098f752c60cba7c8e9386c067675a6a0c4c240c289ea4",
+ "expected_stdout_records": 34,
+ "status": "MATCH",
+ "status_note": "34/34 records byte-identical between the locked oracle build and the live Rugra tree. The fixture required wiring test_for_array_slack to the nearestArrayedComponent walks (the three slack.* struct-hit records are impossible for the former conservative stub) and completing scoreSingleComponent's CALL arm through Funcdata::getCallSpecs (the box.call.lock/output records are impossible for the former fall-through)."
+}

@@ -44,6 +44,33 @@ Rugra 的数据类型系统，对应 Ghidra 的 `Datatype` 类层次
 （`TypeBase`/`TypePointer`/`TypeArray`/`TypeStruct`/`TypeUnion`/`TypeEnum`/`TypeCode`/`TypeSpacebase`）。
 采用 `enum Datatype` + 携带各自 `TypeBase` 的变体表示。
 
+## 2026-09-26：WORKPKG-UNMAP-TYPEUNION-0003（wt/typeunion，union store 仲裁地基收口）
+
+- `test_for_array_slack`（type.cc:990-1005 `TypePointer::testForArraySlack`）从
+  保守 stub（非数组恒 false）接通为忠实虚分派：`TYPE_ARRAY` 短路后按
+  `off < 0` 走 `nearest_arrayed_component_forward_in_struct` /
+  `off >= 0` 走 `nearest_arrayed_component_backward_in_struct`（两 walks
+  提取出的 TypeStruct 覆写体，type.cc:1698-1740/1669-1696；基类 null walk
+  type.cc:188-205）。spacebase 覆写（type.cc:2971/3020）不经
+  `isPtrsubMatching` 的 consult 面（其 subType 查询只返回 map 符号类型），
+  与生产 `RulePtrsubUndo` 孪生同判度面。B2 证明：
+  `tests/oracle/typeunion_resolveflow_1204`（34 records 双侧逐字节 MATCH，
+  slack.* 六格中三格为 stub 形态不可达）。
+- `TypeStruct::score_single_component` 的 CALL 臂（type.cc:1913-1925）从
+  过期降级（"Rugra does not yet thread FuncCallSpecs"）补全为忠实移植：
+  `fd.get_call_specs_of_op`（funcdata.cc:484-496）→ `slot >= 1 &&
+  isInputLocked` 取 `getParam(slot-1)`（ProtoStoreInternal::getInput 越界
+  null 守卫 fspec.cc:3372-3377 的 Option 镜像）/ `slot < 0 &&
+  isOutputLocked` 取输出参数型（Rugra FuncProto 的 `return_type` 承载）→
+  与 `parent` 的 `Datatype*` 指针恒等比较 → -1。B2：同 fixture 的
+  `box.call.lock/default/output` 三格（真实 FuncCallSpecs + 锁定参数/输出，
+  经 `__stdcall` 模型 setPieces 保型实证）。
+- `nearest_arrayed_component_forward/backward` 重构为 Arc 入口 + struct 核
+  （`*_in_struct`）双形态，walk 体单份共享（行为逐字节不变，
+  `test_struct_nearest_arrayed_component_walks` 既有断言全保）。
+- 新增单测：`test_for_array_slack_dispatches_the_walks`（stub 不可达的三格
+  + miss/cutoff 反例）。
+
 ## 2026-08-11 ANN-J annotation bootstrap
 
 This pass classified eighteen previously unanchored helpers without changing
@@ -539,3 +566,40 @@ PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 
 构成误用陷阱。基类 `Datatype::find_resolve`（type.cc:586，return
 self）保留不变。PartialUnion 的流内解析一律走 unionresolve.rs 自由
 函数。
+
+### 2026-09-26 — WORKPKG-UNMAP-TYPEUNION-0003（type.cc 371/420 + 2536/2542/2440 残项）
+
+- **`pub enum TypeClass`**（type.hh:131-141）：存储类枚举，判别值与
+  Ghidra 全等（GENERAL=0/FLOAT=1/PTR=2/HIDDENRET=3/VECTOR=4，
+  CLASS1..4=100..103），是 spec 解码路径的可观察。
+- **`pub fn string2typeclass(classstring: &str) -> Result<TypeClass, String>`**
+  （type.cc:371-411）：首字符 dispatch + 全串精确匹配；`"unknown"` 映射
+  GENERAL，未识别拼写返回 `Err`（oracle 抛 LowlevelError
+  `"Unknown data-type class: ..."`）。fspec.rs 的
+  `string_to_type_class` 是分叉lookalike（未知串静默 GENERAL、无
+  "general"/"unknown" 拼写、无报错）——消费方迁移归 fspec 车道。
+- **`pub fn metatype2typeclass(meta: TypeMetatype) -> TypeClass`**
+  （type.cc:420-432）：FLOAT→Float、PTR→Ptr、默认 General。
+- **`TypePartialUnion::find_compatible_resolve(&self, ct: &Arc<Datatype>) -> i32`**
+  （type.cc:2536-2540）：由硬编码 `-1` 存根改为忠实委托——转发
+  `unionresolve::find_compatible_resolve(&self.container, ct)`（其
+  PartialUnion 臂即本委托）。参数从 `&Datatype` 改为 `&Arc<Datatype>`
+  （自由函数需要 Arc 身份做指针等价比较；原签名零调用方）。
+- **`TypePartialUnion::resolve_truncation_fd(&self, fd, off, op, slot)`**
+  （type.cc:2542-2546 新增 fd-aware 形）：委托
+  `unionresolve::union_resolve_truncation(fd, &self.container,
+  off + self.offset, op, slot)`——打分并写缓存。退化无 fd 方法形
+  `resolve_truncation(off,op,slot)` 保持返回 `None`（coreaction 的
+  SUBPIECE 传播调用点在飞域未改线，登记
+  TYPEUNION-COREACTION-WIRE-0001）。
+- **`TypePartialUnion::find_truncation(&self, off, sz, op, slot, resolutions)`**
+  （type.cc:2440-2444）：由硬编码 `None` 存根改为忠实委托
+  `container.find_truncation(off + self.offset, ...)`，签名与
+  `Datatype::find_truncation` 的 PartialUnion 分派臂对齐。
+- **`Datatype::has_warning`**（type.hh:232）：由硬编码 `false` 存根改为
+  `(flags & WARNING_ISSUED) != 0`；`type_flags::WARNING_ISSUED = 1<<18`
+  （0x20000）补齐。
+- **`Datatype::set_type_name/set_type_id/set_type_flag`**：RUGRA-GLUE
+  变体无关字段写 seam（Ghidra 从 TypeFactory 方法直接赋公开成员）。
+- `Datatype::find_resolve` 文档修正：删除"override 已加在各 variant 上"
+  的不实声明，明确 override 在 unionresolve.rs 自由函数。

@@ -220,6 +220,7 @@ pub mod type_flags {
     pub const TYPE_INCOMPLETE: u32 = 1 << 10;  // type_incomplete
     pub const NEEDS_RESOLUTION: u32 = 1 << 11; // needs_resolution
     pub const POINTER_TO_ARRAY: u32 = 1 << 16; // pointer_to_array
+    pub const WARNING_ISSUED: u32 = 1 << 18;   // warning_issued (0x20000)
     // Bits 0x7000..0x8000 are `force_format` in Ghidra (3 display-format bits).
     // Bit 0x8000 is `truncate_bigendian`, 0x10000 is `pointer_to_array`,
     // 0x20000 is `warning_issued`. Ghidra has NO equate flag on Datatype —
@@ -463,7 +464,11 @@ fn base_submeta(base: &TypeBase) -> SubMetatype {
 
 // Ghidra: type.cc:1035 TypePointer::calcSubmeta
 /// Recover the pointer-specific sub-metatype calculated by Ghidra.
-fn pointer_submeta(pointer: &TypePointer) -> SubMetatype {
+// Ghidra: type.cc:1035 TypePointer::calcSubmeta
+/// The stored-submeta projection of `TypePointer::calcSubmeta`
+/// (type.cc:1035-1050). Public for `TypeFactory::recalcPointerSubmeta`'s
+/// probe (type.cc:3728 reads `top.submeta` off a scratch TypePointer).
+pub fn pointer_submeta(pointer: &TypePointer) -> SubMetatype {
     if let Some(submeta) = pointer.base.submeta_override {
         return submeta;
     }
@@ -1272,18 +1277,14 @@ impl Datatype {
     /// (`slot == -1`), then return it; otherwise return the original
     /// data-type.
     ///
-    /// Faithful to `Datatype::findResolve` (type.cc:586-590): the base class
-    /// simply returns `self`. Subclass overrides (TypePointer, TypeArray,
-    /// TypeStruct, TypeUnion) walk down to a resolved component; those are
-    /// added on their respective variants. Here `op`/`slot` are taken as
-    /// opaque `&PcodeOp`-style references — Rugra threads them as
-    /// `Option<&op::PcodeOp>` so callers that do not have a concrete op can
-    /// pass `None` and still get the base "return self" behaviour.
+    /// Faithful to the BASE `Datatype::findResolve` (type.cc:586-590),
+    /// which simply returns `this`. Ghidra's subclass overrides (TypePointer,
+    /// TypeArray, TypeStruct, TypeUnion, TypePartialUnion) consult the
+    /// Funcdata union-resolution cache via
+    /// `op->getParent()->getFuncdata()`; Rugra's PcodeOp has no Funcdata
+    /// back-pointer, so those overrides live as the fd-aware free function
+    /// `unionresolve::find_resolve` — use that for any op-bearing call.
     pub fn find_resolve(&self, _op: Option<&crate::op::PcodeOp>, _slot: i32) -> &Datatype {
-        // TypePartialUnion override (type.cc:2517) would walk the container
-        // looking for a previously-resolved union field. Rugra does not yet
-        // cache union resolutions on the Funcdata, so we fall back to the
-        // base "return self" behaviour for partial unions as well.
         self
     }
 
@@ -1677,11 +1678,11 @@ impl Datatype {
         (self.get_flags() & type_flags::TYPE_INCOMPLETE) != 0
     }
 
-    // Ghidra: type.hh:165 Datatype::hasWarning (inline)
-    /// Rugra-private: no `warning_issued` flag is tracked yet; mirror Ghidra's
-    /// default-false behaviour so callers compile.
+    // Ghidra: type.hh:165 Datatype::hasWarning (inline, type.hh:232)
+    /// Has a warning been issued about this data-type?
+    /// `(flags & warning_issued) != 0`.
     pub fn has_warning(&self) -> bool {
-        false
+        (self.get_flags() & type_flags::WARNING_ISSUED) != 0
     }
 
     // Ghidra: type.hh:165 Datatype::markEquate
@@ -1720,6 +1721,60 @@ impl Datatype {
     fn clear_flags_mut(&mut self, bits: u32) {
         let f = self.base_mut();
         *f &= !bits;
+    }
+
+    // RUGRA-GLUE: field-write helpers for the factory's in-place mutation
+    // paths (Ghidra assigns `name`/`displayName`/`id`/`flags` members
+    // directly from TypeFactory methods such as setName (type.cc:3451-3454)
+    // and insertWarning (type.cc:3755); Rust needs variant-agnostic
+    // accessors on the enum).
+    /// Set `name` AND `displayName` together, as `TypeFactory::setName`
+    /// does (type.cc:3451-3452).
+    pub fn set_type_name(&mut self, n: &str) {
+        let (name, display): (&mut String, &mut String) = match self {
+            Datatype::Void(b) => (&mut b.name, &mut b.display_name),
+            Datatype::Base(b) => (&mut b.name, &mut b.display_name),
+            Datatype::Pointer(p) => (&mut p.base.name, &mut p.base.display_name),
+            Datatype::Array(a) => (&mut a.base.name, &mut a.base.display_name),
+            Datatype::Struct(s) => (&mut s.base.name, &mut s.base.display_name),
+            Datatype::Enum(e) => (&mut e.base.name, &mut e.base.display_name),
+            Datatype::Union(u) => (&mut u.base.name, &mut u.base.display_name),
+            Datatype::Code(c) => (&mut c.base.name, &mut c.base.display_name),
+            Datatype::Spacebase(s) => (&mut s.base.name, &mut s.base.display_name),
+            Datatype::PartialStruct(ps) => (&mut ps.base.name, &mut ps.base.display_name),
+            Datatype::PartialEnum(pe) => (&mut pe.base.name, &mut pe.base.display_name),
+            Datatype::PartialUnion(pu) => (&mut pu.base.name, &mut pu.base.display_name),
+        };
+        *name = n.to_string();
+        *display = n.to_string();
+    }
+
+    // RUGRA-GLUE: id member write (Ghidra assigns `id` directly from
+    // TypeFactory::setName, type.cc:3453-3454).
+    /// Set the data-type id (type.hh:190 `id` member write).
+    pub fn set_type_id(&mut self, id: u64) {
+        match self {
+            Datatype::Void(b) => b.id = id,
+            Datatype::Base(b) => b.id = id,
+            Datatype::Pointer(p) => p.base.id = id,
+            Datatype::Array(a) => a.base.id = id,
+            Datatype::Struct(s) => s.base.id = id,
+            Datatype::Enum(e) => e.base.id = id,
+            Datatype::Union(u) => u.base.id = id,
+            Datatype::Code(c) => c.base.id = id,
+            Datatype::Spacebase(s) => s.base.id = id,
+            Datatype::PartialStruct(ps) => ps.base.id = id,
+            Datatype::PartialEnum(pe) => pe.base.id = id,
+            Datatype::PartialUnion(pu) => pu.base.id = id,
+        }
+    }
+
+    // RUGRA-GLUE: flags member OR-write (Ghidra assigns `flags` directly
+    // from TypeFactory::insertWarning, type.cc:3755).
+    /// OR the given flags into the variant's `TypeBase.flags` (public seam
+    /// over `set_flags_mut` for the factory's flag writes).
+    pub fn set_type_flag(&mut self, bits: u32) {
+        self.set_flags_mut(bits);
     }
 
     // Ghidra: type.hh:165 Datatype::baseMut
@@ -1953,6 +2008,100 @@ pub fn string2metatype(metastring: &str) -> TypeMetatype {
         'c' if metastring == "code" => TypeMetatype::Code,
         'v' if metastring == "void" => TypeMetatype::Void,
         _ => TypeMetatype::Unknown,
+    }
+}
+
+// Ghidra: type.hh:131 type_class
+/// The storage class of a parameter resource (`enum type_class`,
+/// type.hh:131-141). Values mirror Ghidra's exactly (including the
+/// architecture-specific class gap 100..103) so the discriminants are an
+/// observable of the spec-decoding path (`string2typeclass` below).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeClass {
+    /// General purpose (TYPECLASS_GENERAL = 0).
+    General = 0,
+    /// Floating-point data-types (TYPECLASS_FLOAT = 1).
+    Float = 1,
+    /// Pointer data-types (TYPECLASS_PTR = 2).
+    Ptr = 2,
+    /// Class for hidden return values (TYPECLASS_HIDDENRET = 3).
+    HiddenRet = 3,
+    /// Vector data-types (TYPECLASS_VECTOR = 4).
+    Vector = 4,
+    /// Architecture specific class 1 (TYPECLASS_CLASS1 = 100).
+    Class1 = 100,
+    /// Architecture specific class 2 (TYPECLASS_CLASS2 = 101).
+    Class2 = 101,
+    /// Architecture specific class 3 (TYPECLASS_CLASS3 = 102).
+    Class3 = 102,
+    /// Architecture specific class 4 (TYPECLASS_CLASS4 = 103).
+    Class4 = 103,
+}
+
+// Ghidra: type.cc:371 string2typeclass
+/// Given a description of a data-type \e class, return the [`TypeClass`].
+/// Faithful to `string2typeclass` (type.cc:371-411):
+///
+/// ```text
+/// switch(classstring[0]) {
+///   case 'c': "class1".."class4" -> TYPECLASS_CLASS1..4
+///   case 'g': "general"          -> TYPECLASS_GENERAL
+///   case 'h': "hiddenret"        -> TYPECLASS_HIDDENRET
+///   case 'f': "float"            -> TYPECLASS_FLOAT
+///   case 'p': "ptr"|"pointer"    -> TYPECLASS_PTR
+///   case 'v': "vector"           -> TYPECLASS_VECTOR
+///   case 'u': "unknown"          -> TYPECLASS_GENERAL
+/// }
+/// throw LowlevelError("Unknown data-type class: " + classstring)
+/// ```
+///
+/// Alignment Evidence (four decisive-semantics checklist):
+/// - References/output params: none — pure function returning the enum by
+///   value; `classstring` is borrowed read-only.
+/// - Loop bounds/iteration order: no loops; a single first-character
+///   dispatch (`classstring[0]`, the C null terminator for an empty string
+///   matches no case) followed by exact full-string comparisons in the
+///   oracle's declaration order (class1..4, general, hiddenret, float,
+///   ptr/pointer, vector, unknown).
+/// - Counter/accumulator: none.
+/// - Sort/comparison key: none; equality on the whole string per arm.
+/// Unrecognized descriptions return `Err` (Ghidra throws `LowlevelError`).
+pub fn string2typeclass(classstring: &str) -> Result<TypeClass, String> {
+    let first = classstring.chars().next().unwrap_or('\0');
+    match first {
+        'c' => match classstring {
+            "class1" => Ok(TypeClass::Class1),
+            "class2" => Ok(TypeClass::Class2),
+            "class3" => Ok(TypeClass::Class3),
+            "class4" => Ok(TypeClass::Class4),
+            _ => Err(format!("Unknown data-type class: {classstring}")),
+        },
+        'g' if classstring == "general" => Ok(TypeClass::General),
+        'h' if classstring == "hiddenret" => Ok(TypeClass::HiddenRet),
+        'f' if classstring == "float" => Ok(TypeClass::Float),
+        'p' => match classstring {
+            "ptr" | "pointer" => Ok(TypeClass::Ptr),
+            _ => Err(format!("Unknown data-type class: {classstring}")),
+        },
+        'v' if classstring == "vector" => Ok(TypeClass::Vector),
+        // case 'u': "unknown" maps to the general-purpose class.
+        'u' if classstring == "unknown" => Ok(TypeClass::General),
+        _ => Err(format!("Unknown data-type class: {classstring}")),
+    }
+}
+
+// Ghidra: type.cc:420 metatype2typeclass
+/// Assign the basic storage class based on a metatype:
+/// `TYPE_FLOAT` -> `TYPECLASS_FLOAT`, `TYPE_PTR` -> `TYPECLASS_PTR`,
+/// everything else the general purpose `TYPECLASS_GENERAL`. Faithful to
+/// `metatype2typeclass` (type.cc:420-432). Alignment Evidence: no
+/// references/output params, no loops, no counters, no sort keys — a pure
+/// three-arm metatype dispatch returning the enum by value.
+pub fn metatype2typeclass(meta: TypeMetatype) -> TypeClass {
+    match meta {
+        TypeMetatype::Float => TypeClass::Float,
+        TypeMetatype::Pointer => TypeClass::Ptr,
+        _ => TypeClass::General,
     }
 }
 
@@ -2290,27 +2439,45 @@ pub fn pointer_is_ptrsub_matching(
 // Ghidra: type.cc:990 TypePointer::testForArraySlack (static)
 /// Test if an out-of-bounds offset makes sense as array slack: i.e. whether
 /// the data-type is itself an array or has an arrayed component at `off`.
-/// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005).
+/// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005):
+/// the `TYPE_ARRAY` short-circuit, then the virtual
+/// `nearestArrayedComponentForward` (off < 0) / `nearestArrayedComponentBackward`
+/// (off >= 0) dispatch, reporting whether any component was found.
 ///
-/// Rugra note: `nearestArrayedComponentForward/Backward` are not yet ported
-/// on `Datatype` (they live inlined in `ruleaction.rs`); the forward/backward
-/// branches therefore currently reduce to the `TYPE_ARRAY` short-circuit,
-/// matching Ghidra's behaviour when no arrayed component is found. The full
-/// nearest-component walk will be wired in when the
-/// `nearest_arrayed_component_*` methods are lifted to `Datatype`.
+/// Virtual-dispatch note: only `TypeStruct` overrides the walks
+/// (type.cc:1669/1698); the base overrides (type.cc:188-205) return null, so
+/// every non-struct without array metatype reports no slack. The
+/// `TYPE_SPACEBASE` overrides (type.cc:2971/3020) live on the in-map twins
+/// (`TypeSpacebase::nearest_arrayed_component_*_in_map`) — a spacebase
+/// cannot reach this consult through `isPtrsubMatching` (its `subType`
+/// lookups return map-symbol types, never a spacebase), matching the
+/// production `RulePtrsubUndo` twin's dispatch surface.
 pub fn test_for_array_slack(dt: &Datatype, off: i64) -> bool {
+    // type.cc:995-996 — a bare array always has slack.
     if dt.get_metatype() == TypeMetatype::Array {
         return true;
     }
-    // Ghidra: compType = (off < 0)
-    //           ? dt->nearestArrayedComponentForward(off,&newoff,&elSize)
-    //           : dt->nearestArrayedComponentBackward(off,&newoff,&elSize);
-    //         return (compType != null);
-    // Rugra: nearest-arrayed-component methods are not yet on Datatype; until
-    // they land, no non-array type reports slack. This is the conservative
-    // (false-negative) fallback.
-    let _ = off;
-    false
+    // type.cc:998-1004:
+    //   compType = (off < 0)
+    //             ? dt->nearestArrayedComponentForward(off,&newoff,&elSize)
+    //             : dt->nearestArrayedComponentBackward(off,&newoff,&elSize);
+    //   return (compType != (Datatype *)0);
+    let found = if off < 0 {
+        match dt {
+            Datatype::Struct(s) => {
+                nearest_arrayed_component_forward_in_struct(s, off).dtype.is_some()
+            }
+            _ => false,
+        }
+    } else {
+        match dt {
+            Datatype::Struct(s) => {
+                nearest_arrayed_component_backward_in_struct(s, off).dtype.is_some()
+            }
+            _ => false,
+        }
+    };
+    found
 }
 
 /// Result of `Datatype::decode_basic`. Mirrors the field updates Ghidra's
@@ -3065,11 +3232,40 @@ impl TypeStruct {
                 }
             }
         } else if op.is_call() {
-            // Ghidra consults FuncCallSpecs for a type-locked param/output
-            // equal to `parent`. Rugra does not yet thread FuncCallSpecs
-            // through PcodeOp, so we fall through to the "resolve to
-            // component" default. This matches Ghidra's behaviour when no
-            // call specs are available (fc == null).
+            // cc:1913-1925: consult the call-specs for a type-locked
+            // parameter/output equal to `parent`. FuncCallSpecs lookup is
+            // Funcdata::getCallSpecs(op) (funcdata.cc:484-496).
+            if let Some(fc_arc) = fd.get_call_specs_of_op(op_ref) {
+                let fc = fc_arc.read().unwrap();
+                // cc:1918-1921:
+                //   if (slot >= 1 && fc->isInputLocked())
+                //     param = fc->getParam(slot-1);
+                //   else if (slot < 0 && fc->isOutputLocked())
+                //     param = fc->getOutput();
+                // ProtoStoreInternal::getInput returns null out of bounds
+                // (fspec.cc:3372-3377); Rust's Option mirrors that guard.
+                // The output ProtoParameter's getType() is Rugra's FuncProto
+                // `return_type` (the output param's data-type carrier).
+                let param_type: Option<&Arc<Datatype>> =
+                    if slot >= 1 && fc.prototype.is_input_locked() {
+                        fc.prototype
+                            .get_param((slot - 1) as usize)
+                            .map(|p| &p.data_type)
+                    } else if slot < 0 && fc.prototype.is_output_locked() {
+                        Some(&fc.prototype.return_type)
+                    } else {
+                        None
+                    };
+                if let Some(pt) = param_type {
+                    // cc:1922: param->getType() == parent — pointer equality
+                    // between two `Datatype*`.
+                    let param_ptr = Arc::as_ptr(pt) as *const Datatype;
+                    if std::ptr::eq(param_ptr, parent) {
+                        // Function signature refers to parent directly.
+                        return -1;
+                    }
+                }
+            }
         }
         // In all other cases resolve to the component.
         0
@@ -4207,56 +4403,65 @@ fn arrayed_element_size(dt: &Datatype) -> i64 {
 /// `TypeSpacebase::nearest_arrayed_component_forward_in_map`.
 pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
     if let Datatype::Struct(s) = dt.as_ref() {
-        // type.cc:1701-1714.
-        let mut i = nearest_lower_bound(s, off);
-        let mut remain: i64;
-        if i < 0 {
-            // No component starting before off: start at first after.
+        return nearest_arrayed_component_forward_in_struct(s, off);
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:1698 TypeStruct::nearestArrayedComponentForward
+/// The `TypeStruct` override body (type.cc:1698-1740), shared by the
+/// `&Arc<Datatype>` virtual-dispatch entry above and the borrowed
+/// `test_for_array_slack` consult.
+fn nearest_arrayed_component_forward_in_struct(s: &TypeStruct, off: i64) -> ArrayedComponent {
+    // type.cc:1701-1714.
+    let mut i = nearest_lower_bound(s, off);
+    let mut remain: i64;
+    if i < 0 {
+        // No component starting before off: start at first after.
+        i += 1;
+        remain = 0;
+    } else {
+        let subfield = &s.fields[i as usize];
+        remain = off - subfield.offset as i64;
+        if remain != 0
+            && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
+                || remain >= subfield.type_ptr.get_size() as i64)
+        {
+            // Middle of a non-structure we must go forward from: skip it.
             i += 1;
             remain = 0;
-        } else {
-            let subfield = &s.fields[i as usize];
-            remain = off - subfield.offset as i64;
-            if remain != 0
-                && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
-                    || remain >= subfield.type_ptr.get_size() as i64)
-            {
-                // Middle of a non-structure we must go forward from: skip it.
-                i += 1;
-                remain = 0;
-            }
         }
-        // type.cc:1715-1738.
-        while (i as usize) < s.fields.len() {
-            let subfield = &s.fields[i as usize];
-            let diff = subfield.offset as i64 - off; // may be negative (first field)
-            if diff > 128 {
+    }
+    // type.cc:1715-1738.
+    while (i as usize) < s.fields.len() {
+        let subfield = &s.fields[i as usize];
+        let diff = subfield.offset as i64 - off; // may be negative (first field)
+        if diff > 128 {
+            break;
+        }
+        let subtype = &subfield.type_ptr;
+        if subtype.get_metatype() == TypeMetatype::Array {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: -diff,
+                elsize: arrayed_element_size(subtype),
+            };
+        }
+        let res = nearest_arrayed_component_forward(subtype, remain);
+        if res.dtype.is_some() {
+            // type.cc:1729 — subdiff = diff + remain - suboff.
+            let subdiff = diff + remain - res.newoff;
+            if subdiff > 128 {
                 break;
             }
-            let subtype = &subfield.type_ptr;
-            if subtype.get_metatype() == TypeMetatype::Array {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: -diff,
-                    elsize: arrayed_element_size(subtype),
-                };
-            }
-            let res = nearest_arrayed_component_forward(subtype, remain);
-            if res.dtype.is_some() {
-                // type.cc:1729 — subdiff = diff + remain - suboff.
-                let subdiff = diff + remain - res.newoff;
-                if subdiff > 128 {
-                    break;
-                }
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: -diff,
-                    elsize: res.elsize,
-                };
-            }
-            i += 1;
-            remain = 0;
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: -diff,
+                elsize: res.elsize,
+            };
         }
+        i += 1;
+        remain = 0;
     }
     ArrayedComponent::miss()
 }
@@ -4268,40 +4473,49 @@ pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> Arraye
 /// spacebase/precision notes.
 pub fn nearest_arrayed_component_backward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
     if let Datatype::Struct(s) = dt.as_ref() {
-        // type.cc:1672-1694.
-        let first_index = nearest_lower_bound(s, off);
-        let mut i = first_index;
-        while i >= 0 {
-            let idx = i as usize;
-            let subfield = &s.fields[idx];
-            let diff = off - subfield.offset as i64;
-            if diff > 128 {
-                break;
-            }
-            let subtype = &subfield.type_ptr;
-            if subtype.get_metatype() == TypeMetatype::Array {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: diff,
-                    elsize: arrayed_element_size(subtype),
-                };
-            }
-            // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
-            let remain = if idx == first_index as usize {
-                diff
-            } else {
-                subtype.get_size() as i64 - 1
-            };
-            let res = nearest_arrayed_component_backward(subtype, remain);
-            if res.dtype.is_some() {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: diff,
-                    elsize: res.elsize,
-                };
-            }
-            i -= 1;
+        return nearest_arrayed_component_backward_in_struct(s, off);
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:1669 TypeStruct::nearestArrayedComponentBackward
+/// The `TypeStruct` override body (type.cc:1669-1696), shared by the
+/// `&Arc<Datatype>` virtual-dispatch entry above and the borrowed
+/// `test_for_array_slack` consult.
+fn nearest_arrayed_component_backward_in_struct(s: &TypeStruct, off: i64) -> ArrayedComponent {
+    // type.cc:1672-1694.
+    let first_index = nearest_lower_bound(s, off);
+    let mut i = first_index;
+    while i >= 0 {
+        let idx = i as usize;
+        let subfield = &s.fields[idx];
+        let diff = off - subfield.offset as i64;
+        if diff > 128 {
+            break;
         }
+        let subtype = &subfield.type_ptr;
+        if subtype.get_metatype() == TypeMetatype::Array {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: diff,
+                elsize: arrayed_element_size(subtype),
+            };
+        }
+        // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
+        let remain = if idx == first_index as usize {
+            diff
+        } else {
+            subtype.get_size() as i64 - 1
+        };
+        let res = nearest_arrayed_component_backward(subtype, remain);
+        if res.dtype.is_some() {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: diff,
+                elsize: res.elsize,
+            };
+        }
+        i -= 1;
     }
     ArrayedComponent::miss()
 }
@@ -5194,18 +5408,50 @@ impl TypePartialUnion {
     // `union_resolve_truncation`) — a misuse trap. Use those free functions.
 
     // Ghidra: type.cc:2536 TypePartialUnion::findCompatibleResolve
-    /// Delegate to the container union's `findCompatibleResolve`. Faithful to
-    /// `TypePartialUnion::findCompatibleResolve` (type.cc:2536-2540). Returns
-    /// -1 (no compatible form) until Rugra wires the union-resolution cache.
-    pub fn find_compatible_resolve(&self, _ct: &Datatype) -> i32 {
-        -1
+    /// If this data-type has an alternate form matching `ct`, return the
+    /// field index of that form, else -1. Faithful to
+    /// `TypePartialUnion::findCompatibleResolve` (type.cc:2536-2540): pure
+    /// delegation to the container union's `findCompatibleResolve` with the
+    /// SAME `ct`. Rugra's virtual dispatch is the fd-free free function
+    /// `unionresolve::find_compatible_resolve` (whose PartialUnion arm is
+    /// this very delegation), so this method form forwards there.
+    pub fn find_compatible_resolve(&self, ct: &Arc<Datatype>) -> i32 {
+        crate::unionresolve::find_compatible_resolve(&self.container, ct)
     }
 
     // Ghidra: type.cc:2542 TypePartialUnion::resolveTruncation
-    /// Resolve which union field is being used for a truncation. Delegates to
-    /// the container union's `resolveTruncation` at `off + offset`. Faithful
-    /// to `TypePartialUnion::resolveTruncation` (type.cc:2542-2546). Without
-    /// the Funcdata union-field cache, returns `None` (no field resolved).
+    /// fd-aware twin of `TypePartialUnion::resolveTruncation`
+    /// (type.cc:2542-2546): resolve which union field is being used for a
+    /// truncation by delegating to the container union's
+    /// `resolveTruncation` at `off + offset` — scoring and caching the
+    /// `(union,op,slot)` edge on a miss. The oracle reaches the Funcdata
+    /// through `op->getParent()->getFuncdata()`; Rugra's PcodeOp has no
+    /// Funcdata back-pointer, so the fd is threaded explicitly (same
+    /// discipline as `unionresolve::union_resolve_truncation`, the
+    /// TypeUnion member this delegates to).
+    pub fn resolve_truncation_fd(
+        &self,
+        fd: &mut crate::funcdata::Funcdata,
+        off: i64,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+    ) -> Option<(TypeField, i64)> {
+        crate::unionresolve::union_resolve_truncation(
+            fd,
+            &self.container,
+            off + self.offset,
+            op,
+            slot,
+        )
+    }
+
+    // Ghidra: type.cc:2542 TypePartialUnion::resolveTruncation
+    /// Degenerate no-fd form of [`Self::resolve_truncation_fd`]. The
+    /// scoring/cache write requires the Funcdata; without it this returns
+    /// `None` (no field resolved). Production callers that hold the fd must
+    /// use [`Self::resolve_truncation_fd`]; the remaining no-fd call site
+    /// (coreaction SUBPIECE propagation) is registered as
+    /// TYPEUNION-COREACTION-WIRE-0001 pending the coreaction write lease.
     pub fn resolve_truncation(
         &self,
         _off: i64,
@@ -5216,18 +5462,23 @@ impl TypePartialUnion {
     }
 
     // Ghidra: type.cc:2440 TypePartialUnion::findTruncation
-    /// Find the field for a truncation without re-scoring. Delegates to the
-    /// container union's `findTruncation` at `off + offset`. Faithful to
-    /// `TypePartialUnion::findTruncation` (type.cc:2440-2444). Without the
-    /// Funcdata union-field cache, returns `None`.
+    /// Find the field for a truncation without re-scoring. Faithful to
+    /// `TypePartialUnion::findTruncation` (type.cc:2440-2444): delegation to
+    /// the container union's `findTruncation` at `off + offset`, passing the
+    /// SAME `sz`/`op`/`slot`/`resolutions` channel — the container is
+    /// therefore the cache-key parent, exactly as in Ghidra's delegation.
+    /// This is the method form of the `Datatype::find_truncation`
+    /// PartialUnion arm.
     pub fn find_truncation(
         &self,
-        _off: i64,
-        _sz: i32,
-        _op: Option<&crate::op::PcodeOp>,
-        _slot: i32,
+        off: i64,
+        sz: usize,
+        op: Option<&crate::op::PcodeOp>,
+        slot: i32,
+        resolutions: Option<&UnionResolveMap>,
     ) -> Option<(TypeField, i64)> {
-        None
+        self.container
+            .find_truncation(off + self.offset, sz, op, slot, resolutions)
     }
 
     // Ghidra: type.cc:2488 TypePartialUnion::encode
@@ -6678,6 +6929,76 @@ mod tests {
         assert!(nearest_arrayed_component_backward(&scalar8, 0).dtype.is_none());
     }
 
+    #[test]
+    fn test_for_array_slack_dispatches_the_walks() {
+        // type.cc:990-1005: TYPE_ARRAY short-circuit, then the
+        // nearestArrayedComponentForward (off < 0) / Backward (off >= 0)
+        // virtual dispatch. The struct-hit answers are impossible for the
+        // former conservative stub (which returned false for every
+        // non-array).
+        let arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 1,
+        }));
+        let int4 = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let arr2 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a2".into(), 8, TypeMetatype::Array),
+            array_of: int4.clone(),
+            num_elements: 2,
+        }));
+        let slack = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 16, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "pad".into(), offset: 0, type_ptr: int4.clone() },
+                TypeField { name: "arr".into(), offset: 4, type_ptr: arr2 },
+                TypeField { name: "tail".into(), offset: 12, type_ptr: int4 },
+            ],
+        }));
+        let plain = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("P".into(), 16, TypeMetatype::Struct),
+            fields: vec![
+                TypeField {
+                    name: "p".into(),
+                    offset: 0,
+                    type_ptr: Arc::new(Datatype::Base(TypeBase::new(
+                        "l1".into(),
+                        8,
+                        TypeMetatype::Int,
+                    ))),
+                },
+                TypeField {
+                    name: "q".into(),
+                    offset: 8,
+                    type_ptr: Arc::new(Datatype::Base(TypeBase::new(
+                        "l2".into(),
+                        8,
+                        TypeMetatype::Int,
+                    ))),
+                },
+            ],
+        }));
+        // Array short-circuit regardless of offset (type.cc:995-996).
+        assert!(test_for_array_slack(arr.as_ref(), 0));
+        assert!(test_for_array_slack(arr.as_ref(), 17));
+        // Struct with an arrayed component: forward (off < 0) and
+        // backward (off >= 0) consults both find it.
+        assert!(test_for_array_slack(slack.as_ref(), -2));
+        assert!(test_for_array_slack(slack.as_ref(), 6));
+        // Struct without arrays: both directions miss.
+        assert!(!test_for_array_slack(plain.as_ref(), 6));
+        // 128-cutoff: the first candidate field is too far.
+        assert!(!test_for_array_slack(plain.as_ref(), 200));
+    }
+
     // ---- is_primitive_whole (type.cc:501-513, CR-PJOINS M1) ----
 
     #[test]
@@ -6798,5 +7119,130 @@ mod tests {
             num_elements: 1,
         });
         assert!(!array_of_union.is_primitive_whole());
+    }
+
+    // --- WORKPKG-UNMAP-TYPEUNION-0003: type.cc string2typeclass /
+    // metatype2typeclass (type.cc:371/420) ---
+
+    #[test]
+    fn test_string2typeclass_matrix() {
+        // type.cc:374-410: first-character dispatch, exact whole-string
+        // matches, LowlevelError on anything else.
+        assert_eq!(string2typeclass("class1"), Ok(TypeClass::Class1));
+        assert_eq!(string2typeclass("class2"), Ok(TypeClass::Class2));
+        assert_eq!(string2typeclass("class3"), Ok(TypeClass::Class3));
+        assert_eq!(string2typeclass("class4"), Ok(TypeClass::Class4));
+        assert_eq!(string2typeclass("general"), Ok(TypeClass::General));
+        assert_eq!(string2typeclass("hiddenret"), Ok(TypeClass::HiddenRet));
+        assert_eq!(string2typeclass("float"), Ok(TypeClass::Float));
+        assert_eq!(string2typeclass("ptr"), Ok(TypeClass::Ptr));
+        assert_eq!(string2typeclass("pointer"), Ok(TypeClass::Ptr));
+        assert_eq!(string2typeclass("vector"), Ok(TypeClass::Vector));
+        // 'u' "unknown" maps to the GENERAL class (type.cc:405-408).
+        assert_eq!(string2typeclass("unknown"), Ok(TypeClass::General));
+        // Discriminants mirror type.hh:131-141 (observable via the enum
+        // value in spec decoding).
+        assert_eq!(TypeClass::General as i32, 0);
+        assert_eq!(TypeClass::Float as i32, 1);
+        assert_eq!(TypeClass::Ptr as i32, 2);
+        assert_eq!(TypeClass::HiddenRet as i32, 3);
+        assert_eq!(TypeClass::Vector as i32, 4);
+        assert_eq!(TypeClass::Class1 as i32, 100);
+        assert_eq!(TypeClass::Class4 as i32, 103);
+        // Unknown spellings throw LowlevelError("Unknown data-type class: ").
+        assert_eq!(
+            string2typeclass("classes"),
+            Err("Unknown data-type class: classes".to_string())
+        );
+        assert_eq!(
+            string2typeclass("garbage"),
+            Err("Unknown data-type class: garbage".to_string())
+        );
+        assert_eq!(
+            string2typeclass("unknow"),
+            Err("Unknown data-type class: unknow".to_string())
+        );
+        assert_eq!(
+            string2typeclass("ptrs"),
+            Err("Unknown data-type class: ptrs".to_string())
+        );
+        // An empty string dispatches on '\0' — no case, error.
+        assert_eq!(
+            string2typeclass(""),
+            Err("Unknown data-type class: ".to_string())
+        );
+    }
+
+    #[test]
+    fn test_metatype2typeclass() {
+        // type.cc:423-431: TYPE_FLOAT -> FLOAT, TYPE_PTR -> PTR, default
+        // GENERAL.
+        assert_eq!(metatype2typeclass(TypeMetatype::Float), TypeClass::Float);
+        assert_eq!(metatype2typeclass(TypeMetatype::Pointer), TypeClass::Ptr);
+        assert_eq!(metatype2typeclass(TypeMetatype::Int), TypeClass::General);
+        assert_eq!(metatype2typeclass(TypeMetatype::Uint), TypeClass::General);
+        assert_eq!(metatype2typeclass(TypeMetatype::Struct), TypeClass::General);
+        assert_eq!(metatype2typeclass(TypeMetatype::Union), TypeClass::General);
+        assert_eq!(metatype2typeclass(TypeMetatype::Bool), TypeClass::General);
+        assert_eq!(metatype2typeclass(TypeMetatype::Void), TypeClass::General);
+    }
+
+    // --- WORKPKG-UNMAP-TYPEUNION-0003: TypePartialUnion::findTruncation /
+    // findCompatibleResolve delegation (type.cc:2440/2536) ---
+
+    #[test]
+    fn test_partial_union_find_compatible_resolve_delegates_to_container() {
+        // type.cc:2536-2540: container->findCompatibleResolve(ct). Build a
+        // union whose field 0 is an int4 (non-resolution); a non-resolution
+        // `ct` matching that exact Arc at offset 0 resolves to field 0.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let union = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("uu".into(), 4, TypeMetatype::Union),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+                TypeField { name: "b".into(), offset: 0, type_ptr: char_t.clone() },
+            ],
+        }));
+        let pu = TypePartialUnion {
+            base: TypeBase::new("uu+4".into(), 4, TypeMetatype::PartialUnion),
+            container: union,
+            offset: 0,
+            stripped: None,
+        };
+        assert_eq!(pu.find_compatible_resolve(&int_t), 0);
+        assert_eq!(pu.find_compatible_resolve(&char_t), 1);
+        let long_t = Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int)));
+        assert_eq!(pu.find_compatible_resolve(&long_t), -1);
+    }
+
+    #[test]
+    fn test_partial_union_find_truncation_delegates_at_container_offset() {
+        // type.cc:2440-2444: container->findTruncation(off + offset, ...).
+        // The STRUCT container consult path cannot apply (container is a
+        // union here); the observable is the +offset shift into the union's
+        // cache consult, so reuse the union consult machinery: build a
+        // union cache entry for field 0 and confirm the partial-union form
+        // resolves through it at off + offset. Without op/resolutions the
+        // consult misses (None) — same as the container.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let union = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("uu".into(), 8, TypeMetatype::Union),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+            ],
+        }));
+        let pu = TypePartialUnion {
+            base: TypeBase::new("uu+0".into(), 8, TypeMetatype::PartialUnion),
+            container: union,
+            offset: 0,
+            stripped: None,
+        };
+        // Cache miss without a resolutions snapshot: None, via delegation.
+        assert!(pu.find_truncation(0, 4, None, 0, None).is_none());
+        // Direct dispatch equivalence: Datatype::find_truncation on the
+        // PartialUnion arm must give the identical answer.
+        let pu_dt = Datatype::PartialUnion(pu);
+        assert!(pu_dt.find_truncation(0, 4, None, 0, None).is_none());
     }
 }

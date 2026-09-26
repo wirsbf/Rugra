@@ -15,7 +15,22 @@ data-org flavor 下 `get_base(1, Code)` 返回**未命名** base——`printName
 `test_data_org_code_core_named_and_unified` 固定：`get_base(1,Code)` 名为
 `code`、与 `get_type_code()`/`find_by_name("code")` Arc 同一。canon 双语料
 字节恒等亲证（E2E 门禁，Lane TYPINGPX 终报）。
+## 2026-09-26：decode 告警尾接线（WORKPKG-UNMAP-TYPEUNION-0003，wt/typeunion）
 
+- `decode_struct` 的 overlap 告警从丢弃改为逐字构建并接入
+  `insert_warning`（type.cc:1849-1860 告警文本两形态 +
+  4357-4358 `if (!warning.empty()) insertWarning(ct, warning)`）：
+  首个 overlap 命名字段，后续 collapse 为 multiple-overlapping 形态；
+  匿名（id-0）类型使 `insert_warning` 抛逐字
+  `Can only issue warnings for named data-types`（type.cc:3753-3754）；
+  返回 Arc 为 flag 写入后的注册体（define_replace 重包语义）。
+- `decode_enum` 的重复名告警同样接通（type.cc:4326-4327）。
+  union decode 路径无告警通道（type.cc:4382 丢弃返回值）——镜像保持。
+- B2 证明：`tests/oracle/typefactory_recalcptr_1204`（42 records，40 逐字节
+  MATCH；2 条 identity 记录为已登记 `TYPEFACTORY-ARC-IDENTITY-0001`
+  MISMATCH——runner 棘轮精确钉住该已登记 delta）；新增单测
+  `test_decode_struct_overlap_warning_rides_insert_warning`（命名告警
+  注册+逐字文本、匿名逐字抛错、无 overlap 不注册）。
 ## 2026-09-24：DataOrg core-type 表改为 Java headless `<coretypes>` 精确投影（Lane GH）
 
 `init_data_org_core_types` 的整数命名不再用 `int{N}`/`uint{N}` 约定式拼写，改为
@@ -1212,3 +1227,48 @@ extra 恒 0）就此消灭；构造签名与去重键不变。
   分类见 `docs/alignment_docs/TYPEFACTORY_PERARCH_2026-09-26.md`。已知限制：
   线程局部=最后发布者胜；同线程交错双 Architecture 处理（无现存驱动形态）不在
   覆盖面；跨线程 drop 不清原线程 TLS（Arc 保活，退化到旧工厂，不 panic）。
+
+### 2026-09-26 — WORKPKG-UNMAP-TYPEUNION-0003（type.cc 3724/3445/3750/3761/4055/4122/3479/3500 残项）
+
+- **`pub struct DatatypeWarning`**（type.hh:752-762）：警告记录
+  `{ type_name, type_id, warning }`——Ghidra 存 `Datatype*`，Rugra 记
+  `removeWarning` 比较所用的 (id,name) 身份对（type.cc:3766）。新字段
+  `warnings: Vec<DatatypeWarning>`（type.hh:760）随两个构造器初始化。
+- **`pub fn insert_warning(&mut self, dt, warn) -> Result<Arc<Datatype>, String>`**
+  （type.cc:3750-3757）：id==0 → Err（oracle 抛 LowlevelError）；经
+  registered-slot replace 置 `warning_issued`（type.hh:185 = 0x20000）后
+  追加记录。
+- **`pub fn remove_warning(&mut self, dt: &Datatype)`**（type.cc:3761-3773）：
+  保序遍历，(id,name) 双等即删。
+- **`pub fn set_name(&mut self, ct, n) -> Result<Arc<Datatype>, String>`**
+  （type.cc:3445-3459）：经 define_replace 完成 nametree/tree 双通道
+  erase-reinsert、`name`/`displayName` 同置、id==0 时 `hashName(n)`。
+  与 oracle 的分歧：撞名/撞树键时 oracle std::set::insert 静默失败（类型
+  不入索引），Rugra 以 `Err` 显式拒绝（注册表误用面）。
+- **`pub fn recalc_pointer_submeta(&mut self, base, sub)`**
+  （type.cc:3724-3745）：忠实移植——`TypePointer top(1,base,0)` 探针的
+  calcSubmeta 即当前正确 submeta；相等早退；否则从
+  `lower_bound((sub, base, 0,0,0, no-space, Reverse(1), 0))` 起沿树序走，
+  首个非 TYPE_PTR 或 `ptrto != base`（Arc 身份）即 break；old-key submeta
+  分量 == sub 的条目 remove + 以当前投影重插（Ghidra 原位改
+  `ptr->submeta = curSub`，Rugra submeta 为派生量，重键即迁移）。探针
+  形状继承 oracle 的 wordsize-0/无空间/size-1 错过面。define_replace 的
+  Arc 重包接缝限制：pointee 为完成前旧 Arc 的指针不可达
+  （TYPEFACTORY-ARC-IDENTITY-0001）。
+- **`pub fn get_type_pointer_with_space(&mut self, ptr_to, space, nm)`**
+  （type.cc:4055-4065）：`TypePointer::new_with_space`（wordsize=
+  space.word_size()、spaceid、calcSubmeta）+ name/displayName/id=hashName +
+  findAdd(enforce) + calcTruncate 尾（TYPE-0001 残差形态：守卫 +
+  resizePointer 注册副作用，同 decode 路径 kludge）。注意无
+  `getStripped` 前置（异于 getTypePointer）。
+- **`pub fn destroy_type(&mut self, ct) -> Result<(), String>`**
+  （type.cc:4122-4132）：coretype → Err；hasWarning 先排空；nametree/tree
+  双通道按 Arc 身份或 (name,id)/树键等价删除。
+- **`set_fields_flags` / `set_union_fields_flags`**（type.cc:3479/3500 全
+  签名形）：补齐 flags 掩码尾——struct 掩码
+  `opaque_string|variable_length|type_incomplete`（type.cc:3487-3488），
+  union 掩码无 `opaque_string`（type.cc:3508-3509）；旧
+  `set_fields_sized`/`set_union_fields_sized` 委托 flags=0 投影。
+  struct 完成路径（`set_fields`/`set_fields_sized`/`set_fields_flags`）
+  现补齐 `recalcPointerSubmeta(ot,SUB_PTR)` + `(ot,SUB_PTR_STRUCT)` 迁移
+  尾（type.cc:3490-3491，union 版无此调用）。
