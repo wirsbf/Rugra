@@ -157,6 +157,10 @@ POPCOUNT/LZCOUNT。`get(opc)` 查表，`len()` 返回已注册条目数。
   popcount/lzcount 全部类别）
 - evaluate_no_exc：unary/binary/未知 opcode
 
+另有集成测试 `tests/opbehavior_sdiv_panic.rs`（KUNAUB-SDIV-0001 崩溃形态锁，
+2 个 `#[should_panic]`：SDIV/SREM 在 `(INT64_MIN,-1)`、sizein=8 输入上
+恒 panic，镜像 oracle SIGFPE——见下方 2026-09-26 裁决节）。
+
 ## 对齐说明（关键修复）
 
 本次移植将原有 35% 覆盖率的胶水代码提升至全量对齐，关键变更：
@@ -188,3 +192,68 @@ POPCOUNT/LZCOUNT。`get(opc)` 查表，`len()` 返回已注册条目数。
 - 本模块 79 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — KUNAUB-SDIV-0001 崩溃形态裁决（INT64_MIN / -1 常量折叠）
+
+**裁决：(a) 维持 panic**（root 2026-09-26；零生产代码改动）。1:1 对齐原则下
+oracle 在 `INT_SDIV`/`INT_SREM` 常量折叠遇到 `(in1,in2)=(INT64_MIN,-1)`、
+`sizein=8` 时为 SIGFPE 硬死，Rust panic 在正常运行下同样终止进程——形态最贴近。
+选 (b) LowlevelError→opMarkNoCollapse 软失败=主动分歧（oracle 死 Rugra 活），
+不采。
+
+**oracle 侧（锁定 e40ed130，亲读核对）**：
+`OpBehaviorIntSdiv::evaluateBinary`（opbehavior.cc:507-517）与
+`OpBehaviorIntSrem::evaluateBinary`（:529-539）只守卫 `in2 == 0`
+（抛 `EvaluationError`），随后直接执行原生 `intb` 除法/取余
+（:514 `num/denom` / :536 `val % mod`）——`INT64_MIN / -1` 是同步硬件陷阱，
+进程被 SIGFPE 杀死。主管线可达路径：ruleaction.cc:3854
+`RuleCollapseConstants::applyOp` → op.cc:466 `PcodeOp::collapse` →
+`opcode->evaluateBinary`；ruleaction.cc:3867 的 `catch(LowlevelError&)` 只能
+接住除零 `EvaluationError`，接不住硬件 fault。
+
+**Rugra 侧（四处除法位点现状核对，2026-09-26）**——全部只守卫 `in2 == 0`、
+随后执行原生 `i64` 除法/取余，无溢出守卫：
+- safe 自由函数版：`src/opbehavior.rs` `CPUI_INT_SDIV` 臂（:188-196，
+  `zero_extend(num / denom, size_out)`）与 `CPUI_INT_SREM` 臂（:205-213，
+  `zero_extend(val % modulus, size_out)`）；`mask_bits(64)→u64::MAX`、
+  `sign_extend_to_i64(x,8)=x as i64` 已核对，sizein=8 时即计算字面量
+  `i64::MIN / -1`。
+- OOP trait 版：`OpBehaviorIntSdiv::evaluate_binary`（:1350-1358，
+  `num / denom`）与 `OpBehaviorIntSrem::evaluate_binary`（:1398-1408，
+  `val % modulus`）。
+- Rust 语义：`i64::MIN / -1`（及 `% -1`）**在所有 profile 下恒 panic**
+  （"attempt to divide with overflow" / "attempt to calculate the
+  remainder with overflow"）——这不是 overflow-checks 配置项，是无条件行为。主管线汇聚点
+  （ruleaction.rs → op.rs → typeop.rs）与 `unify.rs` 调用点同池。
+
+**双侧复现实证（2026-09-26，/dev/shm/rugra-tests/kunasdiv/）**：
+- 构造：`sdiv_srem.c`（`f_sdiv`/`f_srem`，-O0，`cqto`+`idivq` 保留）。SLEIGH
+  `IDIV rm64` 本义即 16 字节形（ia.sinc:3576-3580：`tmp:16=(zext(RDX)<<64)|zext(RAX);
+  quotient = tmp s/ sext(rm64)`）。
+- oracle：`sdiv_crash_1204`（锁定树 git-archive 全管线驱动）对两函数均
+  **SIGFPE 杀进程（rc 136，core dumped），stdout 0 字节——golden 不可产出**，
+  末行日志停在进入 action pipeline。oracle 侧折叠链：RuleSubCommute 的
+  SDIV/SREM 臂（ruleaction.cc:4574-4601）先把 `SUB168(SDIV16(SEXT816(a),
+  SEXT816(b)),0)` commute 成 8 字节 `SDIV8(a,b)`，再由 RuleCollapseConstants
+  折叠进 `evaluateBinary(sizein=8)` → `i64::MIN / -1` → SIGFPE。
+- Rugra：**E2E panic 当前被上游折叠缺口屏蔽**——Rugra 的
+  `RuleSubCommute::apply_op` 对 INT_SDIV/INT_SREM 臂标注 deferred
+  （ruleaction.rs 注释 "INT_SDIV / INT_SREM deferred (need sign_extend
+  helper)"），16 字节成语不重写、折叠不发生，`gen_decompile` 全管线跑完
+  输出未折叠表达式（trap 形与常形皆然）。非 trap 双侧实证（g_div
+  `100/-7`）：oracle 折成常量 `0xfffffffffffffff2`，Rugra 打印
+  `SUB168(SEXT816(100) / SEXT816(-7),0)`。该缺口与本模块四个除法位点无关，
+  已开票 **RULEACTION-SUBCOMMUTE-SDIV-SEXT16-0001**（见 TODO_BOARD）。
+- 单测锁形：`tests/opbehavior_sdiv_panic.rs`（2 个 `#[should_panic]` 集成
+  测试，直触 `opbehavior::evaluate_binary(CPUI_INT_SDIV/SREM,8,8,
+  0x8000000000000000,0xFFFFFFFFFFFFFFFF)`——四个除法位点本身的崩溃形态由
+  直触锁定，绕开上游缺口）。
+
+**服务化边界注记（部署边界，非对齐缺陷）**：service 式 `catch_unwind` 包装下
+Rugra panic 可捕获继续而 oracle SIGFPE 不可捕获=可观测分歧。oracle 无服务化
+形态，故不构成对齐缺陷；服务化部署如需硬死对齐，应在 wrapper 层显式
+`std::process::abort`/拒绝恢复，而非改本模块。
+
+**B2 状态**：本条为崩溃形态裁决登记，oracle 侧无输出可比对（进程死），
+四个除法位点保持 `UNTESTED→崩溃形态锁定`（`#[should_panic]` 为 Rust 侧回归
+锁，不升 MATCH）。
