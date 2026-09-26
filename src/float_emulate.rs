@@ -74,6 +74,13 @@ pub struct FloatFormat {
     pub max_exponent: i32,
     /// Whether the integer bit (jbit) is implied
     pub jbit_implied: bool,
+    /// Minimum decimal digits of precision guaranteed by the format
+    /// (float.hh:51 `decimalMinPrecision`, set by `calcPrecision`
+    /// float.cc:219-223).
+    pub decimal_min_precision: i32,
+    /// Maximum decimal digits of precision needed to uniquely represent
+    /// value (float.hh:52 `decimalMaxPrecision`).
+    pub decimal_max_precision: i32,
 }
 
 impl FloatFormat {
@@ -81,7 +88,7 @@ impl FloatFormat {
     /// Construct default IEEE 754 standard settings for the given byte size.
     /// Supports size=4 (single) and size=8 (double).
     pub fn new(size: usize) -> Self {
-        match size {
+        let mut fmt = match size {
             4 => Self {
                 size: 4,
                 signbit_pos: 31,
@@ -92,6 +99,8 @@ impl FloatFormat {
                 bias: 127,
                 max_exponent: 255, // (1<<exp_size)-1 — float.cc:59
                 jbit_implied: true,
+                decimal_min_precision: 0,
+                decimal_max_precision: 0,
             },
             8 => Self {
                 size: 8,
@@ -103,9 +112,27 @@ impl FloatFormat {
                 bias: 1023,
                 max_exponent: 2047, // (1<<exp_size)-1 — float.cc:59
                 jbit_implied: true,
+                decimal_min_precision: 0,
+                decimal_max_precision: 0,
             },
             _ => panic!("Unsupported float size: {}", size),
-        }
+        };
+        // float.cc:66: the constructor tail calls calcPrecision().
+        fmt.calc_precision();
+        fmt
+    }
+
+    // Ghidra: float.cc:217 FloatFormat::calcPrecision
+    /// Set the decimal precision bounds. Faithful to `calcPrecision`
+    /// (float.cc:218-223): `decimalMinPrecision = floor(frac_size *
+    /// 0.30103)` (log10(2) truncated), and `decimalMaxPrecision =
+    /// ceil((frac_size + 1) * 0.30103) + 1` — the precision needed to
+    /// guarantee an IEEE 754 binary -> decimal -> binary round trip.
+    fn calc_precision(&mut self) {
+        // float.cc:220
+        self.decimal_min_precision = (self.frac_size as f64 * 0.30103).floor() as i32;
+        // float.cc:222
+        self.decimal_max_precision = ((self.frac_size as f64 + 1.0) * 0.30103).ceil() as i32 + 1;
     }
 
     // Ghidra: float.hh:66 FloatFormat::getSize
@@ -427,6 +454,84 @@ impl FloatFormat {
         (x >> self.signbit_pos) & 1 != 0
     }
 
+    // Ghidra: float.cc:427 FloatFormat::printDecimal
+    /// Print the given value as a decimal string with the minimum number
+    /// of digits that uniquely specify the underlying binary value.
+    /// Faithful to `printDecimal` (float.cc:427-459): iterate `prec` from
+    /// `decimalMinPrecision` upward, formatting the host double and
+    /// re-parsing it (through `f32` when the TARGET format is <= 4 bytes,
+    /// `f64` otherwise — float.cc:451-457) until the round trip is exact,
+    /// returning at `decimalMaxPrecision` regardless.
+    ///
+    /// Formatting semantics: the C++ `ostringstream` with
+    /// `unsetf(ios::floatfield)` + `precision(prec)` is exactly printf
+    /// `%.*g` (libstdc++ `num_put::do_put(double)`), and
+    /// `setf(ios::scientific)` + `precision(prec-1)` is `%.*e` — the
+    /// scientific count excludes the first digit (float.cc:435-436).
+    /// Rust's `{:.*}`/`{:.*e}` formatters are correctly-rounded like
+    /// printf, so the two forms are reproduced directly, with the %g
+    /// exponent test and trailing-zero strip implemented here (printf
+    /// strips trailing zeros in the significand unless the `#` flag is
+    /// given).
+    ///
+    /// Four decisive semantics (printc.cc:1380's consumer contract):
+    /// - References: none — pure string/value returns.
+    /// - Loop bounds: `prec` from `decimalMinPrecision` (inclusive) with
+    ///   no upper test in the loop head; the ONLY exit at
+    ///   `prec == decimalMaxPrecision` returns the CURRENT string
+    ///   (float.cc:442-443), the round-trip exit returns the same
+    ///   iteration's string.
+    /// - Counters: `prec` increments by 1 per iteration AFTER the
+    ///   round-trip check fails.
+    /// - Comparison keys: the round-trip equality `roundtrip == host`
+    ///   (f32-widened for size<=4), never a string comparison.
+    pub fn print_decimal(&self, host: f64, forcesci: bool) -> String {
+        // float.cc:431: for(int4 prec=decimalMinPrecision;;++prec)
+        let mut prec = self.decimal_min_precision;
+        loop {
+            // float.cc:432-440: the two ostringstream configurations.
+            let s = if forcesci {
+                // s.setf(ios::scientific); s.precision(prec-1) — C's %.*e
+                // spells the exponent `e±<2+ digits>`; Rust's LowerExp
+                // prints `e<exp>` — normalize the tail (printf_g does the
+                // same for the %g path).
+                let raw = format!("{:.*e}", (prec as usize).saturating_sub(1), host);
+                let epos = raw.rfind(['e', 'E']).expect("LowerExp always emits 'e'");
+                let exp: i32 = raw[epos + 1..]
+                    .parse()
+                    .expect("LowerExp exponent is a plain integer");
+                let tail = if exp < 0 {
+                    format!("e-{:02}", -exp)
+                } else {
+                    format!("e+{:02}", exp)
+                };
+                format!("{}{tail}", &raw[..epos])
+            } else {
+                // s.unsetf(ios::floatfield); s.precision(prec) == %.*g
+                printf_g(prec as usize, host)
+            };
+            // float.cc:442-443: the max-precision exit returns the
+            // current string (res is not consulted).
+            if prec == self.decimal_max_precision {
+                return s;
+            }
+            // float.cc:445-457: round-trip parse — f32 for target
+            // formats of at most 4 bytes, f64 otherwise. A failed parse
+            // (should be impossible for our formatter's output) compares
+            // unequal and continues.
+            let roundtrip = if self.size <= 4 {
+                s.parse::<f32>().map(|v| v as f64).unwrap_or(f64::NAN)
+            } else {
+                s.parse::<f64>().unwrap_or(f64::NAN)
+            };
+            // float.cc:458-459: if (roundtrip == host) break; return res;
+            if roundtrip == host {
+                return s;
+            }
+            prec += 1;
+        }
+    }
+
     // Ghidra: float.cc:132 FloatFormat::extractExponentCode
     /// Extract the exponent from the encoding.
     pub fn extract_exponent_code(&self, x: u64) -> u32 {
@@ -703,6 +808,74 @@ impl FloatFormat {
         let ival = ((a << sa) as i64) >> sa;
         self.get_encoding(ival as f64)
     }
+}
+
+// RUGRA-GLUE: printf_g — the `%.*g` formatting the C++ ostringstream
+// performs for `s << double` under the default floatfield
+// (libstdc++ num_put::do_put(double) defers to snprintf "%.*g"). Rust's
+// std::fmt has no %g mode, so the printf algorithm is reproduced:
+//   1. Format the value in `%e` style with `p-1` digits after the point
+//      (p = precision, with printf's "precision 0 is taken as 1" rule)
+//      to obtain the decimal exponent.
+//   2. If exponent < -4 or exponent >= p, keep the `%e` style; otherwise
+//      re-format in `%f` style with `p-1-exponent` decimals.
+//   3. Strip trailing zeros of the significand (and a bare trailing '.'),
+//      in both styles — the %g default (no '#' flag).
+// Special values pass through printf's spelling ("inf"/"nan"), which the
+// caller (FloatFormat::print_decimal) never sees — push_float intercepts
+// infinity/nan first (printc.cc:1391-1402).
+fn printf_g(prec: usize, host: f64) -> String {
+    let p = if prec == 0 { 1 } else { prec };
+    if !host.is_finite() {
+        // printf spells these; unreachable from print_decimal's callers.
+        return if host.is_nan() {
+            (if host.is_sign_negative() { "-nan" } else { "nan" }).to_string()
+        } else if host.is_sign_negative() {
+            "-inf".to_string()
+        } else {
+            "inf".to_string()
+        };
+    }
+    // Step 1: %.*e with p-1 digits after the point, to read the exponent.
+    // Rust's LowerExp prints `e<exp>` (no sign, no padding); C's %e spells
+    // `e±<2+ digits>` — normalize the exponent tail to the C form so the
+    // round-trip parse and the emitted bytes both match the oracle.
+    let e_str = format!("{:.*e}", p - 1, host);
+    let epos = e_str.rfind(['e', 'E']).expect("LowerExp always emits 'e'");
+    let exp: i32 = e_str[epos + 1..]
+        .parse()
+        .expect("LowerExp exponent is a plain integer");
+    let c_exp_tail = if exp < 0 {
+        format!("e-{:02}", -exp)
+    } else {
+        format!("e+{:02}", exp)
+    };
+    // Step 2: style selection.
+    if exp < -4 || exp >= p as i32 {
+        // %e style: strip trailing zeros in the mantissa only, keeping the
+        // (normalized) exponent tail.
+        let mantissa = strip_g_zeros(&e_str[..epos], epos);
+        format!("{mantissa}{c_exp_tail}")
+    } else {
+        // %f style with p-1-exp decimals.
+        let decimals = (p as i32 - 1 - exp).max(0) as usize;
+        let f_str = format!("{:.*}", decimals, host);
+        strip_g_zeros(&f_str, f_str.len())
+    }
+}
+
+// RUGRA-GLUE: strip_g_zeros — the %g trailing-zero removal: cut '0's
+// directly before `keep` (the mantissa end), then a bare trailing '.'.
+fn strip_g_zeros(s: &str, keep: usize) -> String {
+    let mut end = keep;
+    let bytes = s.as_bytes();
+    while end > 0 && bytes[end - 1] == b'0' {
+        end -= 1;
+    }
+    if end > 0 && bytes[end - 1] == b'.' {
+        end -= 1;
+    }
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 #[cfg(test)]

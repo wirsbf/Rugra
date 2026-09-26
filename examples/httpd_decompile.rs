@@ -4612,6 +4612,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "[PREPASS] HTTPD-CODEREF-SYMBOLIZE-0001 print DB: {} function symbols",
             code_entries.len()
         );
+        // MIRATTR-F-STRFOLD-0001 (mirror-state completion): the readonly
+        // property ranges the oracle's BfdArchitecture installs at
+        // Architecture init — LoadImageBfd::getReadonly
+        // (loadimage_bfd.cc:286-303) lists every BFD section with
+        // SEC_READONLY (ELF: SHF_ALLOC && !SHF_WRITE, size>0) and
+        // Architecture::fillinReadOnlyFromLoader (architecture.cc:1371-
+        // 1381) ORs Varnode::readonly over each range into the symboltab
+        // flagbase. PrintC::pushPtrCharConstant's isReadOnly gate
+        // (printc.cc:1709, via Scope::isReadOnly database.cc:1796 ->
+        // queryProperties -> flagbase) reads exactly this channel, so
+        // without the ranges the mirror can never fold a string literal
+        // (probe-verified: the char*-typed rodata constants 0x7a4a9/
+        // 0x7a4bb reach the gate and reject not-readonly). The direct-
+        // runner oracle harness (BfdArchitecture) HAS these ranges —
+        // this is bare-library truth, not analyzer state. Print-DB only:
+        // the mirror action pipeline runs channel-absent (the swap below
+        // happens after perform_action), so the HERITAGE-FLAGBASE-
+        // SPACELESS poisoning class (spaceless flagbase consults during
+        // heritage) cannot fire on this install.
+        {
+            let ro_base = if mirror { 0 } else { img_base };
+            if let Object::Elf(elf) = &obj {
+                const SHF_ALLOC: u64 = 0x2;
+                const SHF_WRITE: u64 = 0x1;
+                let mut ro_ranges = 0usize;
+                for header in elf.section_headers.iter() {
+                    if header.sh_size == 0
+                        || (header.sh_flags & SHF_ALLOC) == 0
+                        || (header.sh_flags & SHF_WRITE) != 0
+                    {
+                        continue;
+                    }
+                    let first = Address::new(header.sh_addr + ro_base);
+                    let last = Address::new(header.sh_addr + ro_base + header.sh_size - 1);
+                    if let Some(range) = rugra::address::Range::new(first, last) {
+                        symbol_db.set_property_range(
+                            rugra::varnode::varnode_flags::READONLY,
+                            range,
+                        );
+                        ro_ranges += 1;
+                    }
+                }
+                eprintln!(
+                    "[PREPASS] MIRATTR-F-STRFOLD-0001 print DB: {} readonly section ranges installed",
+                    ro_ranges
+                );
+            }
+        }
         std::sync::Arc::new(std::sync::RwLock::new(symbol_db))
     };
 

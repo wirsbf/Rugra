@@ -1020,6 +1020,27 @@ impl Varnode {
         (self.addlflags & addl_flags::SPACEBASE_PLACEHOLDER) != 0
     }
 
+    // Ghidra: varnode.hh:268 Varnode::hasImpliedField
+    /// Does \b this have an implied field. Faithful to the inline
+    /// `hasImpliedField` (varnode.hh:268):
+    /// `((addlflags & Varnode::has_implied_field) != 0)`. The flag is set
+    /// by `ActionSetCasts::resolveHeir` (coreaction.cc:2519
+    /// `vn->setImpliedField()` — the coreaction-side producer is a
+    /// registered handover on the in-flight coreaction lease) and consumed
+    /// by `PrintLanguage::recurse` -> `PrintC::pushImpliedField`
+    /// (printlanguage.cc:527, printc.cc:2085).
+    pub fn has_implied_field(&self) -> bool {
+        (self.addlflags & addl_flags::HAS_IMPLIED_FIELD) != 0
+    }
+
+    // Ghidra: varnode.hh:335 Varnode::setImpliedField
+    /// Mark \b this as having an implied field. Faithful to the inline
+    /// `setImpliedField` (varnode.hh:335):
+    /// `addlflags |= Varnode::has_implied_field`.
+    pub fn set_implied_field(&mut self) {
+        self.addlflags |= addl_flags::HAS_IMPLIED_FIELD;
+    }
+
     // Ghidra: varnode.hh:319 Varnode::setSpacebasePlaceholder
     /// Mark \b this as a special Varnode for tracking stackpointer values.
     /// Faithful to `Varnode::setSpacebasePlaceholder` (varnode.hh:319):
