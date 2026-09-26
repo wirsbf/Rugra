@@ -1,0 +1,89 @@
+{
+ "schema_version": 2,
+ "fixture_id": "TYPINGPX-PXNAME-0001",
+ "todo_ids": [
+  "TYPINGPX-MIRROR-FRESH-DB-0001"
+ ],
+ "status_note": "Bilateral Funcdata::mapGlobals discovery-arm naming with POINTER-typed highs: the px/pax/pi/pc/ppx first-character family of ScopeInternal::buildVariableName's persist arm (database.cc:2455-2466) driven by the RECURSIVE TypePointer::printNameBase (type.hh:424, 'p' + pointee) over base name[0] (type.hh:273). Lane TYPINGPX root-cause pin: the httpd mirror px/x residual (156-state, ap_fini 51) is NOT a naming-rule or type-propagation defect — per-function-fresh A/B drill shows both sides naming 1:1 — it is the mirror driver's shared constructor Database (CSPECGLOBAL architecture.cc:597 parity) letting the first function to touch a global address name it process-wide; fixed per-function-fresh on the mirror face (TYPINGPX-MIRROR-FRESH-DB-0001).",
+ "decisive_semantics": {
+  "reference_output_parameters": "ct is a Datatype* read from the max varnode's high type (funcdata_varnode.cc:1692-1693) and passed BY POINTER to buildVariableName (database.cc:2434) then addSymbol (cc:1709-1710); no out params; addSymbol mutates the discovered (global) scope's SymbolEntry set.",
+  "loop_bounds_traversal_order": "the discovery arm is entered once per persist group whose base address has no queryProperties entry (cc:1701); the fixture gives each case a single-address group so one buildVariableName call per case; index is reset to 0 before each call (cc:1706).",
+  "counter_accumulator_lifecycle": "no counters on this path (the persist arm of buildVariableName prints type base + space name + offset in one pass); mapGlobals' inconsistentuse stays false — no group extends past a seeded entry here.",
+  "sorting_comparison_keys": "none on the naming path; makeNameUnique (database.cc:2553) is a no-op — each case name is fresh in the fixture scope; the printNameBase recursion order is p-then-pointee (type.hh:424) and a-then-element (type.hh:457)."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture (FixtureTranslate/FixtureArchitecture, cf. funcdata_mapglobals_maxvn_1204): const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; no SLEIGH/BFD loader.",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output (maxvn form); core types registered as xunknown1/2/4/8 (the sleigh_arch.cc:229 cacheCoreTypes spelling, so printNameBase contributes the golden's 'x' character) + int8 + code.",
+ "analysis_options": {
+  "entrypoint": "direct Funcdata factory surface (newOp/newVarnodeOut/newConstant/opSetInput/opInsertEnd + setHighLevel) with one 8-byte written persist|addrtied varnode per case carrying a forced v_type (pointer/array/pointer-of-pointer constructions through the fixture factory), a Database-backed global scope (ownership range 0..u64::MAX added after varnode creation), and a CommentDatabaseInternal",
+  "flag_channel": "persist|addrtied are pinned directly on the varnodes (production derives them from the newVarnodeOut localmap queryProperties channel, a registered Rugra gap) — identical flag state both sides",
+  "high_channel": "setHighLevel assigns the HighVariable; getType() derives from the single member's forced v_type (HighVariable::updateType, variable.cc:400-417); stripType leaves the plain pointer form"
+ },
+ "expected_results": {
+  "record_count": 6,
+  "records": [
+   "case=a_px|name=pxRam0000000000007000|size=8|mt=ptr|tsize=8",
+   "case=b_pax|name=paxRam0000000000007100|size=8|mt=ptr|tsize=8",
+   "case=c_pi|name=piRam0000000000007200|size=8|mt=ptr|tsize=8",
+   "case=d_pc|name=pcRam0000000000007300|size=8|mt=ptr|tsize=8",
+   "case=e_ppx|name=ppxRam0000000000007400|size=8|mt=ptr|tsize=8",
+   "case=f_x|name=xRam0000000000007500|size=8|mt=unknown|tsize=8"
+  ]
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "coverage": {
+  "ptr_to_unknown_px": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case a: xunknown8* high -> pxRam…7000 (httpd witness: ap_fini 0xa0820/0xa0828, ap_update_vhost_given_ip 0xa0830)"
+  },
+  "ptr_to_array_pax": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case b: xunknown1[16]* high -> paxRam…7100 (httpd witness: ap_set_name_virtual_host 0xa0820 = xunknown1 [16] * — TypePointer('p') recursion into TypeArray('a') recursion into base('x'), type.hh:424/457/273)"
+  },
+  "ptr_to_int_pi": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case c: int8* high -> piRam…7200 (httpd witness: ap_fini 0xa0830)"
+  },
+  "ptr_to_code_pc": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case d: code* high -> pcRam…7300 (httpd witness: ap_field_noparam 0x9cb38/0x9ce48, ap_pregsub 0x9cb38, ap_pregfree 0x9c880)"
+  },
+  "ptr_to_ptr_ppx": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case e: xunknown1** high -> ppxRam…7400 — the raw printNameBase recursion does NOT flatten pointer-to-pointer (type.hh:424 recurses as-is, unlike TypeOp::propagateToPointer which caps at depth 1); httpd witness family pppppxVar (golden 0x2d910-era indirection chains)"
+  },
+  "plain_unknown_control": {
+   "status": "MATCH",
+   "residual_todo_ids": [],
+   "note": "case f: xunknown8 high (non-pointer control) -> xRam…7500 — the same ct channel with no pointer contribution (httpd witness: main 0xa0800/0xa1190/…)"
+  }
+ },
+ "comparand": {
+  "cpp_fixture": "tests/oracle/typingpx_pxname_1204.cc",
+  "rust_fixture": "tests/oracle/typingpx_pxname_1204.rs",
+  "runner": "tools/run_typingpx_pxname_oracle.sh",
+  "rust_side_src": "src/funcdata.rs map_globals + src/varmap.rs build_variable_name/_internal (database.cc:2434 persist arm) — no behavior change this lane; the fixture locks the already-correct naming against regression"
+ },
+ "evidence": {
+  "runner_exits": [
+   0,
+   0
+  ],
+  "runs": 2,
+  "ghidra_stdout_sha256": "3263ec9b02d5a96c45b6ab2dc1953d18b7f2c716e733e5d9a95ff830111da0fc",
+  "discrimination_probe": "lane drill pair (oracle typingpx_drill_1204 fresh-per-function vs Rugra map_globals probe): 17/17 mapGlobals name+type records 1:1 on the six CR-diff functions (ap_fini px/px/pi, ap_set_name pax, ap_update px, ap_init x, main x/i), except main@0xa11b8 (Rugra int8/iRam vs oracle xunknown8/xRam — registered as TYPINGPX-A11B8-INT8-0001, ActionInferTypes edge family); shared-scope oracle drill confirms the shared-Database behavior itself is oracle-faithful for a one-arch-sequential run (ap_fini sym=xRam@0xa0820 in PIRAM2 drill_httpd.out:2879)"
+ },
+ "registry": "PENDING-ROOT-REGISTER (fixture_registry.json root-serial entry, cf. cspecglobal precedent)",
+ "input_sha256": "PENDING-ROOT-REGISTER"
+}
