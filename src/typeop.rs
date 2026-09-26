@@ -88,10 +88,9 @@ fn base_local_type(
     type_factory.read().unwrap().get_base(size, metatype)
 }
 
-// Ghidra: typeop.cc:295 TypeOp::getInputCast (base fallback)
-fn default_input_cast(_op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-    None
-}
+// (The former `default_input_cast` stub — a None-returning placeholder for
+// the base `TypeOp::getInputCast` — was replaced by the faithful base arm
+// on the trait (typeop.cc:295-303) as part of WORKPKG-UNMAP-TYPEOP-0001.)
 
 // Ghidra: typeop.cc:932 TypeOpEqual::getInputCast
 /// Compute the input cast requested by `INT_EQUAL`/`INT_NOTEQUAL`. Both
@@ -138,6 +137,560 @@ pub fn comparison_input_cast(
         .map(|_| required)
 }
 
+/// The `CastStrategyC` every trait arm in this file constructs:
+/// `CastStrategy::setTypeFactory` sets `promoteSize = tlst->getSizeOfInt()`
+/// (cast.cc:27). Rugra's trait objects reach the factory through
+/// `local_type_factory`, so the strategy is rebuilt per call from it.
+// RUGRA-GLUE: strategy construction mirror of CastStrategy::setTypeFactory
+//   (cast.cc:27); detached fixtures without a factory fall back to the
+//   x86-64 int size 4.
+fn factory_cast_strategy(
+    type_factory: &Arc<RwLock<TypeFactory>>,
+) -> crate::type_system::cast::CastStrategyC {
+    let promote_size = type_factory
+        .read()
+        .unwrap()
+        .get_size_of_int()
+        .max(1) as usize;
+    crate::type_system::cast::CastStrategyC::new(promote_size)
+}
+
+// Ghidra: typeop.cc:1023 TypeOpIntSless::getInputCast (ordering-comparison family)
+/// Compute the input cast for the ordering comparisons —
+/// `TypeOpIntSless::getInputCast` (typeop.cc:1023-1031),
+/// `TypeOpIntSlessEqual::getInputCast` (cc:1049-1057),
+/// `TypeOpIntLess::getInputCast` (cc:1075-1083) and
+/// `TypeOpIntLessEqual::getInputCast` (cc:1099-1107). The required type is
+/// the op's own `inputTypeLocal(slot)` base (SLESS family = TYPE_INT, LESS
+/// family = TYPE_UINT); `checkIntPromotionForCompare` forces it, else
+/// `castStandard(reqtype,curtype,true,care_ptr_uint)` — `care_ptr_uint` is
+/// TRUE for the signed compares (cc:1030/1056) and FALSE for the unsigned
+/// ones (cc:1082/1106).
+pub fn ordering_compare_input_cast<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    strategy: &crate::type_system::cast::CastStrategyC,
+    fd: &crate::funcdata::Funcdata,
+    care_ptr_uint: bool,
+) -> Option<Arc<Datatype>> {
+    let (in_arc, op_view) = {
+        let op = op_ref.0.read().unwrap();
+        (op.get_in(slot)?.clone(), op)
+    };
+    // cc:1027: checkIntPromotionForCompare(op,slot)
+    let promo_forced = strategy.check_int_promotion_for_compare_op(&op_view, slot);
+    // cc:1026: reqtype = op->inputTypeLocal(slot)
+    let reqtype = op_impl.get_input_local(&op_view, slot)?;
+    if promo_forced {
+        return Some(reqtype);
+    }
+    // cc:1029: curtype = op->getIn(slot)->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:1030: castStandard(reqtype,curtype,true,care_ptr_uint)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, true, care_ptr_uint)
+        .map(|_| reqtype)
+}
+
+// Ghidra: typeop.cc:1131 TypeOpIntZext::getInputCast (extension family)
+/// Compute the input cast for the zero/sign extensions —
+/// `TypeOpIntZext::getInputCast` (typeop.cc:1131-1139) and
+/// `TypeOpIntSext::getInputCast` (cc:1157-1165): the required type is the
+/// op's own `inputTypeLocal(slot)` base (ZEXT = TYPE_UINT, SEXT = TYPE_INT);
+/// `checkIntPromotionForExtension` (cast.cc:126-138: a promotion whose
+/// extension direction matches the explicit extension is implied — no cast)
+/// forces the base, else `castStandard(reqtype,curtype,true,false)`.
+pub fn extension_input_cast<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    strategy: &crate::type_system::cast::CastStrategyC,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<Arc<Datatype>> {
+    let (in_arc, opcode, op_view) = {
+        let op = op_ref.0.read().unwrap();
+        (op.get_in(slot)?.clone(), op.opcode, op)
+    };
+    // cc:1134: reqtype = op->inputTypeLocal(slot)
+    let reqtype = op_impl.get_input_local(&op_view, slot)?;
+    // cc:1135: checkIntPromotionForExtension(op) — cast.cc:126-138.
+    let vn_guard = in_arc.read().unwrap();
+    let promo_type = strategy.int_promotion_type(&vn_guard);
+    drop(vn_guard);
+    const NO_PROMOTION: i32 = -1;
+    const UNKNOWN_PROMOTION: i32 = 0;
+    const UNSIGNED_EXTENSION: i32 = 1;
+    const SIGNED_EXTENSION: i32 = 2;
+    let forced = match promo_type {
+        NO_PROMOTION => false,
+        UNKNOWN_PROMOTION => true, // cast.cc:132
+        ext => {
+            // cast.cc:135-136: matching extension direction is implied.
+            if (ext & UNSIGNED_EXTENSION != 0) && opcode == OpCode::CPUI_INT_ZEXT {
+                false
+            } else if (ext & SIGNED_EXTENSION != 0) && opcode == OpCode::CPUI_INT_SEXT {
+                false
+            } else {
+                true
+            }
+        }
+    };
+    if forced {
+        return Some(reqtype);
+    }
+    // cc:1137: curtype = op->getIn(slot)->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:1138: castStandard(reqtype,curtype,true,false)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, true, false)
+        .map(|_| reqtype)
+}
+
+// Ghidra: typeop.cc:1543 TypeOpIntRight::getInputCast (shift slot-0 family)
+/// Compute the slot-0 input cast for the right shifts —
+/// `TypeOpIntRight::getInputCast` (typeop.cc:1543-1556, gate
+/// UNSIGNED_EXTENSION) and `TypeOpIntSright::getInputCast` (cc:1585-1598,
+/// gate SIGNED_EXTENSION): a promotion that does not carry the shift's own
+/// extension direction forces the `inputTypeLocal(slot)` base, else
+/// `castStandard(reqtype,curtype,true,true)`. Any other slot falls back to
+/// the `TypeOpBinary` (= base `TypeOp::getInputCast`) arm.
+pub fn shift_input_cast<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    strategy: &crate::type_system::cast::CastStrategyC,
+    fd: &crate::funcdata::Funcdata,
+    gate: i32,
+) -> Option<Arc<Datatype>> {
+    const UNSIGNED_EXTENSION: i32 = 1;
+    const SIGNED_EXTENSION: i32 = 2;
+    let _ = (UNSIGNED_EXTENSION, SIGNED_EXTENSION);
+    let (in_arc, op_view) = {
+        let op = op_ref.0.read().unwrap();
+        (op.get_in(slot)?.clone(), op)
+    };
+    // cc:1548/1574(mod slot): reqtype = op->inputTypeLocal(slot)
+    let reqtype = op_impl.get_input_local(&op_view, slot)?;
+    // cc:1550/1592: promoType = castStrategy->intPromotionType(vn)
+    let vn_guard = in_arc.read().unwrap();
+    let promo_type = strategy.int_promotion_type(&vn_guard);
+    drop(vn_guard);
+    const NO_PROMOTION: i32 = -1;
+    // cc:1551/1593: promotion present without the shift's own extension
+    // direction forces the base type.
+    if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+        return Some(reqtype);
+    }
+    // cc:1549/1591: curtype = vn->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:1553/1595: castStandard(reqtype,curtype,true,true)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, true, true)
+        .map(|_| reqtype)
+}
+
+// Ghidra: typeop.cc:1639 TypeOpIntDiv::getInputCast (divide/remainder family)
+/// Compute the input cast for the integer divides/remainders —
+/// `TypeOpIntDiv::getInputCast` (typeop.cc:1639-1649, UNSIGNED gate),
+/// `TypeOpIntSdiv::getInputCast` (cc:1659-1669, SIGNED gate),
+/// `TypeOpIntRem::getInputCast` (cc:1679-1689, UNSIGNED gate) and
+/// `TypeOpIntSrem::getInputCast` (cc:1699-1709, SIGNED gate): both slots
+/// take the same promotion gate as the shifts against the op's
+/// `inputTypeLocal(slot)` base (DIV/REM = TYPE_UINT, SDIV/SREM = TYPE_INT),
+/// else `castStandard(reqtype,curtype,true,true)`.
+pub fn divrem_input_cast<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    strategy: &crate::type_system::cast::CastStrategyC,
+    fd: &crate::funcdata::Funcdata,
+    gate: i32,
+) -> Option<Arc<Datatype>> {
+    let (in_arc, op_view) = {
+        let op = op_ref.0.read().unwrap();
+        (op.get_in(slot)?.clone(), op)
+    };
+    // cc:1643/1663/1683/1703: reqtype = op->inputTypeLocal(slot)
+    let reqtype = op_impl.get_input_local(&op_view, slot)?;
+    // cc:1645/1665/1685/1705: promoType = castStrategy->intPromotionType(vn)
+    let vn_guard = in_arc.read().unwrap();
+    let promo_type = strategy.int_promotion_type(&vn_guard);
+    drop(vn_guard);
+    const NO_PROMOTION: i32 = -1;
+    // cc:1646/1666/1686/1706
+    if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+        return Some(reqtype);
+    }
+    // cc:1644/1664/1684/1704: curtype = vn->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:1648/1668/1688/1708: castStandard(reqtype,curtype,true,true)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, true, true)
+        .map(|_| reqtype)
+}
+
+// Ghidra: typeop.cc:1872 TypeOpFloatInt2Float::absorbZext
+/// Return whether the given FLOAT_INT2FLOAT's input-0 is an implied
+/// INT_ZEXT output — the extension the conversion absorbs
+/// (typeop.cc:1864-1883): `vn0->isWritten() && vn0->isImplied()` and the
+/// defining op's opcode is INT_ZEXT.
+pub fn float_int2float_absorb_zext(op_ref: &crate::op::PcodeOpRef) -> bool {
+    let in0 = {
+        let op = op_ref.0.read().unwrap();
+        match op.get_in(0) {
+            Some(vn) => vn.clone(),
+            None => return false,
+        }
+    };
+    let vn = in0.read().unwrap();
+    if !vn.is_written() || !vn.is_implied() {
+        return false;
+    }
+    vn.get_def()
+        .map(|def| def.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT)
+        .unwrap_or(false)
+}
+
+// Ghidra: typeop.cc:1847 TypeOpFloatInt2Float::getInputCast
+/// Compute the input cast for `FLOAT_INT2FLOAT` (typeop.cc:1847-1862):
+/// no cast at all when the conversion absorbs an INT_ZEXT
+/// (`absorbZext`, cc:1850-1851); the required type is the op's
+/// `inputTypeLocal(slot)` base (TYPE_INT — the conversion expects a signed
+/// integer); `care_uint_int` starts TRUE and drops to FALSE when the input's
+/// NZMask high bit is clear for sizes up to `sizeof(uintb)` (cc:1856-1860:
+/// "If the high-bit is not set, we don't care if input is signed or
+/// unsigned"); final gate `castStandard(reqtype,curtype,care_uint_int,true)`.
+pub fn float_int2float_input_cast<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    strategy: &crate::type_system::cast::CastStrategyC,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<Arc<Datatype>> {
+    // cc:1850-1851: no cast if we are absorbing an INT_ZEXT.
+    if float_int2float_absorb_zext(op_ref) {
+        return None;
+    }
+    let (in_arc, op_view) = {
+        let op = op_ref.0.read().unwrap();
+        (op.get_in(slot)?.clone(), op)
+    };
+    // cc:1853: reqtype = op->inputTypeLocal(slot)
+    let reqtype = op_impl.get_input_local(&op_view, slot)?;
+    // cc:1855-1860: care_uint_int from the NZMask high bit.
+    let mut care_uint_int = true;
+    let vn = in_arc.read().unwrap();
+    let vn_size = vn.get_size();
+    if vn_size <= std::mem::size_of::<u64>() {
+        let mut val = vn.get_nz_mask();
+        val >>= 8 * vn_size - 1;
+        care_uint_int = (val & 1) != 0;
+    }
+    drop(vn);
+    // cc:1854: curtype = vn->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op_ref, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:1861: castStandard(reqtype,curtype,care_uint_int,true)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, care_uint_int, true)
+        .map(|_| reqtype)
+}
+
+// Ghidra: typeop.cc:1518 TypeOpIntLeft::getOutputToken (shift token family)
+/// Compute the output token for the shifts — `TypeOpIntLeft::getOutputToken`
+/// (typeop.cc:1518-1525), `TypeOpIntRight::getOutputToken` (cc:1558-1565)
+/// and `TypeOpIntSright::getOutputToken` (cc:1608-1615): the token is
+/// input-0's HIGH read-facing type, with a BOOL demoted to the factory INT
+/// base of the same size. The fd-aware consult is keyed on slot 0
+/// (UNIONRESOLVE-PKG-B-0001).
+pub fn shift_output_token_in_fd(
+    op_ref: &crate::op::PcodeOpRef,
+    fd: &crate::funcdata::Funcdata,
+    type_factory: &Arc<RwLock<TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    let in0 = {
+        let op = op_ref.0.read().unwrap();
+        op.get_in(0)?.clone()
+    };
+    // cc:1521/1561/1611: res1 = op->getIn(0)->getHighTypeReadFacing(op)
+    let res1 = crate::unionresolve::vn_high_type_read_facing(fd, &in0, op_ref, 0)
+        .or_else(|| in0.read().unwrap().v_type.clone())?;
+    // cc:1522-1523/1562-1563/1612-1613: bool -> base int of the same size.
+    if res1.get_metatype() == TypeMetatype::Bool {
+        let size = res1.get_size();
+        return type_factory.read().unwrap().get_base(size, TypeMetatype::Int);
+    }
+    Some(res1)
+}
+
+// Ghidra: typeop.cc:2063 TypeOpPiece::getOutputToken
+/// Compute the output token for `PIECE` (typeop.cc:2063-2072): the output's
+/// HIGH def-facing type when its metatype is INT or UINT ("PIECE casts to
+/// uint or int, based on output"), else the factory UINT base of the output
+/// size ("If output is unknown or pointer, treat as cast to uint"). The
+/// fd-aware def-facing consult is keyed on slot -1 (the def-op edge).
+pub fn piece_output_token_in_fd(
+    op_ref: &crate::op::PcodeOpRef,
+    fd: &crate::funcdata::Funcdata,
+    type_factory: &Arc<RwLock<TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    let out_vn = {
+        let op = op_ref.0.read().unwrap();
+        op.get_out()?.clone()
+    };
+    let out_size = out_vn.read().unwrap().get_size();
+    // cc:2067: dt = vn->getHighTypeDefFacing()
+    let dt = crate::unionresolve::vn_high_type_def_facing(fd, &out_vn)
+        .or_else(|| out_vn.read().unwrap().v_type.clone());
+    match dt {
+        // cc:2069-2070
+        Some(dt)
+            if matches!(
+                dt.get_metatype(),
+                TypeMetatype::Int | TypeMetatype::Uint
+            ) =>
+        {
+            Some(dt)
+        }
+        // cc:2071: tlst->getBase(vn->getSize(),TYPE_UINT)
+        _ => type_factory
+            .read()
+            .unwrap()
+            .get_base(out_size, TypeMetatype::Uint),
+    }
+}
+
+// Ghidra: typeop.cc:2142 TypeOpSubpiece::getOutputToken
+/// Compute the output token for `SUBPIECE` (typeop.cc:2142-2159):
+/// (1) `findTruncation` of input-0's HIGH read-facing type at the
+/// SUBPIECE's composite byte offset (artificial slot 1 — the facing type
+/// for slot 0 is already the parent) returns a size-matching field type;
+/// otherwise (2) the output's DEF-facing high type when not UNKNOWN; (3)
+/// else the factory INT base. The byte offset is
+/// `TypeOpSubpiece::computeByteOffsetForComposite` (cc:2195-2207).
+pub fn subpiece_output_token_in_fd(
+    op_ref: &crate::op::PcodeOpRef,
+    fd: &crate::funcdata::Funcdata,
+    type_factory: &Arc<RwLock<TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    let (in0, out_vn, lsb) = {
+        let op = op_ref.0.read().unwrap();
+        (
+            op.get_in(0)?.clone(),
+            op.get_out()?.clone(),
+            op.get_in(1)
+                .and_then(|vn| Some(vn.read().unwrap().get_offset()))
+                .unwrap_or(0),
+        )
+    };
+    let out_size = out_vn.read().unwrap().get_size();
+    // cc:2147: ct = op->getIn(0)->getHighTypeReadFacing(op)
+    let ct = crate::unionresolve::vn_high_type_read_facing(fd, &in0, op_ref, 0)
+        .or_else(|| in0.read().unwrap().v_type.clone());
+    // cc:2149 + typeop.cc:2195-2207: computeByteOffsetForComposite.
+    let byte_off = {
+        let in0_guard = in0.read().unwrap();
+        let in_size = in0_guard.get_size();
+        if in0_guard.get_space().is_big_endian() {
+            in_size as i64 - out_size as i64 - (lsb as u32 as i64)
+        } else {
+            lsb as u32 as i64
+        }
+    };
+    // cc:2150-2154: field arm — artificial slot 1; only a size-matching
+    // field returns early (the inner `if` does not return).
+    if let Some(ct) = &ct {
+        let op_view = op_ref.0.read().unwrap();
+        if let Some((field, _offset)) =
+            ct.find_truncation(byte_off, out_size, Some(&op_view), 1, Some(&fd.union_map))
+        {
+            if out_size == field.type_ptr.get_size() {
+                return Some(field.type_ptr.clone());
+            }
+        }
+    }
+    // cc:2155-2157: dt = outvn->getHighTypeDefFacing(); non-UNKNOWN wins.
+    let dt = crate::unionresolve::vn_high_type_def_facing(fd, &out_vn)
+        .or_else(|| out_vn.read().unwrap().v_type.clone());
+    if let Some(dt) = dt {
+        if dt.get_metatype() != TypeMetatype::Unknown {
+            return Some(dt);
+        }
+    }
+    // cc:2158: tlst->getBase(outvn->getSize(),TYPE_INT)
+    type_factory
+        .read()
+        .unwrap()
+        .get_base(out_size, TypeMetatype::Int)
+}
+
+// Ghidra: typeop.cc:2250 TypeOpPtradd::getInputCast
+/// Compute the input cast for `PTRADD` slot 0 (typeop.cc:2250-2266): the
+/// operation expects the VARNODE's own read-facing type, not the (possibly
+/// different) HIGH read-facing type; a non-pointer on either side returns
+/// the varnode type; when both sides are pointers, equal `alignSize` on the
+/// one-level-down bases cancels the cast, else the varnode type is the
+/// cast. Any other slot falls back to the base `TypeOp::getInputCast` arm.
+pub fn ptradd_input_cast(
+    op_ref: &crate::op::PcodeOpRef,
+    slot: usize,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<Arc<Datatype>> {
+    if slot != 0 {
+        return None;
+    }
+    let in0 = {
+        let op = op_ref.0.read().unwrap();
+        op.get_in(0)?.clone()
+    };
+    // cc:2255: reqtype = op->getIn(0)->getTypeReadFacing(op)
+    let reqtype = crate::unionresolve::vn_type_read_facing(fd, &in0, op_ref, 0)?;
+    // cc:2256: curtype = op->getIn(0)->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in0, op_ref, 0)
+        .unwrap_or_else(|| reqtype.clone());
+    // cc:2257-2258
+    let ptr_of = |t: &Arc<Datatype>| -> Option<Arc<Datatype>> {
+        match t.as_ref() {
+            Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+            _ => None,
+        }
+    };
+    if reqtype.get_metatype() != TypeMetatype::Pointer {
+        return Some(reqtype);
+    }
+    if curtype.get_metatype() != TypeMetatype::Pointer {
+        return Some(reqtype);
+    }
+    // cc:2259-2260: go down exactly one level.
+    let reqbase = ptr_of(&reqtype)?;
+    let curbase = ptr_of(&curtype)?;
+    // cc:2261-2262: equal align sizes on the bases cancel the cast.
+    if reqbase.get_align_size() == curbase.get_align_size() {
+        return None;
+    }
+    // cc:2263
+    Some(reqtype)
+}
+
+// Ghidra: typeop.cc:963 TypeOpEqual::propagateAcrossCompare
+/// Propagate a data-type across a comparison PcodeOp — the shared
+/// `propagateType` body of CPUI_INT_EQUAL/INT_NOTEQUAL/INT_LESS/
+/// INT_LESSEQUAL (typeop.cc:945/1009/1085/1109 call sites,
+/// cc:963-986 body): propagation is input<->input only; a spacebase input
+/// is rewrapped as a pointer to the unknown 1-byte base (wordsize from the
+/// default data space); a PointerRel whose parent is a STRUCT with a
+/// non-negative byte offset degrades to a plain pointer of the same size
+/// ("the two sides of the operator are likely to be different types",
+/// cc:972-979); everything else propagates unchanged.
+pub fn propagate_across_compare(
+    alt_type: &Arc<Datatype>,
+    op: &PcodeOp,
+    inslot: i32,
+    outslot: i32,
+    type_factory: Option<&Arc<RwLock<TypeFactory>>>,
+) -> Option<Arc<Datatype>> {
+    // cc:966: must propagate input <-> input.
+    if inslot == -1 || outslot == -1 {
+        return None;
+    }
+    // Ghidra receives invn/outvn from the caller (always attached in
+    // production); a detached fixture op without those inputs observes the
+    // same decisions by skipping the varnode-dependent checks.
+    let invn = op.get_in(inslot as usize);
+    let outvn = op.get_in(outslot as usize);
+    if invn.is_some_and(|vn| vn.read().unwrap().is_spacebase()) {
+        // cc:968-971: pointer to the unknown base, alttype-sized, wordsize
+        // of the default data space (x86-64 ram wordsize 1 in the Rugra
+        // driver; propagate_to_pointer_sized carries the 1).
+        return Some(propagate_to_pointer_sized(alt_type, alt_type.get_size(), type_factory));
+    }
+    // cc:972-981: PointerRel degradation arm.
+    let rel_state = match alt_type.as_ref() {
+        Datatype::Pointer(p) => p.base.pointer_rel.as_ref(),
+        _ => None,
+    };
+    if let Some(rel) = rel_state {
+        if !outvn.is_some_and(|vn| vn.read().unwrap().is_constant()) {
+            if rel.parent.get_metatype() == TypeMetatype::Struct && rel.offset >= 0 {
+                // cc:974-979: mid-structure pointers do not propagate
+                // across comparisons; degrade to a plain pointer.
+                if let Some(factory) = type_factory {
+                    let unknown_base =
+                        factory.read().unwrap().get_base(1, TypeMetatype::Unknown)?;
+                    let wordsize = match alt_type.as_ref() {
+                        Datatype::Pointer(p) => p.wordsize,
+                        _ => 1,
+                    };
+                    return Some(
+                        factory
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get_type_pointer(alt_type.get_size(), unknown_base, wordsize),
+                    );
+                }
+                // Factory-less detached fixtures observe the same shape via
+                // the anonymous-pointer constructor (interning residual).
+                return Some(Arc::new(Datatype::Pointer(
+                    crate::type_system::datatype::TypePointer::new(
+                        alt_type.get_size(),
+                        Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
+                            "unknown".to_string(),
+                            1,
+                            TypeMetatype::Unknown,
+                        ))),
+                        1,
+                    ),
+                )));
+            }
+            return Some(alt_type.clone());
+        }
+    }
+    // cc:983-984
+    Some(alt_type.clone())
+}
+
+// Ghidra: typeop.cc:295 TypeOp::getInputCast (base arm)
+/// The shared base-arm body (typeop.cc:295-303): annotations never take a
+/// cast; the required type is `inputTypeLocal(slot)`; the current type is
+/// the input's HIGH read-facing type; the gate is
+/// `castStandard(reqtype,curtype,false,true)`. Both the trait default and
+/// the subclass fallbacks (INT_RIGHT/INT_SRIGHT non-slot-0, PTRADD
+/// non-slot-0 — cc:1555/1597/2265) route through this single
+/// implementation, exactly as Ghidra's virtual dispatch falls back to
+/// `TypeOp::getInputCast` once.
+pub fn base_input_cast_arm<T: TypeOp + ?Sized>(
+    op_impl: &T,
+    op: &crate::op::PcodeOpRef,
+    slot: usize,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<Arc<Datatype>> {
+    let type_factory = op_impl.local_type_factory()?;
+    let strategy = factory_cast_strategy(type_factory);
+    let (in_arc, reqtype) = {
+        let op_view = op.0.read().unwrap();
+        let in_arc = op_view.get_in(slot)?.clone();
+        // cc:299: annotations never take a cast.
+        if in_arc.read().unwrap().is_annotation() {
+            return None;
+        }
+        // cc:300: reqtype = op->inputTypeLocal(slot)
+        let reqtype = op_impl.get_input_local(&op_view, slot)?;
+        (in_arc, reqtype)
+    };
+    // cc:301: curtype = vn->getHighTypeReadFacing(op)
+    let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_arc, op, slot as i32)
+        .or_else(|| in_arc.read().unwrap().v_type.clone())?;
+    // cc:302: castStandard(reqtype,curtype,false,true)
+    strategy
+        .cast_standard_full(&reqtype, &curtype, false, true)
+        .map(|_| reqtype)
+}
+
 /// Core trait representing a P-code operation type
 ///
 /// Corresponds to Ghidra's `TypeOp` class
@@ -149,6 +702,15 @@ pub trait TypeOp {
     /// Get the name of the operation
     // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str;
+
+    /// Get the name of the op-code as it should be displayed in context —
+    /// the default returns the bare display name; subclasses whose display
+    /// token depends on the op (ZEXT/SEXT sizes, CARRY family, PIECE/
+    /// SUBPIECE sizes, CALLOTHER userop) override it.
+    // Ghidra: typeop.hh:183 TypeOp::getOperatorName (inline default `return name;`)
+    fn get_operator_name(&self, _op: &PcodeOp) -> String {
+        self.get_name().to_string()
+    }
 
     /// Get properties/flags for this operation
     // Ghidra: typeop.hh:72 TypeOp::getFlags
@@ -280,16 +842,14 @@ pub trait TypeOp {
     /// [`Self::get_input_local_in_fd`]: the fd-aware read-facing consults
     /// (union_map) need the owning function; detached fixtures observe the
     /// map-miss arm inside the canonical functions they delegate to.
-    // Ghidra: typeop.hh:158 TypeOp::getInputCast
+    // Ghidra: typeop.cc:295 TypeOp::getInputCast (base arm, fd-carrying form)
     fn get_input_cast(
         &self,
         op: &crate::op::PcodeOpRef,
         slot: usize,
         fd: &crate::funcdata::Funcdata,
     ) -> Option<Arc<Datatype>> {
-        let _ = fd;
-        let op = op.0.read().unwrap();
-        default_input_cast(&op, slot)
+        base_input_cast_arm(self, op, slot, fd)
     }
 
     /// Propagate an incoming data-type across a specific PcodeOp.
@@ -419,9 +979,13 @@ impl TypeOp for TypeOpUnary {
 /// (`TypeOpBinary(t,opc,name,mout,min)`, typeop.hh:211); they drive
 /// `getBase(size, meta)` for the local-type defaults exactly as
 /// TypeOpBinary::getOutputLocal/getInputLocal do.
-macro_rules! binary_op {
+/// `binary_op_ext` is the full generator: identical to `binary_op` plus a
+/// trailing `{ ... }` group of extra `TypeOp` methods spliced verbatim into
+/// the trait impl (used for the per-subclass getInputCast/getOperatorName
+/// overrides the oracle defines on top of the TypeOpBinary defaults).
+macro_rules! binary_op_ext {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
-     $metaout:ident, $metain:ident) => {
+     $metaout:ident, $metain:ident, { $($extra:tt)* }) => {
         pub struct $struct_name {
             type_factory: Arc<RwLock<TypeFactory>>,
         }
@@ -491,7 +1055,16 @@ macro_rules! binary_op {
             fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
                 macro_arith_output_token(OpCode::$opcode, op, &self.type_factory)
             }
+            $($extra)*
         }
+    };
+}
+
+macro_rules! binary_op {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metaout:ident, $metain:ident) => {
+        binary_op_ext!($struct_name, $opcode, $name, $flags, $symbol,
+                       $metaout, $metain, {});
     };
 }
 
@@ -577,9 +1150,13 @@ macro_rules! unary_op {
 /// (`TypeOpFunc(t,opc,name,mout,min)`, typeop.hh:244); they drive
 /// `getBase(size, meta)` for the local-type defaults exactly as
 /// TypeOpFunc::getOutputLocal/getInputLocal do.
-macro_rules! functional_unary_op {
+/// `functional_unary_op_ext` is the full generator: identical to
+/// `functional_unary_op` plus a trailing `{ ... }` group of extra `TypeOp`
+/// methods spliced verbatim into the trait impl (per-subclass
+/// getInputCast/getOperatorName overrides).
+macro_rules! functional_unary_op_ext {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr,
-     $metaout:ident, $metain:ident) => {
+     $metaout:ident, $metain:ident, { $($extra:tt)* }) => {
         pub struct $struct_name {
             type_factory: Arc<RwLock<TypeFactory>>,
         }
@@ -641,7 +1218,16 @@ macro_rules! functional_unary_op {
                 let size = op.get_in(slot)?.read().unwrap().get_size();
                 base_local_type(type_factory, size, TypeMetatype::$metain)
             }
+            $($extra)*
         }
+    };
+}
+
+macro_rules! functional_unary_op {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr,
+     $metaout:ident, $metain:ident) => {
+        functional_unary_op_ext!($struct_name, $opcode, $name, $flags, $func,
+                                 $metaout, $metain, {});
     };
 }
 
@@ -650,9 +1236,12 @@ macro_rules! functional_unary_op {
 /// (`TypeOpFunc(t,opc,name,mout,min)`, typeop.hh:244); they drive
 /// `getBase(size, meta)` for the local-type defaults exactly as
 /// TypeOpFunc::getOutputLocal/getInputLocal do.
-macro_rules! functional_binary_op {
+/// `functional_binary_op_ext` is the full generator: identical to
+/// `functional_binary_op` plus a trailing `{ ... }` group of extra `TypeOp`
+/// methods spliced verbatim into the trait impl.
+macro_rules! functional_binary_op_ext {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr,
-     $metaout:ident, $metain:ident) => {
+     $metaout:ident, $metain:ident, { $($extra:tt)* }) => {
         pub struct $struct_name {
             type_factory: Arc<RwLock<TypeFactory>>,
         }
@@ -718,9 +1307,15 @@ macro_rules! functional_binary_op {
                 let size = op.get_in(slot)?.read().unwrap().get_size();
                 base_local_type(type_factory, size, TypeMetatype::$metain)
             }
+            $($extra)*
         }
     };
 }
+
+// (The thin `functional_binary_op` wrapper — the no-extra-arguments form of
+// `functional_binary_op_ext` — was removed by WORKPKG-UNMAP-TYPEOP-0001
+// after both of its instantiations (TypeOpPiece/TypeOpSubpiece) grew
+// per-subclass overrides and moved to `functional_binary_op_ext!`.)
 
 /// CPUI_COPY implementation. Ghidra's TypeOpCopy never overrides
 /// getOutputLocal/getInputLocal (typeop.hh:253-263), so both resolve through
@@ -1155,44 +1750,106 @@ binary_op!(
     Int
 );
 // Ghidra: typeop.cc:1631 TypeOpIntDiv::TypeOpIntDiv — TypeOpBinary("/",TYPE_UINT,TYPE_UINT)
-binary_op!(
+binary_op_ext!(
     TypeOpIntDiv,
     CPUI_INT_DIV,
     "INT_DIV",
     typeop_flags::ARITHMETIC_OP,
     "/",
     Uint,
-    Uint
+    Uint,
+    {
+        /// The divide input cast, both slots (typeop.cc:1639-1649): a
+        /// promotion without the UNSIGNED extension direction forces the
+        /// `inputTypeLocal(slot)` base (TYPE_UINT), else
+        /// `castStandard(reqtype,curtype,TRUE,TRUE)`.
+        // Ghidra: typeop.cc:1639 TypeOpIntDiv::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            const UNSIGNED_EXTENSION: i32 = 1;
+            divrem_input_cast(self, op, slot, &strategy, fd, UNSIGNED_EXTENSION)
+        }
+    }
 );
 // Ghidra: typeop.cc:1651 TypeOpIntSdiv::TypeOpIntSdiv — TypeOpBinary("/",TYPE_INT,TYPE_INT)
-binary_op!(
+binary_op_ext!(
     TypeOpIntSdiv,
     CPUI_INT_SDIV,
     "INT_SDIV",
     typeop_flags::ARITHMETIC_OP,
     "s/",
     Int,
-    Int
+    Int,
+    {
+        /// The signed divide input cast, both slots (typeop.cc:1659-1669):
+        /// SIGNED gate, `inputTypeLocal` base TYPE_INT.
+        // Ghidra: typeop.cc:1659 TypeOpIntSdiv::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            const SIGNED_EXTENSION: i32 = 2;
+            divrem_input_cast(self, op, slot, &strategy, fd, SIGNED_EXTENSION)
+        }
+    }
 );
 // Ghidra: typeop.cc:1671 TypeOpIntRem::TypeOpIntRem — TypeOpBinary("%",TYPE_UINT,TYPE_UINT)
-binary_op!(
+binary_op_ext!(
     TypeOpIntRem,
     CPUI_INT_REM,
     "INT_REM",
     typeop_flags::ARITHMETIC_OP,
     "%",
     Uint,
-    Uint
+    Uint,
+    {
+        /// The remainder input cast, both slots (typeop.cc:1679-1689):
+        /// UNSIGNED gate, `inputTypeLocal` base TYPE_UINT.
+        // Ghidra: typeop.cc:1679 TypeOpIntRem::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            const UNSIGNED_EXTENSION: i32 = 1;
+            divrem_input_cast(self, op, slot, &strategy, fd, UNSIGNED_EXTENSION)
+        }
+    }
 );
 // Ghidra: typeop.cc:1691 TypeOpIntSrem::TypeOpIntSrem — TypeOpBinary("%",TYPE_INT,TYPE_INT)
-binary_op!(
+binary_op_ext!(
     TypeOpIntSrem,
     CPUI_INT_SREM,
     "INT_SREM",
     typeop_flags::ARITHMETIC_OP,
     "s%",
     Int,
-    Int
+    Int,
+    {
+        /// The signed remainder input cast, both slots (typeop.cc:1699-1709):
+        /// SIGNED gate, `inputTypeLocal` base TYPE_INT.
+        // Ghidra: typeop.cc:1699 TypeOpIntSrem::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            const SIGNED_EXTENSION: i32 = 2;
+            divrem_input_cast(self, op, slot, &strategy, fd, SIGNED_EXTENSION)
+        }
+    }
 );
 // Ghidra: typeop.cc:1380 TypeOpInt2Comp::TypeOpInt2Comp — TypeOpUnary("-",TYPE_INT,TYPE_INT)
 unary_op!(
@@ -1205,34 +1862,70 @@ unary_op!(
     Int
 );
 // Ghidra: typeop.cc:1332 TypeOpIntCarry::TypeOpIntCarry — TypeOpFunc("CARRY",TYPE_BOOL,TYPE_UINT)
-functional_binary_op!(
+functional_binary_op_ext!(
     TypeOpIntCarry,
     CPUI_INT_CARRY,
     "INT_CARRY",
     0,
     "carry",
     Bool,
-    Uint
+    Uint,
+    {
+        /// `CARRY<insize>` — the operator name carries the input-0 size.
+        // Ghidra: typeop.cc:1340 TypeOpIntCarry::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            format!(
+                "CARRY{}",
+                op.get_in(0)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0)
+            )
+        }
+    }
 );
 // Ghidra: typeop.cc:1348 TypeOpIntScarry::TypeOpIntScarry — TypeOpFunc("SCARRY",TYPE_BOOL,TYPE_INT)
-functional_binary_op!(
+functional_binary_op_ext!(
     TypeOpIntScarry,
     CPUI_INT_SCARRY,
     "INT_SCARRY",
     0,
     "scarry",
     Bool,
-    Int
+    Int,
+    {
+        /// `SCARRY<insize>` — the operator name carries the input-0 size.
+        // Ghidra: typeop.cc:1356 TypeOpIntScarry::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            format!(
+                "SCARRY{}",
+                op.get_in(0)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0)
+            )
+        }
+    }
 );
 // Ghidra: typeop.cc:1364 TypeOpIntSborrow::TypeOpIntSborrow — TypeOpFunc("SBORROW",TYPE_BOOL,TYPE_INT)
-functional_binary_op!(
+functional_binary_op_ext!(
     TypeOpIntSborrow,
     CPUI_INT_SBORROW,
     "INT_SBORROW",
     0,
     "sborrow",
     Bool,
-    Int
+    Int,
+    {
+        /// `SBORROW<insize>` — the operator name carries the input-0 size.
+        // Ghidra: typeop.cc:1372 TypeOpIntSborrow::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            format!(
+                "SBORROW{}",
+                op.get_in(0)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0)
+            )
+        }
+    }
 );
 
 // Bitwise Operations
@@ -1381,6 +2074,18 @@ impl TypeOp for TypeOpIntLeft {
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Int)
     }
+
+    /// The shift output token (typeop.cc:1518-1525): input-0's HIGH
+    /// read-facing type, with BOOL demoted to the factory INT base of the
+    /// same size. The fd-aware consult is keyed on slot 0.
+    // Ghidra: typeop.cc:1518 TypeOpIntLeft::getOutputToken
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        shift_output_token_in_fd(op, fd, &self.type_factory)
+    }
 }
 
 // Ghidra: typeop.cc:1527 TypeOpIntRight::TypeOpIntRight — TypeOpBinary(">>",TYPE_UINT,TYPE_UINT)
@@ -1453,6 +2158,38 @@ impl TypeOp for TypeOpIntRight {
         }
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Uint)
+    }
+
+    /// The slot-0 input cast (typeop.cc:1543-1556): a promotion that lacks
+    /// the UNSIGNED extension direction forces the `inputTypeLocal(0)`
+    /// base (TYPE_UINT), else `castStandard(reqtype,curtype,TRUE,TRUE)`;
+    /// every other slot falls back to the base `TypeOp::getInputCast` arm
+    /// (cc:1555, via the trait default).
+    // Ghidra: typeop.cc:1543 TypeOpIntRight::getInputCast
+    fn get_input_cast(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        if slot != 0 {
+            // cc:1555: TypeOpBinary::getInputCast — no override, the base arm.
+            return base_input_cast_arm(self, op, slot, fd);
+        }
+        let strategy = factory_cast_strategy(&self.type_factory);
+        const UNSIGNED_EXTENSION: i32 = 1;
+        shift_input_cast(self, op, slot, &strategy, fd, UNSIGNED_EXTENSION)
+    }
+
+    /// The shift output token (typeop.cc:1558-1565): input-0's HIGH
+    /// read-facing type, BOOL demoted to the factory INT base.
+    // Ghidra: typeop.cc:1558 TypeOpIntRight::getOutputToken
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        shift_output_token_in_fd(op, fd, &self.type_factory)
     }
 }
 
@@ -1527,6 +2264,37 @@ impl TypeOp for TypeOpIntSright {
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(type_factory, size, TypeMetatype::Int)
     }
+
+    /// The slot-0 input cast (typeop.cc:1585-1598): a promotion that lacks
+    /// the SIGNED extension direction forces the `inputTypeLocal(0)` base
+    /// (TYPE_INT), else `castStandard(reqtype,curtype,TRUE,TRUE)`; every
+    /// other slot falls back to the base arm (cc:1597).
+    // Ghidra: typeop.cc:1585 TypeOpIntSright::getInputCast
+    fn get_input_cast(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        if slot != 0 {
+            // cc:1597: TypeOpBinary::getInputCast — the base arm.
+            return base_input_cast_arm(self, op, slot, fd);
+        }
+        let strategy = factory_cast_strategy(&self.type_factory);
+        const SIGNED_EXTENSION: i32 = 2;
+        shift_input_cast(self, op, slot, &strategy, fd, SIGNED_EXTENSION)
+    }
+
+    /// The shift output token (typeop.cc:1608-1615): input-0's HIGH
+    /// read-facing type, BOOL demoted to the factory INT base.
+    // Ghidra: typeop.cc:1608 TypeOpIntSright::getOutputToken
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        shift_output_token_in_fd(op, fd, &self.type_factory)
+    }
 }
 
 // Comparison Operations
@@ -1536,35 +2304,82 @@ impl TypeOp for TypeOpIntSright {
 
 // Extension Operations
 // Ghidra: typeop.cc:1115 TypeOpIntZext::TypeOpIntZext — TypeOpFunc("ZEXT",TYPE_UINT,TYPE_UINT)
-functional_unary_op!(
+functional_unary_op_ext!(
     TypeOpIntZext,
     CPUI_INT_ZEXT,
     "INT_ZEXT",
     typeop_flags::INHERITS_SIGN_ZERO,
     "zext",
     Uint,
-    Uint
+    Uint,
+    {
+        /// `ZEXT<insize><outsize>` — the operator name carries both sizes
+        /// (typeop.cc:1122-1129).
+        // Ghidra: typeop.cc:1122 TypeOpIntZext::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            let in_size = op.get_in(0).map(|v| v.read().unwrap().get_size());
+            let out_size = op.get_out().map(|v| v.read().unwrap().get_size());
+            format!("ZEXT{}{}", in_size.unwrap_or(0), out_size.unwrap_or(0))
+        }
+
+        /// The extension input cast (typeop.cc:1131-1139): the
+        /// `inputTypeLocal(slot)` base (TYPE_UINT) forced under
+        /// `checkIntPromotionForExtension` (cast.cc:126-138: an unsigned
+        /// promotion into ZEXT is implied), else
+        /// `castStandard(reqtype,curtype,TRUE,FALSE)`.
+        // Ghidra: typeop.cc:1131 TypeOpIntZext::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            extension_input_cast(self, op, slot, &strategy, fd)
+        }
+    }
 );
 // Ghidra: typeop.cc:1141 TypeOpIntSext::TypeOpIntSext — TypeOpFunc("SEXT",TYPE_INT,TYPE_INT)
-functional_unary_op!(
+functional_unary_op_ext!(
     TypeOpIntSext,
     CPUI_INT_SEXT,
     "INT_SEXT",
     typeop_flags::INHERITS_SIGN,
     "sext",
     Int,
-    Int
+    Int,
+    {
+        /// `SEXT<insize><outsize>` — the operator name carries both sizes
+        /// (typeop.cc:1148-1155).
+        // Ghidra: typeop.cc:1148 TypeOpIntSext::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            let in_size = op.get_in(0).map(|v| v.read().unwrap().get_size());
+            let out_size = op.get_out().map(|v| v.read().unwrap().get_size());
+            format!("SEXT{}{}", in_size.unwrap_or(0), out_size.unwrap_or(0))
+        }
+
+        /// The extension input cast (typeop.cc:1157-1165): the
+        /// `inputTypeLocal(slot)` base (TYPE_INT) forced under
+        /// `checkIntPromotionForExtension` (a signed promotion into SEXT is
+        /// implied), else `castStandard(reqtype,curtype,TRUE,FALSE)`.
+        // Ghidra: typeop.cc:1157 TypeOpIntSext::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            extension_input_cast(self, op, slot, &strategy, fd)
+        }
+    }
 );
-// Ghidra: typeop.cc:2116 TypeOpSubpiece::TypeOpSubpiece — TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN)
-functional_unary_op!(
-    TypeOpTrunc,
-    CPUI_SUBPIECE,
-    "SUBPIECE",
-    0,
-    "subpiece",
-    Unknown,
-    Unknown
-);
+// (The former `TypeOpTrunc` macro instantiation — the pre-12.0.4 Rust name
+// for SUBPIECE — was removed by WORKPKG-UNMAP-TYPEOP-0001: the oracle class
+// is `TypeOpSubpiece` (typeop.cc:2116) and the TypeOpManager table's dead
+// first SUBPIECE registration (overwritten in place by TypeOpSubpiece) went
+// with it. The 12.0.4 registerInstructions table (typeop.cc:44) registers
+// exactly one SUBPIECE entry.)
 
 // Floating Point Operations
 // Ghidra: typeop.cc:1783 TypeOpFloatAdd::TypeOpFloatAdd — TypeOpBinary("+",TYPE_FLOAT,TYPE_FLOAT)
@@ -1698,14 +2513,33 @@ functional_unary_op!(
     Float
 );
 // Ghidra: typeop.cc:1839 TypeOpFloatInt2Float::TypeOpFloatInt2Float — TypeOpFunc("INT2FLOAT",TYPE_FLOAT,TYPE_INT)
-functional_unary_op!(
+functional_unary_op_ext!(
     TypeOpFloatInt2Float,
     CPUI_FLOAT_INT2FLOAT,
     "FLOAT_INT2FLOAT",
     typeop_flags::FLOATINGPOINT_OP,
     "i2f",
     Float,
-    Int
+    Int,
+    {
+        /// The INT2FLOAT input cast (typeop.cc:1847-1862): no cast when the
+        /// conversion absorbs an INT_ZEXT (`absorbZext`, cc:1850-1851); else
+        /// the `inputTypeLocal(slot)` base (TYPE_INT) under
+        /// `castStandard(reqtype,curtype,care_uint_int,true)` where
+        /// `care_uint_int` drops to FALSE when the input's NZMask high bit
+        /// is clear (cc:1855-1860: "If the high-bit is not set, we don't
+        /// care if input is signed or unsigned").
+        // Ghidra: typeop.cc:1847 TypeOpFloatInt2Float::getInputCast
+        fn get_input_cast(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            slot: usize,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            let strategy = factory_cast_strategy(&self.type_factory);
+            float_int2float_input_cast(self, op, slot, &strategy, fd)
+        }
+    }
 );
 
 impl TypeOpFloatInt2Float {
@@ -1787,12 +2621,107 @@ unary_op!(
 
 // Special Operations
 // Ghidra: typeop.cc:2037 TypeOpPiece::TypeOpPiece — TypeOpFunc("CONCAT",TYPE_UNKNOWN,TYPE_UNKNOWN)
-functional_binary_op!(
-    TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat", Unknown, Unknown
+functional_binary_op_ext!(
+    TypeOpPiece,
+    CPUI_PIECE,
+    "PIECE",
+    0,
+    "concat",
+    Unknown,
+    Unknown,
+    {
+        /// `CONCAT<insize><insize>` — the operator name carries both input
+        /// sizes (typeop.cc:2048-2055).
+        // Ghidra: typeop.cc:2048 TypeOpPiece::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            let in0 = op
+                .get_in(0)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
+            let in1 = op
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
+            format!("CONCAT{}{}", in0, in1)
+        }
+
+        /// "Never need a cast into a PIECE" (typeop.cc:2057-2061).
+        // Ghidra: typeop.cc:2057 TypeOpPiece::getInputCast
+        fn get_input_cast(
+            &self,
+            _op: &crate::op::PcodeOpRef,
+            _slot: usize,
+            _fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            None
+        }
+
+        /// The PIECE output token (typeop.cc:2063-2072): the output's
+        /// DEF-facing high type when INT/UINT ("PIECE casts to uint or int,
+        /// based on output"), else the factory UINT base ("If output is
+        /// unknown or pointer, treat as cast to uint"). The fd-aware
+        /// def-facing consult is keyed on slot -1
+        /// (UNIONRESOLVE-PKG-B-0001).
+        // Ghidra: typeop.cc:2063 TypeOpPiece::getOutputToken
+        fn get_output_token_in_fd(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            piece_output_token_in_fd(op, fd, &self.type_factory)
+        }
+    }
 );
 // Ghidra: typeop.cc:2116 TypeOpSubpiece::TypeOpSubpiece — TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN)
-functional_binary_op!(
-    TypeOpSubpiece, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece", Unknown, Unknown
+functional_binary_op_ext!(
+    TypeOpSubpiece,
+    CPUI_SUBPIECE,
+    "SUBPIECE",
+    0,
+    "subpiece",
+    Unknown,
+    Unknown,
+    {
+        /// `SUB<insize><outsize>` — the operator name carries the input-0
+        /// and output sizes (typeop.cc:2127-2134).
+        // Ghidra: typeop.cc:2127 TypeOpSubpiece::getOperatorName
+        fn get_operator_name(&self, op: &PcodeOp) -> String {
+            let in0 = op
+                .get_in(0)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
+            let out = op
+                .get_out()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
+            format!("SUB{}{}", in0, out)
+        }
+
+        /// "Never need a cast into a SUBPIECE" (typeop.cc:2136-2140).
+        // Ghidra: typeop.cc:2136 TypeOpSubpiece::getInputCast
+        fn get_input_cast(
+            &self,
+            _op: &crate::op::PcodeOpRef,
+            _slot: usize,
+            _fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            None
+        }
+
+        /// The SUBPIECE output token (typeop.cc:2142-2159): a size-matching
+        /// `findTruncation` field of the input-0 HIGH read-facing type at
+        /// the SUBPIECE's composite byte offset (artificial slot 1), else
+        /// the output's DEF-facing high type when not UNKNOWN, else the
+        /// factory INT base.
+        // Ghidra: typeop.cc:2142 TypeOpSubpiece::getOutputToken
+        fn get_output_token_in_fd(
+            &self,
+            op: &crate::op::PcodeOpRef,
+            fd: &crate::funcdata::Funcdata,
+        ) -> Option<Arc<Datatype>> {
+            subpiece_output_token_in_fd(op, fd, &self.type_factory)
+        }
+    }
 );
 
 impl TypeOpPiece {
@@ -1924,7 +2853,21 @@ impl TypeOp for TypeOpBranch {
     }
 }
 
-pub struct TypeOpCbranch;
+/// `CBRANCH` type operator. Ghidra's `TypeOpCbranch` takes the Architecture
+/// TypeFactory in its constructor (typeop.cc:602); `getInputLocal`
+/// (typeop.cc:609-619) reads slot 1 as the BOOL base and slot 0 as a
+/// pointer to the code type worded by the input's address space.
+pub struct TypeOpCbranch {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCbranch {
+    // Ghidra: typeop.cc:602 TypeOpCbranch::TypeOpCbranch
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpCbranch {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1938,6 +2881,11 @@ impl TypeOp for TypeOpCbranch {
     fn get_flags(&self) -> u32 {
         0
     }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   getInputLocal override below resolves through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
     // Ghidra: typeop.cc:621 TypeOpCbranch::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
@@ -1949,6 +2897,37 @@ impl TypeOp for TypeOpCbranch {
             .map(|v| format!("{}", v.read().unwrap()))
             .unwrap_or_else(|| "_".to_string());
         format!("if ({}) goto {}", in1, in0)
+    }
+
+    /// The branch local input types (typeop.cc:609-619): slot 1 is the BOOL
+    /// base of the condition's size; slot 0 is a pointer to the code type,
+    /// sized by the input and worded by the input's address space
+    /// ("First parameter is code pointer").
+    // Ghidra: typeop.cc:609 TypeOpCbranch::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        if slot == 1 {
+            // cc:614-615: Second param is bool.
+            let size = op.get_in(1)?.read().unwrap().get_size();
+            return type_factory.read().unwrap().get_base(size, TypeMetatype::Bool);
+        }
+        // cc:616-618: td = tlst->getTypeCode(); pointer worded by the
+        // input's space word size.
+        let in0 = op.get_in(0)?;
+        let (size, word_size) = {
+            let vn = in0.read().unwrap();
+            (vn.get_size(), vn.get_space().word_size())
+        };
+        let code = type_factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_code();
+        Some(
+            type_factory
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_type_pointer(size, code, word_size),
+        )
     }
 }
 
@@ -2357,6 +3336,12 @@ impl TypeOp for TypeOpPtradd {
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_PTRADD
     }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   getInputLocal/getOutputLocal INT bases and the base getInputCast
+    //   fallback (cc:2265) resolve through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
     // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "PTRADD"
@@ -2414,11 +3399,28 @@ impl TypeOp for TypeOpPtradd {
         crate::unionresolve::vn_high_type_read_facing(fd, &in0, op, 0)
     }
 
-    // TypeOpPtradd::getInputCast (typeop.cc:2250-2266) has no trait-side
-    // duplicate anymore: the production SetCasts dispatch computes it via
-    // `ActionSetCasts::ptr_input_reqtype` (coreaction.rs), whose cc:2255/2256
-    // read-facing consults are fd-aware (UNIONRESOLVE-PKG-B-0001 merged the
-    // former degenerate trait copy into that single implementation).
+    /// The PTRADD slot-0 input cast (typeop.cc:2250-2266): the operation
+    /// expects the VARNODE's own read-facing type — not the (possibly
+    /// different) HIGH read-facing type; a non-pointer on either side
+    /// returns the varnode type, and equal `alignSize` on the one-level-down
+    /// pointer bases cancels the cast. Other slots take the base arm
+    /// (cc:2265). The cc:2255/2256 read-facing consults are fd-aware
+    /// (UNIONRESOLVE-PKG-B-0001); the production SetCasts dispatch reaches
+    /// this same shape through `ActionSetCasts::ptr_input_reqtype`
+    /// (coreaction.rs).
+    // Ghidra: typeop.cc:2250 TypeOpPtradd::getInputCast
+    fn get_input_cast(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        if slot == 0 {
+            return ptradd_input_cast(op, slot, fd);
+        }
+        // cc:2265: TypeOp::getInputCast — the base arm.
+        base_input_cast_arm(self, op, slot, fd)
+    }
 
     // Ghidra: typeop.cc:2268 TypeOpPtradd::propagateType
     fn propagate_type(
@@ -2444,6 +3446,11 @@ impl TypeOp for TypeOpPtrsub {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_PTRSUB
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   getInputLocal/getOutputLocal INT bases resolve through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
@@ -2673,7 +3680,22 @@ impl TypeOp for TypeOpMulti {
     }
 }
 
-pub struct TypeOpIndirect;
+/// `INDIRECT` type operator. Ghidra's `TypeOpIndirect` takes the
+/// Architecture TypeFactory in its constructor (typeop.cc:1985);
+/// `getInputLocal` (typeop.cc:1992-2003) reads slot 0 through the base
+/// default and slot 1 as a pointer to the code type worded by the space of
+/// the op referenced through the iop constant.
+pub struct TypeOpIndirect {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpIndirect {
+    // Ghidra: typeop.cc:1985 TypeOpIndirect::TypeOpIndirect
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpIndirect {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -2686,6 +3708,11 @@ impl TypeOp for TypeOpIndirect {
     // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   getInputLocal override below resolves through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.cc:2022 TypeOpIndirect::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -2709,11 +3736,95 @@ impl TypeOp for TypeOpIndirect {
         lng.op_indirect(op);
     }
 
-    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Indirect does not override)
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Indirect does not
+    // override) — `tlst->getBase(out->getSize(),TYPE_UNKNOWN)`
+    // (typeop.cc:261-268).
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        // Indirect usually inherits type from its first input
-        op.get_in(0)
-            .and_then(|vn| vn.read().unwrap().v_type.clone())
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Unknown)
+    }
+
+    /// The INDIRECT local input types (typeop.cc:1992-2003): slot 0 through
+    /// the `TypeOp::getInputLocal` base default; slot 1 is a pointer to the
+    /// code type, sized by input-0 and worded by the address space of the op
+    /// referenced through the iop constant (cc:2000-2002 "Second parameter
+    /// is code pointer"). The fd-less form words the pointer by this op's
+    /// own code space — the referenced op lives in the same function body,
+    /// so both address spaces are the same one; the fd-carrying form below
+    /// decodes the referenced op exactly.
+    // Ghidra: typeop.cc:1992 TypeOpIndirect::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        if slot == 0 {
+            // cc:1997-1998: TypeOp::getInputLocal base default.
+            let size = op.get_in(0)?.read().unwrap().get_size();
+            return type_factory.read().unwrap().get_base(size, TypeMetatype::Unknown);
+        }
+        // cc:1999-2002: code pointer sized by in(0), worded by the
+        // referenced op's space word size (this op's code space).
+        let in0 = op.get_in(0)?;
+        let size = in0.read().unwrap().get_size();
+        let word_size = op
+            .get_addr()
+            .get_space()
+            .map(|space| space.get_word_size() as usize)
+            .unwrap_or(1);
+        let code = type_factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_code();
+        Some(
+            type_factory
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_type_pointer(size, code, word_size),
+        )
+    }
+
+    /// fd-carrying form of the slot-1 arm: decodes the referenced op via
+    /// `Funcdata::get_op_from_const` (the `PcodeOp::getOpFromConst` twin)
+    /// and words the code pointer by that op's own address space, exactly
+    /// as cc:2000-2002 does; every other path delegates to the fd-less
+    /// form above.
+    // Ghidra: typeop.cc:1992 TypeOpIndirect::getInputLocal (iop const arm)
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        if slot != 1 {
+            let op = op.0.read().unwrap();
+            return self.get_input_local(&op, slot);
+        }
+        let (in0, iop_vn) = {
+            let op = op.0.read().unwrap();
+            (op.get_in(0)?.clone(), op.get_in(1)?.clone())
+        };
+        let type_factory = self.local_type_factory()?;
+        let size = in0.read().unwrap().get_size();
+        let word_size = fd
+            .get_op_from_const(&iop_vn)
+            .and_then(|iop| {
+                iop.0
+                    .read()
+                    .unwrap()
+                    .get_addr()
+                    .get_space()
+                    .map(|space| space.get_word_size() as usize)
+            })
+            .unwrap_or(1);
+        let code = type_factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_code();
+        Some(
+            type_factory
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_type_pointer(size, code, word_size),
+        )
     }
 
     /// INDIRECT is transparent (like COPY/MULTIEQUAL) but never propagates
@@ -2817,6 +3928,34 @@ impl TypeOp for TypeOpSegment {
             None => lng.op_binary(op),
         }
     }
+
+    /// The SEGMENTOP output token (typeop.cc:2414-2418): input-2's HIGH
+    /// read-facing type ("Assume type of ptr portion"). The fd-aware
+    /// consult is keyed on slot 2.
+    // Ghidra: typeop.cc:2414 TypeOpSegment::getOutputToken
+    fn get_output_token_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let in2 = {
+            let op = op.0.read().unwrap();
+            op.get_in(2)?.clone()
+        };
+        crate::unionresolve::vn_high_type_read_facing(fd, &in2, op, 2)
+            .or_else(|| in2.read().unwrap().v_type.clone())
+    }
+
+    /// "Never need a cast for inputs" (typeop.cc:2420-2424).
+    // Ghidra: typeop.cc:2420 TypeOpSegment::getInputCast
+    fn get_input_cast(
+        &self,
+        _op: &crate::op::PcodeOpRef,
+        _slot: usize,
+        _fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        None
+    }
 }
 
 pub struct TypeOpCpoolref;
@@ -2909,7 +4048,22 @@ impl TypeOp for TypeOpNew {
     }
 }
 
-pub struct TypeOpCallother;
+/// `CALLOTHER` type operator. Ghidra's `TypeOpCallother` takes the
+/// Architecture TypeFactory in its constructor (typeop.cc:811);
+/// `getInputLocal` (typeop.cc:855-863) consults the user-op descriptor
+/// registered for the CALLOTHER index held in input slot 0 and falls back
+/// to the `TypeOp::getInputLocal` base default.
+pub struct TypeOpCallother {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCallother {
+    // Ghidra: typeop.cc:811 TypeOpCallother::TypeOpCallother
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpCallother {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -2922,6 +4076,11 @@ impl TypeOp for TypeOpCallother {
     // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   getInputLocal fallback below resolves through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.cc:818 TypeOpCallother::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -2961,6 +4120,58 @@ impl TypeOp for TypeOpCallother {
             None => lng.op_binary(op),
         }
     }
+
+    /// The CALLOTHER operator name (typeop.cc:837-853) via the inherent
+    /// twin below.
+    // Ghidra: typeop.cc:837 TypeOpCallother::getOperatorName
+    fn get_operator_name(&self, op: &PcodeOp) -> String {
+        TypeOpCallother::userop_operator_name(op)
+    }
+
+    /// fd-less form: no parent Funcdata chain, so the descriptor table is
+    /// unreachable — this observes the base default exactly as Ghidra's
+    /// `userOp == null` arm (cc:860-862). The fd-carrying form below
+    /// performs the real lookup.
+    // Ghidra: typeop.cc:855 TypeOpCallother::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        // cc:862: TypeOp::getInputLocal(op,slot) base default.
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Unknown)
+    }
+
+    /// fd-carrying form (typeop.cc:855-863): the user-op descriptor
+    /// registered for the CALLOTHER index in input slot 0
+    /// (`tlst->getArch()->userops.getOp(...)`, cc:858) supplies the fixed
+    /// input type when present; the null result falls to the `TypeOp`
+    /// base default (cc:862).
+    // Ghidra: typeop.cc:855 TypeOpCallother::getInputLocal (userop arm)
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let (index, in_size) = {
+            let op = op.0.read().unwrap();
+            let index = op.get_in(0)?.read().unwrap().get_offset() as i32;
+            let in_size = op.get_in(slot)?.read().unwrap().get_size();
+            (index, in_size)
+        };
+        // cc:858-861: userOp->getInputLocal(op,slot) wins when non-null.
+        if let Some(manager) = fd
+            .arch
+            .as_ref()
+            .and_then(|arch| arch.userops.clone())
+        {
+            if let Some(res) = manager.read().unwrap().get_input_local(index, slot as i32) {
+                return Some(res.clone());
+            }
+        }
+        // cc:862: TypeOp::getInputLocal(op,slot).
+        let type_factory = self.local_type_factory()?;
+        base_local_type(type_factory, in_size, TypeMetatype::Unknown)
+    }
 }
 
 impl TypeOpCallother {
@@ -2976,7 +4187,7 @@ impl TypeOpCallother {
     /// the caller. The default path mirrors Ghidra's fallback branch
     /// (`TypeOp::getOperatorName(op) + '[' + slot0 + ']'`).
     // Ghidra: typeop.cc:837 TypeOpCallother::getOperatorName
-    pub fn get_operator_name(&self, op: &PcodeOp) -> String {
+    pub fn userop_operator_name(op: &PcodeOp) -> String {
         if let Some(index_vn) = op.get_in(0) {
             let vn = index_vn.read().unwrap();
             let index = vn.get_offset() as i32;
@@ -3369,41 +4580,42 @@ macro_rules! compare_op_impl {
                 Some(TypeMetatype::Bool)
             }
 
-            /// The two comparison operands use the exact Equal/NotEqual cast
-            /// selection, including High read-facing types, `typeOrder`, and
-            /// the comparison integer-promotion check — routed through the
-            /// fd-aware canonical `comparison_input_cast` (union_map consult
-            /// at each High read-facing read, UNIONRESOLVE-PKG-B-0001).
-            // Ghidra: typeop.cc:932 TypeOpEqual::getInputCast
+            /// The Equal/NotEqual arms use the exact `TypeOpEqual/
+            /// TypeOpNotEqual::getInputCast` selection — High read-facing
+            /// types, `typeOrder`, and the comparison integer-promotion
+            /// check — routed through the fd-aware canonical
+            /// `comparison_input_cast` (union_map consult at each High
+            /// read-facing read, UNIONRESOLVE-PKG-B-0001). The LESS/
+            /// LESSEQUAL arms use the ordering-comparison form
+            /// (cc:1075-1083/1099-1107): `inputTypeLocal(slot)` base
+            /// (TYPE_UINT), promotion check, else castStandard(TRUE,FALSE).
+            // Ghidra: typeop.cc:932 TypeOpEqual::getInputCast /
+            //   typeop.cc:1075 TypeOpIntLess::getInputCast
             fn get_input_cast(
                 &self,
                 op: &crate::op::PcodeOpRef,
                 slot: usize,
                 fd: &crate::funcdata::Funcdata,
             ) -> Option<Arc<Datatype>> {
+                let strategy = factory_cast_strategy(&self.type_factory);
                 let opcode = op.0.read().unwrap().opcode;
-                if matches!(
-                    opcode,
-                    OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
-                ) {
-                    return comparison_input_cast(
-                        fd,
-                        op,
-                        slot,
-                        &crate::type_system::cast::CastStrategyC::new(4),
-                    );
+                match opcode {
+                    OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                        comparison_input_cast(fd, op, slot, &strategy)
+                    }
+                    OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => {
+                        // cc:1082/1106: care_ptr_uint = FALSE (unsigned).
+                        ordering_compare_input_cast(self, op, slot, &strategy, fd, false)
+                    }
+                    _ => None,
                 }
-                let other = if slot == 0 { 1 } else { 0 };
-                op.0
-                    .read()
-                    .unwrap()
-                    .get_in(other)
-                    .and_then(|vn| vn.read().unwrap().v_type.clone())
             }
 
             /// Comparisons propagate a type across their two input operands
-            /// (never to/from the output). Spacebase inputs are rewrapped as a
-            /// pointer to an unknown base type.
+            /// (never to/from the output) via the shared
+            /// `TypeOpEqual::propagateAcrossCompare` body: a spacebase input
+            /// is rewrapped as a pointer to the unknown base; a mid-struct
+            /// PointerRel degrades to a plain pointer.
             /// Faithful to `TypeOpEqual::propagateAcrossCompare`
             /// (typeop.cc:963-986).
             // Ghidra: typeop.cc:945 TypeOpEqual::propagateType
@@ -3414,24 +4626,7 @@ macro_rules! compare_op_impl {
                 inslot: i32,
                 outslot: i32,
             ) -> Option<Arc<Datatype>> {
-                if inslot == -1 || outslot == -1 {
-                    return None; // Must propagate input <-> input
-                }
-                let src_slot = inslot;
-                if src_slot >= 0 {
-                    if let Some(vn) = op.get_in(src_slot as usize) {
-                        if vn.read().unwrap().is_spacebase() {
-                            return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
-                                crate::type_system::TypeBase::new(
-                                    "unknown".to_string(),
-                                    1,
-                                    TypeMetatype::Unknown,
-                                ),
-                            ))));
-                        }
-                    }
-                }
-                Some(alt_type.clone())
+                propagate_across_compare(alt_type, op, inslot, outslot, Some(&self.type_factory))
             }
         }
     };
@@ -3465,6 +4660,22 @@ macro_rules! signed_compare_op_impl {
             //   (typeop.hh:205 TYPE_BOOL set by TypeOpBinary ctor).
             fn get_output_metatype(&self) -> Option<TypeMetatype> {
                 Some(TypeMetatype::Bool)
+            }
+
+            /// The ordering-comparison input cast for the signed compares
+            /// (typeop.cc:1023-1031 SLESS / cc:1049-1057 SLESSEQUAL):
+            /// `inputTypeLocal(slot)` base (TYPE_INT), promotion check,
+            /// else `castStandard(reqtype,curtype,TRUE,TRUE)`.
+            // Ghidra: typeop.cc:1023 TypeOpIntSless::getInputCast
+            fn get_input_cast(
+                &self,
+                op: &crate::op::PcodeOpRef,
+                slot: usize,
+                fd: &crate::funcdata::Funcdata,
+            ) -> Option<Arc<Datatype>> {
+                let strategy = factory_cast_strategy(&self.type_factory);
+                // cc:1030/1056: care_ptr_uint = TRUE (signed compares).
+                ordering_compare_input_cast(self, op, slot, &strategy, fd, true)
             }
 
             /// Signed comparisons only propagate signed (TYPE_INT) types
@@ -3966,7 +5177,6 @@ impl TypeOpManager {
         // Extension
         ops[OpCode::CPUI_INT_ZEXT as usize] = Some(Box::new(TypeOpIntZext::new(type_factory.clone())));
         ops[OpCode::CPUI_INT_SEXT as usize] = Some(Box::new(TypeOpIntSext::new(type_factory.clone())));
-        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpTrunc::new(type_factory.clone())));
 
         // Floating Point
         ops[OpCode::CPUI_FLOAT_ADD as usize] = Some(Box::new(TypeOpFloatAdd::new(type_factory.clone())));
@@ -4004,7 +5214,8 @@ impl TypeOpManager {
 
         // Control Flow
         ops[OpCode::CPUI_BRANCH as usize] = Some(Box::new(TypeOpBranch::new(type_factory.clone())));
-        ops[OpCode::CPUI_CBRANCH as usize] = Some(Box::new(TypeOpCbranch));
+        ops[OpCode::CPUI_CBRANCH as usize] =
+            Some(Box::new(TypeOpCbranch::new(type_factory.clone())));
         ops[OpCode::CPUI_BRANCHIND as usize] =
             Some(Box::new(TypeOpBranchind::new(type_factory.clone())));
         ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall::new(type_factory.clone())));
@@ -4018,12 +5229,14 @@ impl TypeOpManager {
         ops[OpCode::CPUI_PTRSUB as usize] =
             Some(Box::new(TypeOpPtrsub::new(type_factory.clone())));
         ops[OpCode::CPUI_MULTIEQUAL as usize] = Some(Box::new(TypeOpMulti));
-        ops[OpCode::CPUI_INDIRECT as usize] = Some(Box::new(TypeOpIndirect));
+        ops[OpCode::CPUI_INDIRECT as usize] =
+            Some(Box::new(TypeOpIndirect::new(type_factory.clone())));
         ops[OpCode::CPUI_SEGMENTOP as usize] =
             Some(Box::new(TypeOpSegment::new(type_factory.clone())));
         ops[OpCode::CPUI_CPOOLREF as usize] = Some(Box::new(TypeOpCpoolref));
         ops[OpCode::CPUI_NEW as usize] = Some(Box::new(TypeOpNew));
-        ops[OpCode::CPUI_CALLOTHER as usize] = Some(Box::new(TypeOpCallother));
+        ops[OpCode::CPUI_CALLOTHER as usize] =
+            Some(Box::new(TypeOpCallother::new(type_factory.clone())));
         ops[OpCode::CPUI_CAST as usize] = Some(Box::new(TypeOpCast::new(type_factory.clone())));
         ops[OpCode::CPUI_INSERT as usize] = Some(Box::new(TypeOpInsert::new(type_factory.clone())));
         ops[OpCode::CPUI_EXTRACT as usize] = Some(Box::new(TypeOpExtract::new(type_factory.clone())));
@@ -4972,10 +6185,372 @@ mod tests {
         crate::funcdata::Funcdata::new("t", Address::new(0x1000), 0)
     }
 
+    #[test]
+    fn float_int2float_input_cast_absorbs_zext_and_tracks_high_bit() {
+        use crate::varnode::varnode_flags;
+        // typeop.cc:1847-1862.
+        let f2i = TypeOpFloatInt2Float::new(raw_factory());
+        // absorbZext (cc:1850-1851): an implied INT_ZEXT output feeding the
+        // conversion never takes a cast.
+        let mut zext = pcodeop(OpCode::CPUI_INT_ZEXT);
+        let zext_out = typed_vn(8, 0x30, None);
+        zext_out.write().unwrap().set_flags(varnode_flags::WRITTEN | varnode_flags::IMPLIED);
+        zext.output = Some(zext_out.clone());
+        let mut op = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
+        op.inrefs.push(zext_out);
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        let op_r = op_ref(op);
+        assert!(f2i.get_input_cast(&op_r, 0, &detached_fd()).is_none());
+        // The absorb predicate itself (cc:1872-1883).
+        assert!(float_int2float_absorb_zext(&op_r));
+
+        // care_uint_int (cc:1855-1860): a 4-byte input whose NZMask cannot
+        // carry the high bit drops the signed/unsigned distinction — an
+        // uint-typed current type under the int base is cast-free. A
+        // high-bit-capable input (constant with bit 31 set) keeps it: the
+        // uint current type takes the int base cast.
+        let uint4 = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(), 4, TypeMetatype::Uint,
+        )));
+        let mut plain = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
+        plain.inrefs.push(typed_vn(4, 0x10, Some(uint4.clone())));
+        plain.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        // Non-constant input with no NZMask constraint (high bit possible):
+        // care stays TRUE -> uint under int base takes the cast.
+        let cast = f2i
+            .get_input_cast(&op_ref(plain), 0, &detached_fd())
+            .expect("high-bit-capable uint takes the int base cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Int);
+
+        // A constant whose NZMask high bit is clear drops care_uint_int —
+        // the uint current type becomes cast-free under the int base
+        // (cc:1858-1859 shift reads the constant's NZMask).
+        let mut const_op = pcodeop(OpCode::CPUI_FLOAT_INT2FLOAT);
+        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(4, 0x7f))));
+        const_op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        assert!(f2i
+            .get_input_cast(&op_ref(const_op), 0, &detached_fd())
+            .is_none());
+    }
+
+    #[test]
+    fn extension_input_cast_forces_under_mismatched_promotion() {
+        // typeop.cc:1131-1139/1157-1165: the extension's input takes its
+        // inputTypeLocal base (ZEXT=UINT, SEXT=INT) when the promotion
+        // direction mismatches, else castStandard(TRUE,FALSE).
+        let zext = TypeOpIntZext::new(raw_factory());
+        let sext = TypeOpIntSext::new(raw_factory());
+        // A 1-byte int-typed input under ZEXT (req uint1, cur int1,
+        // care_uint_int=TRUE) takes the uint base (cast.cc:352-361).
+        let int1 = Arc::new(Datatype::Base(TypeBase::new(
+            "int1".into(), 1, TypeMetatype::Int,
+        )));
+        let mut op = pcodeop(OpCode::CPUI_INT_ZEXT);
+        op.inrefs.push(typed_vn(1, 0x10, Some(int1)));
+        op.output = Some(typed_vn(4, 0x20, None));
+        let cast = zext
+            .get_input_cast(&op_ref(op), 0, &detached_fd())
+            .expect("int1 under uint1 base takes the cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Uint);
+        assert_eq!(cast.get_size(), 1);
+        // The mirrored SEXT case: uint1 current under the int1 base.
+        let mut op = pcodeop(OpCode::CPUI_INT_SEXT);
+        let uint1 = Arc::new(Datatype::Base(TypeBase::new(
+            "uint1".into(), 1, TypeMetatype::Uint,
+        )));
+        op.inrefs.push(typed_vn(1, 0x10, Some(uint1)));
+        op.output = Some(typed_vn(4, 0x20, None));
+        let cast = sext
+            .get_input_cast(&op_ref(op), 0, &detached_fd())
+            .expect("uint1 under int1 base takes the cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Int);
+    }
+
+    #[test]
+    fn shift_and_divrem_input_casts_use_own_extensionGate() {
+        // typeop.cc:1543-1556 INT_RIGHT slot0: promotion gate requires the
+        // UNSIGNED extension; the base metain is UINT.
+        let right = TypeOpIntRight::new(raw_factory());
+        let mut op = pcodeop(OpCode::CPUI_INT_RIGHT);
+        let uint2 = Arc::new(Datatype::Base(TypeBase::new(
+            "uint2".into(), 2, TypeMetatype::Uint,
+        )));
+        op.inrefs.push(typed_vn(2, 0x10, Some(uint2)));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        op.output = Some(typed_vn(2, 0x20, None));
+        let op_r = op_ref(op);
+        // uint current under uint base is cast-free regardless of gate.
+        assert!(right.get_input_cast(&op_r, 0, &detached_fd()).is_none());
+        // Slot 1 (the shift amount) takes the base arm (cc:1555).
+        assert!(right.get_input_cast(&op_r, 1, &detached_fd()).is_none());
+
+        // INT_SDIV (cc:1659-1669): metain=INT; a uint-typed current takes
+        // the int base with care_uint_int=TRUE.
+        let sdiv = TypeOpIntSdiv::new(raw_factory());
+        let mut div_op = pcodeop(OpCode::CPUI_INT_SDIV);
+        let uint4 = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(), 4, TypeMetatype::Uint,
+        )));
+        div_op.inrefs.push(typed_vn(4, 0x10, Some(uint4)));
+        div_op.inrefs.push(typed_vn(4, 0x20, Some(int_t())));
+        let cast = sdiv
+            .get_input_cast(&op_ref(div_op), 0, &detached_fd())
+            .expect("uint under sdiv int base takes the cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Int);
+        // INT_DIV (cc:1639-1649): metain=UINT; uint current is cast-free.
+        let div = TypeOpIntDiv::new(raw_factory());
+        let mut udiv_op = pcodeop(OpCode::CPUI_INT_DIV);
+        let uint4b = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(), 4, TypeMetatype::Uint,
+        )));
+        udiv_op.inrefs.push(typed_vn(4, 0x10, Some(uint4b)));
+        udiv_op.inrefs.push(typed_vn(4, 0x20, Some(int_t())));
+        assert!(div
+            .get_input_cast(&op_ref(udiv_op), 0, &detached_fd())
+            .is_none());
+    }
+
+    #[test]
+    fn piece_subpiece_segment_never_take_input_casts() {
+        // typeop.cc:2057-2061/2136-2140/2420-2424: "Never need a cast".
+        let piece = TypeOpPiece::new(raw_factory());
+        let subpiece = TypeOpSubpiece::new(raw_factory());
+        let segment = TypeOpSegment::new(raw_factory());
+        for (op_impl, opc) in [
+            (&piece as &dyn TypeOp, OpCode::CPUI_PIECE),
+            (&subpiece, OpCode::CPUI_SUBPIECE),
+            (&segment, OpCode::CPUI_SEGMENTOP),
+        ] {
+            let mut op = pcodeop(opc);
+            op.inrefs.push(typed_vn(4, 0x10, Some(int_t())));
+            op.inrefs.push(typed_vn(4, 0x20, Some(int_t())));
+            op.output = Some(typed_vn(4, 0x30, None));
+            assert!(
+                op_impl.get_input_cast(&op_ref(op), 0, &detached_fd()).is_none(),
+                "{:?} never casts inputs",
+                opc
+            );
+        }
+    }
+
+    #[test]
+    fn operator_names_carry_sizes() {
+        // typeop.cc:1122/1148/1340/1356/1372/2048/2127 + typeop.hh:183
+        // default.
+        let factory = raw_factory();
+        let mut zext = pcodeop(OpCode::CPUI_INT_ZEXT);
+        zext.inrefs.push(typed_vn(1, 0x10, None));
+        zext.output = Some(typed_vn(4, 0x20, None));
+        assert_eq!(
+            TypeOpIntZext::new(factory.clone()).get_operator_name(&zext),
+            "ZEXT14"
+        );
+        assert_eq!(
+            TypeOpIntSext::new(factory.clone()).get_operator_name(&zext),
+            "SEXT14"
+        );
+        let mut carry = pcodeop(OpCode::CPUI_INT_CARRY);
+        carry.inrefs.push(typed_vn(4, 0x10, None));
+        carry.inrefs.push(typed_vn(4, 0x20, None));
+        assert_eq!(
+            TypeOpIntCarry::new(factory.clone()).get_operator_name(&carry),
+            "CARRY4"
+        );
+        assert_eq!(
+            TypeOpIntScarry::new(factory.clone()).get_operator_name(&carry),
+            "SCARRY4"
+        );
+        assert_eq!(
+            TypeOpIntSborrow::new(factory.clone()).get_operator_name(&carry),
+            "SBORROW4"
+        );
+        let mut piece = pcodeop(OpCode::CPUI_PIECE);
+        piece.inrefs.push(typed_vn(4, 0x10, None));
+        piece.inrefs.push(typed_vn(4, 0x20, None));
+        piece.output = Some(typed_vn(8, 0x30, None));
+        assert_eq!(
+            TypeOpPiece::new(factory.clone()).get_operator_name(&piece),
+            "CONCAT44"
+        );
+        let mut sub = pcodeop(OpCode::CPUI_SUBPIECE);
+        sub.inrefs.push(typed_vn(8, 0x10, None));
+        sub.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        sub.output = Some(typed_vn(4, 0x30, None));
+        assert_eq!(
+            TypeOpSubpiece::new(factory.clone()).get_operator_name(&sub),
+            "SUB84"
+        );
+        // Default (typeop.hh:183): the bare display name.
+        assert_eq!(
+            TypeOpIntAdd::new(factory.clone()).get_operator_name(&carry),
+            "INT_ADD"
+        );
+    }
+
+    #[test]
+    fn cbranch_indirect_local_input_types() {
+        // typeop.cc:609-619 Cbranch: slot 1 is the bool base; slot 0 a code
+        // pointer worded by the input's space.
+        let cbranch = TypeOpCbranch::new(aligned_factory());
+        let mut op = pcodeop(OpCode::CPUI_CBRANCH);
+        op.inrefs.push(typed_vn(8, 0x500010, None));
+        op.inrefs.push(typed_vn(1, 0x1, None));
+        let bool_t = cbranch
+            .get_input_local(&op, 1)
+            .expect("slot 1 bool base");
+        assert_eq!(bool_t.get_metatype(), TypeMetatype::Bool);
+        assert_eq!(bool_t.get_size(), 1);
+        let code_ptr = cbranch
+            .get_input_local(&op, 0)
+            .expect("slot 0 code pointer");
+        assert_eq!(code_ptr.get_metatype(), TypeMetatype::Pointer);
+        assert_eq!(code_ptr.get_size(), 8);
+        // The pointee is the code type (metatype CODE).
+        match code_ptr.as_ref() {
+            Datatype::Pointer(p) => assert_eq!(p.ptr_to.get_metatype(), TypeMetatype::Code),
+            _ => panic!("slot 0 must be a pointer"),
+        }
+
+        // typeop.cc:1992-2003 Indirect: slot 0 base default; slot 1 code
+        // pointer sized by in(0).
+        let indirect = TypeOpIndirect::new(aligned_factory());
+        let mut iop = pcodeop(OpCode::CPUI_INDIRECT);
+        iop.inrefs.push(typed_vn(4, 0x10, None));
+        iop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(8, 0x99))));
+        let base = indirect
+            .get_input_local(&iop, 0)
+            .expect("slot 0 base default");
+        assert_eq!(base.get_metatype(), TypeMetatype::Unknown);
+        let code_ptr = indirect
+            .get_input_local(&iop, 1)
+            .expect("slot 1 code pointer");
+        assert_eq!(code_ptr.get_size(), 4);
+        match code_ptr.as_ref() {
+            Datatype::Pointer(p) => assert_eq!(p.ptr_to.get_metatype(), TypeMetatype::Code),
+            _ => panic!("slot 1 must be a pointer"),
+        }
+
+        // typeop.cc:855-863 Callother: no descriptor table reachable from a
+        // detached fixture -> the base UNKNOWN default for every slot.
+        let callother = TypeOpCallother::new(aligned_factory());
+        let mut cop = pcodeop(OpCode::CPUI_CALLOTHER);
+        cop.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        cop.inrefs.push(typed_vn(4, 0x10, None));
+        let local = callother
+            .get_input_local(&cop, 1)
+            .expect("callother base default");
+        assert_eq!(local.get_metatype(), TypeMetatype::Unknown);
+    }
+
+    #[test]
+    fn ptradd_input_cast_align_size_arm() {
+        // typeop.cc:2250-2266: equal alignSize on the one-level-down bases
+        // cancels the cast; different align sizes return the varnode type.
+        let ptradd = TypeOpPtradd::new(raw_factory());
+        let char_t = Arc::new(Datatype::Base(TypeBase::new(
+            "char".into(), 1, TypeMetatype::Int,
+        )));
+        let int_t = int_t();
+        let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: char_t.clone(),
+            wordsize: 1,
+        }));
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t.clone(),
+            wordsize: 1,
+        }));
+        // vn type char* (alignSize 1) vs high type int* (alignSize 4):
+        // different base align sizes -> the varnode type is the cast.
+        let mut op = pcodeop(OpCode::CPUI_PTRADD);
+        let vn = typed_vn(8, 0x10, Some(char_ptr.clone()));
+        vn.write().unwrap().high = Some(high_of(int_ptr.clone()));
+        op.inrefs.push(vn);
+        op.inrefs.push(typed_vn(8, 0x20, None));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 1))));
+        let cast = ptradd
+            .get_input_cast(&op_ref(op), 0, &detached_fd())
+            .expect("differing align sizes force the varnode-type cast");
+        assert!(Arc::ptr_eq(&cast, &char_ptr));
+        // Equal bases cancel the cast.
+        let vn2 = typed_vn(8, 0x30, Some(char_ptr.clone()));
+        vn2.write().unwrap().high = Some(high_of(char_ptr.clone()));
+        let mut op2 = pcodeop(OpCode::CPUI_PTRADD);
+        op2.inrefs.push(vn2);
+        op2.inrefs.push(typed_vn(8, 0x40, None));
+        op2.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 1))));
+        let op2_r = op_ref(op2);
+        assert!(ptradd.get_input_cast(&op2_r, 0, &detached_fd()).is_none());
+        // Non-slot-0 takes the base arm: a typed int input under the INT
+        // metain is cast-free.
+        assert!(ptradd.get_input_cast(&op2_r, 1, &detached_fd()).is_none());
+    }
+
+    #[test]
+    fn shift_output_tokens_demote_bool_to_int() {
+        // typeop.cc:1518-1525/1558-1565/1608-1615: the token is in(0)'s
+        // read-facing type with BOOL demoted to the factory INT base.
+        let factory = aligned_factory();
+        let left = TypeOpIntLeft::new(factory.clone());
+        let mut op = pcodeop(OpCode::CPUI_INT_LEFT);
+        let bool_t = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".into(), 1, TypeMetatype::Bool,
+        )));
+        op.inrefs.push(typed_vn(1, 0x10, Some(bool_t)));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        let token = left
+            .get_output_token_in_fd(&op_ref(op), &detached_fd())
+            .expect("bool in0 demotes to int");
+        assert_eq!(token.get_metatype(), TypeMetatype::Int);
+        assert_eq!(token.get_size(), 1);
+        // A non-bool in0 passes through unchanged.
+        let int4 = int_t();
+        let mut op2 = pcodeop(OpCode::CPUI_INT_LEFT);
+        op2.inrefs.push(typed_vn(4, 0x10, Some(int4.clone())));
+        op2.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 3))));
+        let token = left
+            .get_output_token_in_fd(&op_ref(op2), &detached_fd())
+            .expect("int in0 passes through");
+        assert!(Arc::ptr_eq(&token, &int4));
+    }
+
+    #[test]
+    fn piece_output_token_int_uint_or_uint_base() {
+        // typeop.cc:2063-2072: INT/UINT def-facing output passes through;
+        // anything else falls to the factory UINT base.
+        let piece = TypeOpPiece::new(raw_factory());
+        let int4 = int_t();
+        let mut op = pcodeop(OpCode::CPUI_PIECE);
+        op.inrefs.push(typed_vn(4, 0x10, None));
+        op.inrefs.push(typed_vn(4, 0x20, None));
+        op.output = Some(typed_vn(8, 0x30, Some(int4.clone())));
+        let token = piece
+            .get_output_token_in_fd(&op_ref(op), &detached_fd())
+            .expect("int output passes through");
+        assert!(Arc::ptr_eq(&token, &int4));
+        // An unknown output falls to the uint base (cc:2071).
+        let mut op2 = pcodeop(OpCode::CPUI_PIECE);
+        op2.inrefs.push(typed_vn(4, 0x10, None));
+        op2.inrefs.push(typed_vn(4, 0x20, None));
+        op2.output = Some(typed_vn(8, 0x30, None));
+        let token = piece
+            .get_output_token_in_fd(&op_ref(op2), &detached_fd())
+            .expect("unknown output falls to the uint base");
+        assert_eq!(token.get_metatype(), TypeMetatype::Uint);
+        assert_eq!(token.get_size(), 8);
+    }
+
     fn int_t() -> Arc<Datatype> {
         Arc::new(Datatype::Base(TypeBase::new(
             "int".into(), 4, TypeMetatype::Int,
         )))
+    }
+
+    /// A HighVariable seeded with the given type (the fixture equivalent of
+    /// Ghidra's `new HighVariable(vn)` + `updateType` settling).
+    fn high_of(dt: Arc<Datatype>) -> Arc<RwLock<crate::variable::HighVariable>> {
+        Arc::new(RwLock::new(crate::variable::HighVariable::new(dt)))
     }
 
     fn progress_data_t() -> Arc<Datatype> {
@@ -5011,6 +6586,20 @@ mod tests {
     /// local-type defaults.
     fn raw_factory() -> Arc<RwLock<TypeFactory>> {
         Arc::new(RwLock::new(TypeFactory::raw()))
+    }
+
+    /// A factory with the default size→alignment map installed (the raw
+    /// constructor state lacks it and `getTypePointer` construction — used
+    /// by the propagateAcrossCompare spacebase/pointerRel arms — throws the
+    /// "alignment map not initialized" LowlevelError exactly as the oracle
+    /// does for an uninitialized TypeFactory).
+    fn aligned_factory() -> Arc<RwLock<TypeFactory>> {
+        let factory = raw_factory();
+        factory
+            .write()
+            .unwrap()
+            .set_default_alignment_map();
+        factory
     }
 
     #[test]
@@ -5049,6 +6638,70 @@ mod tests {
         assert!(same_arc(equal.propagate_type(&t, &op, 0, 1), &t));
         // To/from the output is blocked.
         assert!(equal.propagate_type(&t, &op, -1, 0).is_none());
+
+        // typeop.cc:968-971: a spacebase input rewraps as a pointer to the
+        // unknown base, sized by the alttype.
+        let mut sb_op = pcodeop(OpCode::CPUI_INT_EQUAL);
+        let sb = typed_vn(8, 0x10, None);
+        sb.write().unwrap().set_flags(varnode_flags::SPACEBASE);
+        sb_op.inrefs.push(sb);
+        sb_op.inrefs.push(typed_vn(8, 0x20, None));
+        let equal = TypeOpIntEqual::new(aligned_factory());
+        let wrapped = equal
+            .propagate_type(&t, &sb_op, 0, 1)
+            .expect("spacebase wraps");
+        assert_eq!(wrapped.get_metatype(), TypeMetatype::Pointer);
+        assert_eq!(wrapped.get_size(), t.get_size());
+
+        // typeop.cc:972-979: a mid-struct PointerRel degrades to a plain
+        // pointer of the same size across comparisons.
+        let parent = Arc::new(Datatype::Struct(crate::type_system::datatype::TypeStruct {
+            base: TypeBase::new("relparent".into(), 16, TypeMetatype::Struct),
+            fields: Vec::new(),
+        }));
+        let mut rel_ptr_base =
+            TypeBase::new("int * rel".into(), 8, TypeMetatype::Pointer);
+        rel_ptr_base.pointer_rel = Some(crate::type_system::datatype::PointerRelState {
+            parent: parent.clone(),
+            offset: 4,
+            stripped: None,
+        });
+        let rel_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: rel_ptr_base,
+            ptr_to: int_t(),
+            wordsize: 1,
+        }));
+        // typeop.cc:972-979: a mid-struct PointerRel degrades to a plain
+        // pointer of the same size across comparisons. (The invn must not
+        // be a spacebase here — cc:968's wrap runs first.)
+        let mut rel_op = pcodeop(OpCode::CPUI_INT_EQUAL);
+        rel_op.inrefs.push(typed_vn(8, 0x10, None));
+        rel_op.inrefs.push(typed_vn(8, 0x20, None));
+        let degraded = equal
+            .propagate_type(&rel_ptr, &rel_op, 0, 1)
+            .expect("pointer-rel degrades");
+        assert_eq!(degraded.get_metatype(), TypeMetatype::Pointer);
+        assert_eq!(degraded.get_size(), 8);
+        // The degraded pointer has no relative state left.
+        match degraded.as_ref() {
+            Datatype::Pointer(p) => assert!(p.base.pointer_rel.is_none()),
+            _ => panic!("degraded must stay a pointer"),
+        }
+        // Negative-offset relative pointers pass through unchanged
+        // (cc:980-981 else arm).
+        let mut neg_rel_base =
+            TypeBase::new("int * rel-neg".into(), 8, TypeMetatype::Pointer);
+        neg_rel_base.pointer_rel = Some(crate::type_system::datatype::PointerRelState {
+            parent,
+            offset: -1,
+            stripped: None,
+        });
+        let neg_rel = Arc::new(Datatype::Pointer(TypePointer {
+            base: neg_rel_base,
+            ptr_to: int_t(),
+            wordsize: 1,
+        }));
+        assert!(same_arc(equal.propagate_type(&neg_rel, &rel_op, 0, 1), &neg_rel));
     }
 
     #[test]
@@ -5068,18 +6721,76 @@ mod tests {
     }
 
     #[test]
-    fn compare_output_metatype_is_bool_and_cast_uses_other_operand() {
+    fn compare_output_metatype_is_bool_and_cast_uses_own_base() {
+        // typeop.cc:1075-1083 TypeOpIntLess::getInputCast: the required type
+        // is the op's own inputTypeLocal base (TYPE_UINT for INT_LESS), NOT
+        // the other operand's type.
         let mut op = pcodeop(OpCode::CPUI_INT_LESS);
         let t = int_t();
         op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
-        op.inrefs.push(typed_vn(4, 0x20, None));
+        op.inrefs.push(typed_vn(4, 0x20, Some(t.clone())));
         let less = TypeOpIntLess::new(raw_factory());
         assert_eq!(less.get_output_metatype(), Some(TypeMetatype::Bool));
-        // Casting slot 1 should target the other operand's type (in[0]).
-        assert!(same_arc(
-            less.get_input_cast(&op_ref(op), 1, &detached_fd()),
-            &t
-        ));
+        // care_uint_int=TRUE (cc:1082 third arg): an int4 current type
+        // under the uint4 base DOES take the cast (cast.cc:352-361 — INT is
+        // not in the care=true whitelist).
+        let cast = less
+            .get_input_cast(&op_ref(op), 1, &detached_fd())
+            .expect("int cur under uint base takes the cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Uint);
+        assert_eq!(cast.get_size(), 4);
+
+        // A pointer-typed current type takes the uint base cast as well
+        // (size mismatch forces the cast; the result preserves the reqtype).
+        let ptr_t = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: t.clone(),
+            wordsize: 1,
+        }));
+        let mut ptr_op = pcodeop(OpCode::CPUI_INT_LESS);
+        ptr_op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        ptr_op.inrefs.push(typed_vn(4, 0x20, Some(ptr_t)));
+        let cast = less
+            .get_input_cast(&op_ref(ptr_op), 1, &detached_fd())
+            .expect("pointer current type forces the base cast");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Uint);
+        assert_eq!(cast.get_size(), 4);
+
+        // A uint current type is cast-free (cast.cc:354-355 whitelist).
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(),
+            4,
+            TypeMetatype::Uint,
+        )));
+        let mut uint_op = pcodeop(OpCode::CPUI_INT_LESS);
+        uint_op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        uint_op.inrefs.push(typed_vn(4, 0x20, Some(uint_t)));
+        assert!(less
+            .get_input_cast(&op_ref(uint_op), 1, &detached_fd())
+            .is_none());
+
+        // typeop.cc:1023-1031 TypeOpIntSless::getInputCast: the same shape
+        // with care_uint_int=TRUE — an int current type under the INT base
+        // is cast-free, an uint current type takes the int base cast.
+        let sless = TypeOpIntSless::new(raw_factory());
+        let mut sless_op = pcodeop(OpCode::CPUI_INT_SLESS);
+        sless_op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        sless_op.inrefs.push(typed_vn(4, 0x20, Some(t.clone())));
+        assert!(sless
+            .get_input_cast(&op_ref(sless_op), 1, &detached_fd())
+            .is_none());
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(),
+            4,
+            TypeMetatype::Uint,
+        )));
+        let mut uint_op = pcodeop(OpCode::CPUI_INT_SLESS);
+        uint_op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        uint_op.inrefs.push(typed_vn(4, 0x20, Some(uint_t)));
+        let cast = sless
+            .get_input_cast(&op_ref(uint_op), 1, &detached_fd())
+            .expect("uint under signed compare forces the int base");
+        assert_eq!(cast.get_metatype(), TypeMetatype::Int);
     }
 
     #[test]
@@ -5360,7 +7071,7 @@ mod tests {
         sub.inrefs
             .push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
         sub.output = Some(typed_vn(4, 0x20, None));
-        let sub_op = TypeOpTrunc::new(factory.clone());
+        let sub_op = TypeOpSubpiece::new(factory.clone());
         // SUBPIECE ctor: TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN) —
         // typeop.cc:2116. Both sides stay UNKNOWN (cast decision is the
         // printer's isSubpieceCast predicate, not a metatype).

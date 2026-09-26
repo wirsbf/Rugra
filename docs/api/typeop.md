@@ -3,6 +3,65 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-09-26：WORKPKG-UNMAP-TYPEOP-0001 — getInputCast/getOutputToken 虚分派残臂补齐
+
+锁定 oracle（e40ed130）的 typeop.cc 虚分派族按包规格逐臂补齐（B2 fixture
+`tests/oracle/typeop_cast_arms_1204.*` 双侧 141 record 字节恒等，SHA-256
+`2daf410c…`；runner `tools/run_typeop_cast_arms_oracle.sh`）：
+
+- **canonical 共享臂函数**（对齐 `comparison_input_cast` 先例，fd-aware consult
+  走 unionresolve.rs 孪生）：
+  `ordering_compare_input_cast`（cc:1023/1049/1075/1099，
+  `inputTypeLocal` 基 + `checkIntPromotionForCompare` + `castStandard(TRUE,
+  care_ptr_uint)`——SLESS 族 care_ptr_uint=TRUE、LESS 族 FALSE）、
+  `extension_input_cast`（cc:1131/1157，`checkIntPromotionForExtension`
+  cast.cc:126-138 方向匹配即隐含）、`shift_input_cast`（cc:1543/1585 slot-0，
+  UNSIGNED/SIGNED 门）、`divrem_input_cast`（cc:1639/1659/1679/1699 双 slot）、
+  `float_int2float_input_cast` + `float_int2float_absorb_zext`（cc:1847/1872，
+  吸收 ZEXT 短路 + NZMask 高位动态 `care_uint_int`）、`ptradd_input_cast`
+  （cc:2250，varnode 自类型 vs HIGH 类型一层基座 `alignSize` 仲裁）、
+  `base_input_cast_arm`（cc:295-303 基臂：annotation 短路 +
+  `inputTypeLocal` + `castStandard(FALSE,TRUE)`）。
+- **trait 臂接线**：compare 宏族修正——EQUAL/NOTEQUAL 保持
+  `comparison_input_cast`，**LESS/LESSEQUAL 从"另一操作数 v_type"的错误臂改
+  走 ordering 臂**；`signed_compare_op_impl`（SLESS/SLESSEQUAL）新增
+  ordering 臂（care_ptr_uint=TRUE）；ZEXT/SEXT/DIV/SDIV/REM/SREM/
+  FLOAT_INT2FLOAT 经宏 `_ext` 尾块接线各自 `get_input_cast`；INT_RIGHT/
+  INT_SRIGHT slot-0 覆写 + 非 slot-0 落 `base_input_cast_arm`；PTRADD slot-0
+  走 `ptradd_input_cast`、余 slot 落基臂；PIECE/SUBPIECE/SEGMENTOP 显式
+  never-cast 覆写（cc:2057/2136/2420）。
+- **getOutputToken 族**：`shift_output_token_in_fd`（cc:1518/1558/1608，in0
+  HIGH read-facing + BOOL 降级 factory INT 基）接 INT_LEFT/RIGHT/SRIGHT；
+  `piece_output_token_in_fd`（cc:2063，def-facing INT/UINT 否则 UINT 基）；
+  `subpiece_output_token_in_fd`（cc:2142，findTruncation 场地匹配 →
+  def-facing 非 UNKNOWN → INT 基，artificial slot 1）；SEGMENTOP token =
+  in2 read-facing（cc:2414）。
+- **`getOperatorName` trait 面**：默认 `get_name()`（typeop.hh:183 inline）；
+  覆写 ZEXT/SEXT `<in><out>` 尺寸、CARRY/SCARRY/SBORROW `<in>`、
+  CONCAT `<in0><in1>`、SUB `<in><out>`（cc:1122/1148/1340/1356/1372/2048/2127）；
+  CALLOTHER trait 臂委托既有 `userop_operator_name`。
+- **getInputLocal 特例**：`TypeOpCbranch`（cc:609——slot1=BOOL 基、slot0=
+  代码指针按输入空间 wordsize）、`TypeOpIndirect`（cc:1992——slot0 基默认、
+  slot1=iop 常量解引用的代码指针，fd 形态走 `get_op_from_const` 精确解码）、
+  `TypeOpCallother`（cc:855——fd 形态查 `arch.userops` 描述符，null 落基默认）。
+  三者从 unit struct 转为携带 `TypeFactory`（镜像 oracle 构造器收 `t`）。
+- **`TypeOpPtradd/Ptrsub` 补 `local_type_factory` provider**（此前缺失导致基臂
+  解析不到工厂）。
+- **`propagateAcrossCompare`（cc:963-986）补齐**：compare 宏的
+  `propagate_type` 改走完整 oracle 体——spacebase 重包（alttype 尺寸）+
+  **PointerRel 结构中位指针降级为普通指针臂**（cc:972-979）+ outvn 常量检查。
+- **registerInstructions 表核验（cc:24-108）**：60 项逐一在场；**发现并移除
+  SUBPIECE 的死注册**（`TypeOpTrunc` 注册后即被 `TypeOpSubpiece` 原地覆盖——
+  12.0.4 只注册一个 SUBPIECE 条目，cc:44）；`TypeOpTrunc` 旧名宏实例化删除
+  （改名未链接残留），测试迁移到 `TypeOpSubpiece`。
+- **生产消费状态（诚实记账）**：coreaction.rs cast_input/cast_output 的行为
+  镜像（ordering/extension/shift/divrem/ptr_input_reqtype/subpiece token 等）
+  在本包之前已存在并驱动 canon——本包补齐的是 typeop.rs 虚分派层本身（账本
+  对齐单位 + 未来 REGEN 链接的单一实现源）。**唯一真行为缺口 =
+  FLOAT_INT2FLOAT getInputCast**：此前 cast_input 的默认臂对它返回 None（永不
+  cast），本包补齐了 oracle 臂但消费端改线属 COREACT-0002/REGEN 域（本包写域
+  不含 coreaction.rs）——canon 影响预期 0，已在票行如实归因。
+
 ## 2026-09-26：fd-aware facing 消费点收口（UNIONRESOLVE-PKG-B-0001）
 
 锁定 oracle（e40ed130）的四个 facing 方法（varnode.cc:626-672）在 typeop 消费
@@ -17,7 +76,8 @@
 - **trait `get_input_cast`** 签名改 `(op: &PcodeOpRef, slot, fd)`（对齐
   `get_input_local_in_fd` 先例：Rust PcodeOp 无 parent→Funcdata 链，fd 穿参）。
   compare 宏族 EQUAL/NOTEQUAL 臂路由到上述 canonical；LESS 族 other-operand
-  读不变。
+  读为当时的过渡形态，**已被 WORKPKG-UNMAP-TYPEOP-0001 修正为 oracle 的
+  ordering 臂**（cc:1075/1099，见顶部 2026-09-26 包节）。
 - **trait 新增 `get_output_token_in_fd(op_ref, fd)`**（默认转发 fd-less
   `get_output_token`，镜像 Ghidra 单一虚分派）：`TypeOpCopy`（cc:405-409，
   旧实现是裸 `v_type` 非 high 读）、`TypeOpPtradd`（cc:2244-2248）、
@@ -28,7 +88,10 @@
 - **`TypeOpPtradd/Ptrsub::getInputCast` 的 trait 侧退化副本删除**
   （cc:2250/2320 的单一实现 = coreaction.rs `ptr_input_reqtype`，其
   cc:2255/2256/2325/2326 consult 已 fd-aware；旧行为等价于 map-miss 臂，
-  生产与测试均无 trait 调用方）。
+  生产与测试均无 trait 调用方）。**WORKPKG-UNMAP-TYPEOP-0001 已恢复 trait 侧
+  正式臂**：PTRADD = `ptradd_input_cast`（cc:2250 单一 canonical，fd-aware），
+  非 slot-0 落 `base_input_cast_arm`；PTRSUB 的 trait 臂仍以 coreaction
+  `ptr_input_reqtype` 为单一实现（待 REGEN 链接，见顶部包节）。
 - 测试侧新增 `op_ref()`/`detached_fd()` fixture 助手（detached fd 的空
   union map ⇒ consult 恰为 map-miss 臂，与旧退化形同观察）。
 
