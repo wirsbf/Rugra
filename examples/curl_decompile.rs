@@ -41,6 +41,31 @@ fn mirror_bundle_enabled() -> bool {
     std::env::var("RUGRA_MIRROR").is_ok()
 }
 
+// HTTPDMAIN-F2-IMAGEBASE-DECISION-0001 (F2B, curl half, 2026-09-26): the
+// per-run native load base. The canon golden's producer (analyzeHeadless)
+// imports the curl ET_DYN PIE at its preferred image base 0x100000, so the
+// canon face now loads NATIVELY there — every IR address (entries, labels,
+// and the CALL return-address constants the x86 lifter synthesizes) is
+// created in the golden's image-based form directly and the H-family
+// retaddr residuals (PRINTC-CONST-DISPLAYREBASE-0001, file2string
+// `0x3af8` vs canon `(undefined *)0x103af8`) self-heal. Any mirror
+// component keeps the locked oracle BfdArchitecture contract (BFD raw
+// vma = base 0): under the gate the base is 0, every shift below is the
+// identity, and the bank/projection faces stay byte-identical (the worker
+// subprocesses inherit the same env, so both processes derive the same
+// value — the W1b manifest-inheritance precedent).
+fn curl_image_base() -> u64 {
+    if mirror_bundle_enabled()
+        || std::env::var("RUGRA_FLOW_MIRROR").is_ok()
+        || std::env::var("RUGRA_BARE_LOAD").is_ok()
+        || std::env::var("RUGRA_ORACLE_FIXTURE_DATA").is_ok()
+    {
+        0
+    } else {
+        ANALYZE_HEADLESS_IMAGE_BASE
+    }
+}
+
 // RUGRA-GLUE: flow-mirror component (RUGRA-FLOW-MIRROR-0001 M1/M2) — the
 // oracle followFlow load contract: full-range flow, full-segment SLEIGH
 // image, no shared-return overrides, load_mode=single_function_bfd.
@@ -1005,7 +1030,7 @@ fn install_callee_siglock_protos(
         .collect();
     let mut installed = 0usize;
     for (owner, entry) in specs {
-        let Some(entry_proto) = table.get(&(entry + ANALYZE_HEADLESS_IMAGE_BASE)) else {
+        let Some(entry_proto) = table.get(&entry) else {
             continue;
         };
         if !entry_proto.input_lock && entry_proto.ret.is_none() {
@@ -2101,7 +2126,12 @@ fn link_call_specs(
         // ledger), which is why the asymmetry stayed latent until a
         // function with local DWARF-defined callees was projected.
         if !installed && !mirror_bundle_enabled() {
-            match debug_db.locked_callsite_proto(entry, &model_carrier) {
+            // F2B: entry is canon-space (native load); DWARF keys are
+            // link-time base-0 — query through the base-0 twin.
+            match debug_db.locked_callsite_proto(
+                entry.wrapping_sub(curl_image_base()),
+                &model_carrier,
+            ) {
                 Ok(Some(proto)) => {
                     owner.write().unwrap().prototype = proto;
                     dwarf_signatures += 1;
@@ -2338,7 +2368,11 @@ fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
 fn worker_memory_load_image(
     elf: &goblin::elf::Elf, buffer: &[u8],
 ) -> rugra::loadimage::RawLoadImage {
-    rugra::loadimage::RawLoadImage::from_bytes("curl", 0, worker_memory_image_bytes(elf, buffer))
+    rugra::loadimage::RawLoadImage::from_bytes(
+        "curl",
+        curl_image_base(), // F2B: native analyzeHeadless base (0 under any mirror gate)
+        worker_memory_image_bytes(elf, buffer),
+    )
 }
 
 fn external_block_base(elf: &goblin::elf::Elf) -> u64 {
@@ -3129,6 +3163,12 @@ fn main() {
                 std::process::exit(2);
             }
         },
+        // F2B selector base note: the ledger-matched selector surface stays
+        // link-time base-0 (the ledger corpus loop), so RUGRA_STAGE_FUNC
+        // address forms are unchanged — base-0 under every mirror gate (the
+        // bank capture contract) and base-0 on the canon stage face alike
+        // (the worker target rebases +curl_image_base() at the request
+        // boundary).
         false => match args.as_slice() {
         [_] => DriverMode::All,
         [_, option, functions @ ..]
@@ -3827,6 +3867,9 @@ fn build_worker_architecture(
                 for (&address, global) in globals.iter() {
                     let size = global.data_type.get_size().max(1) as i32;
                     let scope = db.global_scope_id;
+                    // F2B: seed at the canon address (queries arrive in the
+                    // native image space; identity under the mirror gate).
+                    let address = address + curl_image_base();
                     // GLOBWORD-C5: when the front-end supplied a query
                     // channel Database, its DWARF layer already installed
                     // the authoritative (typed, typelocked) entry at this
@@ -3869,8 +3912,9 @@ fn build_worker_architecture(
                     if !is_object || sym.is_import() {
                         continue;
                     }
-                    let address = sym.st_value;
-                    if address == 0 || !seen.insert(address) {
+                    let raw_address = sym.st_value;
+                    let address = raw_address + curl_image_base(); // F2B: canon seed address
+                    if address == 0 || raw_address == 0 || !seen.insert(address) {
                         continue;
                     }
                     let Some(name) = elf.strtab.get_at(sym.st_name) else {
@@ -3970,7 +4014,7 @@ fn build_worker_architecture(
                                     || (0..8).all(|k| byte_at(slot + k) == Some(0))
                             };
                             let all_pointer_slots = (0..size_usize / 8)
-                                .all(|i| slot_is_pointer(address + (i as u64) * 8));
+                                .all(|i| slot_is_pointer(raw_address + (i as u64) * 8));
                             if all_pointer_slots {
                                 (
                                     rugra::type_system::typefactory::TypeFactory::shared_default()
@@ -5036,20 +5080,33 @@ fn decompile_request(
         Object::Elf(elf) => elf,
         _ => return Err("worker input is not an ELF image".to_string()),
     };
+    // F2B: the worker's addresses are canon-space (native load, target
+    // rebased at the request boundary); raw-ELF math below uses the base-0
+    // twin. Identity (0) under every mirror gate.
+    let img_base = curl_image_base();
     let target = &request.target;
-    if target.symbol_backed && !elf_symbol_matches(elf, target) {
+    let vaddr0 = target.vaddr.wrapping_sub(img_base);
+    if target.symbol_backed
+        && !elf.syms.iter().any(|symbol| {
+            symbol.st_value == vaddr0
+                && symbol.st_size as usize == target.size
+                && (elf.strtab.get_at(symbol.st_name) == Some(target.name.as_str())
+                    || strip_gcc_suffix(elf.strtab.get_at(symbol.st_name).unwrap_or(""))
+                        == target.name)
+        })
+    {
         return Err(format!(
             "worker target no longer matches ELF symbol: {} @ 0x{:x} size {}",
             target.name, target.vaddr, target.size
         ));
     }
     let Some(section) = elf.section_headers.iter().find(|section| {
-        target.vaddr >= section.sh_addr
-            && target.vaddr < section.sh_addr.saturating_add(section.sh_size)
+        vaddr0 >= section.sh_addr
+            && vaddr0 < section.sh_addr.saturating_add(section.sh_size)
     }) else {
         return Err(format!("no ELF section contains 0x{:x}", target.vaddr));
     };
-    let expected_file_offset = section.sh_offset + (target.vaddr - section.sh_addr);
+    let expected_file_offset = section.sh_offset + (vaddr0 - section.sh_addr);
     if expected_file_offset != target.file_offset {
         return Err(format!(
             "worker target file offset mismatch: expected 0x{:x}, received 0x{:x}",
@@ -5208,11 +5265,13 @@ fn decompile_request(
             // by the FULL scan) keeps every run, which is what prints the
             // interior-suffix literals ("%s%s" at 0x61eb, "r" at 0x61c2)
             // the canon golden folds.
+            let canon_dat_label_starts: [u64; 5] =
+                CANON_DAT_LABEL_STARTS.map(|addr| addr + img_base); // F2B: canon keys
             let string_addrs: HashMap<u64, &String> = request
                 .string_entries
                 .iter()
                 .filter(|(address, _)| {
-                    !CANON_DAT_LABEL_STARTS.contains(address)
+                    !canon_dat_label_starts.contains(address)
                 })
                 .map(|(address, value)| (*address, value))
                 .collect();
@@ -5225,7 +5284,8 @@ fn decompile_request(
             // non-overlap rule for Data never applied to them, so the
             // skip exempts them while every other interior byte of a
             // string span stays label-free.
-            const CANON_INTERIOR_DAT_LABELS: [u64; 3] = [0x62f8, 0x62f9, 0x62ac];
+            let canon_interior_dat_labels: [u64; 3] =
+                [0x62f8, 0x62f9, 0x62ac].map(|addr| addr + img_base); // F2B: canon keys
             let full_scan_starts: Vec<u64> = {
                 let mut starts: Vec<u64> =
                     request.string_entries.iter().map(|(a, _)| *a).collect();
@@ -5250,7 +5310,10 @@ fn decompile_request(
                         None => global.name.clone(),
                     };
                     (
-                        address, (
+                        // F2B: DWARF addresses are link-time base-0 — rebase
+                        // to the canon space the IR lives in (identity under
+                        // every mirror gate).
+                        address + img_base, (
                             name, global.data_type.clone(), global.data_type.get_size() as i32,
                         ),
                     )
@@ -5287,7 +5350,8 @@ fn decompile_request(
                                 && (ph.p_flags & PF_R) != 0
                                 && (ph.p_flags & PF_W) == 0
                         })
-                        .map(|ph| (ph.p_vaddr, ph.p_vaddr + ph.p_filesz))
+                        // F2B: canon-space bounds (identity under mirror).
+                        .map(|ph| (ph.p_vaddr + img_base, ph.p_vaddr + img_base + ph.p_filesz))
                         .collect()
                 };
                 let mut typed = 0usize;
@@ -5372,7 +5436,7 @@ fn decompile_request(
                     let is_string = string_addrs.contains_key(address);
                     let dtype =
                         dtype.or_else(|| undefined1.clone());
-                    if !is_string && !CANON_INTERIOR_DAT_LABELS.contains(address) {
+                    if !is_string && !canon_interior_dat_labels.contains(address) {
                         // STRCONST-SPANNONOVERLAP: greatest admitted string
                         // start STRICTLY BELOW address — the span test needs
                         // the containing predecessor, never the address's
@@ -5748,16 +5812,21 @@ fn decompile_request(
             // containing-entry geometry instead of hard tables.
             const CANON_INTERIOR_STRING_DATA: [(u64, &str); 2] =
                 [(0x61c2, "r"), (0x61eb, "%s%s")];
+            let canon_dat_label_starts_registry: [u64; 5] =
+                CANON_DAT_LABEL_STARTS.map(|addr| addr + img_base); // F2B: canon keys
+            let canon_interior_string_data: [(u64, String); 2] =
+                CANON_INTERIOR_STRING_DATA
+                    .map(|(addr, s)| (addr + img_base, s.to_string()));
             let mut registry_entries: Vec<(u64, String)> = request
                 .string_entries
                 .iter()
-                .filter(|(address, _)| !CANON_DAT_LABEL_STARTS.contains(address))
+                .filter(|(address, _)| !canon_dat_label_starts_registry.contains(address))
                 .cloned()
                 .collect();
             registry_entries.extend(
-                CANON_INTERIOR_STRING_DATA
+                canon_interior_string_data
                     .iter()
-                    .map(|(a, s)| (*a, s.to_string())),
+                    .map(|(a, s)| (*a, s.clone())),
             );
             sm.write()
                 .unwrap()
@@ -5787,7 +5856,7 @@ fn decompile_request(
             .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
     } else {
         sleigh
-            .configure_x86_64(section_image, section.sh_addr)
+            .configure_x86_64(section_image, section.sh_addr + img_base)
             .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
     }
 
@@ -5825,7 +5894,9 @@ fn decompile_request(
     // SECSEED/CMTFILL e40ed130 verification: 17 records / 45 lines
     // byte-exact vs canon). Escape hatches: RUGRA_CMTSEED=0 / RUGRA_SEEDS=0.
     if let Some(records) = cmtseed_comments() {
-        let code_lo = ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr;
+        // F2B: target.vaddr is canon-space natively — the manifest anchors
+        // (canon addresses) match the window directly.
+        let code_lo = target.vaddr;
         let code_hi = code_lo.saturating_add(target.size as u64);
         let mut injected = 0usize;
         let mut skipped = 0usize;
@@ -5841,7 +5912,7 @@ fn decompile_request(
                 db_write.add_comment(
                     rugra::comment::comment_type::WARNING,
                     Address::new(target.vaddr),
-                    Address::new(*anchor - ANALYZE_HEADLESS_IMAGE_BASE),
+                    Address::new(*anchor),
                     text,
                 );
                 injected += 1;
@@ -5856,11 +5927,10 @@ fn decompile_request(
             code_hi
         );
     }
-    // RESIDMAP-PRINTBATCH-0001: the canon analyzeHeadless golden addresses
-    // are this driver's base-0 addresses + 0x100000 (same delta the
-    // code-label layer carries); warning texts that embed an address render
-    // through Funcdata::print_raw_code_addr.
-    fd.set_display_image_base(ANALYZE_HEADLESS_IMAGE_BASE);
+    // F2B: canon addresses are natively image-based now — the
+    // RESIDMAP-PRINTBATCH-0001 display delta collapses to 0 (raw IR
+    // addresses already print the golden's 0x10xxxx form).
+    fd.set_display_image_base(0);
     // HEADLESS-BRIDGE-V1-TYPESEED W1b (C1): attach the canon-address-keyed
     // committed-local seeds before any action runs — the `<localdb>`
     // transport position (the httpd driver attaches the same carrier at its
@@ -5872,7 +5942,7 @@ fn decompile_request(
     // historical bare load.
     if let Some(table) = typeseed_local_table() {
         if let Some(seeds) =
-            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+            table.get(&format!("0x{:x}", target.vaddr))
         {
             eprintln!(
                 "[TYPESEED] {} typeseed: {} committed locals",
@@ -5889,7 +5959,7 @@ fn decompile_request(
     // surfaced loudly rather than silently merged).
     if let Some(table) = dwarfseed_local_table() {
         if let Some(seeds) =
-            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+            table.get(&format!("0x{:x}", target.vaddr))
         {
             let taken: std::collections::HashSet<i64> =
                 fd.committed_locals.iter().map(|l| l.offset).collect();
@@ -5927,7 +5997,7 @@ fn decompile_request(
     // same way the canon commit layer does).
     if let Some(table) = structseed_local_table() {
         if let Some(seeds) =
-            table.get(&format!("0x{:x}", ANALYZE_HEADLESS_IMAGE_BASE + target.vaddr))
+            table.get(&format!("0x{:x}", target.vaddr))
         {
             let taken: std::collections::HashSet<i64> =
                 fd.committed_locals.iter().map(|l| l.offset).collect();
@@ -6005,7 +6075,7 @@ fn decompile_request(
                 Some(parent) => format!("{}::{}", parent, global.name),
                 None => global.name.clone(),
             };
-            fd.add_symbol(address, name);
+            fd.add_symbol(address + img_base, name);
         }
     }
     for (address, value) in &request.string_entries {
@@ -6061,8 +6131,13 @@ fn decompile_request(
             target.name
         );
     } else {
-        match debug_db.apply(&mut fd) {
-            Ok(true) => {
+        // F2B: fd.baseaddr is canon-space (native load); the DWARF table
+        // keys are link-time base-0 — query through the base-0 twin. The
+        // get + locked_proto + assign chain is exactly what
+        // DebugPrototypeDatabase::apply performs on fd.baseaddr.
+        match debug_db.locked_callsite_proto(vaddr0, &fd.funcp.clone()) {
+            Ok(Some(proto)) => {
+                fd.funcp = proto;
                 dwarf_applied = true;
                 eprintln!(
                     "[PREPASS] {} applied locked DWARF prototype: {} params{}",
@@ -6075,7 +6150,7 @@ fn decompile_request(
                     }
                 )
             }
-            Ok(false) => {}
+            Ok(None) => {}
             Err(error) => eprintln!(
                 "[PREPASS] {} DWARF prototype rejected: {}",
                 target.name, error
@@ -6187,7 +6262,8 @@ fn decompile_request(
         fd.global_struct_ptrs = debug_globals
             .address_pointer_map()
             .into_iter()
-            .filter(|(address, _)| *address == 0x17520)
+            .filter(|(address, _)| *address + img_base == 0x117520) // F2B: canon-space config witness
+            .map(|(address, ty)| (address + img_base, ty))
             .collect();
     }
 
@@ -6581,7 +6657,7 @@ fn decompile_request(
                         }
                         code_labels
                             .entry(dest)
-                            .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
+                            .or_insert_with(|| format!("LAB_{:08x}", dest));
                     }
                 }
             }
@@ -6617,7 +6693,7 @@ fn decompile_request(
                 if jt_rg.addresstable.is_empty() {
                     continue;
                 }
-                let dispatch = ANALYZE_HEADLESS_IMAGE_BASE + jt_rg.opaddress.as_u64();
+                let dispatch = jt_rg.opaddress.as_u64();
                 for (i, dest) in jt_rg.addresstable.iter().enumerate() {
                     let case_value = jt_rg.label.get(i).copied();
                     if case_value != Some(rugra::jumptable::NO_LABEL) && case_value.is_some() {
@@ -6655,7 +6731,7 @@ fn decompile_request(
                 code_labels.insert(addr, name);
             }
         }
-        printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
+        printer.set_code_label_layer(code_labels, 0);
     }
     let fd_read = fd_arc
         .read()
@@ -8250,29 +8326,64 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // layers), differing only in the iteration channels (the round's lock
     // table + the harvest switch). Extracted so the iteration's decompile
     // is input-identical to a face pass with those locks installed.
+    // F2B: the request carries the CANON-space address fields (native load)
+    // — target, symbols, strings, prototypes, flow overrides and the data
+    // layers are rebased +img_base here at the boundary (the main-side
+    // tables stay link-time base-0 for ELF/ledger matching). Identity
+    // (img_base == 0) under every mirror gate.
+    let img_base = curl_image_base();
+    let symbol_entries_canon: Vec<(u64, String)> = symbol_entries
+        .iter()
+        .map(|(address, name)| (address + img_base, name.clone()))
+        .collect();
+    let string_entries_canon: Vec<(u64, String)> = string_entries
+        .iter()
+        .map(|(address, value)| (address + img_base, value.clone()))
+        .collect();
+    let prototype_entries_canon: Vec<(u64, usize)> = prototype_entries
+        .iter()
+        .map(|(address, count)| (address + img_base, *count))
+        .collect();
+    let rodata_dat_entries_canon: Vec<(u64, String)> = rodata_dat_entries
+        .iter()
+        .map(|(address, name)| (address + img_base, name.clone()))
+        .collect();
+    let db_symbol_entries_canon: Vec<(u64, String, i32, bool)> = db_symbol_entries
+        .iter()
+        .map(|(address, name, size, ptr)| (address + img_base, name.clone(), *size, *ptr))
+        .collect();
+    let fn_symbol_entries_canon: Vec<(u64, String)> = fn_symbol_entries
+        .iter()
+        .map(|(address, name)| (address + img_base, name.clone()))
+        .collect();
+    let rodata_span_canon = rodata_span.map(|(lo, size)| (lo + img_base, size));
+    let got_span_canon = got_span.map(|(lo, size)| (lo + img_base, size));
     let build_decompile_request = |func: &FuncInfo,
                                    paramid_table: Option<Vec<(u64, CalleeSiglockProto)>>,
                                    harvest_callsite_evidence: bool,
                                    paramid_evidence_policy: Option<(bool, bool)>| {
+        let mut target = worker_target(func);
+        target.vaddr += img_base;
         DecompileRequest {
             binary_image: buffer.clone(),
-            target: worker_target(func),
-            symbol_entries: symbol_entries.clone(),
-            string_entries: string_entries.clone(),
-            prototype_entries: prototype_entries.clone(),
+            target,
+            symbol_entries: symbol_entries_canon.clone(),
+            string_entries: string_entries_canon.clone(),
+            prototype_entries: prototype_entries_canon.clone(),
             flow_override_entries: flow_override_entries
                 .iter()
                 .filter(|record| record.function_address == func.vaddr)
-                .copied()
+                .map(|record| FlowOverrideRecord {
+                    function_address: record.function_address + img_base,
+                    override_address: record.override_address + img_base,
+                    flow_type: record.flow_type,
+                })
                 .collect(),
-            rodata_dat_entries: rodata_dat_entries
-                .iter()
-                .map(|(&address, name)| (address, name.clone()))
-                .collect(),
-            rodata_span,
-            got_span,
-            db_symbol_entries: db_symbol_entries.clone(),
-            fn_symbol_entries: fn_symbol_entries.clone(),
+            rodata_dat_entries: rodata_dat_entries_canon.clone(),
+            rodata_span: rodata_span_canon,
+            got_span: got_span_canon,
+            db_symbol_entries: db_symbol_entries_canon.clone(),
+            fn_symbol_entries: fn_symbol_entries_canon.clone(),
             paramid_table,
             harvest_callsite_evidence,
             paramid_evidence_policy,
@@ -8455,14 +8566,14 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 for entry in sorted {
                     let sites = &records[entry];
                     let name = symbol_table
-                        .get(entry)
+                        .get(&entry.wrapping_sub(img_base))
                         .cloned()
-                        .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                        .unwrap_or_else(|| format!("FUN_{:08x}", entry));
                     for site in sites {
                         eprintln!(
                             "[PARAMID-SITE] r{} 0x{:x} {} <- {}: arity={} slots={:?} ret={:?}",
                             round,
-                            entry + ANALYZE_HEADLESS_IMAGE_BASE,
+                            entry,
                             name,
                             site.caller,
                             site.arity,
@@ -8481,18 +8592,19 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             let mut merged_keys: Vec<&u64> = records.keys().collect();
             merged_keys.sort_unstable();
             for entry in merged_keys {
-                if plt_set.contains(entry) && !admit_plt_slots {
+                if plt_set.contains(&entry.wrapping_sub(img_base)) && !admit_plt_slots {
                     continue;
                 }
                 let sites = &records[entry];
                 let name = symbol_table
-                    .get(entry)
+                    .get(&entry.wrapping_sub(img_base))
                     .cloned()
-                    .unwrap_or_else(|| format!("FUN_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + entry));
+                    .unwrap_or_else(|| format!("FUN_{:08x}", entry));
                 if let Some(proto) = merge_callsite_evidence(*entry, &name, sites, &mut dead) {
-                    // Canon address key (base-0 entry + image base) — the
-                    // same key space the manifest and install arm use.
-                    next.insert(entry + ANALYZE_HEADLESS_IMAGE_BASE, proto);
+                    // Canon address key — the same key space the manifest
+                    // and the worker install arm use (F2B: harvest entries
+                    // are canon-space natively).
+                    next.insert(*entry, proto);
                 }
             }
             eprintln!(
@@ -8627,6 +8739,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             "[SYMS] {} entries; targets 0x2000-0x5000:",
             symbol_table.len()
         );
+        // F2B: the table stays link-time base-0 on the controller side (the
+        // canon shift happens at the request boundary) — the window below
+        // reads it in its native base-0 form.
         for (&addr, name) in symbol_table.iter() {
             if addr >= 0x2000 && addr <= 0x5000 {
                 eprintln!("[SYM] 0x{:x} = {}", addr, name);

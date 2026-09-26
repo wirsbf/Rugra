@@ -3794,7 +3794,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // RUGRA-GLUE: RUGRA_STAGE_FUNC=<name|0xaddr> (curl driver contract);
     // the address arm only exists behind the stage envs so env-unset runs
-    // keep name-only selection semantics untouched.
+    // keep name-only selection semantics untouched. F2B base note: the
+    // `functions` ledger carries canon-space addresses on the canon face,
+    // so a canon-stage selector address is the image-based form
+    // (e.g. 0x12b820 for main); under the mirror gate (the bank capture
+    // contract) the ledger stays base-0 (0x2b820) exactly as the bank
+    // manifests' capture commands pin them.
     let stage_target_selected = |vaddr: u64, name: &str| -> bool {
         let Some(selector) = stage_selector.as_ref() else { return false; };
         selector == name
