@@ -1799,6 +1799,76 @@
       }
     },
     {
+      "id": "database_symbol_subclass_1204",
+      "description": "MIGW1-DATABASE-0005 phase 2: Symbol-subclass construction surface (FunctionSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol ctor+buildType chains, getBytesConsumed, getMapEntryPosition cc:309 quirk, SymbolEntry getFirstUseAddress/printEntry, EntrySubsort, SymbolCompareName, DuplicateFunctionError, Scope::printBounds) - 31-case bilateral stdout byte-identical MATCH",
+      "runner": [
+        "tools/run_database_symbol_subclass_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/database_symbol_subclass_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_database_symbol_subclass_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/database_symbol_subclass_1204.cc",
+          "fixture_source_2": "tests/oracle/database_symbol_subclass_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_database_symbol_subclass_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "FunctionSymbol::build_type",
+          "FunctionSymbol::new",
+          "FunctionSymbol::get_bytes_consumed",
+          "LabSymbol::build_type",
+          "LabSymbol::new",
+          "LabSymbol::new_decode",
+          "ExternRefSymbol::build_name_type",
+          "ExternRefSymbol::new",
+          "ExternRefSymbol::get_ref_addr",
+          "UnionFacetSymbol::new",
+          "UnionFacetSymbol::new_decode",
+          "UnionFacetSymbol::get_field_number",
+          "Symbol::get_bytes_consumed",
+          "Symbol::get_map_entry_position",
+          "SymbolEntry::get_first_use_address",
+          "SymbolEntry::print_entry",
+          "EntrySubsort::lt",
+          "SymbolCompareName::is_before",
+          "DuplicateFunctionError::new",
+          "Scope::print_bounds"
+        ],
+        "ghidra_function_ids": [
+          "FunctionSymbol::buildType",
+          "FunctionSymbol::FunctionSymbol",
+          "FunctionSymbol::getBytesConsumed",
+          "LabSymbol::buildType",
+          "LabSymbol::LabSymbol",
+          "ExternRefSymbol::buildNameType",
+          "ExternRefSymbol::ExternRefSymbol",
+          "ExternRefSymbol::getRefAddr",
+          "UnionFacetSymbol::UnionFacetSymbol",
+          "UnionFacetSymbol::getFieldNumber",
+          "Symbol::getBytesConsumed",
+          "Symbol::getMapEntryPosition",
+          "SymbolEntry::getFirstUseAddress",
+          "SymbolEntry::printEntry",
+          "SymbolEntry::EntrySubsort",
+          "SymbolCompareName",
+          "DuplicateFunctionError",
+          "Scope::printBounds"
+        ]
+      }
+    },
+    {
       "id": "database_scope_tree_1204",
       "description": "MIGW1-DATABASE-0005 phase 2: Scope name/tree query surface (hashScopeName, resolveScope 3 branches, isSubScope, getFullName, getScopePath, findDistinguishingScope, getResolutionDepth+isNameUsed, override/resetSizeLockType, attach/detach, clearReferences, adjustCaches) - 50-case bilateral stdout byte-identical MATCH",
       "runner": [

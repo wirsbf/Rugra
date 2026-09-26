@@ -636,11 +636,54 @@ C++ `hashViaProduction(db, global, "\xff")` 喂单字节 0xFF；Rust 名字通�
 
 ### 残余 UNTESTED（诚实记账，不升 MATCH）
 
-63 条清单中 fixture 未覆盖者维持 UNTESTED：Symbol 子类 ctor 链的 buildType/
-buildNameType 输出面（FunctionSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol）、
-`getBytesConsumed`/`getMapEntryPosition`、`SymbolEntry::getFirstUseAddress`/
-`printEntry`、EntrySubsort 排序面、`SymbolCompareName`、`DuplicateFunctionError`、
-`printBounds`/`printEntries`、`addDynamicMapInternal` whole-count、`categorySanity`、
-`multi_entry_symbols`、`resolveExternalRefFunction`、`decodeWrappingAttributes`、
-children 迭代器端点。结构吸收裁决（MapIterator/NullSubsort 等 13 条）不在此列
-（裁决即交付物）。
+63 条清单中 fixture 未覆盖者维持 UNTESTED：`addDynamicMapInternal` whole-count、
+`categorySanity`、`multi_entry_symbols`、`resolveExternalRefFunction`、
+`decodeWrappingAttributes`、children 迭代器端点、`printEntries`（多空间聚合面）、
+`Scope::decode` 族 encode/decode 残项。结构吸收裁决（MapIterator/NullSubsort 等
+13 条）不在此列（裁决即交付物）。
+
+## 2026-09-26（MIGW1-DATABASE-0005 phase 2 续）：Symbol 子类面第二双侧 fixture
+
+### DATABASE-SYMBOL-SUBCLASS-FIXTURE-0001（tests/oracle/database_symbol_subclass_1204.{cc,rs}）
+
+31 case 全量 stdout 逐字节 **MATCH**（runner
+`tools/run_database_symbol_subclass_oracle.sh`，registry
+`database_symbol_subclass_1204`），覆盖 18 个清单函数/载体：
+
+| 函数/载体 | Ghidra 锚 | 覆盖面 |
+|---|---|---|
+| `FunctionSymbol::buildType` + 双 ctor | database.cc:514/534/545 | code 类型 size 1 + namelock\|typelock + 构造序（name 后置）+ consumeSize 覆写 |
+| `LabSymbol::buildType` + 双 ctor | database.cc:728/736/745 | 工厂解析的 xunknown1 占位类型（裁决 R1 的双侧见证） |
+| `ExternRefSymbol::buildNameType`/ctor/`getRefAddr` | database.cc:768/789；hh:351 | 自动名 `<shortcut><printRaw>_exref` + externref\|typelock + code 指针尺寸=refaddr 地址尺寸 |
+| `UnionFacetSymbol` ctor 族 + `getFieldNumber` | database.cc:691；hh:323/324 | fieldNum i32（-1=整 union）+ union_facet 类别 |
+| `Symbol::getBytesConsumed` | database.cc:508 | 类型尺寸通道 |
+| `Symbol::getMapEntryPosition` | database.cc:301 | **cc:309 怪癖双侧钉死**：计数器条件读被查 entry 尺寸（非迭代项）——whole 被查项=全表索引、partial 被查项恒 0、缺席 -1 |
+| `SymbolEntry::getFirstUseAddress` | database.cc:122 | 首用范围/空 uselimit 无效地址 |
+| `SymbolEntry::printEntry` | database.cc:166 | 三形态逐字串：静态空 uselimit（`all`）/静态范围 uselimit（`ram: 4000-4fff`）/动态（`<dynamic>`） |
+| `SymbolEntry::EntrySubsort` | database.hh:107-134 | earliest/latest 边界 + (useindex,useoffset) 字典序 + 相等 |
+| `SymbolCompareName` | database.hh:366 | name 字典序 + nameDedup tie-break |
+| `DuplicateFunctionError` | database.hh:435 | "Duplicate Function" 消息 + address/functionName 载体 |
+| `Scope::printBounds` | database.hh:789 | rangetree 排序范围打印 |
+
+**载体裁决（fixture 注释+此处记录）**：① C++ `FunctionSymbol(Scope*,int4)` decode
+ctor 的可观察状态（空名+consumeSize+code 类型+锁旗标）在 Rust 值模型经空名命名
+ctor 等价到达（字段恒等，构造路径差）；② C++ Symbol 自持 `mapentry` 表，Rust
+`get_map_entry_position` 以参数收表——fixture 以同插入序组装；③ 动态 entry 经
+`SymbolEntry` 动态 ctor（hh:140）直接构造——`addMapInternal` 对无效地址解引用
+space（C++ 同样崩溃路径），双侧一致不经过。
+
+### 跨文件发现（报 root 裁量，非本票写域）：DATATYPE-PRINTRAW-0001
+
+fixture 设计时亲读 type.cc 发现 `src/type_system/datatype.rs:1804 print_raw`
+（锚 type.cc:139 Datatype::printRaw）的 Code/Union/Enum/Struct/Spacebase/Array
+臂与锁定 oracle 偏差：
+
+| 臂 | C++ 真值 | Rust 现值 |
+|---|---|---|
+| Code | `TypeCode::printRaw`（type.cc:2772）：`<name\|funcptr>()` | `code {name}` |
+| Union/Enum/Struct/Spacebase | 无 override→`Datatype::printRaw`（type.cc:139）：`<name\|unkbyteN>` | `union {name}`/`enum {name}`/`struct{…}`/`spacebase {name}` |
+| Array | `TypeArray::printRaw`（type.cc:1204）：`<elem> [N]`（空格） | `{elem}[{n}]` |
+| Pointer | `TypePointer::printRaw`（type.cc:910）：`<ptrto> *` + spacebase 指针 `(<space>)` 臂 | `{ptr_to} *`（缺 spaceid 臂） |
+
+本票 fixture 刻意用基类型（printRaw=纯名）避开该偏差面；修复属 datatype.rs
+租约，建议 root 开票。

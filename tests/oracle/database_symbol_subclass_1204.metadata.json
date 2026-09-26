@@ -1,0 +1,129 @@
+{
+ "schema_version": 1,
+ "fixture_id": "DATABASE-SYMBOL-SUBCLASS-FIXTURE-0001",
+ "todo_ids": [
+  "MIGW1-DATABASE-0005"
+ ],
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/type.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/space.cc"
+  ]
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "oracle_side": "production BfdArchitecture over the pinned curl blob; symbols constructed directly against a standalone FixtureScope; observations are id/name/size/message-level plus verbatim printEntry strings; entry types are base types whose printRaw is the plain name on both sides (the printRaw of code/union/struct/enum metatypes is outside this fixture - a pre-existing cross-file deviation reported separately)",
+  "rugra_side": "production Symbol/FunctionSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol/SymbolEntry value model; TypeFactory::new_flavor(8, CoreTypeFlavor::Standalone) mirrors the oracle's SLEIGH core-type table; no fixture-side reimplementation",
+  "pipeline": "none; direct function calls only"
+ },
+ "input": {
+  "scope": {
+   "id": 100,
+   "name": "",
+   "arch": "BfdArchitecture x86:LE:64:default:gcc (oracle) / value model (rugra)"
+  },
+  "type_factory_flavor": "standalone SLEIGH core table (sleigh_arch.cc:229-232)",
+  "ram_space": {
+   "name": "ram",
+   "addrsize": 4,
+   "wordsize": 1,
+   "index": 3,
+   "shortcut": " "
+  },
+  "cases": 31,
+  "binary": "examples/curl (pinned blob 34a3febf:examples/curl, architecture bootstrap only)"
+ },
+ "input_fingerprint": "sha256:369c2ca2e8fcf5f659185fa9d51fb5582b378bdfeb705113a0ae70b9b98f4d25",
+ "observation": {
+  "functions": [
+   "FunctionSymbol::buildType (database.cc:514)",
+   "FunctionSymbol ctors (database.cc:534/545)",
+   "FunctionSymbol::getBytesConsumed (database.cc:508 override)",
+   "LabSymbol::buildType (database.cc:728)",
+   "LabSymbol ctors (database.cc:736/745)",
+   "ExternRefSymbol::buildNameType (database.cc:768)",
+   "ExternRefSymbol ctor (database.cc:789)",
+   "ExternRefSymbol::getRefAddr (database.hh:351)",
+   "UnionFacetSymbol ctors (database.cc:691 / hh:323)",
+   "UnionFacetSymbol::getFieldNumber (database.hh:324)",
+   "Symbol::getBytesConsumed (database.cc:508)",
+   "Symbol::getMapEntryPosition (database.cc:301, cc:309 quirk)",
+   "SymbolEntry::getFirstUseAddress (database.cc:122)",
+   "SymbolEntry::printEntry (database.cc:166)",
+   "SymbolEntry::EntrySubsort (database.hh:107-134)",
+   "SymbolCompareName (database.hh:366)",
+   "DuplicateFunctionError (database.hh:435)",
+   "Scope::printBounds (database.hh:789)"
+  ],
+  "overall_status": "MATCH"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "FunctionSymbol/LabSymbol/ExternRefSymbol ctors mutate the fresh Symbol through the scope backref; addMapPoint/addMapInternal return the installed SymbolEntry whose pointer identity feeds getMapEntryPosition (Rust: same_storage_identity on Arc+addr+offset+size+hash)",
+  "loop_bounds_traversal_order": "getMapEntryPosition iterates the symbol's mapentry in insertion order; printBounds iterates the rangetree in sorted Range order (first-offset ascending); EntrySubsort compares useindex then useoffset",
+  "counter_accumulator_lifecycle": "getMapEntryPosition's pos starts at 0 and increments only while the SOUGHT entry is whole-sized (entry->getSize() == type->getSize(), cc:309 - reads the sought entry, not the iterated one); partial sought entries never increment pos",
+  "sorting_comparison_keys": "SymbolCompareName: name lexicographic then nameDedup; EntrySubsort: useindex then useoffset; Scope rangetree: Range first-offset ascending"
+ },
+ "comparand": {
+  "rugra_base_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
+  "rugra_base_tree": "2eaa964981c4c49377888972d57d2a83b044be17",
+  "cpp_fixture_sha256": "037cf4b2f4f96c9afbf6d165fe3046d87928ec4c3e9a1d4f78561816b8982c16",
+  "rust_fixture_sha256": "cff8c5293fef477660aec6bec68485409a1ca28e861babe24d4aaffbf70cd9b0",
+  "runner_sha256": "ec6043b3a1dc525e1f63cd9408625a07a7892b678bae06b1bbe68a22915c4c5b",
+  "database_rs_sha256": "217d3ed47d3fe1c5119c7d0904ce2aab5996b49dd573a7b5b0922d6e589b2356",
+  "database_doc_sha256": "ff8ebe0d2b3cfbf881140e4ecf16579d01a759a9def238300afaa32cec2a259a",
+  "cargo_toml_sha256": "0fbaf1b24ed0db7e29f287a64e433009f34c025a4117f86cd6220dfd8add445e",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
+  "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
+  "ghidra_type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
+  "ghidra_space_cc_blob": "dbaa2e775f32e63abb60c1c0b31457967ee52db7",
+  "ghidra_sleigh_arch_cc_blob": "cb0848a4de0dc9dc78f6fe8598a4745cb0c97545",
+  "ghidra_ghidra_arch_cc_blob": "34226889c3688b8b331b9854553d86b574310583"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544,
+   "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree file"
+  },
+  "bfd": {
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "expected_stdout_sha256": "99e2901152fe2ded155456394ed9ed6c6bb9d54c0423f202a0e48968389020d6",
+ "expected_ghidra_exit_code": 0,
+ "expected_rugra_exit_code": 0,
+ "overall_status": "MATCH"
+}
