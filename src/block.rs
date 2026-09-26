@@ -3746,14 +3746,28 @@ impl BlockGraph {
                         None => continue,
                     };
                     let yprime = find_copy_map(&y); // cc:1173: y' = FIND(y)
+                    // RUGRA-GLUE: cc:1174 dereferences x and yprime as raw
+                    // pointers — when y' == x (the loop head's own edge into
+                    // a reachunder member: y == x and copymap still points
+                    // at itself, cc:1027/1122) C++ reads the same object
+                    // twice, which is naturally legal without locks. Rugra's
+                    // per-block RwLock must not take two read guards of one
+                    // lock for that snapshot (std::sync::RwLock::read is
+                    // documented "might panic" when the lock is already
+                    // held by the current thread), so the ptr_eq arm serves
+                    // both interval reads from the single x guard — the
+                    // values are identical by object identity
+                    // (BLOCK-RWLOCK-RECURSIVE-READ-0001).
                     let (x_visitcount, x_numdesc, yprime_visitcount) = {
                         let xg = x.read().unwrap();
-                        let yg = yprime.read().unwrap();
-                        (
-                            xg.get_visit_count(),
-                            xg.get_num_desc(),
-                            yg.get_visit_count(),
-                        )
+                        let x_visitcount = xg.get_visit_count();
+                        let x_numdesc = xg.get_num_desc();
+                        if Arc::ptr_eq(&yprime, &x) {
+                            (x_visitcount, x_numdesc, x_visitcount)
+                        } else {
+                            let yg = yprime.read().unwrap();
+                            (x_visitcount, x_numdesc, yg.get_visit_count())
+                        }
                     };
                     if (x_visitcount > yprime_visitcount)
                         || (x_visitcount + x_numdesc <= yprime_visitcount)
@@ -9789,5 +9803,116 @@ mod finalize_visited_tests {
             assert!(wd.iterate_op.is_some(), "iterateOp must survive finalizePrinting");
             assert!(wd.loop_def.is_some());
         }
+    }
+}
+
+#[cfg(test)]
+mod findirreducible_lock_tests {
+    use super::{edge_flags as ef, BlockBasic, BlockGraph, FlowBlock};
+    use crate::address::Address;
+    use std::sync::{Arc, RwLock};
+
+    type BlockArc = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+
+    fn loop_graph() -> (BlockGraph, BlockArc, BlockArc, BlockArc) {
+        // Minimal reducible loop with a head->body edge:
+        //   b0 -> b1   (entry -> loop head)
+        //   b1 -> b2   (head -> body)  <- drives yprime == x at x=b1, t=b2
+        //   b2 -> b1   (body -> head, back edge)
+        let b0: BlockArc = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x7000))));
+        let b1: BlockArc = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x7010))));
+        let b2: BlockArc = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x7020))));
+        let mut graph = BlockGraph::new();
+        graph.add_block(b0.clone());
+        graph.add_block(b1.clone());
+        graph.add_block(b2.clone());
+        graph.add_edge(b0.clone(), b1.clone());
+        graph.add_edge(b1.clone(), b2.clone());
+        graph.add_edge(b2.clone(), b1.clone());
+        (graph, b0, b1, b2)
+    }
+
+    /// BLOCK-RWLOCK-RECURSIVE-READ-0001 unit lock: the interval snapshot in
+    /// find_irreducible (block.cc:1174) reads x->visitcount, x->numdesc and
+    /// yprime->visitcount. For the loop head's own edge into a reachunder
+    /// member the in-edge source y IS x and copymap still points at itself
+    /// (cc:1027/1122), so y' = FIND(y) = x and the oracle reads the same
+    /// object twice through raw pointers. The Rust form must not take two
+    /// read guards of one RwLock for that snapshot (std::sync::RwLock::read
+    /// is documented "might panic" when the lock is already held by the
+    /// current thread): the ptr_eq arm serves both interval reads from the
+    /// single x guard. Expected oracle outcome for this graph (visitcount
+    /// b0=0,b1=1,b2=2; numdesc self-inclusive b0=3,b1=2,b2=1): the interval
+    /// [1,3) contains y'=b1's visitcount 1, cc:1187's `yprime != x` keeps
+    /// the head out of reachunder, and the collapse re-points b2's copymap
+    /// at the head (cc:1190-1196) with no irreducible classification.
+    #[test]
+    fn yprime_equals_x_interval_snapshot_single_guard() {
+        let (mut graph, _b0, b1, b2) = loop_graph();
+        let mut preorder: Vec<BlockArc> = Vec::new();
+        let mut rootlist: Vec<BlockArc> = Vec::new();
+        graph
+            .find_spanning_tree(&mut preorder, &mut rootlist)
+            .expect("spanning tree");
+        let mut irreduciblecount: i32 = 0;
+        let needrebuild = graph.find_irreducible(&preorder, &mut irreduciblecount);
+
+        // Reducible loop: no irreducible edges, no spanning-tree rebuild.
+        assert!(!needrebuild, "reducible loop must not need a rebuild");
+        assert_eq!(irreduciblecount, 0);
+
+        // cc:1190-1196 collapse: reachunder={b2} re-points at the head b1
+        // and clears the mark; the head keeps its own copymap.
+        assert!(!b2.read().unwrap().is_mark(), "collapse clears the mark");
+        let body_copy = b2
+            .read()
+            .unwrap()
+            .get_copy_map()
+            .and_then(|weak| weak.upgrade());
+        assert!(body_copy.is_some(), "copymap must be re-pointed, not dropped");
+        assert!(
+            Arc::ptr_eq(&body_copy.unwrap(), &b1),
+            "reachunder member must collapse into the loop head"
+        );
+        let head_copy = b1
+            .read()
+            .unwrap()
+            .get_copy_map()
+            .and_then(|weak| weak.upgrade());
+        assert!(Arc::ptr_eq(&head_copy.unwrap(), &b1));
+
+        // The head's own edge into the body kept its tree classification on
+        // both halves (the yprime==x arm must not promote it).
+        let head_out = b1.read().unwrap().get_out(0).unwrap().flags;
+        let body_in = b2.read().unwrap().get_in(0).unwrap().flags;
+        assert_ne!(head_out & ef::F_TREE_EDGE, 0);
+        assert_ne!(body_in & ef::F_TREE_EDGE, 0);
+        assert_eq!(head_out & ef::F_IRREDUCIBLE_EDGE, 0);
+        assert_eq!(body_in & ef::F_IRREDUCIBLE_EDGE, 0);
+
+        // The back edge keeps its back|loop labels on both halves.
+        let body_out = b2.read().unwrap().get_out(0).unwrap().flags;
+        let head_in1 = b1.read().unwrap().get_in(1).unwrap().flags;
+        assert_ne!(body_out & ef::F_BACK_EDGE, 0);
+        assert_ne!(head_in1 & ef::F_BACK_EDGE, 0);
+        assert_eq!(body_out & ef::F_IRREDUCIBLE_EDGE, 0);
+    }
+
+    /// Same graph through the full structure_loops driver (block.cc:2194-2215,
+    /// the funcdata.rs production entry): converges on the first pass, the
+    /// collapse survives the driver, rootlist keeps the single entry root.
+    #[test]
+    fn yprime_equals_x_through_structure_loops_driver() {
+        let (mut graph, b0, b1, b2) = loop_graph();
+        let mut rootlist: Vec<BlockArc> = Vec::new();
+        graph.structure_loops(&mut rootlist).expect("structure loops");
+        assert_eq!(rootlist.len(), 1);
+        assert!(Arc::ptr_eq(&rootlist[0], &b0));
+        let body_copy = b2
+            .read()
+            .unwrap()
+            .get_copy_map()
+            .and_then(|weak| weak.upgrade());
+        assert!(Arc::ptr_eq(&body_copy.unwrap(), &b1));
     }
 }
