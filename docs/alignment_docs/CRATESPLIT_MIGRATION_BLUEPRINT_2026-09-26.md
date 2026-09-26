@@ -397,9 +397,11 @@ C0-C5（可选破环）、R7（capability 接线裁决）。执行触发由 root
 
 ## 附：本蓝图实测数据复现口径
 
-- 依赖图：/dev/shm/rugra-tests/cratesplit/deps_map3.py（生产/测试分离 + brace use 解析 +
-  lib.rs 再导出归位 + Tarjan SCC + 缩图层）；prod_edges.tsv（557 边）/test_edges.tsv（184 边）。
+- 依赖图：deps_map3.py（生产/测试分离 + brace use 解析 + lib.rs 再导出归位 + Tarjan SCC +
+  缩图层）；prod_edges.tsv（557 边）/test_edges.tsv（184 边）。
 - Ghidra include 图：ghidra_inc_graph.py（226 文件、零环、23 层）。
-- 关键 grep 事实（防内存盘丢失，已内嵌正文）：typeop.hh:25、varnode.hh:214、op.hh:21、
+- 脚本与边表归档：`/dev/shm/rugra-reports/cratesplit-evidence/`（内存盘，重启即丢——
+  复现只需对 src/ 与锁定 oracle cpp 树重跑两脚本，关键结论已全部内嵌正文）。
+- 关键 grep 事实（防内存盘丢失，正文已引用）：typeop.hh:25、varnode.hh:214、op.hh:21、
   space.hh:22-23、marshal.hh:19-20、heritage.hh:23、varmap.hh:22、fspec.hh:22-23、
   address.rs:2010、typeop.rs:65、typefactory.rs:2730、lib.rs:126-127、Cargo.toml:6。
