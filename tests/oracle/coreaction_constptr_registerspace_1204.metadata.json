@@ -123,7 +123,7 @@
   "cpp_fixture_sha256": "f79d033436c3492d3b4c2028e491e0593923f34364e7ca2330202540fe598eaa",
   "rust_fixture_sha256": "23234a81df92775f7be1d15ac710475a5488b86be6ad7bc5135bc3b2d63c0e0c",
   "runner_sha256": "6e9fb8c2cdafe41d1574829339bd44dd339b24d9a0f9479d2c6baad673723fca",
-  "rust_crate_tree_sha256": "fbe6d3a22e3d0111e4bc63b687f614d32fee8af0650231690dc2a268405050ac"
+  "rust_crate_tree_sha256": "727d1bc01f18f351a60f4242874c41aeb51d9699acc7d254841fdd9f88fc5985"
  },
  "expected_exit_code": 0,
  "expected_stdout_sha256": "42810918fa2026ada8c0ff36c8bcc683bd5150d0b5a2e6ce43168854cc8ccf4e",
