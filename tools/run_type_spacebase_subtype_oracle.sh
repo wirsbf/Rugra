@@ -225,7 +225,7 @@ mkdir -p "$snapshot_root/ghidra"
 git -C "$repo_root" archive --format=tar "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim examples/curl sleigh_specs/x86-64.sla \
+  src sleigh_shim crates examples/curl sleigh_specs/x86-64.sla \
   sleigh_specs/x86-64.pspec sleigh_specs/x86-64-gcc.cspec \
   sleigh_specs/x86.ldefs | tar -xf - -C "$snapshot_root"
 git -C "$ghidra_root" archive --format=tar "$oracle_commit" \

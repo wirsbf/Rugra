@@ -92,7 +92,7 @@
   "cpp_fixture_sha256": "98385dd5bfbbe676fa473c03eedcf46a3baea51a1a0961e6c871de66184fe5e0",
   "rust_fixture_sha256": "991472ca4ea9bd04576e32568d670492aa82d9d88c59df541903d5160361371b",
   "runner_sha256": "01bd18a510fe69ca6906bacd11fd21181826ef1fc4e31c01fe955c75a5c17d57",
-  "rust_crate_tree_sha256": "5cf5059edbb1c0e0337b9089586d4f33416ad9a250ea2e29fa1298d5b4c272af",
+  "rust_crate_tree_sha256": "e9cc5ea6012abe8960c77bad4034d8d8aa01e2dfbda74271587247e9d1cc1369",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-store-varnode-spacebase-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents"
  },
  "input_manifest": {

@@ -28,7 +28,7 @@
   "typefactory_overlay_sha256": "15255e97974f4e02b6dd270d170fd070186dd3d11bed7d46adacfd632c911a2e",
   "datatype_overlay_sha256": "8ea630941c8a2d6d2b0752b1fe7f576d44d2de3d8e7b66d14706c34f91b3e263",
   "api_typefactory_document_sha256": "203fdd751bb8fe1060d2838fbbaad1df3353ec056d8f202250268f7972c71360",
-  "api_datatype_document_sha256": "64b9b81a032bc6236b7ccafbd9e6f834f1fac79f8cca35ff0885ad82f42e5cd7",
+  "api_datatype_document_sha256": "be33c7fcd281f52049d8e612f95f2fd8eb12b05291ca2550aa0009b5e090473b",
   "runner_sha256": "80da874db333c993d6cea3f436cba7b4546437d778d95e35ff4d894ef329817c",
   "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the two hash-verified live files (src/type_system/typefactory.rs, src/type_system/datatype.rs), build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed."
  },

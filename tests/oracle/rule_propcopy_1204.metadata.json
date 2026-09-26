@@ -75,7 +75,7 @@
   }
  },
  "host_tools": {
-  "g++": "g++ (GCC) 16.2.1 20260810",
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
   "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
  },

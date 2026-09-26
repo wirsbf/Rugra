@@ -89,28 +89,28 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937,
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1"
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721,
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3"
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182,
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390,
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94"
@@ -419,6 +419,6 @@
  "comparand": {
   "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
   "rust_fixture_sha256": "3df55dd3613b19d956a380d6306b6f6ca533a0b7af1d95f14f78dc82e558b092",
-  "runner_sha256": "074657f82a976d8084256d84009fe3408bd7d344416ccc09f718e86c449ff162"
+  "runner_sha256": "3f2454cb4aadcab98ddcfbc9b7446422420de42a27d686d144b411dc94e789df"
  }
 }

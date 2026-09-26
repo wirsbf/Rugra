@@ -99,7 +99,7 @@
   ],
   "archive_policy": "Extract only the explicit dependency closure from the pinned commit, then overlay the four declared live source files.",
   "base_closure_hash_scheme": "sha256 of rugra-actiondw-copydef-base-v1 plus sorted length-prefixed relative paths and pinned archive contents",
-  "base_closure_sha256": "556db9b36a05dd44be43e338d232e96434062b8d110e631606abd75fd1519f5d",
+  "base_closure_sha256": "6835743d2aab49f8189f7bbd41966e988d2b9ad0ad736c7235827026afa81bfd",
   "overlays": {
    "src/coreaction.rs": {
     "sha256": "2a42ae2a4284d102321269cd19cf0c62b7af328080413c59dc0eaeb1337d36aa"

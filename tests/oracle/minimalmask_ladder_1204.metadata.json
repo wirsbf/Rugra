@@ -63,7 +63,7 @@
   "varnode_overlay_sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7",
   "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "fspec_overlay_sha256": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329",
-  "runner_sha256": "7770c4bf47ef4d00b026d24885ac5b9eb5f6f49755a376f745aa4dffcbaafbb1",
+  "runner_sha256": "6ad63d47a2bbeaa2679c8bc8554efd5483645f3bda3c66625d939b669401687d",
   "rust_visibility_transform_sha256": "0589ee71b3030f8fda2560e651b23ab07b0655ec7d3c35bddc42fe8749b9e90c"
  },
  "expected_results": {

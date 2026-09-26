@@ -127,35 +127,35 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -173,7 +173,7 @@
   "sha256": "bdc2ab15556627808b510e5190e8e901d54dceed5024747c56d0c5c4d3c8082a",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -421,7 +421,7 @@
   "arch_overlay_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
   "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
-  "runner_sha256": "2de33a436f30b41cf3b8ae54cedf553058b01801cd577d09a6ee8832694fda37"
+  "runner_sha256": "c0dc5db6ca28f7eb10b36155a0debc3f4db9038d3bc431cd5c294cb7869fca13"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",

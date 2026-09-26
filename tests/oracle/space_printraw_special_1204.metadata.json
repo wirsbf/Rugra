@@ -122,7 +122,7 @@
   "rugra_op_source": "088059518ebed202e512f0155ef3fcd70a8927eac96409b355eb341d98cd6ca1",
   "api_document_space": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
   "api_document_op": "762182346909d080454341ac07749483dcfce2192cf568de1a8e57c4da930d81",
-  "runner": "4e5aa31226574c7fe06617776ac629bf7b6dc50f8d0046cd16d4504c1aa8b086"
+  "runner": "c3e04d8c25cbaa8e2cfa144fcd771ce5d7d92f17a4139ee98fd511ba9fe2ae5a"
  },
  "expected_stdout_sha256": "08cbbe565a0a3f6c8790a6defc4a43831a46d312308f810fec89030142b12aa1",
  "expected_line_count": 11,

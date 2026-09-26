@@ -74,7 +74,7 @@
    "c5_explicit_varnode_and_max_val": "<set space='register' offset='0x20a' size='1' val='0x123'/> explicit storage form (VarnodeData::decodeFromAttributes space branch with rewind + AddrSpace::decodeAttributes) plus <set name='RAX' val='0xffffffffffffffff'/> (max uintb through cpp-stream hex parsing).",
    "errors": "Seven verbatim oracle texts: e1 <tracked_set> without space -> 'No address space indicated in range tag'; e2 <bogus/> child -> same range error first (Range::decodeFromAttributes runs before the child-name dispatch); e2b <bogus space='ram'/> -> 'Bad <context_data> tag' (only reachable when the range decodes); e3 first>last -> 'Illegal range tag'; e4 unknown register -> 'Unknown register name: NOSUCHREG'; e5 unknown space -> 'Unknown address space name: nosuchspace'; e6 <register val='0'/> inside tracked_set -> 'Expecting <set> but got <register>' (probe name chosen inside the locked ElementId table; TreeDecoder maps table-external names to XMLunknown \u2014 registered residual)."
   },
-  "sha256": "825bad914c4b6310177e485d35f97249ddf9062f6d7a524eeee78347f99e7c9c"
+  "sha256": "2f4ad4b98f91e986706242ebfd043242a14f2adc52a4d4c7121af1e3894313dc"
  },
  "observation_schema": {
   "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",

@@ -132,7 +132,7 @@ fi
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/ghidra"
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_git_bin" -C "$repo_root" archive --format=tar "$rugra_base_commit" -- \
-  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim benches \
+  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim crates benches \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs | \
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/rugra"
 /usr/bin/cp -- "$comment_source" "$oracle_tmp/rugra/src/comment.rs"

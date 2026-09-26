@@ -126,7 +126,7 @@
    "bitops_propagated_subpiece_pos",
    "bitops_propagated_dense_neg"
   ],
-  "sha256": "8e87f9877e9a6e201bf51cf26eb501c550950564ff637dec512584c4e59b9883"
+  "sha256": "eb57d5348a459adcbce8a3a07b6edc98b2787c200fb9ce41584b8c9a0fde9839"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "72e7588d05b1000da61706824cb5503774cd4e6b13ce98eb06bb589b4de310ab",

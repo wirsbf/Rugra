@@ -289,7 +289,7 @@
   "typefactory_rs_sha256": "15255e97974f4e02b6dd270d170fd070186dd3d11bed7d46adacfd632c911a2e",
   "cpp_fixture_sha256": "48c783c86b4126236bfb3db7fe91f832d5c7bf3924ae2b309d1794cc5d50c774",
   "rust_fixture_sha256": "fb83c46735a97c3b942cff13f5612abf759df2fa396e15531f3aacfa08a87e61",
-  "runner_sha256": "1a780bef46d8029894caf48b6620a620ff2475bf2879a444cc8e918c4a9b3448",
+  "runner_sha256": "fa31c3117a8b978c33b5de4a7295f722be4922bf5df5ff1ec46849fb5dcc7382",
   "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the hash-verified live src/type_system/typefactory.rs, build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed. Re-pinned from 296c128 to 71971b2 by TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 because the datatype.rs Result-returning decode_basic/decode_code_stub/decode_prototype the current typefactory.rs consumes entered datatype.rs after 296c128, leaving the old pin uncompilable at HEAD.",
   "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",

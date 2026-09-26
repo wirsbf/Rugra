@@ -102,7 +102,7 @@
  "build": {
   "registry_packages": 164,
   "dependency_policy": "Every registry archive named by Cargo.lock is read from the local cache, verified against its Cargo.lock checksum, safely unpacked into a private vendor directory, and built through a private CARGO_HOME under clean env. Mutable registry source trees are never compiled.",
-  "rugra_source_policy": "Materialize the complete library build closure from pinned Git base 9161720cbe798e6f0b7ee93159a68591eea2c854, then overlay only the live src/expression.rs candidate. Other concurrent working-tree source files cannot enter the comparand."
+  "rugra_source_policy": "Materialize the complete library build closure from pinned Git base daeda9cb841f01d6070bdd7398714ae0f876ce47, then overlay only the live src/expression.rs candidate. Other concurrent working-tree source files cannot enter the comparand."
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
@@ -184,10 +184,10 @@
   }
  },
  "comparand": {
-  "rugra_base_commit": "9161720cbe798e6f0b7ee93159a68591eea2c854",
+  "rugra_base_commit": "daeda9cb841f01d6070bdd7398714ae0f876ce47",
   "cpp_fixture_sha256": "62afd92dbbb7966ed5575ea83aed78756630171a678a8f44ae3004c97949a85d",
   "rust_fixture_sha256": "832daf40243245e3a600d4aafab883f0d950265622ffd0c66a98d3bc1be6cadf",
-  "runner_sha256": "6ff0d2e3337fb4477cf902d495e770789854dffab33b884c697c3a5d64836bf8",
+  "runner_sha256": "377bb4a925ef799bd3ed4c04909795c0ed08f990042406c3c8d49bc1f2add3d2",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-functional-equality-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_tree_sha256": "8023ee949bf2b89e57a98eba4eb6bf4b1797b3d9e4cac28832c34a5f87582586"
  },

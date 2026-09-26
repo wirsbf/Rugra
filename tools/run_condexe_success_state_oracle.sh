@@ -91,7 +91,7 @@ git -C "$repo_root" archive --format=tar \
   --output="$oracle_tmp/rugra-source.tar" "$rugra_source_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim
+  src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 cp "$condexe_overlay" "$snapshot_root/src/condexe.rs"
 cp "$cpp_fixture" "$snapshot_root/tests/oracle/condexe_success_state_1204.cc"

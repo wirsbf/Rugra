@@ -112,7 +112,7 @@
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "a0e69cef400c0a3b6eb02b7b09e8c23e597c4ce7cae26177f49bf14c2f81fc4a",
+  "sha256": "961b144b1e0b21e79c3d7e771c41a63f3bdea7a7a9cf1ad31bf7a9cb66688882",
   "binary": {
    "path": "examples/curl",
    "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",

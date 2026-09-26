@@ -71,7 +71,7 @@ done
 rugra_workspace="$oracle_tmp/rugra-workspace"
 mkdir -p "$rugra_workspace"
 git -C "$repo_root" archive "$rugra_base_commit" -- \
-  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim benches \
+  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim crates benches \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   | tar -x -C "$rugra_workspace"
 cp "$space_rs" "$rugra_workspace/src/space.rs"

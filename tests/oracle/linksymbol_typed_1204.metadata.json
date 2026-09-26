@@ -9,7 +9,7 @@
   "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
+ "rugra_base_commit": "5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e",
  "architecture": "x86:LE:64:default",
  "compiler_spec": {
   "id": "gcc",
@@ -77,7 +77,7 @@
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
+   "source_repository_commit": "5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 161728
@@ -116,14 +116,14 @@
  "comparand": {
   "cpp_fixture_sha256": "352cad94590b25123be3e2c6a19d3345e33325f1094f6ae46d35786b2d77ebc1",
   "rust_fixture_sha256": "27ee4ea055814f614bb519ed2ec5b94e94283260f5b9aa2f93b27d6b60a7efdd",
-  "runner_sha256": "72d105d1b0c06d61039fcfff85006c764ab718e119c727ebb0ffba6b4991a094",
+  "runner_sha256": "d9e4d910738706543c6bd8318a59baea49ca81b0c869280611fcc2cf0f157d99",
   "doc_funcdata_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
   "doc_varmap_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
   "doc_merge_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
   "rust_crate_tree_sha256": "05a8e7e5f51457143b6b123b3fdca5e90c357230d72b7c873752ab61f447b219",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-linksymbol-typed-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 9001bbdf13b0c3de7cb5c1938de98f6008213f07 Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
  },
  "known_dependencies": {},
  "record_verdicts": {

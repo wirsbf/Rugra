@@ -165,7 +165,7 @@
   "rust_fixture_sha256": "3026a7fa7c9f467e5598e99c2dd7aa3ac89c7bb1dd4416f0cf57f98afc251b07",
   "runner_sha256": "002bdc787401e4d14c59fc2d27b38c07ec401e3ebd143a7b840504b76d15d585",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-collect-terms-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "7ddaabac605fcffa2f0917453229f91a0c228ec721ce231b276370653868bbef"
+  "rust_crate_tree_sha256": "9403eb418ab2d5fe0849a3e304c0e1d036f02047f8bd4bdbbc57cdb8fb0417f7"
  },
  "expected_stdout_sha256": "c45835fd3ed1cd125fe0c3e41af1b40e6029df15b816cf7a76b8bccd473dd70b",
  "expected_exit_code": 0,

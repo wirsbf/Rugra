@@ -121,7 +121,7 @@ mkdir -p "$snapshot/tests/oracle" \
 git -C "$repo_root" archive --format=tar --output="$oracle_tmp/rugra.tar" \
   "$rugra_base_commit" Cargo.toml Cargo.lock build.rs README.md \
   benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
-  tests/oracle/funcproto_lock_1204.rs src sleigh_shim
+  tests/oracle/funcproto_lock_1204.rs src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra.tar" -C "$snapshot"
 cp "$rust_fixture" "$snapshot/tests/oracle/gapd_counters_1204.rs"
 

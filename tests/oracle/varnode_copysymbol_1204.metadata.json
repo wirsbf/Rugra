@@ -107,7 +107,7 @@
    "op_add_marked_not_close",
    "op_subpiece_high_no_propagate"
   ],
-  "sha256": "67e35eb966aa236ea62a5316aa532833daba261f8ba12060fc4ac7ba02a62ef9"
+  "sha256": "a3846f15602f9511177486c5600bc1d1e31d68462b761bfe7a4a58e7acdc96bc"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "4f98426b35a809ecaecb29f5648b00a464d22bd839abd64f848ecd2968862ab3",

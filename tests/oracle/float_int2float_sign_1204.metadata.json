@@ -212,7 +212,7 @@
  "comparand": {
   "cpp_fixture_sha256": "ec41f575500ab7112cfe8f418f44d59738ee6fa25be69ef2d85b54798f712ce4",
   "rust_fixture_sha256": "2e84a3395c19cac476910fb6f5692ffa4f54c724dc5afdeecaa7d8045d8cc50a",
-  "float_emulate_rs_sha256": "bb211619653cbd1f7d24f382b63fc92452ba7f73f37e83bf47ffeb3f16ef4be4",
+  "float_emulate_rs_sha256": "e4737bc563f0dd44b9f96e34bf49e8cd158694f5a5e63a94cc76aced79837ed9",
   "runner_sha256": "61d477cca2dfdcbd4e11b110c8523f0195d1212998051e171edacf8b763a3a71",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",

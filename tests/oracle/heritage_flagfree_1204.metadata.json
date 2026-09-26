@@ -52,7 +52,7 @@
   "rugra_base_tree": "11212874e9732da30d1c8de7e487deda58fefad0",
   "cpp_fixture_sha256": "0b59675ef73a5695c9344472ffc060abe6e1270555e065756e21c79b5a4e7dcf",
   "rust_fixture_sha256": "27a4de37228504c02e022b10c84247a3c5edcaeb01bb28ddc05cfa75a40e6fea",
-  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
+  "heritage_rs_sha256": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
   "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
   "runner_sha256": "9c753ef7998b9319bd1cc653a9d55c6d6833b3cc0ecea4931e33e92399f3ae66",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",

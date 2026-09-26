@@ -300,7 +300,7 @@
   "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-crate-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "ce31c07f646f9b0f53459d8364eecd26c1ae01f4b1bf393c507e996e8ac8e4ff",
+  "rust_crate_tree_sha256": "12ff30151f6ee4c6a44b333c9ad9a8cbfc7f8c702f4901fb11d4473908a89b8a",
   "repo_cargo_config_files": [],
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",

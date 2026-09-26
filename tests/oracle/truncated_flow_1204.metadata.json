@@ -132,28 +132,28 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
@@ -213,7 +213,7 @@
  "comparand": {
   "cpp_fixture_sha256": "17520d2f107170efbf100724b306daf0b05477fb9f7f4b439a2c7691c480482f",
   "rust_fixture_sha256": "60129dff2df2a5c092126a2ae588d36d606b87431d5dfc49f6887729c2a91406",
-  "runner_sha256": "d2c421aaff24376884e1b6d3e4cb68cfd18d766f214389c8dfac41ae6ebe85a3"
+  "runner_sha256": "f04fc20343b60dbadf1d8e0c8abebdfde203dd0812bd8429ea186d75a65b4bcb"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "dc4db0ffb72828228969a0c0e1558db809f4c93f8efcd979a4b03c6f67dda8b5",

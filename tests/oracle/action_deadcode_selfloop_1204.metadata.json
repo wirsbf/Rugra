@@ -33,40 +33,40 @@
   "source_policy": "Materialize all specifications and the curl input from verified Git blob IDs at the pinned Rugra provenance commit; never consume working-tree copies.",
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.sla",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.pspec",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64-gcc.cspec",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86.ldefs",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:examples/curl",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -79,15 +79,15 @@
   }
  },
  "rugra_source": {
-  "base_commit": "5f6f34ffcb13378189f9fe962d08e4d999184fc5",
-  "base_tree": "d180210e9f8691d817ed95428f53228c5d3f42c8",
-  "base_src_tree": "559b450cdc9dd0248e322d40251be4648bf11ad9",
+  "base_commit": "9f0be561cc987cd1d4861919841686cee1dd58d7",
+  "base_tree": "b270ccd2d09945f342c9d6bfd478408fc6952fa6",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
-  "base_varnode_blob": "a041d0b2130eaf0d47b8974e6686e6bbd2879100",
-  "base_funcdata_blob": "43195dd9ac36e391986b6bf08f26c392df478129",
-  "base_coreaction_blob": "7c4c07d7f6c5e2efa837e2ca145a053d7b9ba51c",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_varnode_blob": "13bec7c6e07f3f2b453cc9a7f7c28d26676e842e",
+  "base_funcdata_blob": "a688f99c83e4322249815aa3d0886ae6f04a86c3",
+  "base_coreaction_blob": "e5fb0a75534d714556206c765e6cc075cf3bd8c3",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -102,10 +102,10 @@
   ],
   "archive_policy": "Extract only the explicit dependency closure from the pinned commit, overlay the three declared live source files, then make helper visibility public in the temporary copy only.",
   "base_closure_hash_scheme": "sha256 of rugra-action-deadcode-base-v1 plus sorted length-prefixed relative paths and pinned archive contents",
-  "base_closure_sha256": "ab982078819a530b0f72e2f4664e5f9f77b3ef3181365038e6a3dd9170d1fcd6",
+  "base_closure_sha256": "d2a6e9b251d1cbbe075479b4f50ecea5cd221ead58c6c4db0fbd66bc2f3e2734",
   "overlays": {
    "src/varnode.rs": {
-    "sha256": "78c333a8b12ba428151be63e09c2c5dc454e0cfcb8b861486839dddbdef87865"
+    "sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7"
    },
    "src/funcdata.rs": {
     "sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da"
@@ -189,7 +189,7 @@
  "comparand": {
   "cpp_fixture_sha256": "28f96646cb6b83a94da7de3a5421d919ec6438d5be41433c81d4248d2399848a",
   "rust_fixture_sha256": "18fbd6294536f4acc02e11c87520d5c7fb9b9347095790cdf1a3c6673acf3b1c",
-  "runner_sha256": "214b41aeb9fbd3e4d75953187ad45400b75f03db2f9759e080af29a18897fbcf",
+  "runner_sha256": "16278387a801ae832ea655d3d3cf9caf20ef693a23f06dc02fb92f591586ca2d",
   "ghidra_instrumentation_sha256": "192d740133e5caf0f029b57ce0ea29dc4d843245a08bc256c95f39b082823ad0",
   "rust_visibility_transform_sha256": "7d5fbb0e7d3b5e3b9dc989a0c2558ed22ffd35d5baf6f59b050b3d8964adea13"
  },

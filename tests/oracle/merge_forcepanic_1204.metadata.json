@@ -33,7 +33,7 @@
  "comparand": {
   "cpp_fixture_sha256": "9844a0d4fb8ff29212957a45e008d2f836bb6a32d7913eee6a85f49637a82a29",
   "rust_fixture_sha256": "5efe5eb10688ff302c36348b3635e2a5357e8009b7ef094ace15eead0c474d93",
-  "runner_sha256": "a8921a69687b9ae6f61a0c22dec47aaf806787703755ab97a00a31d6a4e0988a"
+  "runner_sha256": "331d84a2cbbd6fc5e7ddedd41c655173232cb89d760e6d620f4741d68a800c34"
  },
  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",

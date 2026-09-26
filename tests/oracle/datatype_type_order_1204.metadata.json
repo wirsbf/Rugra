@@ -42,7 +42,7 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_commit": "8012627083360e0111506dc70d891552383a8c65",
+   "source_commit": "0c607aa88b550eb07f6a8c443b34fcad86ec6d72",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
   }
  },
@@ -219,8 +219,8 @@
   "exceptions": "None"
  },
  "comparand": {
-  "rust_base_commit": "8012627083360e0111506dc70d891552383a8c65",
-  "rust_base_tree": "e94f9ee28049d6b26db645f74f0157a376116bf8",
+  "rust_base_commit": "0c607aa88b550eb07f6a8c443b34fcad86ec6d72",
+  "rust_base_tree": "054a8ddf2ab52561cf0c819637f3f1ae15f9b25a",
   "datatype_base_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
   "cpp_fixture_sha256": "44b05399e5a68088c2090e12bec28595e6cbf372188fc37b729b3e45a35b4bb7",
   "rust_fixture_sha256": "51984e0cb080f4746f50f820cb8633a77b9efb4f5531cde659e2e26283cc3277",

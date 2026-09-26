@@ -81,7 +81,7 @@
    "c7_negative_setup": "integer_size=-2 survives decode as int4 and flows through sizeOfLong = (int==4) ? 8 : int.",
    "c8_sam_followed_by_child": "Synthetic document with <size_alignment_map> followed by <char_size value=\"3\">: children after the map are still consumed (oracle sam branch falls through to closeElement, type.cc:4604-4612); char reads 3 and align probes [-1,1] on both sides. Added in the review rework: a stray continue used to leave Rugra's TreeDecoder on the map element and silently drop the trailing child."
   },
-  "sha256": "21572366d57dd31edd887a298288833a474d9e65cef69d9358cb14d42a032e72"
+  "sha256": "6c0e247a872be5622925c67fe3c436f9b959c4503101c79e0d3e2e38ebce4917"
  },
  "observation_schema": {
   "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",

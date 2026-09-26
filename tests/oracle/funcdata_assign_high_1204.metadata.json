@@ -83,7 +83,7 @@
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-funcdata-assignhigh-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "511599e109521b360b97e1086198090ab9302e775bb50afd0d3255692de7f5cc",
+  "rust_crate_tree_sha256": "ea25c9ad7a7ec60ed1557f8654e63e324397849a06dd605b9d90f0a4e65b98a6",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",

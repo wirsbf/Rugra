@@ -9,7 +9,7 @@
   "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "b6b61d57a2efa19b6a0b57aee8d4dbff4fd7b336",
+ "rugra_base_commit": "ba706fb4a87a5f803f65d37484a2078f9eef1d5a",
  "architecture": "x86:LE:64:default",
  "compiler_spec": {
   "id": "gcc",
@@ -106,7 +106,7 @@
  "comparand": {
   "cpp_fixture_sha256": "1bf58ef315569b9554c4ba9f8f0b11aba9939cd5060f572a80141a71d94b873d",
   "rust_fixture_sha256": "8411136056b33b9525879019402eedb6283558bab6aa52e2a1a5809f353eadff",
-  "runner_sha256": "0acad1f26e8479d76e135be679a9330974680b5e33005c3dd5a32c14c2a69965",
+  "runner_sha256": "2d91f4dd0fb050c825934deecd2756b774a75f3676075e84e51887ca474fb4d8",
   "doc_printc_sha256": "23a0c8a5428edce50a64805d6ef5ed25fc99ecb8d4440d61926467c51faab3d1",
   "rust_crate_tree_sha256": "16d98e1c267b68ac4060727918525384735b7441b23cbe0e7f0725ef535e3fb5",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-symbol-decl-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents"

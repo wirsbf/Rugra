@@ -129,7 +129,7 @@ mkdir -p "$snapshot_root"
 git -C "$repo_root" archive --format=tar "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim | tar -xf - -C "$snapshot_root"
+  src sleigh_shim crates | tar -xf - -C "$snapshot_root"
 cp -- "$typefactory_source" "$snapshot_root/src/type_system/typefactory.rs"
 snapshot_decompiler="$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decompile"
 mkdir -p "$snapshot_decompiler"

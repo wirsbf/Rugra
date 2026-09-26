@@ -166,7 +166,7 @@
   "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "sleigh_lift_doc_sha256": "b30eda1293721b8d7cf06cc2722f242389fd59781a732f0748fac08087ff97d5",
   "flow_doc_sha256": "dee0d11b32c81cd87a94ebf707cef2fb28fda3dbbba2a94306073d8161ee37aa",
-  "funcdata_doc_sha256": "f1657aa2698d4866f7de0d45643006d27cde61e7ebb662cf92b8a4a10df40e9b",
+  "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

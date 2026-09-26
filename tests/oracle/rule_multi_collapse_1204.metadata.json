@@ -156,7 +156,7 @@
   "rust_fixture_sha256": "ffcfe86a94db594c25c94a24f325d994a21ab8c239c9735ba9f6b47a6c45e5fa",
   "runner_sha256": "c4cf31ec3951d854dbe28bff35447083d70220ba1dc42b132c7702dfb6391cb9",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "597f56b119632968713ae54d0fc7bea84a9f437a3b84dcbaf171743a26dfca97"
+  "rust_crate_tree_sha256": "d4d124cc057a5212b9b70ab84693909d7d62af41fa57c3441f554feb7e96ca7b"
  },
  "expected_results": {
   "ghidra_exit_code": 0,

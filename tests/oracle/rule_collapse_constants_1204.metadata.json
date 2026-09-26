@@ -148,7 +148,7 @@
    "sym_add_marked",
    "sym_subpiece_high_no_propagate"
   ],
-  "sha256": "c385ebeec4589aae754e97ef8f13f34c5b66a233acaca2d24946613ca1629a1f"
+  "sha256": "41ce2305435084920c59aa907e40a19428aaeeffdecaf10efef4394bd8827022"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "f82cb3dee3f3088ec062aab160c24d5ec070e3cba43230a9b55f2349dda15f08",

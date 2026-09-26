@@ -94,7 +94,7 @@
    "er_pipe_close",
    "er_pipe_not_close"
   ],
-  "sha256": "8c233a080b0de3c6ba0d6957cefaf3e9993b5bb5cd782e0f5e69eaa6a3b632fb"
+  "sha256": "bea51665ffd3d69ca18ab878852731b655e017f4670673516329e0f7ec3a6a6f"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "8374eeae2e8136d30b163c911a98235b8f5b048abea2003ad85d18ccd389b284",
