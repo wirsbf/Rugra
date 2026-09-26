@@ -145,10 +145,16 @@ PKGG 结论（"单线程无争用非问题"）在并行后**部分翻案**：单
 
 ### 2.4 Phase1 落地形态（裁决）
 
-1. **立即可落地**（票 PAREVAL-PHASE1-LAND-0001，write-set=examples/+tools/，零 src/ 改动）：
-   - bin_sweep 族驱动增加 `--jobs-threads K` 进程内并行模式（当前为逐函数子进程隔离——进程级并行本身已确定性安全，线程模式省进程/装载开销）；
-   - `pareval_poc` 门禁接入 verify 脚本（并行=观察中性检查）。
-2. **全语料 GREEN 的前置**：PAREVAL-DETERM-HERMETICITY-0001 修复（§4.4）。修复前，含非封闭函数的语料必须用进程级隔离（每函数一进程，bin_sweep 现形态）兜底——PERFAN 的进程级并行全语料扫掠已给出双口径一致性旁证。
+1. **已落地**（PAREVAL-PHASE1-LAND-0001，wt/phaseland，write-set=examples/+tools/，零 src/ 改动）：
+   - 生产并行驱动 `examples/parallel_decompile.rs`（PoC 的生产化形态：线程池 + per-worker
+     Architecture 构造 + 函数集动态队列分发 + 按函数序收集落盘；`--jobs 1` 即串行形态退化，
+     同一代码路径）；bin_sweep 族的进程级隔离形态保留为硬超时/病态语料兜底；
+   - 确定性门禁 `tools/verify_parallel_determinism.sh` 常设化（"并行=观察中性"协议进 verify
+     脚本族）：serial（jobs=1）vs parallel（jobs=N）逐函数字节 cmp + 非 Ok 签名恒等，
+     exit code 即门禁；语料面 curl 31 / httpd 34 / sqlite3 45（PoC 覆盖面）。
+2. **全语料 GREEN 的前置**：PAREVAL-DETERM-HERMETICITY-0001 修复（§2.5，HERMIT 车道已收口
+   coreaction phi 边排序键根因）。修复前，含非封闭函数的语料必须用进程级隔离（每函数一进程，
+   bin_sweep 现形态）兜底——PERFAN 的进程级并行全语料扫掠已给出双口径一致性旁证。
 3. **per-worker Architecture 复用**暂缓：commentdb 串函数污染（§1.3#3）需先拆分"不可变规格态（cspec/pspec/寄存器目录/.sla）"与"per-函数累积态（commentdb）"，且必须过 PoC 门禁证明字节中性（P2 票 PAREVAL-ARCH-BUILD-COST-0001 承接，预期收益：串行 46% + 并行膨胀 2.5× 的大头）。
 
 ### 2.5 shell_exec 非封闭缺陷（PoC 核心发现）——P1 票
@@ -173,6 +179,56 @@ PKGG 结论（"单线程无争用非问题"）在并行后**部分翻案**：单
 3. 某共享 HashMap 的 hashbrown 迭代序 = f(插入历史/容量)，泄漏进 op 插入序或 varmap 处理序（与 PERF-ACTIONPOOL-ITER-0001 的 HashMap 面同族，但该票是性能面、本票是**语义面**）。
 
 **修复验收** = PoC 门禁 sqlite3 45 函数双模式三臂全 GREEN + 剂量实验 k=0..5 全部同 hash。证据文件：`/dev/shm/rugra-tests/pareval/{sq-w8,shellexec-probe*,dose-k*}/`（内存盘易失；关键 hash 与 diff 已录入本节与票）。
+
+---
+
+### 2.6 Phase1 落地实测（PHASE1-LAND 车道，wt/phaseland，2026-09-26）
+
+生产驱动 `examples/parallel_decompile.rs` + 门禁 `tools/verify_parallel_determinism.sh` 落地后
+的确定性协议实测（门禁口径：serial jobs=1 进程 vs parallel jobs=8 进程，**跨进程**逐函数
+字节 cmp——比 PoC 的同进程三臂协议更强一层）：
+
+| 语料面 | 函数数 | 门禁结论 |
+|---|---|---|
+| curl（examples/curl，31 全量） | 31 | **GREEN**：31/31 字节恒等（jobs=8；jobs=16 复验同 GREEN） |
+| httpd（examples/httpd，34 全量） | 34 | **GREEN**：34/34 字节恒等 |
+| sqlite3（/tmp/sqlite3，48 最大筛 3 病态 = 45） | 45 | **GREEN**：45/45 字节恒等（shell_exec 经 HERMIT 修复后经生产驱动确认封闭） |
+| sqlite3 全量（2799 发现函数，--max-funcs all） | 2799 | **GREEN**：2799/2799 字节恒等，全 Ok 零 err/panic；4.18×@8w（load 107-180 尖峰期极端保守；Amdahl 瓶颈=4 巨函数 2238s 占串行 31%，上界 ~4.8×——巨函数即 DIVCHAIN 残差慢尾） |
+
+**加速比曲线（生产驱动实测，load 95-140 共机——全部显著偏保守；PoC 期 load 45-50 时
+sqlite3 8w 同口径 6.28×）**：
+
+| 语料 | 1w | 2w | 4w | 8w | 16w |
+|---|---|---|---|---|---|
+| sqlite3 45f | 591.4s | 321.5s（1.84×） | 160.2s（3.69×） | 97.5s（**6.06×**） | 101.4s（5.83×，平台期） |
+| curl 31f | 19.2s | 9.3s（2.07×） | 5.8s（3.30×） | 5.4s（**3.55×**） | 5.9s（3.27×） |
+
+平台期主因不变（§2.3）：作业数 < 有效并行度、最长函数链、每函数 arch 构建并行 CPU 膨胀
+（PAREVAL-ARCH-BUILD-COST-0001 承接）。
+
+**TypeFactory 争用注记（TFSINGLE step1 待并）**：生产驱动沿用 bin_sweep 形态
+`shared_default()` 进程单例（与串行驱动同工厂域——串并比较同口径的前提）。PoC 实测该
+形态（step1）8 路并行争用 +7-12% 墙钟；PAREVAL-TF-SINGLETON-WIRING-0001 落地 per-Arch
+工厂所有权后争用面变化，加速比预期改善——用本驱动曲线（1/2/4/8/16）复测即量化，且
+确定性门禁对工厂域不敏感（同构建内串并自比对），该票落地后门禁复跑三面即其并行侧验收。
+
+**落地期发现 1——typedef 前导是进程级 artifact，不是并行缺陷**：`printc.rs` 的
+`TYPEDEFS_EMITTED` 是进程级 AtomicBool（"once per decompiled file"，多函数单进程运行中
+进程即文件），每进程恰好一个函数的文本带 215 字节固定 typedef 前导块，**载体由打印序决定**
+（串行=首 idx；并行=首完成）。四个正典门禁早已把它归一化（compare_ghidra.py:109/141，
+"the preamble is invisible to all four gates"）。生产驱动侧处置：剥离精确 215 字节前导
+（边界=前导自身的收尾 tag_line；docFunction cc:2653 的 `emit->tagLine()` 给**每个**函数
+文档发一个前导换行，属函数文本不属前导——剥 216 字节会让载体函数文本重新位置依赖），
+落盘一次 `typedef_preamble.c` 于 run 目录，函数文件=纯函数文档，门禁恢复纯字节 cmp。
+httpd 面首跑 RED（f000 main 差一个前导换行）即此 artifact 暴露+修正的实证；curl 面首跑
+GREEN 是侥幸（两臂载体恰好同为 f000）。
+
+**落地期发现 2——跨进程确定性成立**：PoC 协议是同进程三臂（serial/par1/par2 一个进程），
+落地门禁是两臂两个进程。curl/httpd 全量跨进程字节恒等证明 bare-native 面的输出不依赖
+进程级分配器布局/ASLR/HashMap 种子（HERMIT 修复 phi 边排序键后，shell_exec 族进程历史
+依赖已在 oracle 侧证伪为对齐缺陷并收口）。
+
+
 
 ---
 
