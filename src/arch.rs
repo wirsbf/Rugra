@@ -640,6 +640,26 @@ impl Default for Architecture {
     }
 }
 
+// Ghidra: architecture.cc:211-212 ~Architecture: if (types != 0) delete types;
+/// TF-SINGLETON-WIRING-0001 step 1 teardown mirror: the oracle Architecture
+/// DESTROYS its TypeFactory in the destructor (architecture.cc:211-212),
+/// ending the factory's cross-Architecture lifetime. Rugra's factory lives
+/// behind `Arc<RwLock<..>>`, so the destruction equivalent is unpublishing
+/// the thread's current-Architecture entry when it still points at OUR
+/// factory — after this, `TypeFactory::shared_default` resolutions on this
+/// thread fall back to the process-canonical tier instead of a dropped
+/// Architecture's stale factory. A different Architecture's publication is
+/// left untouched (its ownership supersedes ours).
+impl Drop for Architecture {
+    // RUGRA-GLUE: drop (destructor side of the ownership mirror; the
+    // Rust-side field teardown follows automatically)
+    fn drop(&mut self) {
+        if let Some(factory) = &self.types {
+            crate::type_system::typefactory::TypeFactory::unpublish_current_arch(factory);
+        }
+    }
+}
+
 impl Architecture {
     // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct an uninitialized Architecture. Faithful to `Architecture()`
@@ -2616,32 +2636,52 @@ impl Architecture {
     }
 
     // RUGRA-GLUE: set_types (no Ghidra counterpart found)
-    /// Set the TypeFactory instance.
+    /// Set the TypeFactory instance. Replaces `buildTypegrp`.
+    ///
+    /// TF-SINGLETON-WIRING-0001 step 1: this is the Rugra moment the
+    /// oracle's `SleighArchitecture::buildTypegrp` installs the factory
+    /// into the Architecture (`types = new TypeFactory(this);`,
+    /// sleigh_arch.cc:201; TypeFactoryGhidra twin ghidra_arch.cc:321), so
+    /// the handle is simultaneously published as the thread's
+    /// current-Architecture factory — the `glb->types` ownership mirror
+    /// that `TypeFactory::shared_default` resolves for handle-less engine
+    /// call sites.
     pub fn set_types(&mut self, tf: std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>) {
+        crate::type_system::typefactory::TypeFactory::publish_current_arch(tf.clone());
         self.types = Some(tf);
     }
 
-    // RUGRA-GLUE: ensure_types (no Ghidra counterpart found)
-    /// Install the process-canonical TypeFactory if none is set, then return
-    /// the active handle. Ghidra's Architecture always owns exactly one
-    /// `TypeFactory` (`TypeFactory::TypeFactory(Architecture*)`,
-    /// type.cc:3106); Rugra's `types` is optional until the compiler-spec
-    /// ingestion chain lands (CSPEC-TEXT-INGEST-0001), so this borrows the
-    /// canonical headless-oracle factory (`TypeFactory::shared_default`,
-    /// DataOrg flavor) as the stand-in. TYPE-WIRING-0001 production wiring:
-    /// after `fd.set_arch(arch)` (or before VarnodeBank use), call
-    /// `arch.ensure_types()` and `fd.vbank.set_type_factory(handle)` so every
-    /// varnode/symbol unknown type resolves the same factory the printer and
-    /// varmap observe.
+    // Ghidra: sleigh_arch.cc:201 types = new TypeFactory(this);
+    // architecture.cc:1350 types->setupSizes() decode tail
+    /// Install this Architecture's OWN TypeFactory if none is set, then
+    /// return the active handle. Ghidra's Architecture always owns exactly
+    /// one `TypeFactory` (`TypeFactory::TypeFactory(Architecture*)`,
+    /// type.cc:3106; built by `buildTypegrp` sleigh_arch.cc:201 with the
+    /// `architecture.cc:1350` setupSizes tail applied at decode), so the
+    /// fresh path now constructs a NEW per-Architecture factory (the
+    /// canonical bootstrap recipe: core types + default alignment map +
+    /// no-lease unknown warmup) instead of borrowing the process-canonical
+    /// singleton — closing the cross-Architecture type-state leak for
+    /// drivers that never call `set_types` explicitly. The returned handle
+    /// is (re)published as the thread's current-Architecture factory so
+    /// every handle-less `shared_default` resolution observes the same
+    /// factory the Architecture observes. TYPE-WIRING-0001 production
+    /// wiring: after `fd.set_arch(arch)` (or before VarnodeBank use), call
+    /// `arch.ensure_types()` and `fd.vbank.set_type_factory(handle)` so
+    /// every varnode/symbol unknown type resolves the same factory the
+    /// printer and varmap observe.
     pub fn ensure_types(
         &mut self,
     ) -> std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>> {
         if let Some(existing) = &self.types {
-            return existing.clone();
+            let existing = existing.clone();
+            crate::type_system::typefactory::TypeFactory::publish_current_arch(existing.clone());
+            return existing;
         }
-        let canonical = crate::type_system::typefactory::TypeFactory::shared_default();
-        self.types = Some(canonical.clone());
-        canonical
+        let fresh = crate::type_system::typefactory::TypeFactory::fresh_canonical();
+        self.types = Some(fresh.clone());
+        crate::type_system::typefactory::TypeFactory::publish_current_arch(fresh.clone());
+        fresh
     }
 
     // RUGRA-GLUE: set_userops (no Ghidra counterpart found)

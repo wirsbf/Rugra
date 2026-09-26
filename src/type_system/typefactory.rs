@@ -147,6 +147,87 @@ pub enum CoreTypeFlavor {
 static CANONICAL_UNKNOWN_BASE_1: std::sync::OnceLock<std::sync::Arc<Datatype>> =
     std::sync::OnceLock::new();
 
+// RUGRA-GLUE: thread-local stand-in for the oracle's `glb->types`
+// ownership resolution (architecture.hh:197). Ghidra's engine always
+// reaches the factory THROUGH the owning Architecture; Rugra's handle-less
+// call sites (39 `shared_default` references) resolve through this
+// registry instead. The entry is published by
+// `Architecture::set_types`/`ensure_types` at the oracle `buildTypegrp`
+// moment (sleigh_arch.cc:201 / ghidra_arch.cc:321) and cleared by
+// `Architecture::drop` when the registry still points at the dropping
+// Architecture's factory (the architecture.cc:211-212 `delete types`
+// mirror). The `unknown_base_1` snapshot is warmed at publication time
+// under NO lease (same MIRROR2 argument as the process-canonical closure),
+// so `canonical_unknown_base_1` never needs the factory lock.
+struct CurrentArchTypes {
+    factory: Arc<RwLock<TypeFactory>>,
+    unknown_base_1: Arc<Datatype>,
+}
+
+thread_local! {
+    static CURRENT_ARCH_TYPES: std::cell::RefCell<Option<CurrentArchTypes>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl TypeFactory {
+    // RUGRA-GLUE: publication half of the `glb->types` ownership mirror
+    // (oracle builds the factory INTO the Architecture: sleigh_arch.cc:201
+    // `types = new TypeFactory(this);`; Rugra drivers install the handle
+    // via `Architecture::set_types`, which calls this).
+    /// Publish `factory` as this thread's current-Architecture factory.
+    ///
+    /// Must run at architecture-build time (before any lease on `factory`
+    /// can exist on this thread) — the eager `unknown_base_1` warmup takes
+    /// one read lease, and the MIRROR2 lock-free fast path requires it to
+    /// be armed before any write-lease holder can reach
+    /// `canonical_unknown_base_1`. Last-publisher-wins: a subsequent
+    /// publication replaces the entry (sequential multi-Architecture
+    /// drivers), and the previous factory stays reachable through its Arc
+    /// handles.
+    pub(crate) fn publish_current_arch(factory: Arc<RwLock<TypeFactory>>) {
+        let unknown_base_1 = factory
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_base(1, TypeMetatype::Unknown)
+            .expect("TypeFactory::get_base always produces an unknown base type");
+        CURRENT_ARCH_TYPES
+            .try_with(|slot| {
+                *slot.borrow_mut() = Some(CurrentArchTypes {
+                    factory,
+                    unknown_base_1,
+                });
+            })
+            .ok();
+    }
+
+    // RUGRA-GLUE: teardown half of the `glb->types` ownership mirror
+    // (architecture.cc:211-212 `delete types;` runs in ~Architecture).
+    /// Clear the thread's current-Architecture entry if it still points at
+    /// `factory` (identity compared). A no-op when another Architecture
+    /// has since published — its ownership supersedes ours.
+    pub(crate) fn unpublish_current_arch(factory: &Arc<RwLock<TypeFactory>>) {
+        CURRENT_ARCH_TYPES
+            .try_with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if slot
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(&current.factory, factory))
+                {
+                    *slot = None;
+                }
+            })
+            .ok();
+    }
+
+    // RUGRA-GLUE: query half of the `glb->types` ownership mirror.
+    /// The thread's current-Architecture factory, if one is published.
+    pub(crate) fn current_arch_factory() -> Option<Arc<RwLock<TypeFactory>>> {
+        CURRENT_ARCH_TYPES
+            .try_with(|slot| slot.borrow().as_ref().map(|current| current.factory.clone()))
+            .unwrap_or(None)
+    }
+}
+
 // RUGRA-GLUE: process-tier probe standing in for Ghidra's architecture-class
 // selection of the core-type table. The oracle has two harness faces:
 // SleighArchitecture::buildCoreTypes (sleigh_arch.cc:204-238) installs the
@@ -2702,11 +2783,11 @@ impl TypeFactory {
             .cloned()
     }
 
-    // Ghidra: type.cc:3850 TypeFactory::TypeFactory(Architecture *g)
+    // Ghidra: type.cc:3106 TypeFactory::TypeFactory(Architecture *g)
     /// The single TypeFactory instance for the locked-oracle process model.
     ///
     /// Ghidra constructs exactly one `TypeFactory` per `Architecture`
-    /// (`TypeFactory::TypeFactory(Architecture *g)`, type.cc:3850-3119 — the
+    /// (`TypeFactory::TypeFactory(Architecture *g)`, type.cc:3106-3119 — the
     /// factory holds `glb` and every `getBase`/`findAdd` call deduplicates
     /// against that one factory), and the canonical headless oracle runs one
     /// Architecture per process. Rugra's production `Funcdata` does not yet
@@ -2726,7 +2807,74 @@ impl TypeFactory {
     /// initialized" (type.cc:3296-3305 getAlignment), which the oracle can
     /// observe only between raw construction and decode, never from inside a
     /// decompiled function.
+    ///
+    /// TF-SINGLETON-WIRING-0001 step 1 (per-Architecture resolution): the
+    /// oracle's engine reaches the factory through the OWNING Architecture
+    /// (`glb->types`, architecture.hh:197); Rugra's handle-less call sites
+    /// (39 `shared_default` references, 9 files) resolve through this entry
+    /// instead. Resolution order mirrors that ownership: **the thread's
+    /// current-Architecture factory wins** (published by
+    /// `Architecture::set_types`/`ensure_types` at the oracle
+    /// `buildTypegrp` moment — sleigh_arch.cc:201 / ghidra_arch.cc:321),
+    /// and the process-canonical factory below is the fallback for
+    /// pre-architecture contexts (unit fixtures, decode-before-arch paths).
+    /// In a single-Architecture process the two arms return the SAME handle
+    /// (the driver installs the process-canonical factory via `set_types`),
+    /// so every existing observation is byte-identical; in a
+    /// multi-Architecture process (bin_sweep dual-binary probe) each
+    /// Architecture's accumulated type tables stay separate, matching the
+    /// oracle's per-Architecture factory lifetime
+    /// (architecture.cc:162 construct-null → buildTypegrp new → 211-212
+    /// delete).
     pub fn shared_default() -> Arc<RwLock<TypeFactory>> {
+        if let Some(current) = Self::current_arch_factory() {
+            return current;
+        }
+        Self::process_canonical_factory()
+    }
+
+    // Ghidra: sleigh_arch.cc:201 types = new TypeFactory(this);
+    /// A FRESH per-Architecture factory with the canonical bootstrap recipe.
+    ///
+    /// The construction sequence is byte-identical to the process-canonical
+    /// factory's (below): `TypeFactory::new(8)` (core types, flavor selected
+    /// by the mirror-tier environment exactly as `SleighArchitecture::
+    /// buildCoreTypes` sleigh_arch.cc:204-238 vs the `<coretypes>` decode
+    /// selects by architecture description) plus the architecture.cc:1350
+    /// decode-tail alignment default (`if (alignMap.empty())
+    /// setDefaultAlignmentMap()`, type.cc:3164-3165), plus the eager
+    /// no-lease warmup of the 1-byte unknown cache (MIRROR2 lock-safety,
+    /// see `canonical_unknown_base_1`). Drivers that build one Architecture
+    /// per binary (the oracle process model) call this per Architecture and
+    /// hand the result to `Architecture::set_types`, which publishes it as
+    /// the thread's current-Architecture factory — the engine's
+    /// `shared_default` resolutions then observe exactly this factory, the
+    /// way the oracle's engine observes `glb->types`.
+    pub fn fresh_canonical() -> Arc<RwLock<TypeFactory>> {
+        let mut factory = TypeFactory::new(8);
+        // architecture.cc:1350 `types->setupSizes();` tail →
+        // type.cc:3164-3165 `if (alignMap.empty()) setDefaultAlignmentMap();`
+        if factory.align_map.is_empty() {
+            factory.set_default_alignment_map();
+        }
+        let arc = Arc::new(RwLock::new(factory));
+        // Eager no-lease warmup, same argument as the process-canonical
+        // closure: this runs at driver/architecture-build time, before any
+        // factory lease can exist on this thread.
+        let _ = arc
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_base(1, TypeMetatype::Unknown)
+            .expect("TypeFactory::get_base always produces an unknown base type");
+        arc
+    }
+
+    // RUGRA-GLUE: process-canonical fallback tier of the oracle's
+    // per-Architecture `glb->types` resolution (architecture.hh:197).
+    /// The process-wide fallback factory (pre-architecture contexts only).
+    /// Construction recipe is frozen: any change here must keep the
+    /// single-Architecture canonical runs byte-identical.
+    fn process_canonical_factory() -> Arc<RwLock<TypeFactory>> {
         static SHARED: std::sync::OnceLock<Arc<RwLock<TypeFactory>>> = std::sync::OnceLock::new();
         SHARED
             .get_or_init(|| {
@@ -2774,19 +2922,33 @@ impl TypeFactory {
     /// NOT re-enter `shared_default`'s RwLock while that lease is held
     /// (self-deadlock via read_contended; the oracle has no locks — any
     /// factory query from inside a factory method is legal there). The
-    /// cache is therefore populated eagerly inside `shared_default`'s
-    /// construction closure (under no lease) and read lock-free here; the
-    /// on-demand population path can only run when the process-canonical
-    /// factory has never been constructed, in which case no lease on it
-    /// can be held either. Factory identity is preserved (the SAME Arc the
-    /// factory's typecache would answer), keeping downstream
+    /// cache is therefore populated eagerly under NO lease — at
+    /// `publish_current_arch` time for the current-Architecture tier and
+    /// inside the process-canonical construction closure for the fallback
+    /// tier — and read lock-free here; the on-demand population path can
+    /// only run when the process-canonical factory has never been
+    /// constructed, in which case no lease on it can be held either.
+    /// Factory identity is preserved (the SAME Arc the answering factory's
+    /// typecache would return — the current Architecture's factory when one
+    /// is published, mirroring `glb->types->getBase(1,TYPE_UNKNOWN)`; the
+    /// process-canonical object otherwise), keeping downstream
     /// identity-sensitive decisions (type-propagation ptr-eq, char-print
-    /// flag reads) on the canonical object.
+    /// flag reads) on one object per factory.
     pub fn canonical_unknown_base_1() -> Arc<Datatype> {
+        if let Some(unknown) = CURRENT_ARCH_TYPES
+            .try_with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .map(|current| current.unknown_base_1.clone())
+            })
+            .unwrap_or(None)
+        {
+            return unknown;
+        }
         if let Some(base) = CANONICAL_UNKNOWN_BASE_1.get() {
             return base.clone();
         }
-        let base = Self::shared_default()
+        let base = Self::process_canonical_factory()
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get_base(1, TypeMetatype::Unknown)
@@ -7901,5 +8063,164 @@ mod tests {
         assert!(subtype.is_none());
         assert_eq!(newoff, 0);
         assert!(factory.get_exact_piece(narrow, 0, 1).is_none());
+    }
+
+    // ---- TF-SINGLETON-WIRING-0001 step 1: current-Architecture resolution
+    // ----
+    // TLS hygiene: every test below MUST unpublish what it published —
+    // cargo's test harness reuses threads, and a stale publication would
+    // redirect a LATER test's `shared_default`/`canonical_unknown_base_1`
+    // resolutions at this test's factory.
+
+    /// The fallback tier: with nothing published, `shared_default` answers
+    /// the process-canonical factory (pre-publication contexts, e.g. unit
+    /// fixtures and decode-before-arch paths).
+    #[test]
+    fn shared_default_without_publication_answers_process_canonical() {
+        assert!(TypeFactory::current_arch_factory().is_none());
+        let resolved = TypeFactory::shared_default();
+        assert!(TypeFactory::current_arch_factory().is_none());
+        assert!(Arc::ptr_eq(
+            &resolved,
+            &TypeFactory::shared_default(),
+        ));
+    }
+
+    /// Publishing a factory redirects BOTH resolution entries to it
+    /// (`shared_default` and `canonical_unknown_base_1`), the published
+    /// unknown is the published factory's OWN cached object (identity
+    /// domain follows the owning Architecture, mirroring
+    /// `glb->types->getBase(1,TYPE_UNKNOWN)`), and unpublishing restores
+    /// the process-canonical fallback.
+    #[test]
+    fn publish_current_arch_redirects_resolution_and_unpublish_restores() {
+        let fresh = TypeFactory::fresh_canonical();
+        assert!(!Arc::ptr_eq(
+            &fresh,
+            &TypeFactory::shared_default(),
+        ));
+        TypeFactory::publish_current_arch(fresh.clone());
+        assert!(Arc::ptr_eq(
+            &TypeFactory::shared_default(),
+            &fresh,
+        ));
+        let published_unknown = TypeFactory::canonical_unknown_base_1();
+        let factory_unknown = fresh
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_base(1, TypeMetatype::Unknown)
+            .expect("factory always produces an unknown base type");
+        assert!(Arc::ptr_eq(&published_unknown, &factory_unknown));
+        TypeFactory::unpublish_current_arch(&fresh);
+        assert!(TypeFactory::current_arch_factory().is_none());
+        assert!(!Arc::ptr_eq(
+            &TypeFactory::shared_default(),
+            &fresh,
+        ));
+    }
+
+    /// Unpublish is ownership-scoped: clearing ANOTHER factory's
+    /// publication is a no-op (the other Architecture's ownership
+    /// supersedes ours), and only the identity-matching unpublish clears.
+    #[test]
+    fn unpublish_is_identity_scoped_to_own_factory() {
+        let first = TypeFactory::fresh_canonical();
+        let second = TypeFactory::fresh_canonical();
+        TypeFactory::publish_current_arch(first.clone());
+        TypeFactory::unpublish_current_arch(&second);
+        assert!(Arc::ptr_eq(
+            &TypeFactory::current_arch_factory().expect("still first"),
+            &first,
+        ));
+        TypeFactory::unpublish_current_arch(&first);
+        assert!(TypeFactory::current_arch_factory().is_none());
+    }
+
+    /// Sequential multi-Architecture lifecycle (bin_sweep dual-binary
+    /// shape): publishing factory #2 must fully replace factory #1 — no
+    /// residual first-Architecture state reachable through the resolution
+    /// entries.
+    #[test]
+    fn republish_replaces_previous_architecture_factory() {
+        let first = TypeFactory::fresh_canonical();
+        let second = TypeFactory::fresh_canonical();
+        TypeFactory::publish_current_arch(first.clone());
+        assert!(Arc::ptr_eq(&TypeFactory::shared_default(), &first));
+        TypeFactory::publish_current_arch(second.clone());
+        assert!(Arc::ptr_eq(&TypeFactory::shared_default(), &second));
+        TypeFactory::unpublish_current_arch(&second);
+        assert!(TypeFactory::current_arch_factory().is_none());
+    }
+
+    /// The fresh-factory construction recipe must match the
+    /// process-canonical one up to instance identity: same alignment-map
+    /// state and a working unknown base (the architecture.cc:1350 decode
+    /// tail applied at build, type.cc:3164-3165).
+    #[test]
+    fn fresh_canonical_matches_process_recipe() {
+        let fresh = TypeFactory::fresh_canonical();
+        let canonical = TypeFactory::shared_default();
+        assert!(!Arc::ptr_eq(&fresh, &canonical));
+        let (fresh_map, canonical_map) = (
+            fresh
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_alignment(1),
+            canonical
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_alignment(1),
+        );
+        assert_eq!(fresh_map, canonical_map);
+        assert!(
+            fresh
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_base(1, TypeMetatype::Unknown)
+                .is_some()
+        );
+    }
+
+    /// Architecture integration: `set_types` publishes (the buildTypegrp
+    /// moment), `ensure_types` installs a fresh OWN factory for
+    /// set_types-less architectures, and Drop unpublishes (the
+    /// architecture.cc:211-212 teardown mirror) — restoring the
+    /// process-canonical fallback tier.
+    #[test]
+    fn architecture_lifecycle_publishes_and_unpublishes_its_factory() {
+        use crate::arch::Architecture;
+        // set_types path: the installed handle becomes the thread-current
+        // factory while the Architecture lives.
+        {
+            let mut arch = Architecture::new();
+            let owned = TypeFactory::fresh_canonical();
+            arch.set_types(owned.clone());
+            assert!(Arc::ptr_eq(
+                &TypeFactory::current_arch_factory().expect("published"),
+                &owned,
+            ));
+            // ensure_types returns the SAME installed handle (no shadow
+            // fresh construction behind an explicit install).
+            assert!(Arc::ptr_eq(&arch.ensure_types(), &owned));
+        }
+        // Architecture dropped → publication cleared.
+        assert!(TypeFactory::current_arch_factory().is_none());
+        // ensure_types fresh path: a set_types-less Architecture acquires
+        // its OWN factory (not the process-canonical singleton) — compare
+        // against the fallback tier directly, because shared_default NOW
+        // resolves to the freshly published current factory by design.
+        {
+            let mut arch = Architecture::new();
+            let handle = arch.ensure_types();
+            assert!(!Arc::ptr_eq(
+                &handle,
+                &TypeFactory::process_canonical_factory(),
+            ));
+            assert!(Arc::ptr_eq(
+                &TypeFactory::current_arch_factory().expect("published"),
+                &handle,
+            ));
+        }
+        assert!(TypeFactory::current_arch_factory().is_none());
     }
 }
