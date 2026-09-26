@@ -207,7 +207,7 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 Clone 用于 printc 从 `fd.scope` 复用）。
 **2026-06-26 完整对齐**（类型面 2026-08-16 `TYPE-WIRING-0001` 统一到 TypeFactory 单轨：`restructure_varnode` 解析工厂句柄——`fd.arch.types` 优先，无 Architecture 生产路径回退 `TypeFactory::shared_default()`（DataOrg flavor，模拟 headless 单 Architecture 进程）——并贯穿 `gather_spacebase`/`restructure`/`merge_with`/`create_entry`/`fake_input_symbols`；Ghidra 对应 `glb->types` 于 varmap.cc:1261/1309、`fd.getArch()->types` 于 varmap.cc:1129/1438）：
 - `restructure_varnode(fd, aliasyes)` — 主入口（**fd 取 `&mut`**：annotateRawStackPtr 插 PTRSUB op，varmap.cc:405-406）：`ScopeLocal::restructureVarnode` (varmap.cc:1256-1286) 完整编排：clearUnlockedCategory(-1) 存活逻辑→build_map_state→gather_varnodes→~~gather_spacebase~~（**2026-09-26 退役，见上**）→gather_open（内嵌 checker.gather + addGuard）→**gather_symbols 回灌（:1269）**→restructure→**clear_unlocked_category(function_parameter) + clear_category(fake_input)（:1275-1276）**→fake_input_symbols→**sort_alias（:1279）→`if (aliasyes)` mark_unaliased→check_unaliased_return（:1280-1282，2026-09-23 SB-MATCHURL-ORD70-0001 穿透 aliasyes=（numpass!=0），coreaction.cc:2279）→alias[0]==0 时 annotate_raw_stack_ptr（:1284-1285，不受 aliasyes 门）**；默认类型 = 工厂 `getBase(1,TYPE_UNKNOWN)`（varmap.cc:1261）。fakeInputSymbols 先于 markUnaliased（Ghidra varmap.cc:1272-1277 的注释："define fake symbols so that mark_unaliased will work"——此前 Rugra 顺序颠倒）。reset_local_window 不在本函数（见下——生命周期移至 scope 构造）
-- `clear_unlocked_category(cat)` — `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) 的 cat>=0 分支（varmap.cc:1275 对 function_parameter 调用）：typelock 存活（未 namelock 的已定义名重置 $$undef，database.cc:2080-2082）；`resetSizeLockType`（:2085-2086）无 Rugra 路径（LocalSymbol 无 sizelock 概念，不可达）；其余 removeSymbol
+- `clear_unlocked_category(cat)` — `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) 的 cat>=0 分支（varmap.cc:1275 对 function_parameter 调用）：typelock 存活（未 namelock 的已定义名重置 $$undef，database.cc:2080-2082）；`resetSizeLockType`（:2085-2086）无 Rugra 路径（LocalSymbol 无 sizelock 概念，不可达）；其余 removeSymbol。**走查序边界（CR-VARMREKEY F2）**：oracle 按 category[cat] 的 catindex 序走查（database.cc:2077-2090），Rugra 按插入（槽位）序——同集同终态、删除序不可观察，但 rename 遍喂给有状态的 buildUndefinedName 计数器，单次调用 ≥2 个 rename 且 catindex 序≠插入序时 $$undefNNNNNNNN 编号可与 oracle 相异（旧 dense 形态同插入序 ⇒ 预存 seam 非本次存储变化；建议后续 B2 fixture 覆盖该边界）
 - `clear_category(cat)` — `ScopeInternal::clearCategory` (database.cc:2022-2029) 的 cat>=0 分支（varmap.cc:1276 对 fake_input 调用）
 - `check_unaliased_return(fd, alias)` — **2026-08-25** `ScopeLocal::checkUnaliasedReturn` (varmap.cc:414-428)：首个 RETURN 的值输入在栈空间且无别名（有序表的 lower_bound）触达 `[off, off+size-1]` 时 `mark_not_mapped(off, size, false)`（删重叠符号 + 并集树去范围）
 - `annotate_raw_stack_ptr(fd)` — **2026-08-25** `ScopeLocal::annotateRawStackPtr` (varmap.cc:386-408)：type recovery 已开始时，栈指针的非加法读者（跳过 eval-special 非调用与 INT_ADD/PTRSUB/PTRADD）改为消费占位 `PTRSUB(sp,#0)`（newOpBefore + opSetInput 到 getSlot 槽位）
@@ -409,7 +409,11 @@ oracle 证据承担：
   O(n²)）。容器 Vec-mimicking 面（iter/get/Index/len/push/clear/last/
   IntoIterator）只产生 live 符号、槽位 id 序==压实 Vec 序——旧调用方
   观察序不变；stale id 读作 dead/absent（null `Symbol*` 语义）而非静默
-  别名移位后的邻居。micro-bench（/dev/shm/rugra-tests/varmrekey/bench，
+  别名移位后的邻居——**边界（CR-VARMREKEY F1）**：该"读作 absent"仅对
+  纯删除产生的陈旧成立；`clear()` 后槽位 id 归零重启，clear 前捕获的 id
+  会别名重填入同槽的新符号（与旧 `< len()` 检查同样别名），可观察行为与
+  dense 基线恒等（pre-clear 陈旧因所有持有者跨 clear seam 重新同步而
+  今日不可达）。micro-bench（/dev/shm/rugra-tests/varmrekey/bench，
   n=8000/删半）：legacy 240.9ms → new 59.3ms（4.1×，legacy 二次方增长）。
   `in_scope`（database.hh:597 rangetree.inRange 全包含）。
 

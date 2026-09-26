@@ -1942,8 +1942,14 @@ pub mod symbol_category {
 /// `category_lists` slots and `mapentry_log` entries; a stale id (held across
 /// a removal) now reads as dead/absent instead of silently aliasing the
 /// symbol that a dense Vec would have shifted into its place — the null
-/// `Symbol *` semantics of the oracle, not a behavior change for any id that
-/// was live when captured.
+/// `Symbol *` semantics of the oracle. Caveat (CR-VARMREKEY F1): that
+/// absent-instead-of-aliased read holds for staleness produced by pure
+/// removals only; `clear()` drops the whole slot vector and ids restart from
+/// zero, so an id captured before a `clear()` aliases whatever symbol is
+/// refilled into that slot afterwards — the same aliasing the old
+/// `< len()` bounds check produced. Observable behavior is identical to the
+/// dense baseline (and pre-clear staleness is unreachable today: every id
+/// holder re-syncs across the clear seam).
 #[derive(Clone, Debug, Default)]
 pub struct SymbolStore {
     slots: Vec<Option<LocalSymbol>>,
@@ -2024,7 +2030,12 @@ impl SymbolStore {
 
     // RUGRA-GLUE: slot-aware first-match (Vec::iter().position() returned a
     //   DENSE index; this returns the stable slot id of the same first live
-    //   match — the iteration orders coincide for any push/remove history)
+    //   match — the iteration orders coincide for any push/remove history.
+    //   Order precision (CR-VARMREKEY F2): this is insertion (slot) order,
+    //   while database.cc walks the category vector in catindex order; the
+    //   deletion loops that use this helper are order-unobservable — see the
+    //   clear_unlocked_category rename-pass note for the one boundary where
+    //   the difference could surface ($$undef numbering).)
     pub(crate) fn position_live(
         &self,
         mut pred: impl FnMut(&LocalSymbol) -> bool,
@@ -3684,7 +3695,16 @@ impl ScopeLocal {
         // take the undefined placeholder (order-independent of removals).
         // position_live returns the STABLE slot id (the dense
         // iter().position() of the old storage returned the compacted
-        // index; both walk live symbols in insertion order).
+        // index; both walk live symbols in insertion order). Order note
+        // (CR-VARMREKEY F2): the oracle walks category[cat] in catindex
+        // order (database.cc:2077-2090) while Rugra walks in insertion
+        // (slot) order — same set, same terminal state, and the removal
+        // pass order below is unobservable; but THIS rename pass feeds the
+        // stateful buildUndefinedName counter, so with >=2 renames in one
+        // call and catindex order != insertion order the $$undefNNNNNNNN
+        // numbering can differ from the oracle. The old dense form walked
+        // the same insertion order, so this is a pre-existing seam, not a
+        // storage change; a future B2 fixture should cover the boundary.
         loop {
             let idx = self
                 .symbols
@@ -3721,7 +3741,10 @@ impl ScopeLocal {
     /// Remove every symbol of the given category, mirroring
     /// `ScopeInternal::clearCategory` (database.cc:2022-2029) for the
     /// `cat >= 0` branch `restructureVarnode` uses with
-    /// `Symbol::fake_input` (varmap.cc:1276).
+    /// `Symbol::fake_input` (varmap.cc:1276). Walk order note
+    /// (CR-VARMREKEY F2): oracle iterates category[cat] in catindex order,
+    /// Rugra in insertion (slot) order — same set, same terminal state,
+    /// unobservable for pure removals.
     pub fn clear_category(&mut self, cat: i32) {
         if cat < 0 {
             return;
