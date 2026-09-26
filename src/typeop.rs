@@ -3613,9 +3613,10 @@ impl TypeOp for TypeOpIntAdd {
     }
 
     /// Pointer arithmetic rule. A pointer propagates input->output when the
-    /// other input is a constant; ints/uints propagate when adding a constant
-    /// to slot 1. Pointers never propagate output->input. Anything else is
-    /// blocked.
+    /// other input makes sense as a pointer add, transformed through
+    /// `propagateAddIn2Out`'s downChain; ints/uints propagate only into the
+    /// slot-1 constant. Pointers never propagate output->input. Anything
+    /// else is blocked.
     /// Faithful to `TypeOpIntAdd::propagateType` (typeop.cc:1181-1201).
     // Ghidra: typeop.cc:1181 TypeOpIntAdd::propagateType
     fn propagate_type(
@@ -3627,24 +3628,45 @@ impl TypeOp for TypeOpIntAdd {
     ) -> Option<Arc<Datatype>> {
         let meta = alt_type.get_metatype();
         if meta != TypeMetatype::Pointer {
-            // Only int/uint may flow, and only when adding a constant on slot 1.
+            // Only int/uint may flow, and only into the slot-1 constant
+            // (typeop.cc:1186-1189). A missing in(1) is ill-formed for a
+            // binary op (the oracle would dereference null); safe Rust
+            // blocks the edge instead of panicking.
             if meta != TypeMetatype::Int && meta != TypeMetatype::Uint {
                 return None;
             }
-            if outslot != 1 || op
+            if outslot != 1
+                || !op
                     .get_in(1)
-                    .map(|v| v.read().unwrap().is_constant())
-                    .unwrap_or(false) {
+                    .is_some_and(|in1| in1.read().unwrap().is_constant())
+            {
                 return None;
             }
         } else if inslot != -1 && outslot != -1 {
-            return None; // Pointers only propagate input <-> output
+            return None; // Must propagate input <-> output for pointers
         }
-        // Don't propagate pointer types output -> input.
-        if inslot == -1 && meta == TypeMetatype::Pointer {
+        // typeop.cc:1194: outvn is the edge's target varnode — the op output
+        // when outslot < 0, else the op input at outslot (the
+        // ActionInferTypes::propagateTypeEdge caller convention,
+        // coreaction.cc:5095-5098).
+        let out_is_constant = if outslot < 0 {
+            op.get_out()
+                .is_some_and(|out| out.read().unwrap().is_constant())
+        } else {
+            op.get_in(outslot as usize)
+                .is_some_and(|out| out.read().unwrap().is_constant())
+        };
+        if out_is_constant && meta != TypeMetatype::Pointer {
+            return Some(alt_type.clone());
+        }
+        if inslot == -1 {
+            // Propagating output to input: don't propagate pointer types
+            // this direction (typeop.cc:1196-1197).
             return None;
         }
-        Some(alt_type.clone())
+        // typeop.cc:1199: propagateAddIn2Out(alttype, tlst, op, inslot) —
+        // `tlst` is this TypeOp's factory member.
+        Self::propagate_add_in2out(alt_type, &self.type_factory, op, inslot)
     }
 }
 
@@ -3886,9 +3908,18 @@ impl TypeOpIntAdd {
             // (type.cc:4016), not the named type.cc:4029 form.
             pointer = Some(factory.get_type_pointer_rel_ephemeral(parent_pointer, pt, parent_off));
         }
-        // typeop.cc:1243-1247: a fully consumed chain with command AddZero
-        // (added 0) falls back to the input type; anything else NULL.
-        let pointer = pointer?;
+        // typeop.cc:1243-1247: a dead chain with command AddZero (added 0)
+        // falls back to the input type; anything else is NULL. The parent
+        // block above already ran, so this only fires when both the chain
+        // and the container accumulator are empty.
+        let pointer = match pointer {
+            Some(found) => found,
+            // command == 0 (AddZero): return alttype (typeop.cc:1244-1245).
+            None if command == PropagateAddCommand::AddZero => {
+                return Some(alttype.clone());
+            }
+            None => return None,
+        };
         // typeop.cc:1248-1251: spacebase input whose transformed pointee is
         // TYPE_SPACEBASE rewrites to an unknown base-type pointer, sized from
         // the RESULT pointer (not the input alttype).
@@ -5288,10 +5319,120 @@ mod tests {
             wordsize: 1,
         }));
         let add = TypeOpIntAdd::new(raw_factory());
-        // pointer input 0 -> output propagates.
+        // pointer input 0 -> output propagates (the 8-byte constant's value
+        // 4 wraps to zero on the 4-byte int pointee, downChain returns the
+        // pointer itself, typeop.cc:1098).
         assert!(same_arc(add.propagate_type(&ptr_t, &op, 0, -1), &ptr_t));
         // pointer output -> input is blocked.
         assert!(add.propagate_type(&ptr_t, &op, -1, 0).is_none());
+    }
+
+    /// TYPEOP-INTADD-PROPTEST-0001: the int arm only flows into the slot-1
+    /// CONSTANT (typeop.cc:1188 `outslot != 1 || !op->getIn(1)->isConstant()`),
+    /// and the constant target returns alttype directly through the
+    /// cc:1194-1195 outvn->isConstant() branch. Pre-fix the const test was
+    /// inverted (constant slot blocked, non-constant slot allowed).
+    #[test]
+    fn int_add_int_arm_flows_into_constant_slot() {
+        let mut op = pcodeop(OpCode::CPUI_INT_ADD);
+        op.inrefs.push(typed_vn(8, 0x10, None));
+        op.inrefs
+            .push(Arc::new(RwLock::new(Varnode::new_constant(0x10, 4))));
+        let add = TypeOpIntAdd::new(raw_factory());
+        let t = int_t();
+        // int input 0 -> constant slot 1 propagates (cc:1188 + cc:1194).
+        assert!(same_arc(add.propagate_type(&t, &op, 0, 1), &t));
+        // int output -> constant slot 1 also propagates: the cc:1194
+        // outvn->isConstant() branch fires before the cc:1196 inslot==-1
+        // block.
+        assert!(same_arc(add.propagate_type(&t, &op, -1, 1), &t));
+    }
+
+    /// TYPEOP-INTADD-PROPTEST-0001: a non-constant slot-1 target blocks the
+    /// int arm (cc:1188 `!isConstant`), and so does any target that is not
+    /// slot 1. Pre-fix the non-constant slot was (invertedly) allowed.
+    #[test]
+    fn int_add_int_arm_blocks_nonconstant_and_non_slot1_targets() {
+        let mut op = pcodeop(OpCode::CPUI_INT_ADD);
+        op.inrefs.push(typed_vn(8, 0x10, None));
+        op.inrefs.push(typed_vn(4, 0x20, None)); // slot 1 NOT constant
+        let add = TypeOpIntAdd::new(raw_factory());
+        assert!(add.propagate_type(&int_t(), &op, 0, 1).is_none());
+        // outslot != 1 blocks regardless of the constant (cc:1188 first
+        // conjunct): to the output...
+        let mut const_op = pcodeop(OpCode::CPUI_INT_ADD);
+        const_op.inrefs.push(typed_vn(8, 0x10, None));
+        const_op
+            .inrefs
+            .push(Arc::new(RwLock::new(Varnode::new_constant(0x10, 4))));
+        assert!(add.propagate_type(&int_t(), &const_op, 0, -1).is_none());
+        // ...and to input slot 0.
+        assert!(add.propagate_type(&int_t(), &const_op, 1, 0).is_none());
+    }
+
+    /// TYPEOP-INTADD-PROPTEST-0001: uint shares the int-arm rule
+    /// (typeop.cc:1186 allows TYPE_UINT as well).
+    #[test]
+    fn int_add_uint_arm_flows_into_constant_slot() {
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(),
+            4,
+            TypeMetatype::Uint,
+        )));
+        let mut op = pcodeop(OpCode::CPUI_INT_ADD);
+        op.inrefs.push(typed_vn(8, 0x10, None));
+        op.inrefs
+            .push(Arc::new(RwLock::new(Varnode::new_constant(0x10, 4))));
+        let add = TypeOpIntAdd::new(raw_factory());
+        assert!(same_arc(add.propagate_type(&uint_t, &op, 0, 1), &uint_t));
+    }
+
+    /// TYPEOP-INTADD-PROPTEST-0001: the pointer arm delegates to
+    /// propagateAddIn2Out (typeop.cc:1199) instead of passing alttype
+    /// through: a non-constant other input is NoPropagate (typeop.cc:1290/
+    /// 1302), a bad constant offset kills the downChain (typeop.cc:1221 via
+    /// getSubType failure), and a zero constant falls back to alttype through
+    /// the cc:1243-1245 AddZero branch. Pre-fix every one of these returned
+    /// Some(alttype) directly.
+    #[test]
+    fn int_add_pointer_arm_delegates_to_propagate_add_in2out() {
+        let ptr_t = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t(),
+            wordsize: 1,
+        }));
+        let add = TypeOpIntAdd::new(raw_factory());
+
+        // Non-constant offset: NoPropagate (sz=4 != 1, no INT_MULT def).
+        let mut nonconst_op = pcodeop(OpCode::CPUI_INT_ADD);
+        nonconst_op.inrefs.push(typed_vn(8, 0x10, None));
+        nonconst_op.inrefs.push(typed_vn(8, 0x50, None));
+        assert!(add.propagate_type(&ptr_t, &nonconst_op, 0, -1).is_none());
+
+        // Constant 5 on a 4-byte pointee: wraps to offset 1, getSubType on
+        // the base pointee fails, command is AddConst -> NULL (cc:1246).
+        let mut bad_op = pcodeop(OpCode::CPUI_INT_ADD);
+        bad_op.inrefs.push(typed_vn(8, 0x10, None));
+        bad_op
+            .inrefs
+            .push(Arc::new(RwLock::new(Varnode::new_constant(5, 4))));
+        assert!(add.propagate_type(&ptr_t, &bad_op, 0, -1).is_none());
+
+        // Constant 0: AddZero with a dead chain falls back to alttype
+        // (cc:1243-1245).
+        let mut zero_op = pcodeop(OpCode::CPUI_INT_ADD);
+        zero_op.inrefs.push(typed_vn(8, 0x10, None));
+        zero_op
+            .inrefs
+            .push(Arc::new(RwLock::new(Varnode::new_constant(0, 4))));
+        assert!(same_arc(add.propagate_type(&ptr_t, &zero_op, 0, -1), &ptr_t));
+
+        // Cross-input propagation is blocked (cc:1191-1192), even with a
+        // constant target edge.
+        assert!(add.propagate_type(&ptr_t, &zero_op, 0, 1).is_none());
+        // Output -> input stays blocked when the target edge is constant:
+        // cc:1194 requires meta != TYPE_PTR, then cc:1196 blocks inslot==-1.
+        assert!(add.propagate_type(&ptr_t, &zero_op, -1, 1).is_none());
     }
 
     #[test]
