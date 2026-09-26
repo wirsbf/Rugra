@@ -37,7 +37,7 @@
   "fspec_doc_sha256": "fd06eb6e2acff710c1aa42b4b0a9ca01c1387502165ff0bcf49f621e30214988",
   "runner_sha256": "f8a1857dbee635eda64e089c8dfeb8ef7b66255597e96fc99084e5aeb5056854",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_sha256": "05ec91d01abbf96787368463781462ba1453e8f9250710e7f5e461e11667fe4f",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-callguard-d0-overlay-v2 plus base commit and sorted length-prefixed paths and contents",

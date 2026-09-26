@@ -35,9 +35,9 @@
    "path": "sleigh_specs/x86-64.sla",
    "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
    "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-   "size": 487659
+   "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+   "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
@@ -140,7 +140,7 @@
   "typefactory_rs_sha256": "f9fa5264698009b900538632a8f5fdb11aa8e92cc0a777a39a75b225ee1de358",
   "datatype_rs_sha256": "0dfe46eeed99b7e48ff617c12f639903d5d2daa605b0f0ff03a6a9d584273ac2",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-type-unknown-lib-snapshot-v2 plus sorted length-prefixed paths and contents from pinned base commit with the owned TypeFactory overlay",
   "rust_crate_tree_sha256": "ed02739a21bd92609fa4e96c46c9f830e1f26e1b34d6aa0ebae1a1482127a6e7",

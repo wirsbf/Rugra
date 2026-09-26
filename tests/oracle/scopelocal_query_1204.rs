@@ -213,10 +213,13 @@ fn main() {
     // (j=0 -> pieces[1] offset 0 precislo, j=1 -> pieces[0] offset 4
     // precishi).
     {
-        let idx = scope.symbols.len();
         let mut piecesym = sym("piecesym", AddressSpace::Stack, 0x640, 8, None);
         piecesym.addrtied = true; // the unified entry's empty uselimit
-        scope.symbols.push(piecesym);
+        // SymbolStore::push returns the stable slot id — the Symbol* the
+        // oracle's addSymbol hands back (database.cc:1810). The old
+        // len()-before-push dense-index idiom died with the Vec storage:
+        // a tombstoned store makes live-len != next-slot.
+        let idx = scope.symbols.push(piecesym);
         scope.add_map_entry(
             idx,
             AddressSpace::Stack,

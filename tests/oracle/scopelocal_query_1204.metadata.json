@@ -14,46 +14,46 @@
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
  "rugra_source": {
-  "base_commit": "73955299b71a101596eb68fac3c293537b280558",
-  "base_tree": "924fc28bff10fb69a5865423108f352684a158f6",
-  "base_src_tree": "eb3e4847768140433ec9f6c418b5d66eede783e0",
-  "base_varmap_blob": "7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
+  "base_tree": "2eaa964981c4c49377888972d57d2a83b044be17",
+  "base_src_tree": "9c45fab3e135b71a0d68e1dc1978413f9b25b168",
+  "base_varmap_blob": "9d46add750c3b48967a70b825d73260318d740dc",
+  "cargo_toml_blob": "990a23789c5cebc24b6d453a6832e5c8dbee117a",
   "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
  },
  "comparand": {
   "cpp_fixture_sha256": "b16dd2b026859863e83ef4b6b23b2421596f45fbab3f48fe83921215374054e5",
-  "rust_fixture_sha256": "a025041ee6a74084943400d682ce4b698d6579f9554be690f7f929713da78c82",
-  "varmap_overlay_sha256": "b4a7c86ab51009279529f0038d40376396b6a7c013b945065dda328e2c3eddc8",
-  "api_document_sha256": "abe63ab8b90d5da99367332b2b1506b26309b3cdecd7caaa764398717b5a18d3",
-  "runner_sha256": "2e92a975b98406be1bd69ba33709ffde4687772530557a5b97e06a779d9f61b8"
+  "rust_fixture_sha256": "55be95627f0964d2727fc2f4959e6c16f00ca89da5bc505581d0a8c9955e2fca",
+  "varmap_overlay_sha256": "654a4a7db5923633d375b70465f251b2e667709d119d899ff01222b8d6fa0cda",
+  "api_document_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
+  "runner_sha256": "c9bfb93d6ea5ca276d387b9eff11a449815c4c7d2b323749c2766db476880a0f"
  },
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "source_repository_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
    "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
    "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
    "size": 487659
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "source_repository_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "source_repository_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "source_repository_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
@@ -92,16 +92,16 @@
   "sorting_comparison_keys": "AddrRange::operator< orders the multiset by (last, subsort) (rangemap.hh:88-91); EntrySubsort::operator< orders by (useindex, useoffset) (database.hh:129-133) with addrtied symbols minimal (0,0) (database.cc:100-107); the findAddr/findContainer upper subsort bound is EntrySubsort(usepoint) built from the QUERY address (database.cc:2232-2237); inUse is uselimit RANGE containment in the usepoint's space (database.cc:114-120); removeRange splits bridging ownership ranges (address.cc:438-448)."
  },
  "input_manifest": {
-  "binary": "examples/curl @ 3bea8db (git blob 76d9343e, sha256 8af50bca, 161728 bytes)",
+  "binary": "examples/curl @ 0e2c87d5 (git blob 76d9343e, sha256 8af50bca, 161728 bytes)",
   "functions": [
    "GetStr @ 0x36d0 (scope carrier only; identity asserted on the Ghidra side)"
   ],
   "cases": [
-   "setup: live space indices const=0 unique=2 ram=3 stack=8 \u2014 the EntrySubsort useindex dimension and the per-space maptable dimension both key on them",
-   "equal_subsort_overlap/findaddr: two entries with identical range AND subsort \u2014 both walks answer the SECOND inserted (hinted+tail bracketing)",
+   "setup: live space indices const=0 unique=2 ram=3 stack=8 — the EntrySubsort useindex dimension and the per-space maptable dimension both key on them",
+   "equal_subsort_overlap/findaddr: two entries with identical range AND subsort — both walks answer the SECOND inserted (hinted+tail bracketing)",
    "wide_narrow_overlap(+_wide_cell): the EntrySubsort-minimum record (narrow, first use 0x1000) owns the shared cell [0x328,0x32b] although wide (first use 0x1100) was inserted first with the smaller start; the wide-only cell answers wide",
-   "wide_narrow_findaddr_midrange/wide_use/nouse: exact-start + RANGE-containment inUse \u2014 narrow admits 0x1050 mid-range, wide admits 0x1150, nothing admits 0x1050 at 0x320",
-   "multi_uselimit_second_range/gap: uselimit {[0x1000,0x100f],[0x2000,0x200f]} \u2014 usepoint 0x2005 answers (subsort from the first range), the 0x1500 gap does not",
+   "wide_narrow_findaddr_midrange/wide_use/nouse: exact-start + RANGE-containment inUse — narrow admits 0x1050 mid-range, wide admits 0x1150, nothing admits 0x1050 at 0x320",
+   "multi_uselimit_second_range/gap: uselimit {[0x1000,0x100f],[0x2000,0x200f]} — usepoint 0x2005 answers (subsort from the first range), the 0x1500 gap does not",
    "cross_space_stack_query/ram_query: a ram entry never answers a stack query and vice versa (maptable[space])",
    "multi_mapping_first/second: ONE symbol with entries at [0x500,0x503] and [0x510,0x513] answers both queries with the respective entry extents",
    "remove_requery_first/second/survivor: removeSymbol drops both mappings of the symbol and the survivor keeps answering (entry-log re-keying)",
@@ -109,14 +109,14 @@
    "find_container_equal_tie: equal-size equal-subsort tie resolves to the LAST inserted (tieB) via the backward walk",
    "partial_offset_piece_hi: the join symbol's [0x644,0x647] piece answers with getOffset()=4 and flags 0x4008000 = precishi|addrtied (mapped NOT set on pieces, database.cc:1172)",
    "qp_local_symbol: getAllFlags = 0x208100 = mapped|addrtied|typelock",
-   "qp_scope_symbol_victim: victim symbol answers with 0x208000 (no readonly fold \u2014 installed before the property range)",
+   "qp_scope_symbol_victim: victim symbol answers with 0x208000 (no readonly fold — installed before the property range)",
    "marknotmapped_window: after markNotMapped(stack,0x900,4) the victim is gone and 0x902 answers property-only 0x2000 with scope=none (ownership window split)",
    "qp_scope_only_property: 0x910 inside the owned window answers 0x20a000 = mapped|addrtied|readonly with scope=this",
    "qp_parent_symbol: the global scope's gpar answers through the local query with 0x20c000 = mapped|addrtied|persist, scope=parent",
    "qp_none: unique-space query with no symbol and no ownership answers flags=0 scope=none",
    "qp_constant: constant-space address short-circuits to property-only flags=0 scope=none (database.cc:950)"
   ],
-  "sha256": "4b7759deb976d1429d4f437290670ada34369bb02d95266ae9cd47ba50d71dd1"
+  "sha256": "b3ee658ce041f71aafa0f3dcdb5a4c5de57d674813391a6850948db373993266"
  },
  "coverage": {
   "setup_space_indices": {
@@ -126,7 +126,7 @@
   },
   "equal_subsort_both_walks": {
    "status": "MATCH",
-   "covers": "equal_subsort_overlap + equal_subsort_findaddr: the bracketing quirk \u2014 both the forward findOverlap walk and the backward findAddr walk answer the second inserted",
+   "covers": "equal_subsort_overlap + equal_subsort_findaddr: the bracketing quirk — both the forward findOverlap walk and the backward findAddr walk answer the second inserted",
    "residual_todo_ids": []
   },
   "wide_narrow_dual_order": {
@@ -176,7 +176,7 @@
   },
   "production_consumer_threading": {
    "status": "UNTESTED",
-   "covers": "Funcdata::mapGlobals / linkSymbol / sync_varnodes_with_symbols still call the second hand-rolled funcdata.rs helper (scope_local_find_overlap, symbol-level, first-inserted tie \u2014 deviates from the bracketing quirk) and the spaceless has_overlap shim; production does not thread the parent scope or the query space",
+   "covers": "Funcdata::mapGlobals / linkSymbol / sync_varnodes_with_symbols still call the second hand-rolled funcdata.rs helper (scope_local_find_overlap, symbol-level, first-inserted tie — deviates from the bracketing quirk) and the spaceless has_overlap shim; production does not thread the parent scope or the query space",
    "residual_todo_ids": [
     "SCOPELOCAL-QUERY-RESIDUAL-0002"
    ]
@@ -204,7 +204,7 @@
   },
   "space_index_unverified_variants": {
    "status": "UNTESTED",
-   "covers": "ghidra_space_index pins Register=4 Join=9 Iop=10 Overlay=11 Other=12 without oracle verification (inert for subsort comparisons \u2014 only uselimit spaces feed EntrySubsort); verified indices are const=0 unique=2 ram=3 stack=8",
+   "covers": "ghidra_space_index pins Register=4 Join=9 Iop=10 Overlay=11 Other=12 without oracle verification (inert for subsort comparisons — only uselimit spaces feed EntrySubsort); verified indices are const=0 unique=2 ram=3 stack=8",
    "residual_todo_ids": [
     "ADDRESS-0001"
    ]
@@ -225,12 +225,12 @@
     {
      "id": "production_consumer_threading",
      "status": "UNTESTED",
-     "detail": "funcdata.rs (off-lease in r2) still carries the second hand-rolled scope_local_find_overlap (symbol-level, first-inserted equal-subsort tie \u2014 the oracle answers the second) and the spaceless has_overlap shim; mapGlobals/linkSymbol do not thread parent scope or query space. Fix = funcdata round: delegate to varmap::{find_overlap_entry, find_addr_entry, query_properties_ex, has_overlap_in} and delete the duplicate."
+     "detail": "funcdata.rs (off-lease in r2) still carries the second hand-rolled scope_local_find_overlap (symbol-level, first-inserted equal-subsort tie — the oracle answers the second) and the spaceless has_overlap shim; mapGlobals/linkSymbol do not thread parent scope or query space. Fix = funcdata round: delegate to varmap::{find_overlap_entry, find_addr_entry, query_properties_ex, has_overlap_in} and delete the duplicate."
     },
     {
      "id": "multientryset_wholecount",
      "status": "UNTESTED",
-     "detail": "wholeCount/multiEntrySet (database.cc:1866-1885) unmodeled \u2014 no query in this domain observes it; register when porting begin/endMultiEntry consumers (XML encode / assignDefaultNames chains)."
+     "detail": "wholeCount/multiEntrySet (database.cc:1866-1885) unmodeled — no query in this domain observes it; register when porting begin/endMultiEntry consumers (XML encode / assignDefaultNames chains)."
     }
    ]
   },

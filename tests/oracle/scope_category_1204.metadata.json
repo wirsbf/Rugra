@@ -157,7 +157,7 @@
    "exact Symbol identity returned by category slots",
    "name-tree ownership and destruction count"
   ],
-  "overall_status": "UNTESTED"
+  "overall_status": "MATCH"
  },
  "exact_function_boundaries": {
   "getCategorySize": "Covers negative category, absent/empty categories, categories containing null holes, populated category 0, and append-only categories 1/2.",
@@ -167,24 +167,24 @@
   "excluded": "Category values outside the documented Symbol enum {-1,0,1,2,3}, allocation failure, corrupt pre-state (category/index not naming an allocated slot), lock poisoning, concurrent access, and categorySanity/clearCategory are outside this fixture."
  },
  "comparand": {
-  "rugra_base_commit": "3efb1398d8955959f71e8694609cbc38059295cb",
-  "rugra_base_tree": "00117c8be4103f58fc3e534b0b6d0fa5c052e567",
+  "rugra_base_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
+  "rugra_base_tree": "2eaa964981c4c49377888972d57d2a83b044be17",
   "cpp_fixture_sha256": "1aafafb9a6f9ae90ad9666966131adf616423c21ef2c43d87037a75ee9a163b6",
   "rust_fixture_sha256": "7aa15e164f09e342b11c145e3a0cd4d6dd06b22f51f40138d4efbcfc9ea61520",
-  "runner_sha256": "9a701930c4b2038609cb1eafa2875b1439f0bbc1219a237c7676663f56846ec2",
-  "database_rs_sha256": "835b46d51c1bb4d8bbd8ad9dca6032c61c801a85725087e15110979b05561fa0",
-  "database_doc_sha256": "d9a12e5d56c2a96c27e75ea3a0142e62c0cec686deb1b6f877e118d4f8a63d27",
+  "runner_sha256": "f06f4610dd0ac1e7e91d016360b445b1055fb4e749404bd73f3f9487f7b42494",
+  "database_rs_sha256": "d513184950bbaec0800504941e9c06260a45a3c14cef5b9254e3e86ec1e98a4d",
+  "database_doc_sha256": "a568c0535af2ba8e22e4f8d11c6d956f4df7ee74fd9c92eb1519b4fb2294db8e",
   "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
   "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
   "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "expected_stdout_sha256": "7ce3d2f0fe29b86ab596f3a966e0d0fe322fb94e55e0ab218627090b2eb762ca",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "MATCH"
 }

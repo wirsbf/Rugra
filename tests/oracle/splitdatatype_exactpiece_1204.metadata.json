@@ -152,7 +152,7 @@
   "datatype_rs_sha256": "668d9ad5c36bfc34f0c72bc6a467e3f50887fbb75490cc3ba7e9ed5f6571cc4c",
   "datatype_doc_sha256": "216e4453c81e99553f444742fa831aa1cc48b4adfc4543567435180b8338292d",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-splitdatatype-exactpiece-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
   "rust_crate_tree_sha256": "59bf0f26a736dde6b61508750c3cb2b1ced90a310cb57f8dbedb55dfa54755d0"

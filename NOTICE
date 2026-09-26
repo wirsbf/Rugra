@@ -9,3 +9,39 @@ the `// Ghidra:` annotations throughout src/ and in docs/alignment_audit/.
 
 Third-party crates are listed in Cargo.toml; notable ports include
 SLEIGH engine bindings built from the Ghidra source tree.
+
+---
+
+kuna (crates/kuna-base, crates/kuna-num, crates/kuna-sleigh, crates/kuna-slacomp)
+
+The vendored crates under crates/ are borrowed from kuna
+(https://github.com/Noelo-Lab/kuna), Copyright 2026 The kuna Authors,
+licensed under the Apache License, Version 2.0, at pinned commit
+0096e984d74846e45f42c1dbe1fb95252083dda2 (upstream HEAD at vendoring time).
+kuna is itself derived from Ghidra
+(https://github.com/NationalSecurityAgency/ghidra): the SLEIGH compiler
+(kuna-slacomp, the sleigh_opt equivalent) and the SLEIGH runtime types
+(kuna-sleigh / kuna-base / kuna-num) are a Rust rendition of Ghidra's C++
+decompiler and SLEIGH sources. Per-file `// Ghidra:` anchors inside the
+vendored sources point at the upstream C++ file/line each module follows.
+
+The following attribution is reproduced from kuna's NOTICE file:
+
+    kuna
+
+    Portions of the structuring and region-recovery code are ported from angr
+    (https://github.com/angr/angr), released under the BSD 2-Clause License.
+
+    (Full text: https://github.com/angr/angr/blob/master/LICENSE)
+
+No angr-derived structuring/region-recovery code is included in the vendored
+subset (only kuna-base/kuna-num/kuna-sleigh/kuna-slacomp; the attribution is
+carried for provenance completeness of the upstream tree).
+
+Vendoring shape: crate sources (src/) and manifests only; kuna's own
+integration-test trees (tests/) and its vendored Ghidra processor-spec corpus
+are not included. Rugra's .slaspec inputs always come from the locked Ghidra
+12.0.4 oracle tree (see tools/build_locked_x86_64_sla.sh). A small number of
+#[cfg(test)] unit tests inside the vendored sources reference kuna's
+repo-root datatest corpus that is not vendored; they are inert for Rugra's
+gates (which exercise the root package) and are skipped in practice.

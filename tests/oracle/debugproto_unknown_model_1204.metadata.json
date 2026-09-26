@@ -12,7 +12,7 @@
   "rust_fixture_sha256": "05da53fa9d9752baa377704dc52001fd40824fe9cbdbb666029890352c18dd7d",
   "sleigh_specs/x86-64-gcc.cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
   "sleigh_specs/x86-64.pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-  "sleigh_specs/x86-64.sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "sleigh_specs/x86-64.sla_sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
   "sleigh_specs/x86.ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
  },
  "compiler_spec": "x86-64-gcc.cspec (production bytes; default model __stdcall extrapop=8)",
@@ -59,7 +59,7 @@
   "rust_fixture": "05da53fa9d9752baa377704dc52001fd40824fe9cbdbb666029890352c18dd7d",
   "sleigh_specs/x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
   "sleigh_specs/x86-64.pspec": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-  "sleigh_specs/x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "sleigh_specs/x86-64.sla": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
   "sleigh_specs/x86.ldefs": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
  },
  "expected_stdout_sha256": "d89957c0082b8e5e78fa81354c2b8761c37e24a783a17a8480d6b51bc5fe307d",

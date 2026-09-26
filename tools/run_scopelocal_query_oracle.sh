@@ -39,14 +39,14 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=73955299b71a101596eb68fac3c293537b280558
-rugra_source_tree=924fc28bff10fb69a5865423108f352684a158f6
-rugra_source_src_tree=eb3e4847768140433ec9f6c418b5d66eede783e0
-rugra_source_varmap_blob=7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2
-rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
+rugra_source_commit=0e2c87d5d75ca755198d1f2cae1218d8d0a88135
+rugra_source_tree=2eaa964981c4c49377888972d57d2a83b044be17
+rugra_source_src_tree=9c45fab3e135b71a0d68e1dc1978413f9b25b168
+rugra_source_varmap_blob=9d46add750c3b48967a70b825d73260318d740dc
+rugra_source_cargo_toml_blob=990a23789c5cebc24b6d453a6832e5c8dbee117a
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_input_commit=73955299b71a101596eb68fac3c293537b280558
+rugra_input_commit=0e2c87d5d75ca755198d1f2cae1218d8d0a88135
 rugra_input_blob=76d9343ea3add321aa4134856323663b36365807
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/scopelocal_query_1204.metadata.json"
@@ -102,7 +102,7 @@ for binding in \
   "$rugra_source_commit^{commit}:$rugra_source_commit" \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
-  "$rugra_source_commit:src/varmap.rs:7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2" \
+  "$rugra_source_commit:src/varmap.rs:$rugra_source_varmap_blob" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
@@ -277,7 +277,14 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+# overall_status keeps the annotated B2-canonicalization form
+# ("UNTESTED: (B2 canonicalization)") — the runner predates the annotation
+# convention; accept any UNTESTED-prefixed form (any MATCH would be wrong
+# here: production consumers are a registered residual).
+if not str(metadata["overall_status"]).startswith("UNTESTED"):
+    raise SystemExit(
+        f"overall mismatch: {metadata['overall_status']!r} (expected UNTESTED prefix)"
+    )
 expected_matches = {
     "setup_space_indices", "equal_subsort_both_walks", "wide_narrow_dual_order",
     "multi_uselimit_containment", "cross_space_maptable",
@@ -333,11 +340,15 @@ require(
     metadata["projection_status"],
     "MATCH" if all(coverage[key]["status"] == "MATCH" for key in expected_matches) else "UNTESTED",
 )
-require(
-    "overall/coverage consistency",
-    metadata["overall_status"],
-    "UNTESTED" if any(record["status"] == "UNTESTED" for record in coverage.values()) else "MATCH",
-)
+if not str(metadata["overall_status"]).startswith(
+    "UNTESTED"
+    if any(record["status"] == "UNTESTED" for record in coverage.values())
+    else "MATCH"
+):
+    raise SystemExit(
+        "overall/coverage consistency mismatch: "
+        f"{metadata['overall_status']!r}"
+    )
 top_residual_ids = metadata.get("residual_todo_ids")
 if not isinstance(top_residual_ids, list) or not top_residual_ids:
     raise SystemExit("top-level residual_todo_ids must be a non-empty list")

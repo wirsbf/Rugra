@@ -1,3 +1,37 @@
+# Cargo workspace: the root `rugra` package plus the vendored SLEIGH Rust
+# compiler crates under crates/ (borrowed from kuna, Apache-2.0; see NOTICE).
+# The vendored crates are standalone members -- nothing in the rugra build
+# graph depends on them; they are built on demand (for example by
+# tools/build_locked_x86_64_sla.sh via `cargo build -p kuna-slacomp`).
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# External (vendored SLEIGH crates' only external deps; versions unified with
+# the root package so the workspace resolves a single copy of each).
+thiserror = "2.0"
+flate2 = "1.1"
+# Intra-workspace (vendored SLEIGH crates)
+kuna-base = { path = "crates/kuna-base" }
+kuna-num = { path = "crates/kuna-num" }
+kuna-sleigh = { path = "crates/kuna-sleigh" }
+kuna-slacomp = { path = "crates/kuna-slacomp" }
+
+# Vendored-crate clippy discipline (kuna ADR 0002: deterministic iteration
+# order -- BTreeMap/BTreeSet only). Only crates that opt in via
+# `[lints] workspace = true` are affected; the root rugra package does not
+# opt in. The disallow list lives in ./clippy.toml.
+[workspace.lints.clippy]
+disallowed_types = "deny"
+
 [package]
 name = "rugra"
 version = "0.1.0"
@@ -27,7 +61,8 @@ rustc-hash = "2.0"
 indexmap = "2.0"
 
 # Error handling
-thiserror = "1.0"
+# thiserror 2.x unifies with the vendored SLEIGH crates (workspace dep).
+thiserror = "2.0"
 anyhow = "1.0"
 
 # Serialization
