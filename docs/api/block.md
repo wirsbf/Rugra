@@ -692,6 +692,14 @@ cross/forward 旧分类；末尾把集合坍缩为 x（清 mark、copymap 指向
 #### 返回
 - `needrebuild`：存在不可归约的树边时需要重建生成树（见下方暴力证据）。
 
+#### 注意
+区间快照（cc:1174 读 x->visitcount/numdesc 与 y'->visitcount）在 y'==x
+（循环头自身入 reachunder 成员的边：y==x 且 copymap 仍指向自身，cc:1027/1122）
+时经 ptr_eq 预判从单一 x 读锁取双值——std::sync::RwLock 同线程同锁二次
+read() 文档标注 "might panic"（BLOCK-RWLOCK-RECURSIVE-READ-0001 加固；
+oracle C++ 裸指针无锁形态，同对象二次读取天然合法，值恒等由对象同一性
+保证）。
+
 ---
 
 ### `pub fn add_loop_edge(&mut self, begin: &Arc<...>, outindex: usize)`
@@ -1952,3 +1960,18 @@ cs 的 default 臂体）对齐；`default_gototype != 0` 的 default 体留周�
 - 单元锁：block.rs `finalize_visited_tests::
   finalize_recurses_into_structured_default_whiledo_for_extraction`
   （同 CFG 全管线，断言 INT_ADD 置 NONPRINTING + iterate_op/loop_def 存活）。
+
+## 2026-09-26：findIrreducible 区间快照同锁递归读加固（BLOCK-RWLOCK-RECURSIVE-READ-0001）
+
+`find_irreducible` 的区间测试快照（block.cc:1174 形：读 x->visitcount、
+x->numdesc、y'->visitcount）原实现同时持 x 与 y' 两个读守卫；y'==x（循环头
+自身入 reachunder 成员的边——y==x 且 copymap 指向自身，cc:1027/1122）时即
+对同一 RwLock 同线程二次 read()。std 文档标注该形态 "might panic"（Linux
+futex 实现恰好读者可重入故现网安全，属标准库实现依赖）；oracle C++ 裸指针
+无锁，同对象二次读取天然合法。加固=ptr_eq 预判分支（`// RUGRA-GLUE:` 注释
+说明锁形态对应关系）：y'==x 臂从单一 x 守卫取双值（对象同一性 ⇒ 值恒等），
+y'!=x 臂保持原双守卫快照。零行为变化机器证明：canon curl/httpd 字节恒等 +
+镜面四面零漂移 + bank 391/391 + 单元锁 `findirreducible_lock_tests`（3 块
+最小可归约环 b0→b1→b2→b1 亲证 y'==x 点：A 侧探针证递归路径真实命中且首守卫
+持有中二次取锁、B 侧证单锁臂；坍缩/copymap/边分类 oracle 语义断言 +
+structure_loops 驱动端到端）。
