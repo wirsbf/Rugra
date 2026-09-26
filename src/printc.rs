@@ -234,6 +234,17 @@ pub mod optoken {
     }
 }
 
+/// The Arc/RwLock handle alias for the RPN per-op emitter transport
+/// (`op_arc` = the op being pushed, whose Arc lands in nodepend entries for
+/// the rpn_recurse drain; `read_op` = the oracle's readOp parameter, threaded
+/// by printlanguage.cc:532 and consumed only by op_int_zext/op_int_sext).
+// RUGRA-GLUE: Rust signature transport for the C++
+//   `push(PrintLanguage*, const PcodeOp*, const PcodeOp*)` parameter triple;
+//   the PcodeOp Arc has no C++ counterpart (RPN nodepend needs an owned
+//   handle where C++ stores bare pointers). Shared by printc.rs's per-op
+//   virtual emitters and typeop.rs's push routing table.
+pub type OpArcRef = std::sync::Arc<std::sync::RwLock<PcodeOp>>;
+
 // Ghidra: printlanguage.hh:144 PrintLanguage::modifiers
 /// Printing modification flags mirroring Ghidra's `modifiers` enum
 /// (printlanguage.hh:144-161). Stored in PrintC.mods as a bitmask.
@@ -1859,6 +1870,15 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_CEIL
             | OpCode::CPUI_FLOAT_FLOOR
             | OpCode::CPUI_FLOAT_ROUND => has(0),
+            // printc.hh:317/343/344 opFloatNan/opPopcountOp/opLzcountOp →
+            // opFunc (printc.cc:424-441): unary functional syntax arms now
+            // carried by the typeop push table (MIGW1-TYPEOP-0002) — an
+            // implied def inlines as `NAN(x)` / `POPCOUNT(x)` / `LZCOUNT(x)`
+            // instead of leaking its register temp as an unnamed-location
+            // token.
+            OpCode::CPUI_FLOAT_NAN
+            | OpCode::CPUI_POPCOUNT
+            | OpCode::CPUI_LZCOUNT => has(0),
             // printc.cc:830 opFloatInt2Float (absorbZext + typecast form)
             // and printc.hh:326-327 opFloatFloat2Float/opFloatTrunc →
             // opTypeCast: all three have total unary emitting arms, so an
@@ -2501,14 +2521,775 @@ impl PrintC {
         opc == OpCode::CPUI_PTRSUB || opc == OpCode::CPUI_PTRADD
     }
 
+    // ===========================================================================
+    // Per-op virtual emitters (printc.hh:283-344) + shared binary/unary
+    // mechanics (printlanguage.cc:547/566).
+    //
+    // Oracle layering carried by this section (MIGW1-TYPEOP-0002):
+    //   typeop.hh:<line> TypeOpX::push   → lng->opXxx(op[,readOp])   (typeop.rs)
+    //   printc.hh:<line> PrintC::opXxx   → one of the four mechanics below
+    //   printlanguage.cc opBinary/opUnary → pushOp + pushVn inputs (RPN)
+    // Every named method below is the PrintC virtual for one op-code; the
+    // opcode→method routing table lives in typeop.rs push_opcode_rpn (the
+    // TypeOp::push virtual dispatch twin), reached from dispatch_op_rpn.
+    // ===========================================================================
+
+
+    // Ghidra: printlanguage.cc:546 PrintLanguage::opBinary
+    /// Push a binary operator token (by BINARY_TOKENS registry id) plus both
+    /// input varnodes onto the RPN stack. Faithful body of
+    /// `PrintLanguage::opBinary(const OpToken*, const PcodeOp*)`
+    /// (printlanguage.cc:547-557):
+    ///
+    /// ```text
+    /// if (isSet(negatetoken)) {          // cc:539-545 flip prelude
+    ///   tok = tok->negate; unsetMod(negatetoken);
+    ///   if (tok == 0) throw LowlevelError("Could not find fliptoken");
+    /// }
+    /// pushOp(tok,op);                    // cc:550
+    /// pushVn(op->getIn(1),op,mods);      // cc:553-555 reverse order
+    /// pushVn(op->getIn(0),op,mods);      // (LIFO nodepend drain)
+    /// ```
+    ///
+    /// The flip-prelude throw is unreachable in the token set dispatched
+    /// here: negatetoken is only set by opBoolNegate (printc.cc:819-820)
+    /// gated on checkPrintNegation, whose flippable set (get_booleanflip,
+    /// opcodes.cc:94-130) maps exactly onto the comparison tokens that all
+    /// carry negate targets (printc.cc:129-134). Rugra keeps the original
+    /// token for a hypothetical null-negate flip (no print-time error
+    /// channel).
+    pub fn rpn_op_binary(
+        &mut self,
+        op_arc: &OpArcRef,
+        op: &PcodeOp,
+        spec_id: usize,
+    ) {
+        // printlanguage.cc:539-545: negatetoken flip prelude.
+        let mut spec = optoken::BINARY_TOKENS[spec_id];
+        if self.mods & print_mods::NEGATETOKEN != 0 {
+            self.mods &= !print_mods::NEGATETOKEN;
+            if let Some(nid) = spec.negate {
+                spec = optoken::BINARY_TOKENS[nid];
+            }
+        }
+        // printlanguage.cc:550: pushOp(tok, op).
+        self.rpn_push_op(Self::RPN_TOK_BINARY_BASE + spec.id);
+        // printlanguage.cc:553-555: implied vn's pushed in reverse order
+        // (in(1) then in(0)) for the LIFO nodepend drain. Missing-input ops
+        // skip emission entirely (same guard as the former inline dispatch
+        // arm) so the stage-2 token can never dangle unbalanced.
+        if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
+            let m = self.mods;
+            self.rpn_push_in(op_arc, op, 1, m);
+            self.rpn_push_in(op_arc, op, 0, m);
+        }
+    }
+
+    // Ghidra: printlanguage.cc:566 PrintLanguage::opUnary
+    /// Push a unary prefix operator token (by rpn_token_table index) plus
+    /// the input varnode onto the RPN stack. Faithful body of
+    /// `PrintLanguage::opUnary(const OpToken*, const PcodeOp*)`
+    /// (printlanguage.cc:566-573): `pushOp(tok,op); pushVn(op->getIn(0),op,mods);`
+    pub fn rpn_op_unary(&mut self, op_arc: &OpArcRef, op: &PcodeOp, tok_index: usize) {
+        // printlanguage.cc:568: pushOp(tok,op).
+        self.rpn_push_op(tok_index);
+        // printlanguage.cc:571: pushVn(op->getIn(0),op,mods).
+        let m = self.mods;
+        self.rpn_push_in(op_arc, op, 0, m);
+    }
+
+    // ---- printc.hh:283-307 comparison/arithmetic binary one-liners ----
+    // Each method is the PrintC virtual `{ opBinary(&<token>,op); }` with
+    // its printc.hh declaration-line anchor; the token registry id is the
+    // printc.cc:36-55 static instance (optoken::BINARY_TOKENS order).
+
+    // Ghidra: printc.hh:283 PrintC::opIntEqual { opBinary(&equal,op); }
+    /// INT_EQUAL → equal token (registry id 12, "==").
+    pub fn op_int_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 12);
+    }
+
+    // Ghidra: printc.hh:284 PrintC::opIntNotEqual { opBinary(&not_equal,op); }
+    /// INT_NOTEQUAL → not_equal token (registry id 13, "!=").
+    pub fn op_int_not_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 13);
+    }
+
+    // Ghidra: printc.hh:285 PrintC::opIntSless { opBinary(&less_than,op); }
+    /// INT_SLESS → less_than token (registry id 8, "<").
+    pub fn op_int_sless(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 8);
+    }
+
+    // Ghidra: printc.hh:286 PrintC::opIntSlessEqual { opBinary(&less_equal,op); }
+    /// INT_SLESSEQUAL → less_equal token (registry id 9, "<=").
+    pub fn op_int_sless_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 9);
+    }
+
+    // Ghidra: printc.hh:287 PrintC::opIntLess { opBinary(&less_than,op); }
+    /// INT_LESS → less_than token (registry id 8 — the same static OpToken
+    /// instance INT_SLESS dispatches to, printc.cc:44).
+    pub fn op_int_less(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 8);
+    }
+
+    // Ghidra: printc.hh:288 PrintC::opIntLessEqual { opBinary(&less_equal,op); }
+    /// INT_LESSEQUAL → less_equal token (registry id 9, "<=").
+    pub fn op_int_less_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 9);
+    }
+
+    // Ghidra: printc.hh:291 PrintC::opIntAdd { opBinary(&binary_plus,op); }
+    /// INT_ADD → binary_plus token (registry id 3, "+"). Rugra keeps the
+    /// struct-field recovery pre-check the former inline dispatch arm had
+    /// (INT_ADD(ptr-to-struct, const-offset) → `ptr->field`, the documented
+    /// substitute for PTRSUB conversion at the printing layer); the oracle
+    /// has no such branch — opIntAdd is the bare one-liner.
+    pub fn op_int_add(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        // Rugra struct-field recovery (see the former dispatch arm's
+        // comment, printc.cc:476-484 opPtrsub shape): INT_ADD(Struct*,
+        // offset) renders `base->field` via the pointer_member RPN token.
+        if op.opcode == OpCode::CPUI_INT_ADD && op.inrefs.len() >= 2 {
+            let i0 = &op.inrefs[0];
+            let i1 = &op.inrefs[1];
+            let v0 = i0.read().unwrap();
+            let v1 = i1.read().unwrap();
+            let (off, bidx) = if v1.get_space() == crate::space::AddressSpace::Const
+                && v1.get_offset() > 0
+                && v1.get_offset() < 0x10000
+                && v0.get_space() != crate::space::AddressSpace::Const
+            {
+                (v1.get_offset(), 0usize)
+            } else if v0.get_space() == crate::space::AddressSpace::Const
+                && v0.get_offset() > 0
+                && v0.get_offset() < 0x10000
+                && v1.get_space() != crate::space::AddressSpace::Const
+            {
+                (v0.get_offset(), 1usize)
+            } else {
+                (0u64, 0usize)
+            };
+            let bv = op.inrefs[bidx].read().unwrap();
+            let fm = if off > 0 {
+                if let Some(ref vt) = bv.v_type {
+                    use crate::type_system::datatype::Datatype;
+                    if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                        if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                            ts.fields.iter().find(|f| f.offset == off as usize).map(|f| f.name.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            drop(bv);
+            drop(v0);
+            drop(v1);
+            if let Some(fn_) = fm {
+                // printc.cc:476-484 opPtrsub shape: pushOp(&pointer_member);
+                // pushVn(base); field atom (nodepend drain inlines the base).
+                self.rpn_push_op(self.rpn_tok_pointer_member);
+                self.rpn_push_in(op_arc, op, bidx, self.mods);
+                use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                let field_atom = Atom::new(&fn_, TagType::Syntax, SyntaxHighlight::NoColor);
+                self.rpn_push_atom(&field_atom);
+                return;
+            }
+        }
+        self.rpn_op_binary(op_arc, op, 3);
+    }
+
+    // Ghidra: printc.hh:292 PrintC::opIntSub { opBinary(&binary_minus,op); }
+    /// INT_SUB → binary_minus token (registry id 4, "-").
+    pub fn op_int_sub(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 4);
+    }
+
+    // Ghidra: printc.hh:298 PrintC::opIntXor { opBinary(&bitwise_xor,op); }
+    /// INT_XOR → bitwise_xor token (registry id 15, "^").
+    pub fn op_int_xor(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 15);
+    }
+
+    // Ghidra: printc.hh:299 PrintC::opIntAnd { opBinary(&bitwise_and,op); }
+    /// INT_AND → bitwise_and token (registry id 14, "&").
+    pub fn op_int_and(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 14);
+    }
+
+    // Ghidra: printc.hh:300 PrintC::opIntOr { opBinary(&bitwise_or,op); }
+    /// INT_OR → bitwise_or token (registry id 16, "|").
+    pub fn op_int_or(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 16);
+    }
+
+    // Ghidra: printc.hh:301 PrintC::opIntLeft { opBinary(&shift_left,op); }
+    /// INT_LEFT → shift_left token (registry id 5, "<<").
+    pub fn op_int_left(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 5);
+    }
+
+    // Ghidra: printc.hh:302 PrintC::opIntRight { opBinary(&shift_right,op); }
+    /// INT_RIGHT → shift_right token (registry id 6, ">>").
+    pub fn op_int_right(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 6);
+    }
+
+    // Ghidra: printc.hh:303 PrintC::opIntSright { opBinary(&shift_sright,op); }
+    /// INT_SRIGHT → shift_sright token (registry id 7 — a distinct static
+    /// OpToken from shift_right that only differs in being the signed form;
+    /// both print ">>", printc.cc:42-43).
+    pub fn op_int_sright(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 7);
+    }
+
+    // Ghidra: printc.hh:304 PrintC::opIntMult { opBinary(&multiply,op); }
+    /// INT_MULT → multiply token (registry id 0, "*").
+    pub fn op_int_mult(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 0);
+    }
+
+    // Ghidra: printc.hh:305 PrintC::opIntDiv { opBinary(&divide,op); }
+    /// INT_DIV → divide token (registry id 1, "/").
+    pub fn op_int_div(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 1);
+    }
+
+    // Ghidra: printc.hh:306 PrintC::opIntSdiv { opBinary(&divide,op); }
+    /// INT_SDIV → divide token (registry id 1 — the same static instance
+    /// INT_DIV dispatches to; the signedness lives in the data-type).
+    pub fn op_int_sdiv(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 1);
+    }
+
+    // Ghidra: printc.hh:307 PrintC::opIntRem { opBinary(&modulo,op); }
+    /// INT_REM → modulo token (registry id 2, "%").
+    pub fn op_int_rem(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 2);
+    }
+
+    // Ghidra: printc.hh:308 PrintC::opIntSrem { opBinary(&modulo,op); }
+    /// INT_SREM → modulo token (registry id 2 — same static instance).
+    pub fn op_int_srem(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 2);
+    }
+
+    // ---- printc.hh:296-297/322 unary one-liners ----
+
+    // Ghidra: printc.hh:296 PrintC::opInt2Comp { opUnary(&unary_minus,op); }
+    /// INT_2COMP → unary_minus token (printc.cc:31, prec 62).
+    pub fn op_int_2comp(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_unary(op_arc, op, self.rpn_tok_unary_minus);
+    }
+
+    // Ghidra: printc.hh:297 PrintC::opIntNegate { opUnary(&bitwise_not,op); }
+    /// INT_NEGATE → bitwise_not token (printc.cc:29, prec 62).
+    pub fn op_int_negate(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_unary(op_arc, op, self.rpn_tok_bitwise_not);
+    }
+
+    // ---- printc.hh:293-295 opFunc one-liners (carry/scarry/sborrow) ----
+
+    // Ghidra: printc.hh:293 PrintC::opIntCarry { opFunc(op); }
+    /// INT_CARRY → opFunc with `CARRY<insize>` (TypeOpIntCarry::
+    /// getOperatorName, typeop.cc:1340-1346).
+    pub fn op_int_carry(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        let nm = Self::rpn_operator_name_carry(op);
+        self.rpn_op_func(op_arc, op, &nm);
+    }
+
+    // Ghidra: printc.hh:294 PrintC::opIntScarry { opFunc(op); }
+    /// INT_SCARRY → opFunc with `SCARRY<insize>` (typeop.cc:1356-1362).
+    pub fn op_int_scarry(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        let nm = Self::rpn_operator_name_carry(op);
+        self.rpn_op_func(op_arc, op, &nm);
+    }
+
+    // Ghidra: printc.hh:295 PrintC::opIntSborrow { opFunc(op); }
+    /// INT_SBORROW → opFunc with `SBORROW<insize>` (typeop.cc:1372-1378).
+    pub fn op_int_sborrow(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        let nm = Self::rpn_operator_name_carry(op);
+        self.rpn_op_func(op_arc, op, &nm);
+    }
+
+    // ---- printc.hh:310-312 boolean binary one-liners ----
+
+    // Ghidra: printc.hh:310 PrintC::opBoolXor { opBinary(&boolean_xor,op); }
+    /// BOOL_XOR → boolean_xor token (registry id 18, "^^" — NOT associative,
+    /// printc.cc:54).
+    pub fn op_bool_xor(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 18);
+    }
+
+    // Ghidra: printc.hh:311 PrintC::opBoolAnd { opBinary(&boolean_and,op); }
+    /// BOOL_AND → boolean_and token (registry id 17, "&&").
+    pub fn op_bool_and(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 17);
+    }
+
+    // Ghidra: printc.hh:312 PrintC::opBoolOr { opBinary(&boolean_or,op); }
+    /// BOOL_OR → boolean_or token (registry id 19, "||").
+    pub fn op_bool_or(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 19);
+    }
+
+    // ---- printc.hh:313-321 float binary one-liners ----
+
+    // Ghidra: printc.hh:313 PrintC::opFloatEqual { opBinary(&equal,op); }
+    /// FLOAT_EQUAL → equal token (registry id 12 — same instance as
+    /// opIntEqual).
+    pub fn op_float_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 12);
+    }
+
+    // Ghidra: printc.hh:314 PrintC::opFloatNotEqual { opBinary(&not_equal,op); }
+    /// FLOAT_NOTEQUAL → not_equal token (registry id 13).
+    pub fn op_float_not_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 13);
+    }
+
+    // Ghidra: printc.hh:315 PrintC::opFloatLess { opBinary(&less_than,op); }
+    /// FLOAT_LESS → less_than token (registry id 8).
+    pub fn op_float_less(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 8);
+    }
+
+    // Ghidra: printc.hh:316 PrintC::opFloatLessEqual { opBinary(&less_equal,op); }
+    /// FLOAT_LESSEQUAL → less_equal token (registry id 9).
+    pub fn op_float_less_equal(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 9);
+    }
+
+    // Ghidra: printc.hh:318 PrintC::opFloatAdd { opBinary(&binary_plus,op); }
+    /// FLOAT_ADD → binary_plus token (registry id 3).
+    pub fn op_float_add(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 3);
+    }
+
+    // Ghidra: printc.hh:319 PrintC::opFloatDiv { opBinary(&divide,op); }
+    /// FLOAT_DIV → divide token (registry id 1).
+    pub fn op_float_div(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 1);
+    }
+
+    // Ghidra: printc.hh:320 PrintC::opFloatMult { opBinary(&multiply,op); }
+    /// FLOAT_MULT → multiply token (registry id 0).
+    pub fn op_float_mult(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 0);
+    }
+
+    // Ghidra: printc.hh:321 PrintC::opFloatSub { opBinary(&binary_minus,op); }
+    /// FLOAT_SUB → binary_minus token (registry id 4).
+    pub fn op_float_sub(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_binary(op_arc, op, 4);
+    }
+
+    // Ghidra: printc.hh:322 PrintC::opFloatNeg { opUnary(&unary_minus,op); }
+    /// FLOAT_NEG → unary_minus token (same instance as opInt2Comp).
+    pub fn op_float_neg(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_unary(op_arc, op, self.rpn_tok_unary_minus);
+    }
+
+    // ---- printc.hh:317/323-330/333/343-344 opFunc one-liners ----
+    // The functional name is the operator name: the TypeOpFunc constructor
+    // `name` field, returned unchanged by the default TypeOp::getOperatorName
+    // (typeop.hh:183 `{ return name; }`).
+
+    // Ghidra: printc.hh:317 PrintC::opFloatNan { opFunc(op); }
+    /// FLOAT_NAN → opFunc with "NAN" (TypeOpFloatNan ctor name, typeop.cc:1775).
+    pub fn op_float_nan(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "NAN");
+    }
+
+    // Ghidra: printc.hh:323 PrintC::opFloatAbs { opFunc(op); }
+    /// FLOAT_ABS → opFunc with "ABS" (TypeOpFloatAbs ctor name, typeop.cc:1823).
+    pub fn op_float_abs(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "ABS");
+    }
+
+    // Ghidra: printc.hh:324 PrintC::opFloatSqrt { opFunc(op); }
+    /// FLOAT_SQRT → opFunc with "SQRT" (TypeOpFloatSqrt ctor name, typeop.cc:1831).
+    pub fn op_float_sqrt(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "SQRT");
+    }
+
+    // Ghidra: printc.hh:328 PrintC::opFloatCeil { opFunc(op); }
+    /// FLOAT_CEIL → opFunc with "CEIL" (TypeOpFloatCeil ctor name, typeop.cc:1920).
+    pub fn op_float_ceil(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "CEIL");
+    }
+
+    // Ghidra: printc.hh:329 PrintC::opFloatFloor { opFunc(op); }
+    /// FLOAT_FLOOR → opFunc with "FLOOR" (TypeOpFloatFloor ctor name, typeop.cc:1928).
+    pub fn op_float_floor(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "FLOOR");
+    }
+
+    // Ghidra: printc.hh:330 PrintC::opFloatRound { opFunc(op); }
+    /// FLOAT_ROUND → opFunc with "ROUND" (TypeOpFloatRound ctor name, typeop.cc:1936).
+    pub fn op_float_round(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "ROUND");
+    }
+
+    // Ghidra: printc.hh:333 PrintC::opPiece { opFunc(op); }
+    /// PIECE → opFunc with `CONCAT<sz0><sz1>` (TypeOpPiece::getOperatorName,
+    /// typeop.cc:2048-2056).
+    pub fn op_piece(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        let nm = Self::rpn_operator_name_piece(op);
+        self.rpn_op_func(op_arc, op, &nm);
+    }
+
+    // Ghidra: printc.hh:343 PrintC::opPopcountOp { opFunc(op); }
+    /// POPCOUNT → opFunc with "POPCOUNT" (TypeOpPopcount ctor name, typeop.cc:2558).
+    pub fn op_popcount(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "POPCOUNT");
+    }
+
+    // Ghidra: printc.hh:344 PrintC::opLzcountOp { opFunc(op); }
+    /// LZCOUNT → opFunc with "LZCOUNT" (TypeOpLzcount ctor name, typeop.cc:2565).
+    pub fn op_lzcount(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_func(op_arc, op, "LZCOUNT");
+    }
+
+    // Ghidra: printc.cc:880 PrintC::opPtradd (push: typeop.hh:823)
+    /// PTRADD: subscript token when printing a load/store value, plain
+    /// binary_plus otherwise; both operands pushed in(1) then in(0) with the
+    /// load/store-value mods stripped (printc.cc:881-887). Verbatim
+    /// extraction of the former inline dispatch arm; reached via typeop.rs
+    /// TypeOpPtradd push (typeop.hh:823 → lng->opPtradd(op)).
+    pub fn op_ptradd_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        // cc:881-882: strip the load/store-value mods from the operands'
+        // mod word.
+        let m = self.mods & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+        if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
+            // cc:883-886: subscript when printing a load/store value, plain
+            // `+` (binary_plus, registry id 3) otherwise.
+            if self.is_set(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE) {
+                self.rpn_push_op(self.rpn_tok_subscript);
+            } else {
+                self.rpn_push_op(Self::RPN_TOK_BINARY_BASE + 3);
+            }
+            self.rpn_push_in(op_arc, op, 1, m);
+            self.rpn_push_in(op_arc, op, 0, m);
+        }
+    }
+
+    // ---- printc.cc real bodies (not printc.hh one-liners) ----
+
+    // Ghidra: printc.hh:289 PrintC::opIntZext (body printc.cc:786-797)
+    /// INT_ZEXT: isZextCast → opHiddenFunc (option_hide_exts + implied) or
+    /// opTypeCast; else opFunc "ZEXT<in><out>" (typeop.cc:1122-1129).
+    /// `read_op` is the oracle readOp consumed by isExtensionCastImplied
+    /// (cast.cc:249 returns false when null). Extracted verbatim from the
+    /// former inline dispatch arm; reached via typeop.rs TypeOpIntZext push.
+    pub fn op_int_zext_rpn(
+        &mut self,
+        op_arc: &OpArcRef,
+        op: &PcodeOp,
+        read_op: Option<&OpArcRef>,
+    ) {
+        // printc.cc:789: castStrategy->isZextCast(outDef, inRead).
+        let (out_dt, in_dt) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
+                ),
+                _ => (None, None),
+            }
+        };
+        let is_zext = match (&out_dt, &in_dt) {
+            (Some(o), Some(i)) => self.cast_strategy.is_zext_cast(o, i),
+            _ => false,
+        };
+        if is_zext {
+            // printc.cc:790: option_hide_exts && isExtensionCastImplied
+            // (cast.cc:249 returns false when readOp is null).
+            if self.option_hide_exts
+                && read_op.is_some()
+                && read_op
+                    .map(|r| {
+                        let g = r.read().unwrap();
+                        self.is_extension_cast_implied(op, &g)
+                    })
+                    .unwrap_or(false)
+            {
+                self.rpn_op_hidden_func(op_arc, op);
+            } else {
+                self.rpn_op_type_cast(op_arc, op);
+            }
+        } else {
+            // printc.cc:796: opFunc(op) — getOperatorName is
+            // "ZEXT" + dec(insize) + dec(outsize) (typeop.cc:1122).
+            let nm = Self::rpn_operator_name_ext("ZEXT", op);
+            self.rpn_op_func(op_arc, op, &nm);
+        }
+    }
+
+    // Ghidra: printc.hh:290 PrintC::opIntSext (body printc.cc:799-810)
+    /// INT_SEXT: same shape as opIntZext but isSextCast (input must be
+    /// signed) and name "SEXT" (typeop.cc:1148-1155). Extracted verbatim
+    /// from the former inline dispatch arm.
+    pub fn op_int_sext_rpn(
+        &mut self,
+        op_arc: &OpArcRef,
+        op: &PcodeOp,
+        read_op: Option<&OpArcRef>,
+    ) {
+        let (out_dt, in_dt) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
+                ),
+                _ => (None, None),
+            }
+        };
+        let is_sext = match (&out_dt, &in_dt) {
+            (Some(o), Some(i)) => self.cast_strategy.is_sext_cast(o, i),
+            _ => false,
+        };
+        if is_sext {
+            if self.option_hide_exts
+                && read_op.is_some()
+                && read_op
+                    .map(|r| {
+                        let g = r.read().unwrap();
+                        self.is_extension_cast_implied(op, &g)
+                    })
+                    .unwrap_or(false)
+            {
+                self.rpn_op_hidden_func(op_arc, op);
+            } else {
+                self.rpn_op_type_cast(op_arc, op);
+            }
+        } else {
+            // typeop.cc:1148: "SEXT" + dec(insize) + dec(outsize).
+            let nm = Self::rpn_operator_name_ext("SEXT", op);
+            self.rpn_op_func(op_arc, op, &nm);
+        }
+    }
+
+    // Ghidra: printc.hh:309 PrintC::opBoolNegate (body printc.cc:814-828)
+    /// BOOL_NEGATE with the full three-branch decision chain of
+    /// `PrintC::opBoolNegate` (printc.cc:814-828):
+    ///
+    /// ```text
+    /// if (isSet(negatetoken)) { unsetMod; pushVn(in0); }        // cc:817-819
+    /// else if (checkPrintNegation(in0)) { pushVn(in0|negatetoken); } // cc:820-821
+    /// else { pushOp(&boolean_not); pushVn(in0); }               // cc:822-825
+    /// ```
+    ///
+    /// Branch 2's negatetoken ride is consumed downstream by
+    /// rpn_op_binary's flip prelude (printlanguage.cc:539-545): the implied
+    /// comparison def dispatches under the recorded vnmod, flipping its
+    /// token (`!(a==b)` → `a!=b`). The former dispatch arm carried only the
+    /// final else (always boolean_not); this extraction carries the whole
+    /// decision.
+    pub fn op_bool_negate_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        // printc.cc:817-819: consumed by an outer BOOL_NEGATE fold — print
+        // our input unmodified.
+        if self.is_set(print_mods::NEGATETOKEN) {
+            self.unset_mod(print_mods::NEGATETOKEN);
+            self.rpn_push_in(op_arc, op, 0, self.mods);
+            return;
+        }
+        // printc.cc:820-821: the input is a flippable comparison — print a
+        // modified (token-flipped) input instead of ourselves.
+        let can_flip = op
+            .get_in(0)
+            .map(|in0| {
+                let vn = in0.read().unwrap();
+                self.check_print_negation(&vn)
+            })
+            .unwrap_or(false);
+        if can_flip {
+            let m = self.mods | print_mods::NEGATETOKEN;
+            self.rpn_push_in(op_arc, op, 0, m);
+            return;
+        }
+        // printc.cc:822-825: otherwise print ourselves.
+        self.rpn_push_op(self.rpn_tok_boolean_not);
+        self.rpn_push_in(op_arc, op, 0, self.mods);
+    }
+
+    // Ghidra: printc.hh:325 PrintC::opFloatInt2Float (body printc.cc:830-841)
+    /// FLOAT_INT2FLOAT: absorb an implied INT_ZEXT input
+    /// (TypeOpFloatInt2Float::absorbZext, typeop.cc:1864-1880) and print the
+    /// float typecast presurround + input: `(float)x`. Delegates to the
+    /// existing rpn_op_float_int2float port.
+    pub fn op_float_int2float_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_float_int2float(op_arc, op);
+    }
+
+    // Ghidra: printc.hh:326 PrintC::opFloatFloat2Float { opTypeCast(op); }
+    /// FLOAT_FLOAT2FLOAT → opTypeCast: a plain `(type)input` cast
+    /// (widening/narrowing float conversions are C-convertible).
+    pub fn op_float_float2float_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_type_cast(op_arc, op);
+    }
+
+    // Ghidra: printc.hh:327 PrintC::opFloatTrunc { opTypeCast(op); }
+    /// FLOAT_TRUNC → opTypeCast (float→int truncation is C-convertible).
+    pub fn op_float_trunc_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.rpn_op_type_cast(op_arc, op);
+    }
+
+    // Ghidra: printc.hh:334 PrintC::opSubpiece (body printc.cc:843-877)
+    /// SUBPIECE: the special-printing field-extraction arms, else
+    /// isSubpieceCast → opTypeCast, else opFunc "SUB<in><out>". The body is
+    /// carried by `op_subpiece_rpn_full` below (extracted verbatim from the
+    /// former inline dispatch arm); this entry exists so the typeop push
+    /// table names the same virtual the oracle's TypeOpSubpiece::push does
+    /// (typeop.hh:799 → lng->opSubpiece).
+    pub fn op_subpiece_virtual_rpn(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        self.op_subpiece_rpn_full(op_arc, op);
+    }
+
+    /// The full printc.cc:843-877 opSubpiece port (doesSpecialPrinting
+    /// field-extraction ladder → isSubpieceCast typecast → opFunc). Called
+    /// by the CPUI_SUBPIECE dispatch arm and by [`Self::op_subpiece_virtual_rpn`].
+    /// Verbatim extraction of the former inline dispatch arm (PRINTC-SUBPIECE
+    /// -FIELDEXTRACT-0001 port).
+    // Ghidra: printc.cc:843 PrintC::opSubpiece
+    fn op_subpiece_rpn_full(&mut self, op_arc: &OpArcRef, op: &PcodeOp) {
+        if op.does_special_printing() {
+            // printc.cc:847-848: vn = in(0); ct = read-facing type.
+            if let Some(in0_arc) = op.get_in(0) {
+                let vn = in0_arc.read().unwrap();
+                if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
+                    if ct.is_piece_structured() {
+                        // printc.cc:851: byte offset into composite.
+                        let mut byte_off = Self::compute_byte_offset_for_composite(op);
+                        // printc.cc:852-861: explicit-vn symbol arm.
+                        let high_info = vn.get_high().map(|h| {
+                            let g = h.read().unwrap();
+                            (g.get_symbol(), g.get_symbol_offset())
+                        });
+                        if let Some((Some(sym_arc), suboff)) = high_info {
+                            if vn.is_explicit() {
+                                let out_vn = op.get_out().map(|a| a.read().unwrap());
+                                let sz = out_vn.as_ref().map(|v| v.get_size()).unwrap_or(0);
+                                if suboff > 0 {
+                                    byte_off += suboff as i64;
+                                }
+                                // printc.cc:858: artificial slot for initial
+                                // resolution.
+                                let slot = if ct.needs_resolution() { 1 } else { 0 };
+                                let sym = sym_arc.read().unwrap();
+                                if let Some(out_vn) = out_vn {
+                                    // printc.cc:859: pushPartialSymbol(sym,
+                                    //   byteOff, sz, op->getOut(), …) — the
+                                    //   OUTPUT varnode is the vn argument: its
+                                    //   high type feeds the allowCast finalcast
+                                    //   (2019) and its space the endian fallback
+                                    //   (2020-2022).
+                                    self.rpn_push_partial_symbol(
+                                        &sym, &out_vn, op, byte_off, sz as i64, slot, true,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        // printc.cc:862-868: findTruncation field arm
+                        // (artificial slot 1 — "The slot is artificial in
+                        // this case"). For a union/partial-union ct this
+                        // consults the (parent,op,slot) resolution cache
+                        // snapshot (TypeUnion::findTruncation type.cc:2185-
+                        // 2199, READ-ONLY; miss → fall thru).
+                        let out_size = op
+                            .get_out()
+                            .map(|a| a.read().unwrap().get_size())
+                            .unwrap_or(0);
+                        if let Some((field, offset)) = ct.find_truncation(
+                            byte_off,
+                            out_size,
+                            Some(op),
+                            1,
+                            Some(&self.union_resolutions),
+                        ) {
+                            if offset == 0 {
+                                // pushOp(&object_member,op);
+                                // pushVn(vn,op,mods);
+                                // pushAtom(field->name,...)
+                                self.rpn_push_op(self.rpn_tok_object_member);
+                                self.rpn_push_in(op_arc, op, 0, self.mods);
+                                let field_atom = crate::printlanguage::Atom::with_field(
+                                    &field.name,
+                                    crate::printlanguage::TagType::FieldToken,
+                                    crate::printlanguage::SyntaxHighlight::NoColor,
+                                    0,
+                                    field.offset as i32,
+                                    -1,
+                                );
+                                self.rpn_push_atom(&field_atom);
+                                return;
+                            }
+                        }
+                        // printc.cc:869: Fall thru to functional printing.
+                    }
+                }
+            }
+        }
+        // printc.cc:872-874: isSubpieceCast(outDef, inRead, offset).
+        let (out_dt, in_dt, offset) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            let off = op
+                .get_in(1)
+                .map(|a| a.read().unwrap().get_offset())
+                .unwrap_or(0);
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    self.vn_high_type_def_facing_snap(&o),
+                    self.vn_high_type_read_facing_snap(&i, op, 0),
+                    off as u32,
+                ),
+                _ => (None, None, off as u32),
+            }
+        };
+        let is_sub = match (&out_dt, &in_dt) {
+            (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset),
+            _ => false,
+        };
+        if is_sub {
+            self.rpn_op_type_cast(op_arc, op);
+        } else {
+            // typeop.cc:2127: "SUB" + dec(insize) + dec(outsize).
+            let nm = Self::rpn_operator_name_ext("SUB", op);
+            self.rpn_op_func(op_arc, op, &nm);
+        }
+    }
+
     // Ghidra: typeop.hh:170 TypeOp::push (virtual dispatch — the per-opcode
     // PrintC::opXxx bodies are printc.cc:481+; see each arm's own anchor)
+
     fn dispatch_op_rpn(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
         read_op: Option<&std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
     ) {
+        // printc.cc:2493 / printlanguage.cc:532:
+        // `op->getOpcode()->push(this, op, readOp)` — the TypeOp per-op
+        // routing hop. The 53 carried push entries (typeop.hh:359..912,
+        // MIGW1-TYPEOP-0002) dispatch through the typeop.rs routing table
+        // into the PrintC per-op virtuals above; ops whose PrintC emitters
+        // are not TypeOpX::push one-liners keep their local arms below.
+        if crate::typeop::push_opcode_rpn(self, op_arc, op, read_op) {
+            return;
+        }
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         match op.opcode {
             // printc.cc:481 opCopy: pushVn(in0).
@@ -2517,187 +3298,14 @@ impl PrintC {
                 // inlines as `ptr->field` / `(type)x` instead of a bare leaf.
                 self.rpn_push_in(op_arc, op, 0, self.mods);
             }
-            // printlanguage.cc:537-553 PrintLanguage::opBinary, dispatched from
-            // the virtual emitters in printc.hh:283-318 (opIntAdd→binary_plus,
-            // opIntSub→binary_minus, opIntMult→multiply, opIntDiv/Sdiv→divide,
-            // opIntRem/Srem→modulo, opIntXor→bitwise_xor, opBoolXor→boolean_xor,
-            // ...). Every binary op flows through pushOp + the nodepend queue
-            // so printlanguage.cc:269-323 parentheses() decides nesting parens.
-            OpCode::CPUI_INT_ADD
-            | OpCode::CPUI_INT_SUB
-            | OpCode::CPUI_INT_MULT
-            | OpCode::CPUI_INT_DIV
-            | OpCode::CPUI_INT_SDIV
-            | OpCode::CPUI_INT_REM
-            | OpCode::CPUI_INT_SREM
-            | OpCode::CPUI_INT_AND
-            | OpCode::CPUI_INT_OR
-            | OpCode::CPUI_INT_XOR
-            | OpCode::CPUI_INT_LEFT
-            | OpCode::CPUI_INT_RIGHT
-            | OpCode::CPUI_INT_SRIGHT
-            | OpCode::CPUI_INT_EQUAL
-            | OpCode::CPUI_INT_NOTEQUAL
-            | OpCode::CPUI_INT_LESS
-            | OpCode::CPUI_INT_SLESS
-            | OpCode::CPUI_INT_LESSEQUAL
-            | OpCode::CPUI_INT_SLESSEQUAL
-            | OpCode::CPUI_BOOL_AND
-            | OpCode::CPUI_BOOL_OR
-            | OpCode::CPUI_BOOL_XOR
-            | OpCode::CPUI_FLOAT_ADD
-            | OpCode::CPUI_FLOAT_SUB
-            | OpCode::CPUI_FLOAT_MULT
-            | OpCode::CPUI_FLOAT_DIV
-            | OpCode::CPUI_FLOAT_EQUAL
-            | OpCode::CPUI_FLOAT_NOTEQUAL
-            | OpCode::CPUI_FLOAT_LESS
-            | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                // Struct field access: INT_ADD(ptr, offset) → ptr->field.
-                // Rugra's substitute for PTRSUB/opPtrsub (printc.cc:476-484:
-                // pushOp(&pointer_member,op); pushVn(in0); pushConstant(off)
-                // … field atom), routed through the pointer_member RPN token
-                // (printc.cc:26, prec 66) so nesting parenthesization engages.
-                if op.opcode == OpCode::CPUI_INT_ADD {
-                    if let (Some(i0), Some(i1)) = (op.get_in(0), op.get_in(1)) {
-                        let v0 = i0.read().unwrap();
-                        let v1 = i1.read().unwrap();
-                        let (off, bidx) = if v1.get_space() == crate::space::AddressSpace::Const
-                            && v1.get_offset() > 0 && v1.get_offset() < 0x10000
-                            && v0.get_space() != crate::space::AddressSpace::Const {
-                            (v1.get_offset(), 0usize)
-                        } else if v0.get_space() == crate::space::AddressSpace::Const
-                            && v0.get_offset() > 0 && v0.get_offset() < 0x10000
-                            && v1.get_space() != crate::space::AddressSpace::Const {
-                            (v0.get_offset(), 1usize)
-                        } else { (0u64, 0usize) };
-                        let bv = op.inrefs[bidx].read().unwrap();
-                        let fm = if off > 0 {
-                            if let Some(ref vt) = bv.v_type {
-                                use crate::type_system::datatype::Datatype;
-                                if let Datatype::Pointer(ref tp) = vt.as_ref() {
-                                    if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
-                                        ts.fields
-                                            .iter()
-                                            .find(|f| f.offset == off as usize)
-                                            .map(|f| f.name.clone())
-                                    } else { None }
-                                } else { None }
-                            } else { None }
-                        } else { None };
-                        if let Some(fn_) = fm {
-                            drop(bv); drop(v0); drop(v1);
-                            // printc.cc:476-484 opPtrsub shape:
-                            // pushOp(&pointer_member); pushVn(base); field atom.
-                            // pushVn records into nodepend (printlanguage.cc:197)
-                            // so an implied base (nested PTRSUB/CAST) is inlined
-                            // by rpn_recurse; the field-atom push drains it
-                            // (rpn_push_atom's pending trigger).
-                            self.rpn_push_op(self.rpn_tok_pointer_member);
-                            self.rpn_push_in(op_arc, op, bidx, self.mods);
-                            use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
-                            let field_atom = Atom::new(&fn_, TagType::Syntax, SyntaxHighlight::NoColor);
-                            self.rpn_push_atom(&field_atom);
-                            return;
-                        }
-                        drop(bv); drop(v0); drop(v1);
-                    }
-                }
-                // printlanguage.cc:550: pushOp(tok, op) — push on reverse
-                // polish notation (parentheses() decides openParen/openGroup,
-                // emitOp prints " op " with the token's spacing=1 at
-                // printlanguage.cc:332-337 when the first operand completes).
-                //
-                // printlanguage.cc:551-552: operands are recorded via pushVn
-                // — in(1) first, then in(0), because nodepend is LIFO and
-                // drains in(0) first (left-to-right print order). rpn_recurse
-                // (printlanguage.cc:526-536) then either inlines the defining
-                // op for implied operands (PRINTC-UNLINKED-REF-0001 fix: the
-                // def expression replaces the GLUE leaf name) or emits the
-                // leaf Atom via pushVnExplicit for explicit operands —
-                // byte-identical to the former direct leaf push.
-                // Missing-input ops skip emission entirely, as before.
-                let tok_index = self.rpn_tok_binary(op.opcode);
-                if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
-                    self.rpn_push_op(tok_index);
-                    self.rpn_push_in(op_arc, op, 1, self.mods);
-                    self.rpn_push_in(op_arc, op, 0, self.mods);
-                }
-            }
-            // printlanguage.cc:566 opUnary: pushOp(tok,op) then
-            // pushVn(op->getIn(0),op,mods). The unary_prefix token rides the
-            // RPN stack — emitOp prints it at stage 0 (printlanguage.cc:
-            // 338-342) when the operand's first pushOp/pushAtom fires the
-            // entry emitOp(revpol.back()) (printlanguage.cc:143/171), i.e.
-            // immediately BEFORE the operand text.
-            //
-            // GLOBWORD-C4-INTNOT-TOKEN-0001: this arm previously called
-            // emit.tag_op("~") eagerly at dispatch time. Under the nodepend
-            // LIFO drain, an INT_NEGATE operand of a binary op (e.g.
-            // AND(ADD(load,0xfefefeff), NEGATE(load))) dispatches AFTER the
-            // left subtree drained, so "~" landed after the left operand's
-            // constant and BEFORE the parent's stage-1 " & " — emitting the
-            // illegal-C form `0xfefefeff~ & *p` where the oracle prints
-            // `... & ~*p` (golden ghidra_curl_1204.c:1309).
-            //
-            // Token mapping (printc.hh virtual emitters):
-            //   INT_NEGATE → bitwise_not (printc.hh:297, printc.cc:29)
-            //   INT_2COMP / FLOAT_NEG → unary_minus (printc.hh:296/322,
-            //     printc.cc:31)
-            //   BOOL_NEGATE → boolean_not (printc.cc:814-825 else branch,
-            //     printc.cc:30). Rugra does not port the negatetoken /
-            //     checkPrintNegation short-circuits of PrintC::opBoolNegate
-            //     yet — the always-print-token arm here matches that
-            //     function's final else for the non-flipped case.
-            //   FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND are opFunc calls in Ghidra
-            //     (printc.hh:323-327); Rugra has no function-call form for
-            //     them, so no token is pushed and only the operand drains —
-            //     byte-identical to the previous behavior for these opcodes.
-            OpCode::CPUI_INT_NEGATE
-            | OpCode::CPUI_BOOL_NEGATE
-            | OpCode::CPUI_INT_2COMP
-            | OpCode::CPUI_FLOAT_NEG
-            | OpCode::CPUI_FLOAT_ABS
-            | OpCode::CPUI_FLOAT_SQRT
-            | OpCode::CPUI_FLOAT_CEIL
-            | OpCode::CPUI_FLOAT_FLOOR
-            | OpCode::CPUI_FLOAT_ROUND => {
-                match op.opcode {
-                    OpCode::CPUI_INT_NEGATE => {
-                        self.rpn_push_op(self.rpn_tok_bitwise_not);
-                    }
-                    OpCode::CPUI_BOOL_NEGATE => {
-                        self.rpn_push_op(self.rpn_tok_boolean_not);
-                    }
-                    OpCode::CPUI_INT_2COMP | OpCode::CPUI_FLOAT_NEG => {
-                        self.rpn_push_op(self.rpn_tok_unary_minus);
-                    }
-                    _ => {} // FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND: opFunc in Ghidra
-                }
-                // printlanguage.cc:572: pushVn(op->getIn(0),op,mods) — record
-                // into nodepend so an implied operand is inlined by the
-                // enclosing rpn_recurse drain; explicit operands drain as
-                // leaf atoms via pushVnExplicit (byte-identical text).
-                self.rpn_push_in(op_arc, op, 0, self.mods);
-            }
-            // printc.cc:486-498 opLoad: usearray = checkArrayDeref(in1);
-            //   if (usearray && !isSet(force_pointer)) m |= print_load_value
-            //   else pushOp(&dereference,op);
-            //   pushVn(op->getIn(1),op,m);
-            // printc.cc:830 PrintC::opFloatInt2Float: absorb an implied
-            // INT_ZEXT input (TypeOpFloatInt2Float::absorbZext,
-            // typeop.cc:1864-1880) and print the float typecast presurround
-            // + the (possibly skipped-through) input: `(float)x`.
-            OpCode::CPUI_FLOAT_INT2FLOAT => {
-                self.rpn_op_float_int2float(op_arc, op);
-            }
-            // printc.hh:326-327: PrintC::opFloatFloat2Float and
-            // PrintC::opFloatTrunc both forward to opTypeCast — a plain
-            // `(type)input` cast (widening/narrowing float conversions and
-            // float→int truncation are all C-convertible).
-            OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_TRUNC => {
-                self.rpn_op_type_cast(op_arc, op);
-            }
+            // (INT_* / BOOL_* / FLOAT_* binary-token arms retired: the
+            //  30 opcodes route through crate::typeop::push_opcode_rpn →
+            //  per-op PrintC virtuals (opIntEqual..opFloatSub) — MIGW1-
+            //  TYPEOP-0002. Struct-field INT_ADD recovery now lives in
+            //  op_int_add; token mechanics in rpn_op_binary.)
+            // (arm retired             OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_TRUNC => {:
+            //  routes through crate::typeop::push_opcode_rpn → per-op PrintC
+            //  virtual emitters above — MIGW1-TYPEOP-0002.)
             // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
             OpCode::CPUI_LOAD => {
                 // cc:490-496: array-use form lets the implied PTRADD/PTRSUB
@@ -3017,264 +3625,15 @@ impl PrintC {
             OpCode::CPUI_CAST => {
                 self.rpn_op_type_cast(op_arc, op);
             }
-            // printc.cc:786 PrintC::opIntZext: if isZextCast(out,in) →
-            // opHiddenFunc (when option_hide_exts and the extension is
-            // implied by C promotion) or opTypeCast; else opFunc.
-            OpCode::CPUI_INT_ZEXT => {
-                // printc.cc:789: castStrategy->isZextCast(outDef, inRead).
-                let (out_dt, in_dt) = {
-                    let out = op.get_out().map(|a| a.read().unwrap());
-                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
-                    match (out, in0) {
-                        (Some(o), Some(i)) => (
-                            self.vn_high_type_def_facing_snap(&o),
-                            self.vn_high_type_read_facing_snap(&i, op, 0),
-                        ),
-                        _ => (None, None),
-                    }
-                };
-                let is_zext = match (&out_dt, &in_dt) {
-                    (Some(o), Some(i)) => self.cast_strategy.is_zext_cast(o, i),
-                    _ => false,
-                };
-                if is_zext {
-                    // printc.cc:790: option_hide_exts && isExtensionCastImplied
-                    // (cast.cc:249 returns false when readOp is null).
-                    if self.option_hide_exts && read_op.is_some() && read_op
-                            .map(|r| {
-                        let g = r.read().unwrap();
-                        self.is_extension_cast_implied(op, &g)
-                    })
-                            .unwrap_or(false) {
-                        self.rpn_op_hidden_func(op_arc, op);
-                    } else {
-                        self.rpn_op_type_cast(op_arc, op);
-                    }
-                } else {
-                    // printc.cc:796: opFunc(op) — getOperatorName is
-                    // "ZEXT" + dec(insize) + dec(outsize) (typeop.cc:1122).
-                    let nm = Self::rpn_operator_name_ext("ZEXT", op);
-                    self.rpn_op_func(op_arc, op, &nm);
-                }
-            }
-            // printc.cc:799 PrintC::opIntSext: same shape as opIntZext but
-            // isSextCast (input must be signed) and name "SEXT".
-            OpCode::CPUI_INT_SEXT => {
-                let (out_dt, in_dt) = {
-                    let out = op.get_out().map(|a| a.read().unwrap());
-                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
-                    match (out, in0) {
-                        (Some(o), Some(i)) => (
-                            self.vn_high_type_def_facing_snap(&o),
-                            self.vn_high_type_read_facing_snap(&i, op, 0),
-                        ),
-                        _ => (None, None),
-                    }
-                };
-                let is_sext = match (&out_dt, &in_dt) {
-                    (Some(o), Some(i)) => self.cast_strategy.is_sext_cast(o, i),
-                    _ => false,
-                };
-                if is_sext {
-                    if self.option_hide_exts && read_op.is_some() && read_op
-                            .map(|r| {
-                        let g = r.read().unwrap();
-                        self.is_extension_cast_implied(op, &g)
-                    })
-                            .unwrap_or(false) {
-                        self.rpn_op_hidden_func(op_arc, op);
-                    } else {
-                        self.rpn_op_type_cast(op_arc, op);
-                    }
-                } else {
-                    // typeop.cc:1148: "SEXT" + dec(insize) + dec(outsize).
-                    let nm = Self::rpn_operator_name_ext("SEXT", op);
-                    self.rpn_op_func(op_arc, op, &nm);
-                }
-            }
-            // printc.cc:843 PrintC::opSubpiece. The doesSpecialPrinting
-            // field-extraction branch (printc.cc:846-871) — active port:
-            // `does_special_printing()` reads addlflags & SPECIAL_PRINT
-            // (op.rs ↔ op.hh:208 special_print) and is set by RuleSubRight
-            // (ruleaction.rs ↔ ruleaction.cc:7257 opMarkSpecialPrint),
-            // registered in the main pipeline (action.rs ↔ coreaction.cc:5700);
-            // `is_piece_structured()` (type_system/datatype.rs:443) matches
-            // Ghidra metatype<=TYPE_ARRAY. Two arms per the oracle:
-            //   (a) printc.cc:853-861 explicit-vn symbol arm → pushPartialSymbol
-            //       (rpn_push_partial_symbol, printc.cc:1947);
-            //   (b) printc.cc:862-868 findTruncation/object_member field-atom
-            //       arm (slot=1 artificial).
-            // Non-matching cases fall through to isSubpieceCast → opTypeCast,
-            // else opFunc (printc.cc:872-877), exactly as the oracle's
-            // "Fall thru to functional printing" comment (printc.cc:869).
-            OpCode::CPUI_SUBPIECE => {
-                if op.does_special_printing() {
-                    // printc.cc:847-848: vn = in(0); ct = read-facing type.
-                    if let Some(in0_arc) = op.get_in(0) {
-                        let vn = in0_arc.read().unwrap();
-                        if let Some(ct) = self.vn_high_type_read_facing_snap(&vn, op, 0) {
-                            if ct.is_piece_structured() {
-                                // printc.cc:851: byte offset into composite.
-                                let mut byte_off = Self::compute_byte_offset_for_composite(op);
-                                // printc.cc:852-861: explicit-vn symbol arm.
-                                let high_info = vn.get_high().map(|h| {
-                                    let g = h.read().unwrap();
-                                    (g.get_symbol(), g.get_symbol_offset())
-                                });
-                                if let Some((Some(sym_arc), suboff)) = high_info {
-                                    if vn.is_explicit() {
-                                        let out_vn = op
-                                            .get_out()
-                                            .map(|a| a.read().unwrap());
-                                        let sz = out_vn
-                                            .as_ref()
-                                            .map(|v| v.get_size())
-                                            .unwrap_or(0);
-                                        if suboff > 0 {
-                                            byte_off += suboff as i64;
-                                        }
-                                        // printc.cc:858: artificial slot for
-                                        // initial resolution.
-                                        let slot =
-                                            if ct.needs_resolution() { 1 } else { 0 };
-                                        let sym = sym_arc.read().unwrap();
-                                        if let Some(out_vn) = out_vn {
-                                            // printc.cc:859: pushPartialSymbol(
-                                            //   sym, byteOff, sz, op->getOut(), …)
-                                            //   — the OUTPUT varnode is the vn
-                                            //   argument: its high type feeds
-                                            //   the allowCast finalcast (2019)
-                                            //   and its space the endian
-                                            //   fallback (2020-2022).
-                                            self.rpn_push_partial_symbol(
-                                                &sym, &out_vn, op, byte_off, sz as i64, slot, true,
-                                            );
-                                            return;
-                                        }
-                                    }
-                                }
-                                // printc.cc:862-868: findTruncation field arm
-                                // (artificial slot 1 — "The slot is
-                                // artificial in this case"). For a
-                                // union/partial-union ct this consults the
-                                // (parent,op,slot) resolution cache snapshot
-                                // (TypeUnion::findTruncation type.cc:2185-
-                                // 2199, READ-ONLY; miss → fall thru).
-                                let out_size = op
-                                    .get_out()
-                                    .map(|a| a.read().unwrap().get_size())
-                                    .unwrap_or(0);
-                                if let Some((field, offset)) = ct.find_truncation(
-                                    byte_off,
-                                    out_size,
-                                    Some(op),
-                                    1,
-                                    Some(&self.union_resolutions),
-                                ) {
-                                    if offset == 0 {
-                                        // pushOp(&object_member,op);
-                                        // pushVn(vn,op,mods);
-                                        // pushAtom(field->name,...)
-                                        self.rpn_push_op(self.rpn_tok_object_member);
-                                        self.rpn_push_in(op_arc, op, 0, self.mods);
-                                        let field_atom =
-                                            crate::printlanguage::Atom::with_field(
-                                                &field.name,
-                                                crate::printlanguage::TagType::FieldToken,
-                                                crate::printlanguage::SyntaxHighlight::NoColor,
-                                                0,
-                                                field.offset as i32,
-                                                -1,
-                                            );
-                                        self.rpn_push_atom(&field_atom);
-                                        return;
-                                    }
-                                }
-                                // printc.cc:869: Fall thru to functional printing.
-                            }
-                        }
-                    }
-                }
-                // printc.cc:872-874: isSubpieceCast(outDef, inRead, offset).
-                let (out_dt, in_dt, offset) = {
-                    let out = op.get_out().map(|a| a.read().unwrap());
-                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
-                    let off = op
-                        .get_in(1)
-                        .map(|a| a.read().unwrap().get_offset())
-                        .unwrap_or(0);
-                    match (out, in0) {
-                        (Some(o), Some(i)) => (
-                            self.vn_high_type_def_facing_snap(&o),
-                            self.vn_high_type_read_facing_snap(&i, op, 0),
-                            off as u32,
-                        ),
-                        _ => (None, None, off as u32),
-                    }
-                };
-                let is_sub = match (&out_dt, &in_dt) {
-                    (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset)
-                    ,
-                    _ => false,
-                };
-                if is_sub {
-                    self.rpn_op_type_cast(op_arc, op);
-                } else {
-                    // typeop.cc:2127: "SUB" + dec(insize) + dec(outsize).
-                    let nm = Self::rpn_operator_name_ext("SUB", op);
-                    self.rpn_op_func(op_arc, op, &nm);
-                }
-            }
-            // Ghidra: printc.cc:880 PrintC::opPtradd (typeop.hh:824 TypeOpPtradd::push)
-            // Faithful port of `PrintC::opPtradd(const PcodeOp*)`
-            // (printc.cc:880-893):
-            //   bool printval = isSet(print_load_value|print_store_value);
-            //   uint4 m = mods & ~(print_load_value|print_store_value);
-            //   if (printval) pushOp(&subscript,op); else pushOp(&binary_plus,op);
-            //   pushVn(op->getIn(1),op,m); pushVn(op->getIn(0),op,m);
-            // Inputs are pushed in(1) first then in(0): nodepend is LIFO so
-            // in(0) drains first (left-to-right print order). Missing-input
-            // ops skip emission entirely (same guard as the INT_* binary
-            // arm) so the stage-2 token can never dangle unbalanced.
-            OpCode::CPUI_PTRADD => {
-                // cc:881-882: strip the load/store-value mods from the
-                // operands' mod word.
-                let m = self.mods
-                    & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
-                if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
-                    // cc:883-886: subscript when printing a load/store value,
-                    // plain `+` (binary_plus, registry id 3) otherwise.
-                    if self.is_set(
-                        print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE) {
-                        self.rpn_push_op(self.rpn_tok_subscript);
-                    } else {
-                        self.rpn_push_op(Self::RPN_TOK_BINARY_BASE + 3);
-                    }
-                    self.rpn_push_in(op_arc, op, 1, m);
-                    self.rpn_push_in(op_arc, op, 0, m);
-                }
-            }
-            // Ghidra: printc.hh:333 PrintC::opPiece { opFunc(op); }
-            // (typeop.hh:787 TypeOpPiece::push). Functional syntax via
-            // PrintC::opFunc (printc.cc:424-441): function_call token + name
-            // atom + comma tokens + inputs in reverse. The operator name is
-            // TypeOpPiece::getOperatorName (typeop.cc:2048-2056):
-            // "CONCAT" + dec(in0->getSize()) + dec(in1->getSize()).
-            OpCode::CPUI_PIECE => {
-                let nm = Self::rpn_operator_name_piece(op);
-                self.rpn_op_func(op_arc, op, &nm);
-            }
-            // Ghidra: printc.hh:292-294 PrintC::opIntCarry/opIntScarry/
-            // opIntSborrow { opFunc(op); } (typeop.hh:299-307 TypeOpIntCarry
-            // ::push → lng->opIntCarry). Functional syntax via opFunc with
-            // the carry-family getOperatorName (CARRY1/SCARRY4/SBORROW2).
-            // GLOBWORD-C3: without this arm the implied INT_CARRY def was
-            // not inline-reachable and the CF flag leaked its unnamed
-            // location `register0x00000200` (5 sites in the curl corpus).
-            OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW => {
-                let nm = Self::rpn_operator_name_carry(op);
-                self.rpn_op_func(op_arc, op, &nm);
-            }
+            // (arm retired             OpCode::CPUI_SUBPIECE => {:
+            //  routes through crate::typeop::push_opcode_rpn → per-op PrintC
+            //  virtual emitters above — MIGW1-TYPEOP-0002.)
+            // (arm retired             OpCode::CPUI_PTRADD => {:
+            //  routes through crate::typeop::push_opcode_rpn → per-op PrintC
+            //  virtual emitters above — MIGW1-TYPEOP-0002.)
+            // (arm retired             OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW => {:
+            //  routes through crate::typeop::push_opcode_rpn → per-op PrintC
+            //  virtual emitters above — MIGW1-TYPEOP-0002.)
             // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
             // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
             // Faithful port of `PrintC::opPtrsub(const PcodeOp*)`

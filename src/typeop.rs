@@ -5,7 +5,7 @@
 use crate::address::calc_mask;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
-use crate::printc::PrintC;
+use crate::printc::{OpArcRef, PrintC};
 use crate::printlanguage::PrintLanguage;
 use crate::space::AddressSpace;
 use crate::type_system::typefactory::TypeFactory;
@@ -4038,6 +4038,718 @@ impl TypeOpManager {
     pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp> {
         self.ops[opcode as usize].as_ref().map(|o| o.as_ref())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-op push carrying (MIGW1-TYPEOP-0002): typeop.hh TypeOpX::push virtuals.
+//
+// Oracle layer (typeop.hh, one inline push per concrete subclass):
+//   `virtual void push(PrintLanguage *lng,const PcodeOp *op,const PcodeOp *readOp) const
+//      { lng->opXxx(op[,readOp]); }`
+// Each route below is one TypeOp subclass push, anchored at its typeop.hh
+// declaration line, dispatching to the PrintC virtual of the same name
+// (printc.rs per-op emitters, printc.hh:283-344 anchors). The Arc transport
+// (`op_arc`, `read_op`) is the Rust signature form of the C++ pointer pair
+// (see printc::OpArcRef). The `None` fallback mirrors the legacy generic
+// emitters for any PrintLanguage implementation other than PrintC (the C++
+// virtuals are pure — every language supplies its own; op_binary/op_unary
+// are Rugra's generic stand-ins, matching the PcodeOp::push wrapper above).
+//
+// Production entry: PrintC::dispatch_op_rpn delegates the 53 opcodes in
+// push_opcode_rpn here (typeop.hh:170 TypeOp::push virtual dispatch twin)
+// — the same `op->getOpcode()->push(this,op,readOp)` hop the oracle's
+// emitExpression (printc.cc:2493) and recurse (printlanguage.cc:532) make.
+// ---------------------------------------------------------------------------
+
+// Ghidra: typeop.hh:359 TypeOpEqual::push
+// (`{ lng->opIntEqual(op); }` → printc.hh:283 opBinary(&equal,op))
+/// INT_EQUAL push route: PrintC::opIntEqual — equal token "==" (id 12).
+pub fn push_int_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:371 TypeOpNotEqual::push
+// (`{ lng->opIntNotEqual(op); }` → printc.hh:284 opBinary(&not_equal,op))
+/// INT_NOTEQUAL push route: PrintC::opIntNotEqual — not_equal token "!=" (id 13).
+pub fn push_int_not_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_not_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:384 TypeOpIntSless::push
+// (`{ lng->opIntSless(op); }` → printc.hh:285 opBinary(&less_than,op))
+/// INT_SLESS push route: PrintC::opIntSless — less_than token "<" (id 8).
+pub fn push_int_sless(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sless(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:394 TypeOpIntSlessEqual::push
+// (`{ lng->opIntSlessEqual(op); }` → printc.hh:286 opBinary(&less_equal,op))
+/// INT_SLESSEQUAL push route: PrintC::opIntSlessEqual — less_equal "<=" (id 9).
+pub fn push_int_sless_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sless_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:401 TypeOpIntLess::push
+// (`{ lng->opIntLess(op); }` → printc.hh:287 opBinary(&less_than,op))
+/// INT_LESS push route: PrintC::opIntLess — the same less_than static
+/// instance INT_SLESS dispatches to (printc.cc:44).
+pub fn push_int_less(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_less(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:411 TypeOpIntLessEqual::push
+// (`{ lng->opIntLessEqual(op); }` → printc.hh:288 opBinary(&less_equal,op))
+/// INT_LESSEQUAL push route: PrintC::opIntLessEqual — less_equal "<=" (id 9).
+pub fn push_int_less_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_less_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:421 TypeOpIntZext::push
+// (`{ lng->opIntZext(op,readOp); }` → printc.cc:786 body)
+/// INT_ZEXT push route: PrintC::opIntZext — cast/hide/func decision; the
+/// only route that consumes `read_op` (isExtensionCastImplied, cast.cc:249).
+pub fn push_int_zext(
+    lng: &mut dyn PrintLanguage,
+    op_arc: &OpArcRef,
+    op: &PcodeOp,
+    read_op: Option<&OpArcRef>,
+) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_zext_rpn(op_arc, op, read_op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:430 TypeOpIntSext::push
+// (`{ lng->opIntSext(op,readOp); }` → printc.cc:799 body)
+/// INT_SEXT push route: PrintC::opIntSext — cast/hide/func decision.
+pub fn push_int_sext(
+    lng: &mut dyn PrintLanguage,
+    op_arc: &OpArcRef,
+    op: &PcodeOp,
+    read_op: Option<&OpArcRef>,
+) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sext_rpn(op_arc, op, read_op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:439 TypeOpIntAdd::push
+// (`{ lng->opIntAdd(op); }` → printc.hh:291 opBinary(&binary_plus,op))
+/// INT_ADD push route: PrintC::opIntAdd — binary_plus "+" (id 3); Rugra
+/// keeps the struct-field recovery pre-check (documented at the emitter).
+pub fn push_int_add(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_add(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:451 TypeOpIntSub::push
+// (`{ lng->opIntSub(op); }` → printc.hh:292 opBinary(&binary_minus,op))
+/// INT_SUB push route: PrintC::opIntSub — binary_minus "-" (id 4).
+pub fn push_int_sub(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sub(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:459 TypeOpIntCarry::push
+// (`{ lng->opIntCarry(op); }` → printc.hh:293 opFunc(op))
+/// INT_CARRY push route: PrintC::opIntCarry — opFunc `CARRY<insize>`.
+pub fn push_int_carry(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_carry(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:467 TypeOpIntScarry::push
+// (`{ lng->opIntScarry(op); }` → printc.hh:294 opFunc(op))
+/// INT_SCARRY push route: PrintC::opIntScarry — opFunc `SCARRY<insize>`.
+pub fn push_int_scarry(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_scarry(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:475 TypeOpIntSborrow::push
+// (`{ lng->opIntSborrow(op); }` → printc.hh:295 opFunc(op))
+/// INT_SBORROW push route: PrintC::opIntSborrow — opFunc `SBORROW<insize>`.
+pub fn push_int_sborrow(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sborrow(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:483 TypeOpInt2Comp::push
+// (`{ lng->opInt2Comp(op); }` → printc.hh:296 opUnary(&unary_minus,op))
+/// INT_2COMP push route: PrintC::opInt2Comp — unary_minus token.
+pub fn push_int_2comp(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_2comp(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:491 TypeOpIntNegate::push
+// (`{ lng->opIntNegate(op); }` → printc.hh:297 opUnary(&bitwise_not,op))
+/// INT_NEGATE push route: PrintC::opIntNegate — bitwise_not token.
+pub fn push_int_negate(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_negate(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:502 TypeOpIntXor::push
+// (`{ lng->opIntXor(op); }` → printc.hh:298 opBinary(&bitwise_xor,op))
+/// INT_XOR push route: PrintC::opIntXor — bitwise_xor "^" (id 15).
+pub fn push_int_xor(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_xor(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:512 TypeOpIntAnd::push
+// (`{ lng->opIntAnd(op); }` → printc.hh:299 opBinary(&bitwise_and,op))
+/// INT_AND push route: PrintC::opIntAnd — bitwise_and "&" (id 14).
+pub fn push_int_and(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_and(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:522 TypeOpIntOr::push
+// (`{ lng->opIntOr(op); }` → printc.hh:300 opBinary(&bitwise_or,op))
+/// INT_OR push route: PrintC::opIntOr — bitwise_or "|" (id 16).
+pub fn push_int_or(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_or(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:529 TypeOpIntLeft::push
+// (`{ lng->opIntLeft(op); }` → printc.hh:301 opBinary(&shift_left,op))
+/// INT_LEFT push route: PrintC::opIntLeft — shift_left "<<" (id 5).
+pub fn push_int_left(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_left(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:538 TypeOpIntRight::push
+// (`{ lng->opIntRight(op); }` → printc.hh:302 opBinary(&shift_right,op))
+/// INT_RIGHT push route: PrintC::opIntRight — shift_right ">>" (id 6).
+pub fn push_int_right(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_right(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:548 TypeOpIntSright::push
+// (`{ lng->opIntSright(op); }` → printc.hh:303 opBinary(&shift_sright,op))
+/// INT_SRIGHT push route: PrintC::opIntSright — shift_sright (id 7, the
+/// distinct signed static instance; prints the same ">>").
+pub fn push_int_sright(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sright(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:559 TypeOpIntMult::push
+// (`{ lng->opIntMult(op); }` → printc.hh:304 opBinary(&multiply,op))
+/// INT_MULT push route: PrintC::opIntMult — multiply "*" (id 0).
+pub fn push_int_mult(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_mult(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:567 TypeOpIntDiv::push
+// (`{ lng->opIntDiv(op); }` → printc.hh:305 opBinary(&divide,op))
+/// INT_DIV push route: PrintC::opIntDiv — divide "/" (id 1).
+pub fn push_int_div(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_div(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:575 TypeOpIntSdiv::push
+// (`{ lng->opIntSdiv(op); }` → printc.hh:306 opBinary(&divide,op))
+/// INT_SDIV push route: PrintC::opIntSdiv — the same divide static instance.
+pub fn push_int_sdiv(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_sdiv(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:583 TypeOpIntRem::push
+// (`{ lng->opIntRem(op); }` → printc.hh:307 opBinary(&modulo,op))
+/// INT_REM push route: PrintC::opIntRem — modulo "%" (id 2).
+pub fn push_int_rem(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_rem(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:591 TypeOpIntSrem::push
+// (`{ lng->opIntSrem(op); }` → printc.hh:308 opBinary(&modulo,op))
+/// INT_SREM push route: PrintC::opIntSrem — the same modulo static instance.
+pub fn push_int_srem(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_int_srem(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:599 TypeOpBoolNegate::push
+// (`{ lng->opBoolNegate(op); }` → printc.cc:814 body)
+/// BOOL_NEGATE push route: PrintC::opBoolNegate — the full three-branch
+/// negation chain (negatetoken consume / flip / boolean_not token).
+pub fn push_bool_negate(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_bool_negate_rpn(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:606 TypeOpBoolXor::push
+// (`{ lng->opBoolXor(op); }` → printc.hh:310 opBinary(&boolean_xor,op))
+/// BOOL_XOR push route: PrintC::opBoolXor — boolean_xor "^^" (id 18).
+pub fn push_bool_xor(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_bool_xor(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:613 TypeOpBoolAnd::push
+// (`{ lng->opBoolAnd(op); }` → printc.hh:311 opBinary(&boolean_and,op))
+/// BOOL_AND push route: PrintC::opBoolAnd — boolean_and "&&" (id 17).
+pub fn push_bool_and(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_bool_and(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:620 TypeOpBoolOr::push
+// (`{ lng->opBoolOr(op); }` → printc.hh:312 opBinary(&boolean_or,op))
+/// BOOL_OR push route: PrintC::opBoolOr — boolean_or "||" (id 19).
+pub fn push_bool_or(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_bool_or(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:627 TypeOpFloatEqual::push
+// (`{ lng->opFloatEqual(op); }` → printc.hh:313 opBinary(&equal,op))
+/// FLOAT_EQUAL push route: PrintC::opFloatEqual — equal token (id 12).
+pub fn push_float_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:634 TypeOpFloatNotEqual::push
+// (`{ lng->opFloatNotEqual(op); }` → printc.hh:314 opBinary(&not_equal,op))
+/// FLOAT_NOTEQUAL push route: PrintC::opFloatNotEqual — not_equal (id 13).
+pub fn push_float_not_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_not_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:641 TypeOpFloatLess::push
+// (`{ lng->opFloatLess(op); }` → printc.hh:315 opBinary(&less_than,op))
+/// FLOAT_LESS push route: PrintC::opFloatLess — less_than (id 8).
+pub fn push_float_less(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_less(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:648 TypeOpFloatLessEqual::push
+// (`{ lng->opFloatLessEqual(op); }` → printc.hh:316 opBinary(&less_equal,op))
+/// FLOAT_LESSEQUAL push route: PrintC::opFloatLessEqual — less_equal (id 9).
+pub fn push_float_less_equal(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_less_equal(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:655 TypeOpFloatNan::push
+// (`{ lng->opFloatNan(op); }` → printc.hh:317 opFunc(op))
+/// FLOAT_NAN push route: PrintC::opFloatNan — opFunc "NAN".
+pub fn push_float_nan(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_nan(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:662 TypeOpFloatAdd::push
+// (`{ lng->opFloatAdd(op); }` → printc.hh:318 opBinary(&binary_plus,op))
+/// FLOAT_ADD push route: PrintC::opFloatAdd — binary_plus (id 3).
+pub fn push_float_add(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_add(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:669 TypeOpFloatDiv::push
+// (`{ lng->opFloatDiv(op); }` → printc.hh:319 opBinary(&divide,op))
+/// FLOAT_DIV push route: PrintC::opFloatDiv — divide (id 1).
+pub fn push_float_div(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_div(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:676 TypeOpFloatMult::push
+// (`{ lng->opFloatMult(op); }` → printc.hh:320 opBinary(&multiply,op))
+/// FLOAT_MULT push route: PrintC::opFloatMult — multiply (id 0).
+pub fn push_float_mult(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_mult(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:683 TypeOpFloatSub::push
+// (`{ lng->opFloatSub(op); }` → printc.hh:321 opBinary(&binary_minus,op))
+/// FLOAT_SUB push route: PrintC::opFloatSub — binary_minus (id 4).
+pub fn push_float_sub(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_sub(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:690 TypeOpFloatNeg::push
+// (`{ lng->opFloatNeg(op); }` → printc.hh:322 opUnary(&unary_minus,op))
+/// FLOAT_NEG push route: PrintC::opFloatNeg — unary_minus token.
+pub fn push_float_neg(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_neg(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:697 TypeOpFloatAbs::push
+// (`{ lng->opFloatAbs(op); }` → printc.hh:323 opFunc(op))
+/// FLOAT_ABS push route: PrintC::opFloatAbs — opFunc "ABS"
+/// (typeop.cc:1823 ctor name).
+pub fn push_float_abs(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_abs(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:704 TypeOpFloatSqrt::push
+// (`{ lng->opFloatSqrt(op); }` → printc.hh:324 opFunc(op))
+/// FLOAT_SQRT push route: PrintC::opFloatSqrt — opFunc "SQRT"
+/// (typeop.cc:1831 ctor name).
+pub fn push_float_sqrt(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_sqrt(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:712 TypeOpFloatInt2Float::push
+// (`{ lng->opFloatInt2Float(op); }` → printc.cc:830 body)
+/// FLOAT_INT2FLOAT push route: PrintC::opFloatInt2Float — absorbZext +
+/// `(float)x` typecast form.
+pub fn push_float_int2float(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_int2float_rpn(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:721 TypeOpFloatFloat2Float::push
+// (`{ lng->opFloatFloat2Float(op); }` → printc.hh:326 opTypeCast(op))
+/// FLOAT_FLOAT2FLOAT push route: PrintC::opFloatFloat2Float — plain
+/// `(type)input` cast.
+pub fn push_float_float2float(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_float2float_rpn(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:728 TypeOpFloatTrunc::push
+// (`{ lng->opFloatTrunc(op); }` → printc.hh:327 opTypeCast(op))
+/// FLOAT_TRUNC push route: PrintC::opFloatTrunc — plain `(type)input` cast.
+pub fn push_float_trunc(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_trunc_rpn(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:735 TypeOpFloatCeil::push
+// (`{ lng->opFloatCeil(op); }` → printc.hh:328 opFunc(op))
+/// FLOAT_CEIL push route: PrintC::opFloatCeil — opFunc "CEIL"
+/// (typeop.cc:1920 ctor name).
+pub fn push_float_ceil(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_ceil(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:742 TypeOpFloatFloor::push
+// (`{ lng->opFloatFloor(op); }` → printc.hh:329 opFunc(op))
+/// FLOAT_FLOOR push route: PrintC::opFloatFloor — opFunc "FLOOR"
+/// (typeop.cc:1928 ctor name).
+pub fn push_float_floor(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_floor(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:749 TypeOpFloatRound::push
+// (`{ lng->opFloatRound(op); }` → printc.hh:330 opFunc(op))
+/// FLOAT_ROUND push route: PrintC::opFloatRound — opFunc "ROUND"
+/// (typeop.cc:1936 ctor name).
+pub fn push_float_round(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_float_round(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:784 TypeOpPiece::push
+// (`{ lng->opPiece(op); }` → printc.hh:333 opFunc(op))
+/// PIECE push route: PrintC::opPiece — opFunc `CONCAT<sz0><sz1>`
+/// (typeop.cc:2048-2056 getOperatorName).
+pub fn push_piece(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_piece(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:799 TypeOpSubpiece::push
+// (`{ lng->opSubpiece(op); }` → printc.cc:843 body)
+/// SUBPIECE push route: PrintC::opSubpiece — field-extraction / cast / func
+/// ladder.
+pub fn push_subpiece(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_subpiece_virtual_rpn(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:823 TypeOpPtradd::push
+// (`{ lng->opPtradd(op); }` → printc.cc:880 body)
+/// PTRADD push route: PrintC::opPtradd — subscript/binary_plus decision.
+/// This closes the table gap the legacy `PcodeOp::push` wrapper registered
+/// ("Rugra's typeop.rs push dispatch table lacks the PTRADD arm", printc.rs
+/// emit_expression comment): the RPN transport now routes through here.
+pub fn push_ptradd(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_ptradd_rpn(op_arc, op),
+        None => lng.op_binary(op),
+    }
+}
+
+// Ghidra: typeop.hh:905 TypeOpPopcount::push
+// (`{ lng->opPopcountOp(op); }` → printc.hh:343 opFunc(op))
+/// POPCOUNT push route: PrintC::opPopcountOp — opFunc "POPCOUNT"
+/// (typeop.cc:2558 ctor name).
+pub fn push_popcount(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_popcount(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:912 TypeOpLzcount::push
+// (`{ lng->opLzcountOp(op); }` → printc.hh:344 opFunc(op))
+/// LZCOUNT push route: PrintC::opLzcountOp — opFunc "LZCOUNT"
+/// (typeop.cc:2565 ctor name).
+pub fn push_lzcount(lng: &mut dyn PrintLanguage, op_arc: &OpArcRef, op: &PcodeOp) {
+    match as_printc_mut(lng) {
+        Some(printc) => printc.op_lzcount(op_arc, op),
+        None => lng.op_unary(op),
+    }
+}
+
+// Ghidra: typeop.hh:170 TypeOp::push (virtual dispatch through the
+// registerInstructions inst table, typeop.cc:24-119)
+/// Opcode → per-op push routing: the Rust twin of Ghidra's
+/// `op->getOpcode()->push(lng, op, readOp)` virtual dispatch. Returns
+/// `true` when the opcode was routed (one of the 53 carried TypeOp push
+/// entries), `false` when the caller must keep its own local arm (the
+/// ops whose PrintC emitters are NOT TypeOpX::push one-liners: COPY, LOAD,
+/// STORE, CALL, CALLIND, CALLOTHER, RETURN, CBRANCH, CAST, PTRSUB — plus
+/// the empty push bodies MULTIEQUAL/INDIRECT which printc.hh:331-332
+/// defines as `{}`, carried by dispatch_op_rpn's no-op fallthrough).
+// RUGRA-GLUE: Ghidra dispatches through the TypeOp* inst table held by the
+//   TypeFactory; PrintC has no Architecture/TypeFactory plumbing to reach
+//   constructed instances, and no push body reads instance state, so the
+//   table is a static per-opcode match to the free per-op routes above.
+pub fn push_opcode_rpn(
+    lng: &mut dyn PrintLanguage,
+    op_arc: &OpArcRef,
+    op: &PcodeOp,
+    read_op: Option<&OpArcRef>,
+) -> bool {
+    match op.opcode {
+        // Ghidra: typeop.hh:359 TypeOpEqual::push
+        OpCode::CPUI_INT_EQUAL => push_int_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:371 TypeOpNotEqual::push
+        OpCode::CPUI_INT_NOTEQUAL => push_int_not_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:384 TypeOpIntSless::push
+        OpCode::CPUI_INT_SLESS => push_int_sless(lng, op_arc, op),
+        // Ghidra: typeop.hh:394 TypeOpIntSlessEqual::push
+        OpCode::CPUI_INT_SLESSEQUAL => push_int_sless_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:401 TypeOpIntLess::push
+        OpCode::CPUI_INT_LESS => push_int_less(lng, op_arc, op),
+        // Ghidra: typeop.hh:411 TypeOpIntLessEqual::push
+        OpCode::CPUI_INT_LESSEQUAL => push_int_less_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:421 TypeOpIntZext::push
+        OpCode::CPUI_INT_ZEXT => push_int_zext(lng, op_arc, op, read_op),
+        // Ghidra: typeop.hh:430 TypeOpIntSext::push
+        OpCode::CPUI_INT_SEXT => push_int_sext(lng, op_arc, op, read_op),
+        // Ghidra: typeop.hh:439 TypeOpIntAdd::push
+        OpCode::CPUI_INT_ADD => push_int_add(lng, op_arc, op),
+        // Ghidra: typeop.hh:451 TypeOpIntSub::push
+        OpCode::CPUI_INT_SUB => push_int_sub(lng, op_arc, op),
+        // Ghidra: typeop.hh:459 TypeOpIntCarry::push
+        OpCode::CPUI_INT_CARRY => push_int_carry(lng, op_arc, op),
+        // Ghidra: typeop.hh:467 TypeOpIntScarry::push
+        OpCode::CPUI_INT_SCARRY => push_int_scarry(lng, op_arc, op),
+        // Ghidra: typeop.hh:475 TypeOpIntSborrow::push
+        OpCode::CPUI_INT_SBORROW => push_int_sborrow(lng, op_arc, op),
+        // Ghidra: typeop.hh:483 TypeOpInt2Comp::push
+        OpCode::CPUI_INT_2COMP => push_int_2comp(lng, op_arc, op),
+        // Ghidra: typeop.hh:491 TypeOpIntNegate::push
+        OpCode::CPUI_INT_NEGATE => push_int_negate(lng, op_arc, op),
+        // Ghidra: typeop.hh:502 TypeOpIntXor::push
+        OpCode::CPUI_INT_XOR => push_int_xor(lng, op_arc, op),
+        // Ghidra: typeop.hh:512 TypeOpIntAnd::push
+        OpCode::CPUI_INT_AND => push_int_and(lng, op_arc, op),
+        // Ghidra: typeop.hh:522 TypeOpIntOr::push
+        OpCode::CPUI_INT_OR => push_int_or(lng, op_arc, op),
+        // Ghidra: typeop.hh:529 TypeOpIntLeft::push
+        OpCode::CPUI_INT_LEFT => push_int_left(lng, op_arc, op),
+        // Ghidra: typeop.hh:538 TypeOpIntRight::push
+        OpCode::CPUI_INT_RIGHT => push_int_right(lng, op_arc, op),
+        // Ghidra: typeop.hh:548 TypeOpIntSright::push
+        OpCode::CPUI_INT_SRIGHT => push_int_sright(lng, op_arc, op),
+        // Ghidra: typeop.hh:559 TypeOpIntMult::push
+        OpCode::CPUI_INT_MULT => push_int_mult(lng, op_arc, op),
+        // Ghidra: typeop.hh:567 TypeOpIntDiv::push
+        OpCode::CPUI_INT_DIV => push_int_div(lng, op_arc, op),
+        // Ghidra: typeop.hh:575 TypeOpIntSdiv::push
+        OpCode::CPUI_INT_SDIV => push_int_sdiv(lng, op_arc, op),
+        // Ghidra: typeop.hh:583 TypeOpIntRem::push
+        OpCode::CPUI_INT_REM => push_int_rem(lng, op_arc, op),
+        // Ghidra: typeop.hh:591 TypeOpIntSrem::push
+        OpCode::CPUI_INT_SREM => push_int_srem(lng, op_arc, op),
+        // Ghidra: typeop.hh:599 TypeOpBoolNegate::push
+        OpCode::CPUI_BOOL_NEGATE => push_bool_negate(lng, op_arc, op),
+        // Ghidra: typeop.hh:606 TypeOpBoolXor::push
+        OpCode::CPUI_BOOL_XOR => push_bool_xor(lng, op_arc, op),
+        // Ghidra: typeop.hh:613 TypeOpBoolAnd::push
+        OpCode::CPUI_BOOL_AND => push_bool_and(lng, op_arc, op),
+        // Ghidra: typeop.hh:620 TypeOpBoolOr::push
+        OpCode::CPUI_BOOL_OR => push_bool_or(lng, op_arc, op),
+        // Ghidra: typeop.hh:627 TypeOpFloatEqual::push
+        OpCode::CPUI_FLOAT_EQUAL => push_float_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:634 TypeOpFloatNotEqual::push
+        OpCode::CPUI_FLOAT_NOTEQUAL => push_float_not_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:641 TypeOpFloatLess::push
+        OpCode::CPUI_FLOAT_LESS => push_float_less(lng, op_arc, op),
+        // Ghidra: typeop.hh:648 TypeOpFloatLessEqual::push
+        OpCode::CPUI_FLOAT_LESSEQUAL => push_float_less_equal(lng, op_arc, op),
+        // Ghidra: typeop.hh:655 TypeOpFloatNan::push
+        OpCode::CPUI_FLOAT_NAN => push_float_nan(lng, op_arc, op),
+        // Ghidra: typeop.hh:662 TypeOpFloatAdd::push
+        OpCode::CPUI_FLOAT_ADD => push_float_add(lng, op_arc, op),
+        // Ghidra: typeop.hh:669 TypeOpFloatDiv::push
+        OpCode::CPUI_FLOAT_DIV => push_float_div(lng, op_arc, op),
+        // Ghidra: typeop.hh:676 TypeOpFloatMult::push
+        OpCode::CPUI_FLOAT_MULT => push_float_mult(lng, op_arc, op),
+        // Ghidra: typeop.hh:683 TypeOpFloatSub::push
+        OpCode::CPUI_FLOAT_SUB => push_float_sub(lng, op_arc, op),
+        // Ghidra: typeop.hh:690 TypeOpFloatNeg::push
+        OpCode::CPUI_FLOAT_NEG => push_float_neg(lng, op_arc, op),
+        // Ghidra: typeop.hh:697 TypeOpFloatAbs::push
+        OpCode::CPUI_FLOAT_ABS => push_float_abs(lng, op_arc, op),
+        // Ghidra: typeop.hh:704 TypeOpFloatSqrt::push
+        OpCode::CPUI_FLOAT_SQRT => push_float_sqrt(lng, op_arc, op),
+        // Ghidra: typeop.hh:712 TypeOpFloatInt2Float::push
+        OpCode::CPUI_FLOAT_INT2FLOAT => push_float_int2float(lng, op_arc, op),
+        // Ghidra: typeop.hh:721 TypeOpFloatFloat2Float::push
+        OpCode::CPUI_FLOAT_FLOAT2FLOAT => push_float_float2float(lng, op_arc, op),
+        // Ghidra: typeop.hh:728 TypeOpFloatTrunc::push
+        OpCode::CPUI_FLOAT_TRUNC => push_float_trunc(lng, op_arc, op),
+        // Ghidra: typeop.hh:735 TypeOpFloatCeil::push
+        OpCode::CPUI_FLOAT_CEIL => push_float_ceil(lng, op_arc, op),
+        // Ghidra: typeop.hh:742 TypeOpFloatFloor::push
+        OpCode::CPUI_FLOAT_FLOOR => push_float_floor(lng, op_arc, op),
+        // Ghidra: typeop.hh:749 TypeOpFloatRound::push
+        OpCode::CPUI_FLOAT_ROUND => push_float_round(lng, op_arc, op),
+        // Ghidra: typeop.hh:784 TypeOpPiece::push
+        OpCode::CPUI_PIECE => push_piece(lng, op_arc, op),
+        // Ghidra: typeop.hh:799 TypeOpSubpiece::push
+        OpCode::CPUI_SUBPIECE => push_subpiece(lng, op_arc, op),
+        // Ghidra: typeop.hh:823 TypeOpPtradd::push
+        OpCode::CPUI_PTRADD => push_ptradd(lng, op_arc, op),
+        // Ghidra: typeop.hh:905 TypeOpPopcount::push
+        OpCode::CPUI_POPCOUNT => push_popcount(lng, op_arc, op),
+        // Ghidra: typeop.hh:912 TypeOpLzcount::push
+        OpCode::CPUI_LZCOUNT => push_lzcount(lng, op_arc, op),
+        _ => return false,
+    }
+    true
 }
 
 impl crate::op::PcodeOp {

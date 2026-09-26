@@ -1219,3 +1219,16 @@ operator）。诱因：for 头超行宽折行后，续行形如
 签名 → 空声明遍历把循环体自动名局部全部"补声明"回灌（`  long uVar13;`
 等 3 处）。与既有 MAIN-IVAR4-DUP（分号门）/WARN-EMIT2 R4（比较符门）同款
 判据加固模式。canon httpd 293→277（−16 含本门 −8 行回灌）。
+
+
+### 2026-09-26 — POSTFIX-BOOLFOLD-TOKEN-0001（MIGW1-TYPEOP-0002 fixture 暴露）
+
+- 补偿层 pass3 `"1 || " → always true` 的朴素 `replacen` 命中数字 token 尾：
+  `0x11 || x` 的 "1 || " 子串被剥，产出 `0x10x22`-族残缺 C（B2 fixture
+  typeop_push_dispatch_1204 的 bin_bool_or case 双侧对比直接暴露；master
+  亲证预存，非本 lane 引入）。修复 = `fold_standalone_one_or`：仅折叠独立
+  token `1`（前行 ∈ {行首, `(`, 空白}），`0x11 || `/`a1 || ` 数字尾不触；
+  UTF-8 char-wise 拷贝 helper `utf8_char_len`。真实 `if (1 || x)` 折叠语义
+  保留。canon curl/httpd 与 master 逐字节恒等（语料无可达命中面）。本 lane
+  写域越界 1 文件声明：B2 验收门硬依赖（BOOL_OR case），与 F8FOR 判据加固
+  先例同款，请 root 裁量。
