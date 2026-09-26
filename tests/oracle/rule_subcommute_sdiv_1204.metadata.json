@@ -1,0 +1,141 @@
+{
+ "schema_version": 2,
+ "fixture_id": "RULE-SUBCOMMUTE-SDIV-0001",
+ "status_note": "RuleSubCommute INT_SDIV/INT_SREM arm port (ticket RULEACTION-SUBCOMMUTE-SDIV-SEXT16-0001, the gap KUNASDIV proved bilaterally: Rugra deferred the arm so the 16-byte signed-division idiom never commuted and never folded — g_div 100/-7 oracle 0xfffffffffffffff2 vs Rugra SUB168(SEXT816(100)/SEXT816(-7),0)). applyOp driven directly on synthetic SUBPIECE(SDIV/SREM16(SEXT..),0) forms; after the single SubCommute application a bounded RulePropagateCopy + RuleSubCancel(SUBPIECE-gated) + RuleCollapseConstants fixpoint reproduces the oppool folding chain. 16 normal cases: both-SEXT written (constant and register ext inputs), positive/negative divisors, SEXT4->16 / SEXT8->16 / SEXT4->8 width boundaries, constant-divisor sign-fit (fit / sign-mismatch / high-bits reject), offset!=0, in0 ZEXT reject, in1 COPY reject, in1 register-input reject, cancelExtensions equal-size / unequal-size (shortenExtension) / constant-ext-isFree guard, SREM mirrors. Trap modes (trap_sdiv/trap_srem, INT64_MIN / -1) record crash forms only: oracle SIGFPE rc 136 with 0-byte stdout vs Rugra panic rc 101 (opbehavior.rs:195 / :212), KUNAUB-SDIV-0001 ruling (a) — no golden.",
+ "decisive_semantics": {
+  "reference_output_parameters": "applyOp(op,data) mutates the IR by reference; cancelExtensions(longform,subOp,ext0In,ext1In,data) takes ext inputs by value as REBINDABLE locals (ruleaction.cc:4498/4504 overwrite ext0In/ext1In with shortenExtension's return), opUnsetOutput(longform)+newUniqueOut(maxSize)+three opSetInput rewires, SUBPIECE left intact; shortenExtension(extOp,maxSize,data) unsets the extension's output and re-creates it smaller at the same space/address (big-endian bumps offset by size diff, cc:4468-4469).",
+  "loop_bounds_traversal_order": "arm condition order fixed: offset==0 -> in(0) written -> def is INT_SEXT -> in(1) written (def INT_SEXT -> either ext-input size > outvn -> cancelExtensions partial path) / in(1) constant (sext0In size <= outvn AND sign_extend(val & mask(outvn), outvn, insize) == val) / else reject (cc:4570-4602); generic commute tail iterates longform inputs in slot order with j=-1 for SDIV/SREM (cc:4633-4649); harness iterates ops in SeqNum order and applies RuleSubCancel only to SUBPIECE ops (getOpList gate, ruleaction.cc:5116).",
+  "counter_accumulator_lens": "no counters; insize = base->getSize() read once before the arm dispatch (cc:4519/4522) and reused by the constant sign-fit check sign_extend(smallval, outvn->getSize(), insize); the harness pass counter is bounded at 8 with early exit on a no-change pass (both sides identical).",
+  "sorting_comparison_keys": "size comparisons are numeric get_size() ==/</>; loneDescend identity is pointer equality (Arc::ptr_eq in Rust); the constant sign-fit comparison val != smallval is uintb-wide bit equality where smallval = sign_extend(val & calc_mask(outvn), outvn, insize) (address.cc:666, clamped to 8 bytes per side); isFree = !(INPUT|WRITTEN) flags so constants are free (varnode.cc:578) — observable in the sdiv_partial_const_ext case (sub_apply=0 both sides)."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": "none: direct RuleSubCommute::applyOp + bounded RulePropagateCopy/RuleSubCancel/RuleCollapseConstants harness on a real BfdArchitecture Funcdata; no decompilation pipeline options",
+ "rugra_source": {
+  "base_commit": "b2b6334f62e93db718b6d720e0de253828985d0a",
+  "note": "src/ruleaction.rs SEXT arm + cancel_extensions/shorten_extension port commit; bilateral normal-mode byte equality proven on this tree"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "1d4da30ea53f864a13b2ad81e80f7603de2c7b9c2f3752e34aa8f144bcad0602",
+  "rust_fixture_sha256": "c41f4d86447e46e84d353f2520f1e790dcb3c884e4b6c3cffbae9436ef3d899c",
+  "oracle_record_sha256": "28d3bcd15d8110fdf5cfdaa8c86d7e6d37e63fb26f5414d4a39f64c5a84fe4dd",
+  "runner_sha256": "fb1cafecbe0d6121fed0adc859c0ccce93262bd08d4d97ef7981b289f913ad32"
+ },
+ "expected_results": {
+  "normal_stdout_sha256": "28d3bcd15d8110fdf5cfdaa8c86d7e6d37e63fb26f5414d4a39f64c5a84fe4dd",
+  "normal_stderr": "empty both sides",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "case_order": [
+   "sdiv_written_fold",
+   "srem_written_fold",
+   "sdiv_pos_divisor",
+   "sdiv_w4_sext_written",
+   "sdiv_const_fit_w4",
+   "srem_const_fit_w4",
+   "sdiv_const_sign_mismatch",
+   "sdiv_const_high_bits",
+   "sdiv_offset_nonzero",
+   "sdiv_in0_zext",
+   "sdiv_in1_copy",
+   "sdiv_in1_reginput",
+   "sdiv_partial_equal",
+   "srem_partial_equal",
+   "sdiv_partial_const_ext",
+   "sdiv_partial_unequal"
+  ],
+  "trap_forms": {
+   "trap_sdiv": {
+    "oracle": "SIGFPE rc=136, core dumped, 0-byte stdout",
+    "rugra": "panic rc=101 'attempt to divide with overflow' at opbehavior.rs:195, 0-byte stdout"
+   },
+   "trap_srem": {
+    "oracle": "SIGFPE rc=136, core dumped, 0-byte stdout",
+    "rugra": "panic rc=101 'attempt to calculate the remainder with overflow' at opbehavior.rs:212, 0-byte stdout"
+   }
+  }
+ },
+ "coverage": {
+  "both_sext_written_commut": {
+   "status": "MATCH",
+   "covers": "g_div 100/-7 shape: SUB8(SDIV16(SEXT816(100),SEXT816(-7)),0) commutes and the folding chain yields COPY(0xfffffffffffffff2); SREM -> 2; positive divisor 100/7 -> 0xe (cc:4570-4601 written-in1 fallthru)",
+   "residual_todo_ids": []
+  },
+  "constant_divisor_sign_fit": {
+   "status": "MATCH",
+   "covers": "SEXT48 + const8 at outvn 4: sign_extend(val & mask(4),4,8) == val gates the commute (fit 0xfffffff9 -> folds 0xfffffff2; sign-mismatch 0x00000000ffffff80 and high-bits 0x100000080 reject) (cc:4592-4597)",
+   "residual_todo_ids": []
+  },
+  "guard_rejections": {
+   "status": "MATCH",
+   "covers": "offset!=0, in(0) ZEXT instead of SEXT, in(1) COPY instead of SEXT, in(1) register input (neither written nor constant) all return 0 (cc:4574/4577/4581/4599)",
+   "residual_todo_ids": []
+  },
+  "cancel_extensions_paths": {
+   "status": "MATCH",
+   "covers": "equal ext-input sizes (SEXTs cancelled, longform rewired to raw inputs with truncated output, SUBPIECE intact), unequal sizes (shortenExtension resizes the smaller side's SEXT output in place), constant ext inputs bail at the isFree guard (constants carry neither INPUT nor WRITTEN, varnode.cc:578) (cc:4483-4512)",
+   "residual_todo_ids": []
+  },
+  "width_boundaries": {
+   "status": "MATCH",
+   "covers": "SEXT416 both-written with outvn 8 (ext inputs smaller than outvn: generic fallthru commute, chain stalls per RuleSubCancel free-constant rule), SEXT48/const8, SEXT816/8 (cc:4583 size comparisons)",
+   "residual_todo_ids": []
+  },
+  "unique_and_reg_offsets": {
+   "status": "MATCH",
+   "covers": "unique-space output offsets (0x10000038-family) and register-space input offsets print identically on both sides (SeqNum-ordered dumps)",
+   "residual_todo_ids": []
+  },
+  "crash_form_trap_modes": {
+   "status": "MATCH",
+   "covers": "INT64_MIN / -1 through the commuted+folding chain: oracle SIGFPE rc 136 (native idiv) vs Rugra panic rc 101 (opbehavior.rs:195/:212) — KUNAUB-SDIV-0001 ruling (a) zero-guard form, no golden by construction",
+   "residual_todo_ids": []
+  },
+  "zext_arm_partial_commute": {
+   "status": "UNTESTED",
+   "covers": "the INT_DIV/INT_REM (unsigned ZEXT) arm's own partial-commute path (cc:4551-4557) is outside this fixture's scope; Rugra still defers it (pre-existing)",
+   "residual_todo_ids": [
+    "RULEACTION-SUBCOMMUTE-ZEXT-PARTIAL-0001"
+   ]
+  },
+  "subzext_overlap_check": {
+   "status": "UNTESTED",
+   "covers": "RuleSubCommute's RuleSubZext-overlap bail (cc:4623-4629) is not exercised (no ZEXT-reader topology in the cases); Rugra lacks the check (pre-existing)",
+   "residual_todo_ids": [
+    "RULEACTION-SUBCOMMUTE-SUBZEXT-OVERLAP-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "MATCH",
+ "residual_todo_ids": [
+  "RULEACTION-SUBCOMMUTE-ZEXT-PARTIAL-0001",
+  "RULEACTION-SUBCOMMUTE-SUBZEXT-OVERLAP-0001"
+ ],
+ "residual_union": {
+  "todo_id": "RULE-SUBCOMMUTE-SDIV-RESIDUAL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "zext_arm_partial_commute",
+    "status": "UNTESTED",
+    "detail": "INT_DIV/INT_REM ZEXT arm written-in1 partial commute via cancelExtensions still deferred in Rugra (returns NO_CHANGE where oracle may cancel); registered RULEACTION-SUBCOMMUTE-ZEXT-PARTIAL-0001."
+   },
+   {
+    "id": "subzext_overlap_check",
+    "status": "UNTESTED",
+    "detail": "cc:4623-4629 offset==0 next-op-ZEXT-to-insize bail (overlap with RuleSubZext) missing in Rugra's apply_op; registered RULEACTION-SUBCOMMUTE-SUBZEXT-OVERLAP-0001."
+   }
+  ]
+ }
+}
