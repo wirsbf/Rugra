@@ -240,15 +240,8 @@ def sweep_time_v(argv: list[str], label: dict, timeout: float) -> dict:
     )
     wall = time.monotonic() - started
     load_after = load_snapshot()
-    fields = {}
-    try:
-        for line in Path("/dev/shm/rugra-tests/perfbench/_timev.tmp").read_text().splitlines():
-            if ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            fields[key.strip()] = value.strip()
-    except FileNotFoundError:
-        pass
+    fields = parse_timev_fields(
+        Path("/dev/shm/rugra-tests/perfbench/_timev.tmp").read_text())
 
     def seconds(name: str) -> float:
         text = ""
@@ -256,16 +249,7 @@ def sweep_time_v(argv: list[str], label: dict, timeout: float) -> dict:
             if key.startswith(name):
                 text = value
                 break
-        pieces = text.replace("h", ":").replace("m", ":").replace("s", "")
-        try:
-            if ":" in pieces:
-                parts = [float(piece) for piece in pieces.split(":")]
-                while len(parts) < 3:
-                    parts.insert(0, 0.0)
-                return parts[0] * 3600 + parts[1] * 60 + parts[2]
-            return float(pieces)
-        except ValueError:
-            return 0.0
+        return parse_timev_seconds(text)
 
     return {
         "schema": 1,
@@ -280,6 +264,37 @@ def sweep_time_v(argv: list[str], label: dict, timeout: float) -> dict:
         "load_before": load_before,
         "load_after": load_after,
     }
+
+
+def parse_timev_fields(text: str) -> dict:
+    """/usr/bin/time -v label lines -> {key: value}.
+
+    The elapsed-time label itself contains colons ("Elapsed (wall clock) time
+    (h:mm:ss or m:ss): 1:05.94"), so a naive partition-at-first-colon
+    contaminates the value with the label tail; split at the last ": "
+    instead.
+    """
+    fields = {}
+    for line in text.splitlines():
+        if ": " not in line:
+            continue
+        key, _, value = line.rpartition(": ")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def parse_timev_seconds(value: str) -> float:
+    """'1:05.94' / '0:01:02.03' / '12.34' -> seconds."""
+    pieces = value.replace("h", ":").replace("m", ":").replace("s", "")
+    try:
+        if ":" in pieces:
+            parts = [float(piece) for piece in pieces.split(":")]
+            while len(parts) < 3:
+                parts.insert(0, 0.0)
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        return float(pieces)
+    except ValueError:
+        return 0.0
 
 
 def file_sha256(path: str) -> str:
