@@ -55,7 +55,19 @@
 # 分片协议 27178 仍为 SQLITE3_SCOREBOARD 记分板口径, 两协议各按各的账本记账）。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
 curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
-httpd	156	29	CSPEC-GLOBAL-APPLY-HTTPD-RATCHET-0001	22708f97	2026-09-26
+httpd	98	29	CSPEC-GLOBAL-APPLY-HTTPD-RATCHET-0001	ba6e670e	2026-09-26
 vsh	16	71	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 sq	7500	810	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 sqlite	26833	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	c4508bba	2026-09-26
+# 2026-09-26 MERGEBATCH18 波次增益锁定（MB18-RATCHET-REPIN-0001, root 授权重钉,
+# @ba6e670e = MB18 23 支合并+repin 态 fresh 实测）:
+# ① httpd ceiling 156→98（TYPINGPX-MIRROR-FRESH-DB-0001 落地——镜面臂逐函数 fresh
+#    constructor-parity DB,px/x 命名遮蔽族清零;ap_fini 51→7;floor 29 不动;
+#    门禁实测 98/98 精确命中——单一向上棘轮,typinglean 车道建议的 98+余量未取,
+#    MB17 156/156 精确命中先例形态）。
+# ② sq 现态记账 4481→4323（GEN4-SQ-BYTELANE-STRUCT-0001 落地——is_arithmetic_op
+#    addlflags 表修正,read_inode 字节车道族收敛 −158[read_inode_1 −98+read_inode_3 −60
+#    逐函数对合];ceiling 7500 不动[收紧须先登记 TODO],floor 810 保持;
+#    车道树实测 4323==集成态实测 4323,零漂移）。
+# ③ curl 58/vsh 15/sqlite 26833 三面恒等基线零漂移（本批 curl 改动全在 canon 面:
+#    curlfam cast 键+b29 种子面;镜面 curl 面字节恒等亲证）。
