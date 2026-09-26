@@ -1,0 +1,22 @@
+{
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86-64 SLEIGH (sleigh_specs) via BfdArchitecture over the pinned curl blob; PrintC singleton emission family",
+ "compiler_spec": "gcc (x86-64-gcc.cspec); the singleton cases do not consult the callspec beyond the architecture boot",
+ "analysis_options": "PrintC default options (resetDefaultsPrintC); initializeFromArchitecture applied; no Java analyzers (direct BfdArchitecture harness)",
+ "observation_scope": "MATCH for the 36 case lines: push_float encodings (printDecimal round-trip, infinity/nan sign arms, .0 suffix, force_scinote, FLOAT_UNKNOWN), setCommentStyle arms + LowlevelError rejection, genericFunctionName printRaw digit rule, emitSymbolScope depth-0, pushMismatchSymbol off==0/off!=0, pushTypePointerRel ADJ token pair, wide-char L prefix",
+ "input_model_difference": "The oracle drives the protected emission entry points through a FixturePrintC subclass over a real BfdArchitecture; Rugra drives the pub fixture seams (push_float_text/set_comment_style/emit_line_comment/generic_function_name/emit_symbol_scope/push_mismatch_symbol_text/rpn_push_type_pointer_rel) with EmitNoMarkup on both sides \u2014 same emitter class, same token stream, byte-identical stdout",
+ "marshal_round_trip": "UNTESTED: no Encoder/Decoder persistence in this fixture",
+ "input": "float encodings 4/8-byte (zero/negzero/one/half/integral/pi/inf/nan/subnormal + scinote) and unregistered size 2; comment styles c/cplusplus//*custom//custom/badstyle; entry addresses 0x22e0/0x3190/0x123456789; BFD function symbols main/GetStr; mismatch symbol off 0/4 at ram 0x10; ADJ token pair with base+0; wide chars 0x1234/0x0a",
+ "input_fingerprint": "sha256:bcfe588bd5cb59ac334d248c9a46e65b0ef2e8ba4076223d06ba353eadf389bb",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "cpp_fixture_sha256": "f9d53f77915407e9cf2cab43a09c98ac3998eee20c7b2640ceb84db488d82c5c",
+ "rust_fixture_sha256": "b7339d8ba7b931fb705c830c255317e2a0f61b833b117d5a74942439eb81689d",
+ "expected_stdout_sha256": "694a7796370751d041c8734f9795d960f25a2173e648f5978ccc24dc5ba78286",
+ "overall_status": "MATCH: 36/36 case lines byte-identical bilaterally (runner tools/run_printc_singleton_emission_oracle.sh)",
+ "fixture_id": "PRINTC-SINGLETON-EMISSION-1204-1204",
+ "coverage_gaps": "checkAddressOfCast (printc.cc:376) and pushImpliedField (printc.cc:2085) need full-IR bilateral fixtures (hand-built PcodeOp/Varnode/HighVariable graphs) \u2014 registered as PRINTC-SINGLETON-IRFIX-0001; Rust-side unit coverage lands with this lane"
+}
