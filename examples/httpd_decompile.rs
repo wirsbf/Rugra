@@ -4133,6 +4133,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // executable-section filter and the channel was inert; the live
     // code-pointer naming contract is HTTPD-CODEREF-SYMBOLIZE-0001's
     // const_code_refs channel with its entry-ness validation.
+    // SLEIGH-RUSTIFY-PHASE3-0001: this harvest is a canon-face channel
+    // (the analyzeHeadless function-creation emulation). Under the
+    // mirror gate every consumer of its outputs is already off — the
+    // prototype_db feeds the PARAMID/V3SIG channels (paramid_active is
+    // false under the gate), the analysis_discovered FUN_ names land in
+    // the canon symbol_table only (mirror fds install mirror_syms), and
+    // func_entry_set's consumer (the code-label layer) is !mirror_fn
+    // gated — so skipping the whole block under the gate is
+    // behavior-preserving for the mirror face and keeps the canon
+    // lifter's None-under-mirror contract sound (the pre-swap iced
+    // prepass ran under the gate too, but its outputs were never
+    // consumed there).
+    if !mirror {
     for &(vaddr, size, file_offset, ref name) in functions.iter().take(max_functions + 50) {
         if size < 5 { continue; }
         let max_size = std::cmp::min(size, 4096);
@@ -4232,6 +4245,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prototype_db.insert(target, fd.funcp.num_params());
     }
     eprintln!("[PREPASS] Collected {} prototypes ({} from call targets)", prototype_db.len(), call_targets.len());
+    }
 
     // HTTPD-CODEREF-SYMBOLIZE-0001: validate the harvested const-space code
     // references into function-entry candidates. A candidate is a function
