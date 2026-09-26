@@ -555,6 +555,10 @@ fixture；全量 `defects=0`、`numbering=0`，`progressbarinit` 目标常量 `0
 - `doc_function` 尾部改为 oracle 时序 `closeBraceIndent → tagLine →
   endFunction → flush`（printc.cc:2662-2665）；typedef 前言包进
   `beginDocument…endDocument…flush`（docAllGlobals 形态，printc.cc:2621-2629）。
+  **2026-09-26（HERMETICITY-TYPEDEF-LATCH-0001）**：前言从进程级闩锁
+  （旧 `static TYPEDEFS_EMITTED`）降为 **per-document** 作用域——每次
+  `doc_function` 调用（=一份完整文档）顶部无条件发射；oracle 依据见
+  下方 GENSMOKE-T1 附注更新。
 - 所有 `open_paren()/close_paren()` 调用点升级为带括号串与组 id 的
   trait 新签名（`open_paren("(")` / `close_paren(")", id)`），为
   `EmitPrettyPrint` 的 openGroup/closeGroup 配对提供 id。
@@ -1244,13 +1248,30 @@ printc.cc:2260/2518/2497）：
 **2026-09-25（GENSMOKE-T1 附注，wt/vshfix）**：typedef 前言在**所有档位**
 保持发射（含 direct-runner 镜脸进程）——不可按
 `typefactory::direct_runner_tier_active` 档位化：curl 驱动的多进程 worker
-协议在进程边界重建 PrintC 的进程级 latch，要求每个 worker 文档以
-TYPEDEF_PREAMBLE 精确开头（`normalize_worker_typedefs`，
-examples/curl_decompile.rs:5974-5990），档位化会使 76 个 worker 全部
-protocol-failure（车道实测）。前言无 oracle 对应物（direct-runner golden
-零 typedef 行），但 `compare_ghidra.py:109/141` 把 typedef 行从所有差分
-面归一化掉，四门口禁均不可见。核心类型拼写档位化本体在
-`typefactory.rs`（见 docs/api/type_system/typefactory.md GENSMOKE-T1 节）。
+协议要求每个 worker 文档以 TYPEDEF_PREAMBLE 精确开头
+（`normalize_worker_typedefs`，examples/curl_decompile.rs:5974-5990），
+档位化会使 76 个 worker 全部 protocol-failure（车道实测）。前言无 oracle
+对应物（direct-runner golden 零 typedef 行），但 `compare_ghidra.py:109/141`
+把 typedef 行从所有差分面归一化掉，四门口禁均不可见。核心类型拼写档位化
+本体在 `typefactory.rs`（见 docs/api/type_system/typefactory.md
+GENSMOKE-T1 节）。
+
+**2026-09-26（HERMETICITY-TYPEDEF-LATCH-0001 更新，wt/hermeticity）**：
+前言作用域从**进程级闩锁**（旧 `static TYPEDEFS_EMITTED: AtomicBool`，
+进程内首函数点燃后续全部抑制）降为 **per-document**——每次 `doc_function`
+调用（=一份完整文档，oracle docFunction 契约 printc.cc:2641-2670：
+beginFunction→…→endFunction→flush 自包含、零声明步、零跨调用门控状态）
+顶部无条件发射。**oracle 依据（机制 E 亲读）**：oracle 的声明区是独立的
+调用方一次性文档——docAllGlobals（printc.cc:2621-2628，
+ifacedecomp.cc:944）与 docTypeDefinitions（printc.cc:2401-2412，
+ifacedecomp.cc:957，其中 cc:2409 `isCoreType() continue` 显式跳过核心
+类型）——`typedef unsigned char byte` 类前导在 oracle 任何 docFunction
+输出中不存在（四 direct-runner golden 零 typedef 行）。旧进程闩锁使前导
+依赖进程内前置打印集合（同函数同输入两字节变体；TFSINGLE 探针
+apr_file_open_stdout 238B/453B 对为捕获面），违反铁律 2.1 封闭前提；
+bin_sweep/gen_decompile/httpd 裸面可观测。curl worker 协议契约
+（每 worker 文档以 TYPEDEF_PREAMBLE 开头）per-document 形态按构造满足；
+direct 臂（CompareFunctions 模式）归一化随动镜像 worker 形态。
 
 ### 2026-06-23（续）：声明白名单覆盖双命名格式
 
@@ -1796,7 +1817,7 @@ model is not present in Rugra's print layer):
   不在打印层改名兜底；未链接符号的 body 引用仍走
   `uVar_<offset>` 地址回退（LINKSYMBOL 桥覆盖缺口）；
   `examples/curl_decompile.rs` 的 TYPEDEF_PREAMBLE 前缀契约约束了
-  typedef latch 的形状（不可在其五 typedef 之后追加新 typedef，否则
+  typedef preamble 的形状（不可在其五 typedef 之后追加新 typedef，否则
   worker 协议失败）。
 
 ### 2026-08-16：scope 不变性看门狗（PRINTC-SCOPE-RESTRUCT-0001 验收证据）
