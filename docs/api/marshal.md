@@ -258,3 +258,30 @@ IOP→0x63、JOIN→0x61；SPACEBASE 且 `isFormalStackSpace()`→0x60（STACK�
 2. 未知名 piece 空间：C++ 赋 null 后靠 `JoinRecord::operator<` 的 size 先比较
    （translate.cc:172-191）不触空解引用而"成功"；Rust 非可选空间句柄在
    查名点 `Err("Unknown address space name: {nm}")` 拒绝。
+
+## KUNAUB-CHARREF-0001：convert_char_ref 回绕语义钉死（2026-09-26，wt/kunaub2）
+
+`convert_char_ref`（marshal.rs，镜像 xml.cc:2337-2360 `convertCharRef`）的
+`int4 val` 累加器 `val *= mult; val += cur`（xml.cc:2356-2357）无位数上限、
+无值域校验；scanner 域（xml.cc:2151-2179 `scanCharRef`）只保证 token 是
+十六进制/十进制数字，长数字串（≥9 位十六进制，如 `&#x1111111111111;`）
+在 C++ 侧是有符号 int 溢出 UB。锁定 oracle（x86-64 gcc/clang -O2）的 de
+facto 行为=静默二进制回绕（imul/add），随后语法动作经
+`string::operator+=(char)` 截断低字节进字符流。
+
+**修复（裁决 (b)：oracle de facto 有确定行为而 Rust debug 分歧）**：
+`val = val.wrapping_mul(mult); val = val.wrapping_add(cur);` —— debug 与
+release 全 profile 回绕（=de facto C++），消除 debug-only 的 "multiply with
+overflow" panic；release 语义零变化（对一切非溢出输入 wrapping 恒等于原生
+`*`/`+`，主管线行为逐字节不变）。
+
+**回归锁**（`marshal::tests`）：
+- `test_convert_char_ref_wraparound_de_facto_cpp`：手工计算的 de facto 回绕
+  值断言——十进制 2147483648→`i32::MIN`、4294967296→0、9999999999→1410065407；
+  十六进制 x100000000→0、x1ffffffff→-1、x111111111→0x11111111。
+- `test_convert_char_ref_overflow_push_truncates_low_byte`：回绕值经
+  `push_reference_char` 低字节截断（x141→'A'）。
+
+对抗输入来源=伪造 spec/XML/cpool 文件（非物理语料）；B2 状态=debug/release
+同值锁定 + de facto 回绕值回归，oracle 侧无需 golden（无已定义标准行为，
+de facto 行为由平台语义决定）。
