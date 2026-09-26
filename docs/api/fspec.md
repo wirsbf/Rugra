@@ -1389,3 +1389,19 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   （两次 foldIn 后 numModels()==0）证明 push 属 decode（cc:2918）。
   C++ 侧构型注记：output 列表必须 populateResolver（fspec.cc:1504 配置
   形态;12.0.4 findEntry 走 resolver）。
+
+### 2026-09-26 — MIGW-FSPEC 终验补丁（锁缺陷修复 + resolver 幂等 + fixture 重钉，Lane MIGWFSPEC）
+
+- **Rust 回归测试抓到 `ProtoStoreSymbol::set_input` 自死锁**：if-let 绑定持有
+  scope 读锁跨 `set_category` 写请求（同线程 read+write 相持）。读锁作用域
+  收敛到查表语句后修复（oracle 侧无锁不显现——双侧 fixture 之外 Rust 侧
+  并发语义自行兜底的实例）。
+- `ParamListStandard::populate_resolver` 先清表再插（Ghidra 恒对新表调用——
+  decode cc:1504 一次、拷贝 ctor cc:610 对新拷贝；清表使 Rust 跨阶段 staging
+  调用幂等，保持 fresh-map 前置条件）。
+- 测试修正两笔：compare_by_entry_address 测试经 set_funcdata 建条目（ctor
+  只记 op 地址）；resolver extent 查询点 0x202（0x204 在 4B 域外）。
+- fixture 元数据重钉（fspec_rs/crate tree），runner 端到端复验 PASS
+  （ghidra=rugra=df4b4fbd…，25 行字节全等）；全部门禁在最终态复跑：
+  cargo test --lib 1758/0、canon curl+httpd vs 基线 0/0 行差、
+  镜面四面 PASS、bank 391/391、annotations/refs OK。

@@ -8490,6 +8490,12 @@ pub fn characterize_as_param(
     /// (resolver-backed queries are opt-in via `resolver_for`).
     pub fn populate_resolver(&mut self) {
         self.stack_entry_index = None;
+        // Ghidra always populates a FRESH resolver map (decode at
+        // fspec.cc:1504 runs once on the decoded list; the copy ctor at
+        // cc:610 runs on the just-constructed copy). Clearing first makes
+        // the Rust call idempotent, which preserves that fresh-map
+        // precondition for callers that stage entries across phases.
+        self.resolver_map.clear();
         // Ghidra walks `list<ParamEntry>` mutating the resolver in place;
         // Rust's ownership splits the walk into a projection pass and an
         // insertion pass over the same (space, first, last, entry, position)
@@ -11425,8 +11431,12 @@ impl ProtoStoreSymbol {
             );
             // Ghidra: res->sym = scope->addSymbol(nm,pieces.type,...)
             // —attach the resolved Datatype (Rugra's add_symbol takes the
-            // type NAME; the Arc is linked here).
-            if let Some(sym) = self.scope.read().unwrap().symbols.get(&id).cloned() {
+            // type NAME; the Arc is linked here). The read guard is scoped
+            // to the lookup: binding it through the if-let would hold the
+            // scope read lock across the set_category write below and
+            // self-deadlock the RwLock.
+            let sym = self.scope.read().unwrap().symbols.get(&id).cloned();
+            if let Some(sym) = sym {
                 sym.write().unwrap().dtype = Some(ty);
                 // Ghidra: scope->setCategory(res->sym,function_parameter,i);
                 self.scope
@@ -12893,7 +12903,7 @@ mod tests {
         list.populate_resolver();
         let resolver = list.resolver_for(AddressSpace::Register).expect("register resolver");
         assert_eq!(resolver.len(), 2);
-        let hit = resolver.find(0x204);
+        let hit = resolver.find(0x202);
         assert_eq!(hit.len(), 1);
         assert_eq!(hit[0].get_param_entry(), 1);
         assert_eq!(hit[0].position, 1);
@@ -12963,8 +12973,12 @@ mod tests {
     fn test_compare_by_entry_address() {
         // Ghidra: fspec.hh:1740
         let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
-        let fc_a = FuncCallSpecs::new(Address::new(0x10), FuncProto::new(String::new(), void_type.clone()));
-        let fc_b = FuncCallSpecs::new(Address::new(0x20), FuncProto::new(String::new(), void_type));
+        let mut fc_a = FuncCallSpecs::new(Address::new(0x10), FuncProto::new(String::new(), void_type.clone()));
+        let mut fc_b = FuncCallSpecs::new(Address::new(0x20), FuncProto::new(String::new(), void_type));
+        // The ctor records the op address, not the callee entry; entries
+        // arrive via set_funcdata (fspec.cc:4949-4958).
+        fc_a.set_funcdata("callee_a", Address::new(0x10));
+        fc_b.set_funcdata("callee_b", Address::new(0x20));
         assert!(FuncCallSpecs::compare_by_entry_address(&fc_a, &fc_b));
         assert!(!FuncCallSpecs::compare_by_entry_address(&fc_b, &fc_a));
     }
