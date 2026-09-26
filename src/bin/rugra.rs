@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rugra::action::{Action, ActionDatabase};
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::printc::PrintC;
@@ -144,32 +143,64 @@ fn main() {
         None
     };
 
-    for &(vaddr, size, file_offset, ref name) in functions.iter().take(take_count) {
-        if size < 5 { continue; }
-        let max_size = std::cmp::min(size, 4096);
-        let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
-        if file_offset as usize >= buffer.len() { continue; }
-        let code_bytes = &buffer[file_offset as usize..end_off];
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
-            Ok(insts) => insts,
-            Err(_) => continue,
-        };
-        for inst in &instructions {
-            if inst.is_call() {
-                if let Some(ref bt) = inst.metadata.branch_target {
-                    call_targets.insert(bt.as_u64());
+    // SLEIGH-RUSTIFY-PHASE3-0001: the prototype pre-pass decodes through the
+    // production SLEIGH engine (one full-PT_LOAD-image lifter at the
+    // ELF-relative base 0, the same contract the main loop's flow lifters
+    // use per section). A decode error skips one byte with zero ops — the
+    // retired iced walk's "Unimplemented" fallback contract.
+    let prepass_image = {
+        const PT_LOAD: u32 = 1;
+        let mut top = 0usize;
+        for ph in elf.program_headers.iter() {
+            if ph.p_type == PT_LOAD {
+                top = top.max((ph.p_vaddr as usize).saturating_add(ph.p_memsz as usize));
+            }
+        }
+        let mut image = vec![0u8; top];
+        for ph in elf.program_headers.iter() {
+            if ph.p_type == PT_LOAD {
+                let vaddr = ph.p_vaddr as usize;
+                let src = buffer
+                    .get(ph.p_offset as usize..(ph.p_offset as usize).saturating_add(ph.p_filesz as usize))
+                    .unwrap_or(&[]);
+                let dst_end = vaddr.saturating_add(src.len()).min(top);
+                if vaddr < dst_end {
+                    image[vaddr..dst_end].copy_from_slice(&src[..dst_end - vaddr]);
                 }
             }
         }
-        let mut lifter = X86Lifter::new();
+        image
+    };
+    let mut prepass_sleigh = SleighLifter::new();
+    if let Err(error) = prepass_sleigh.configure_x86_64(&prepass_image, 0) {
+        eprintln!("[PREPASS] SLEIGH setup failed: {:?} — prototype pre-pass skipped", error);
+        return;
+    }
+    for &(vaddr, size, _file_offset, ref name) in functions.iter().take(take_count) {
+        if size < 5 { continue; }
+        let range_len = std::cmp::min(size, 4096);
         let mut raw_ops = Vec::new();
-        for inst in &instructions {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        let mut addr = vaddr;
+        let limit = vaddr + range_len as u64;
+        while addr < limit {
+            match prepass_sleigh.lift_instruction(addr) {
+                Ok((step, ops)) => {
+                    for op in &ops {
+                        if rugra::opcodes::OpCode::from_i32(op.get_opcode())
+                            == Some(rugra::opcodes::OpCode::CPUI_CALL)
+                        {
+                            if let Some(target_vn) = op.inputs().first() {
+                                if target_vn.space == rugra::space::AddressSpace::Ram {
+                                    call_targets.insert(target_vn.offset);
+                                }
+                            }
+                        }
+                    }
+                    raw_ops.extend(ops);
+                    addr += step as u64;
+                }
+                Err(_) => { addr += 1; }
             }
-            raw_ops.extend(ops);
         }
         let mut fd = Funcdata::new(name, Address::new(vaddr), size as i32);
         fd.inject_raw_ops(&raw_ops);
@@ -183,20 +214,18 @@ fn main() {
         if prototype_db.contains_key(&target) { continue; }
         let Some((foff, fend)) = addr_to_fileoff(target) else { continue; };
         if foff >= buffer.len() { continue; }
-        let code_bytes = &buffer[foff..fend];
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(target)) {
-            Ok(insts) => insts,
-            Err(_) => continue,
-        };
-        let mut lifter = X86Lifter::new();
+        let range_len = fend - foff;
         let mut raw_ops = Vec::new();
-        for inst in &instructions {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        let mut addr = target;
+        let limit = target + range_len as u64;
+        while addr < limit {
+            match prepass_sleigh.lift_instruction(addr) {
+                Ok((step, ops)) => {
+                    raw_ops.extend(ops);
+                    addr += step as u64;
+                }
+                Err(_) => { addr += 1; }
             }
-            raw_ops.extend(ops);
         }
         let name = symbol_table.get(&target).cloned().unwrap_or_else(|| format!("sub_{:x}", target));
         let mut fd = Funcdata::new(&name, Address::new(target), 512);
