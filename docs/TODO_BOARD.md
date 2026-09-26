@@ -28,6 +28,31 @@
 > 结构吸收裁决票（未开）: clone-family+Rule-ctor ~411 条工厂等价证明。
 > UI-控制台桥 618 条（AGENTS 豁免）与 SLEIGH 替代层 1181 条不进入移植 wave。
 
+## CRATESPLIT 程序票池（2026-09-26 登记；设计 DONE，执行 OPEN-待触发；root 持触发判据）
+
+> 设计交付 = `docs/alignment_docs/CRATESPLIT_MIGRATION_BLUEPRINT_2026-09-26.md`（车道 wt/cratesplit，
+> 基=master a6becff6，零 src 改动）。核心实测结论：src 生产依赖图 60 模块单一 SCC（草案层序不成立）；
+> 可行 crate 切割线仅 foundation(9 文件)/sleigh-ffi(1)/core(60) 三条；Ghidra include 图 226 文件零环
+> （23 层）为长期镜像目标。**执行触发判据（root 持有，缺一不启）**：①对齐收敛（canon 双语料零未解释
+> 差异）②零待并分支 ③wave 边界；Phase B 追加 ④SLEIGH 换装+TFSINGLE step-2 落地。每步门禁 =
+> canon cmp 字节恒等（curl/httpd 双 profile）+ annotations/refs/doc_sync 全绿。
+
+| 稳定 ID | 状态 | 优先级 | 内容 | write-set | 验收要点 |
+|---|---|---|---|---|---|
+| `CRATESPLIT-MIGRATION-0001` | 设计 DONE / 执行 OPEN | P2 | 主票：src 整理+crate 化总程序（蓝图 §4 全步骤编排） | 蓝图文档 + 本票池 | 触发判据四项全满足后由 root 派发 A0；每步原子 commit+canon cmp 字节恒等 |
+| `CRATESPLIT-A0-PREFLIGHT-0002` | OPEN | P2 | 预检+看板清扫：活动票 write-set 路径改写、36+28 runner 重钉名单冻结 | TODO_BOARD + /dev/shm 计划档 | 名单落档；活动票零旧路径残留 | 
+| `CRATESPLIT-A1-FOUNDATION-0003` ~ `A8-FRONTEND-0010` | OPEN | P2 | Phase A 八组目录分组（foundation/pcode/types/struct/actions/print/database+arch+emulate+funcdata/frontend，蓝图 §2.3 映射表 97 文件全覆盖）；机制=`#[path]` 保模块路径，lib.rs 为唯一 Rust 写点（单 writer 串行） | src/<组>/、src/lib.rs、docs/api/<组>/ | 每组一步：git mv + lib.rs #[path] + docs/api 镜像同 commit + 门禁 4.0 全套（canon cmp 字节恒等） |
+| `CRATESPLIT-A9-RUNNER-REPIN-0011` | OPEN | P2 | runner 重钉批：36 个 `rugra_base_src_tree` pin 重钉 + 28 个 `overlay_paths` 改写 + 逐个重跑绿（4-5 并行） | tools/run_*.sh（36-40 个） | 每 runner exit 0 且 stdout sha256 与语义基线一致；重钉双形态纪律（blob id+文件 sha256） |
+| `CRATESPLIT-A10-CLOSEOUT-0012` | OPEN | P2 | 收尾：fixture_registry path_epoch 裁决执行（250 处历史 src 引用默认不改写，root 拍板）、ROADMAP/STATUS 状态行、终验双 profile | 文档 | 4.0 门禁全套 + CURRENT_STATUS 刷新 |
+| `CRATESPLIT-B0-PUBAUDIT-0013` | OPEN | P2（Phase B） | pub(crate) 全量审计（54 处）+ upper→core 51 对 reach-in 落 item 级 + cargo tree 断言工具 | 审计档 + 新工具 | 升 pub 候选名单冻结；断言工具进 CI |
+| `CRATESPLIT-B1-FOUNDATION-CRATE-0014` | OPEN | P2（Phase B） | 抽 crates/rugra-foundation（9 文件；error/types 私有 mod 升 pub+根包再导出 shim） | crates/rugra-foundation/、Cargo.toml、lib.rs | canon cmp 字节恒等 + runner 二轮重钉 + examples 零改动编译 |
+| `CRATESPLIT-B2-SLEIGHFFI-CRATE-0015` | OPEN | P2（Phase B） | 抽 crates/rugra-sleigh-ffi（sleigh_ffi+build.rs C++ 构图随迁） | crates/rugra-sleigh-ffi/、build.rs、Cargo.toml | build_locked_x86_64_sla.sh + ffi-test 全量回归 + canon cmp |
+| `CRATESPLIT-B3-CORE-CRATE-0016` | OPEN | P2（Phase B） | 抽 crates/rugra-core（SCC[60] 60 文件；根包变门面再导出；upper 引用 pub(crate) 项升 pub） | crates/rugra-core/、Cargo.toml、lib.rs | canon cmp 字节恒等 + examples ~600 深层引用零改动 + 门禁全套 |
+| `CRATESPLIT-B4-OPTIONAL-UPPERS-0017` | OPEN（可选） | P3 | 可选拆出 rugra-emulate / rugra-frontend / rugra-verify（align+analysis） | crates/rugra-{emulate,frontend,verify}/ | 各包独立 canon cmp + reach-in 面闭合 |
+| `CRATESPLIT-C0..C5-CYCLEBREAK-0018` | OPEN（可选，默认不排期） | P3 | 破环程序六项（蓝图 §5.4：E5 错置副本删除/E11 注册反转/E8 marshal→space/E3+E4 签名移居/E2 downcast 虚化/E10 反向边族），core 按草案层再拆的前置 | 蓝图 §5.4 各行 write-set | 每项独立 B2 fixture + canon cmp；完成前禁宣称 core 可再分层 |
+| `CRATESPLIT-R7-CAPABILITY-0019` | OPEN | P3 | capability.rs 孤儿裁决（零生产入/出边；capability.hh 对应物在账本，禁删）：接线进 arch 构建期或保留登记 | src/capability.rs（若接线）+ docs/api/capability.md | 账本状态更新；若接线需 oracle fixture |
+
+
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
 > ### 派发：MIGW-FSPEC（2026-09-26 root，Rust 化迁移 wave: fspec 真缺失函数）
