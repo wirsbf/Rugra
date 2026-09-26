@@ -12885,16 +12885,45 @@ impl ActionDeindirect {
 
     /// The observable `funcp` slice of the Funcdata the oracle's
     /// `queryFunction` lazily mints (`FunctionSymbol::getFunction`,
-    /// database.cc:557: `new Funcdata(name,displayName,scope,addr,this)`).
-    /// A freshly constructed db Funcdata's FuncProto is the
-    /// default-constructed shape: no model, no locks, not noreturn/inline,
-    /// no parameters — the "function never analyzed" state whose
-    /// model-less form is compatible with every callspec model
-    /// (`ProtoModel::isCompatible`: `compatModel == op2` with both null).
-    // RUGRA-GLUE: the callee FuncProto observable slice (fspec.cc:5460 newfd->getFuncProto()); Rugra mints the default db-function shape per call
+    /// database.cc:557: `new Funcdata(name,displayName,scope,addr,this)`):
+    /// default-constructed flags (no locks, not noreturn/inline, no
+    /// parameters) — the "function never analyzed" state.
+    ///
+    /// Model binding: the raw db FuncProto is model-less, and the model-less
+    /// form is what `lateRestriction`'s `copy` would install on the callspec
+    /// (oracle fspec.cc:3792 `model = op2.model`). The oracle's convergence
+    /// timing never reads that state back: on the locked corpus the oracle's
+    /// constant target only resolves after `ActionActiveParam` finalized the
+    /// spec (the post-copy `deriveInputMap` with a null model would crash,
+    /// coreaction.cc:1753 → fspec.hh:1494), so the copy's model wipe is
+    /// inert there. Rugra's constant folding reaches the deindirect copy
+    /// while trials are still active (probe: site 0xead55, npasses=1,
+    /// 6 active trials), so the model-less copy would strand the still-live
+    /// finalize on the simplified no-full-model fallback, dropping every
+    /// trial (sqlite3_blob_write loses its call arguments). Binding the same
+    /// `setInternal(evalfp, void)` shape `ActionDefaultParams`
+    /// (coreaction.cc:2311-2332) gave the callspec keeps the copy
+    /// model-neutral. Every oracle-exercised gate keeps its outcome:
+    /// `isCompatible` passes via `this == op2` exactly as the oracle's null
+    /// model passes via `compatModel == op2` (fspec.cc:2406-2411), and the
+    /// noreturn/inline/lock gates read identical false. Divergence surface =
+    /// callspecs bound to a non-default model (empty on the locked single-
+    /// model gcc corpora; registered on FSPEC-DEINDIRECT-TRIGGER-0001).
+    // RUGRA-GLUE: the callee FuncProto observable slice (fspec.cc:5460 newfd->getFuncProto()); model bound per the timing rationale above
     fn db_default_callee_proto(fd: &Funcdata) -> crate::fspec::FuncProto {
-        let _ = fd;
-        crate::flow::default_call_spec_proto()
+        let mut proto = crate::flow::default_call_spec_proto();
+        let evalfp = fd.get_arch().and_then(|arch| {
+            arch.evalfp_called
+                .clone()
+                .or_else(|| arch.defaultfp.clone())
+        });
+        let type_void = fd.get_arch().and_then(|arch| {
+            arch.types
+                .as_ref()
+                .and_then(|factory| factory.read().ok().map(|f| f.get_type_void()))
+        });
+        proto.set_internal(evalfp, type_void.unwrap_or_else(|| proto.return_type.clone()));
+        proto
     }
 }
 

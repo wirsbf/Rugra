@@ -3824,12 +3824,18 @@ d6fd730a）已在 /dev/shm/rugra-reports/stackspill-evidence/ 执行。
   生产恒真）→ `op->getIn(0)->getTypeReadFacing(op)`（原始输入，非 walked vn）
   PTR→CODE → `TypeCode::proto` 存在且 `!isInputLocked()` → `force_set` +
   count+=1（isInputLocked 注释保留 oracle FIXME 语义）。
-- **callee proto 生产形**：`db_default_callee_proto` = 默认构造 FuncProto（无
-  model/锁/noreturn/参数）——oracle `FunctionSymbol::getFunction`
-  （database.cc:557）惰性 new 的 db 函数 `funcp` 即此形态；其 model-less 性质
-  经 `ProtoModel::isCompatible` 的 `compatModel == op2`（双 null）与任意
-  callspec model 兼容——`ActionDefaultParams`（cc:2311-2337）先行保证 callspec
-  有 model，lateRestriction 走 copy 路径，与 TRIGFACE 测到的"到达 2 次
-  lateRestriction OK 不重启"一致。
+- **callee proto 生产形**：`db_default_callee_proto` = 默认构造 FuncProto（无锁/
+  noreturn/参数——database.cc:557 惰性 new 的 db 函数 `funcp` 旗标面）**+ 默认
+  model 绑定**（`setInternal(evalfp/defaultfp, void)`——与 `ActionDefaultParams`
+  （cc:2311-2332）给 callspec 的形态一致）。绑定理由（探针实证,站点 0xead55）：
+  oracle 的常量折叠收敛在 ActiveParam finalize **之后**才到达 deindirect 拷贝
+  （拷贝后的 model-null deriveInputMap 在 oracle 会崩,coreaction.cc:1753→
+  fspec.hh:1494——golden 存在=该状态 oracle 从不可达）；Rugra 的常量在迭代 1
+  即析出（npasses=1、6 活跃 trial 时即拷贝）,model-less 拷贝把仍活跃的 finalize
+  晾在简化模型 fallback 上丢光 trial（sqlite3_blob_write 调用参数丢失）。绑定
+  默认 model 使拷贝 model-中性;oracle 已行使的每个门结果不变（isCompatible
+  经 `this==op2` 通过,恰如 oracle null model 经 `compatModel==op2`（fspec.cc:
+  2406-2411）通过;noreturn/inline/lock 门同读 false）。分歧面=非默认 model 的
+  callspec（锁定单 model gcc 语料为空,登记于本票）。
 - 循环内调用 `deindirect` 后**同一 op 的 opcode 已改 CALL**，后续迭代经
   cc:1229 的 CALLIND 门自然跳过（与 oracle 相同的幂等闭包）。
