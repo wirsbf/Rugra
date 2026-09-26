@@ -108,8 +108,9 @@ if [[ ! -x "$DRIVER" ]]; then
 fi
 
 WORK_ROOT="/dev/shm/rugra-tests/phaseland/determinism"
-rm -rf "$WORK_ROOT"
 mkdir -p "$WORK_ROOT"
+# NOTE: the per-run wipe happens per-corpus inside run_face (a global wipe
+# here would destroy --keep-dir evidence of other faces from earlier runs).
 
 GLOBAL_RC=0
 run_face() {
@@ -124,6 +125,9 @@ run_face() {
         return 0
     fi
 
+    # Per-face wipe: only this corpus's subdir, so --keep-dir evidence of
+    # other faces (earlier runs) survives.
+    rm -rf "$WORK_ROOT/$corpus"
     mkdir -p "$WORK_ROOT/$corpus"
 
     echo "[GATE] $corpus: serial arm (jobs=1)..."
