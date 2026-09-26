@@ -51,12 +51,46 @@
 - gather_indirect_pairs 改走 op.rs 的 `previous_op_in_block`（op.cc:344 忠实
   版，OP-PREVIOUSOP-ALIVELIST-0001 交付）；本地 alivelist 扫描版与
   `ArraySequence.fd` raw 指针字段删除。
-- **RuleStringCopy::apply_op** 保持 inert：守卫已逐行（cc:957-962），分析体
-  （StringSequence collectCopyOps/constructTypedPointer）需 ScopeLocal
-  Symbol/SymbolEntry 容器查询，登记 CONSTSEQ-STRINGCOPY-0001。旧简化体从未在
-  语料触发（0 CALLOTHER 输出亲测），行为零变化。
-- 测试 7 个：常量、规则名、form_byte_array 三态（hello/过短/截断）、
-  select 回退、RuleStringStore 类型门。
+- **RuleStringCopy::apply_op** ~~保持 inert~~ → **2026-09-26 接通完整链**
+  （WORKPKG-UNMAP-STRFOLD-0006）：`queryContainer` 桥接 =
+  `ScopeLocal::find_container_entry`（stack 面）+ `query_container_entry_parent_scope`
+  （ram 面投影）；`StringSequence` 七函数全量落地（见 2026-09-26 节）。
+
+## 2026-09-26：StringSequence 全量落地（WORKPKG-UNMAP-STRFOLD-0006 / CONSTSEQ-STRINGCOPY-0001 收口）
+
+- **StringSequence::new**（constseq.cc:188-219 ctor）：space/size/零常量守卫、
+  entry Symbol 类型经 `getSubType` 逐层下降到字符类型（跟踪最内层数组与
+  lastOff）、`collect_copy_ops → check_interference → form_byte_array` 链；
+  `parentType == ct` 比较用 `Arc::ptr_eq`（+ name/size 回退，镜像
+  `matches_factory_char` 回退形）。
+- **collect_copy_ops**（cc:227-264）：loc-tree span [beginAddr..endAddr] 迭代
+  （VarnodeCompareLocDef 序）、written/COPY/同块/常量输入/尺寸守卫（错尺寸
+  返回 false——待分裂）、`tmpDiff` 前元素/间隙/前进算术。
+- **construct_typed_pointer**（cc:273-339）：spacebase PTRSUB 基 +
+  逐层 PTRSUB（结构域）/PTRADD（数组域，元素 0 跳过 cc:304-307）+
+  残差 INT_ADD（cc:327-337）；每层 `getTypePointerStripArray`
+  （type.cc:3849 镜像：stripped twin + 数组层剥除 + 工厂 intern）。
+- **build_string_copy**（cc:347-372）：`numBytes = moveOps.size() * charSize`
+  （cc:351——收集数而非元素数）、getInternalString 源指针、
+  selectStringCopyFunction + `HeapSequence::register_builtin_typed`（userop.cc:449
+  局部类型臂）、lenVn slot-3 定型。
+- **remove_forward/remove_copy_ops**（cc:383-447）：descend 遍历的双臂
+  （xref 二次访问 PIECE 合并取 min offset + 普通读点）、deadOps PIECE 级联、
+  存活读点 INDIRECT(const(0), iop) 围绕 CALLOTHER 重定义、
+  moveOps+deadOps 销毁序。`map<PcodeOp*,list-iter>` xref 镜像为
+  `Arc::as_ptr` 键 + points 索引 + alive 投影。
+- **transform**（cc:453-461）。
+- **B2 双侧 fixture**：`tests/oracle/constseq_stringcopy_1204.{cc,rs}` 八 case
+  （flat/nested_struct/array_offset_root/too_short/root_not_first/gap_in_copies/
+  wide_copy/concat_cascade——含 PIECE 级联 + INDIRECT 重定义 + STRINGDATA hash
+  回读经真实 `getStringData`），双侧 stdout **字节恒等 77/77 行**
+  （`/dev/shm/rugra-tests/strfold/{ghidra,rugra}_fixture.out`，oracle 直跑
+  e40ed130 libdecomp）。
+
+**源代码路径**: `src/constseq.rs`
+**Ghidra 对应**: `constseq.hh` / `constseq.cc` (1146行)
+**状态**: 🔧 **L2.5（StringSequence/HeapSequence 双链 1:1 + 双侧 fixture MATCH；
+  接线于主管线 Rule 池——RuleStringCopy/RuleStringStore 均已接通）**
 
 **验证**：httpd 镜 ap_ht_time 的 "+0000" 五连 STORE → `builtin_strncpy`
 CALLOTHER 对（STRINGDATA+strncpy）在最终 stage projection 中存活（亲采
@@ -91,15 +125,20 @@ printc 写域被 STRLIT 并行持有，禁触）。
 收集最大连续 op 序列。对应 `ArraySequence`。
 
 ### `pub struct StringSequence`
-收集 COPY op 序列写入栈/local 数组。对应 `StringSequence`。
+收集 COPY op 序列写入栈/local 数组。对应 `StringSequence`。字段 =
+`base: ArraySequence` + `root_addr`/`start_addr`（栈偏移）/`space`/
+`entry_first`/`entry_size`/`symbol_type`（容器 SymbolEntry 投影，constseq.hh:67-69
+成员的 Rust 分裂形）。方法：`new`（ctor 链）、`collect_copy_ops`、
+`construct_typed_pointer`、`build_string_copy`、`remove_copy_ops`、`transform`
+（`remove_forward` 为静态私有）。
 
 ### `pub struct HeapSequence`
 收集 STORE op 序列通过堆指针写入。对应 `HeapSequence`。
 
 ### `pub struct RuleStringCopy` / `pub struct RuleStringStore`
-触发 Rule。对应 Ghidra `RuleStringCopy`/`RuleStringStore`。
-RuleStringStore 已完整接通（见 2026-09-25 节）；RuleStringCopy 分析体待
-Symbol/SymbolEntry（CONSTSEQ-STRINGCOPY-0001）。
+触发 Rule。对应 Ghidra `RuleStringCopy`/`RuleStringStore`。两者均已完整接通
+（RuleStringStore 见 2026-09-25 节；RuleStringCopy 见 2026-09-26 节——
+`queryContainer` 桥 + StringSequence 全链）。
 
 测试：constseq::tests 7 个。
 

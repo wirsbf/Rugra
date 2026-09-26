@@ -119,6 +119,9 @@ name = "decompress_1204_oracle"
 path = "tests/oracle/decompress_1204.rs"
 
 [[example]]
+name = "constseq_stringcopy_1204_oracle"
+path = "tests/oracle/constseq_stringcopy_1204.rs"
+[[example]]
 name = "funcproto_lock_1204_oracle"
 path = "tests/oracle/funcproto_lock_1204.rs"
 
