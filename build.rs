@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(has_sleigh)");
+    println!("cargo:rerun-if-env-changed=RUGRA_SLEIGH_CPP");
+    println!("cargo:rerun-if-env-changed=RUGRA_SLEIGH_ENGINE");
 
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let cpp_dir = manifest
@@ -15,16 +17,26 @@ fn main() {
         .join("cpp");
     let shim_dir = manifest.join("sleigh_shim");
 
-    println!("cargo:rerun-if-changed={}", shim_dir.display());
-    println!("cargo:rerun-if-changed={}", cpp_dir.display());
-    println!("cargo:rerun-if-env-changed=DEP_Z_INCLUDE");
-
     // Keep existing ffi-test logic
     if cfg!(feature = "ffi-test") {
         println!("cargo:rustc-link-search=native={}", cpp_dir.display());
     }
 
     // --- Compile SLEIGH C++ engine + shim for direct FFI ---
+    // SLEIGH-RUSTIFY-PHASE2-0001 dual-chain discipline: the C++ runtime
+    // compile sits behind RUGRA_SLEIGH_CPP (default on = Phase1 behavior).
+    // The chain may only be removed after the Phase2 gates pass; setting
+    // RUGRA_SLEIGH_CPP=0 builds the pure-Rust engine (kuna-sleigh) alone.
+    let build_cpp = env::var("RUGRA_SLEIGH_CPP").map(|v| v != "0").unwrap_or(true);
+    if !build_cpp {
+        println!("cargo:rustc-cfg=not_sleigh_cpp");
+        return;
+    }
+
+    println!("cargo:rerun-if-changed={}", shim_dir.display());
+    println!("cargo:rerun-if-changed={}", cpp_dir.display());
+    println!("cargo:rerun-if-env-changed=DEP_Z_INCLUDE");
+
     if !cpp_dir.join("sleigh.cc").exists() {
         panic!(
             "locked Ghidra SLEIGH source tree is missing: {}",
