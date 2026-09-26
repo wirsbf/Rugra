@@ -3043,3 +3043,10 @@ deleteScope/clearCallSpecs/delete jumpvec 在 Rust 所有权模型下由字段 D
 
 验证：`cargo check --lib` 0 error；`cargo test --lib` 1753 passed / 0 failed
 （与基线一致，5 ignored 不变）。
+
+### 批次一补丁：begin_op_code 空 range 默认臂
+
+`begin_op_code`/`end_op_code`（hh:500/503）不再转发 `PcodeOpBank::begin_op`（其默认臂
+返回完整 alivelist，与 op.cc:1158-1185 的 `alivelist.end()` 空 range 语义相悖），改为
+本地实现 op.cc 的 switch：仅 STORE/LOAD/RETURN/CALLOTHER 有 per-opcode 列表，其余
+opcode 空 range（FUNCDATA-OPBEGIN-DEFAULT-0001，bank 侧修复归 op.rs 租约）。

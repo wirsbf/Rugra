@@ -5402,14 +5402,31 @@ impl Funcdata {
     // Ghidra: funcdata.hh:503 Funcdata::endOp(OpCode)
     /// Start/end of PcodeOp objects with the given op-code. Faithful to
     /// `beginOp(OpCode)`/`endOp(OpCode)` (funcdata.hh:500/503) forwarding to
-    /// `obank.begin(opc)`/`obank.end(opc)`.
-    pub fn begin_op_code(&self, opc: crate::opcodes::OpCode) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
-        self.obank.begin_op(opc)
+    /// `obank.begin(opc)`/`obank.end(opc)` (op.cc:1158-1185): only
+    /// STORE/LOAD/RETURN/CALLOTHER have per-opcode lists; every other
+    /// opcode yields an EMPTY range (the C++ default arm returns
+    /// `alivelist.end()` for both endpoints). NOTE: Rugra's
+    /// `PcodeOpBank::begin_op` default arm currently returns the full
+    /// alivelist (op.rs divergence); this forwarder restores the oracle
+    /// empty-range default locally (FUNCDATA-OPBEGIN-DEFAULT-0001).
+    pub fn begin_op_code(
+        &self, opc: crate::opcodes::OpCode,
+    ) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        use crate::opcodes::OpCode;
+        match opc {
+            OpCode::CPUI_STORE => self.obank.storelist.iter(),
+            OpCode::CPUI_LOAD => self.obank.loadlist.iter(),
+            OpCode::CPUI_RETURN => self.obank.returnlist.iter(),
+            OpCode::CPUI_CALLOTHER => self.obank.useroplist.iter(),
+            _ => [].iter(),
+        }
     }
 
     // Ghidra: funcdata.hh:503 Funcdata::endOp(OpCode)
-    pub fn end_op_code(&self, opc: crate::opcodes::OpCode) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
-        self.obank.end_op(opc)
+    pub fn end_op_code(
+        &self, _opc: crate::opcodes::OpCode,
+    ) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        [].iter()
     }
 
     // Ghidra: funcdata.hh:506 Funcdata::beginOpAlive
