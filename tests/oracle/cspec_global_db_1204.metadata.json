@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "fixture_id": "CSPEC-GLOBAL-DB-0001",
+  "todo_ids": [
+    "CSPEC-GLOBAL-APPLY-0001"
+  ],
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/database.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/database.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/address.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/partmap.hh"
+    ]
+  },
+  "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+  "compiler_spec": "x86-64-gcc.cspec (production bytes)",
+  "analysis_options": {
+    "oracle_side": "production BfdArchitecture over the pinned curl blob (examples/curl @ base d153c868); observations are the global Scope's printBounds tree and Scope::queryProperties folds at the fixed probe grid; ram probes sit in the binary's sole PF_W segment so no loader-readonly property participates",
+    "rugra_side": "production marshal DocumentStorage text parse -> Architecture::parse_compiler_config (constructor symboltab write-through) -> Database::query_properties_spaced; no fixture-side fold reassembly",
+    "pipeline": "none; direct function calls only"
+  },
+  "input": {
+    "probe_grid": [
+      ["ram", "0x17000", 8],
+      ["ram", "0x18000", 1],
+      ["register", "0x1094", 4],
+      ["register", "0x1080", 2],
+      ["register", "0x1096", 2],
+      ["unique", "0x100", 4],
+      ["OTHER", "0x10", 1],
+      ["const", "0x5", 1]
+    ],
+    "usepoint": "invalid Address() (the Funcdata::newVarnode call-site form, funcdata_varnode.cc:148-166)"
+  },
+  "coverage": {
+    "db_write_status": "MATCH",
+    "fold_status": "MATCH",
+    "record_counts": {
+      "SCHEMA": 1,
+      "DBTREE": 3,
+      "QPROP": 8
+    }
+  },
+  "observations": [
+    "DBTREE lines are the space-keyed ownership tree sorted by (space index, first): OTHER(1) 0-max, ram(3) 0-max, register(4) 1094-1097 (address.cc:283/588 form)",
+    "QPROP fold = 0x20c000 (mapped|addrtied|persist, varnode.hh:95-105 bit positions) for probes inside an owned range of the global scope (database.cc:1271-1276); property-only 0x0 for register outside the cspec window, unique (unowned space), and const (stackContainer cc:950 isConstant bail)",
+    "oracle observations produced by the locked e40ed130 build; Rugra observations by the CSPEC-GLOBAL-APPLY-0001 constructor-symboltab path (wt/cspecglobal); bilateral stdout diff empty"
+  ],
+  "residuals": [
+    {
+      "aspect": "flagbase property ranges (readonly/volatile)",
+      "status": "UNTESTED",
+      "note": "decodeReadOnly is a skipped-child residual (ARCH-REGISTERDATA/readonly arms); no property range exists in either fixture run, so the property fold leg (cc:1276/1279 OR getProperty) is only observed at its default 0"
+    },
+    {
+      "aspect": "non-RAM symbol entries in the spaced query entry leg",
+      "status": "UNTESTED",
+      "note": "Rugra SymbolEntry addresses are spaceless (DB-LOCALSCOPE-MAP-0001); query_properties_spaced admits RAM entries only — matches the oracle for the locked global scopes (ram loader symbols), but a hypothetical non-RAM entry probe is not covered"
+    }
+  ],
+  "comparand": {
+    "rugra_base_commit": "PENDING-ROOT-REGISTER",
+    "rugra_base_tree": "PENDING-ROOT-REGISTER",
+    "snapshot_model": "direct bilateral run (locked-tree oracle libdecomp + worktree librugra); formal immutable runner + registry pin is root's integration step",
+    "repro": "tools/run_cspec_global_db_oracle.sh"
+  }
+}

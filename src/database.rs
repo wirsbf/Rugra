@@ -5866,7 +5866,99 @@ impl Database {
         qpoint
     }
 
-    // Ghidra: database.cc:1246 Scope::queryContainer (Database-level entry)
+    // Ghidra: database.cc:1263 Scope::queryProperties (spaced form)
+    /// The space-carrying `queryProperties`: `mapScope` +
+    /// `stackContainer` with a full `(space, offset)` address, so
+    /// non-default-data-space probes (the cspec register window, OTHER)
+    /// walk the space-keyed ownership tree exactly the way the C++
+    /// `queryProperties(const Address&, ...)` does. The entry leg admits
+    /// the default-data-space (RAM) entries only — Rugra's `SymbolEntry`
+    /// addresses are spaceless offsets (the DB-LOCALSCOPE-MAP-0001 split
+    /// residual) — which matches the C++ walk for every probe of this
+    /// fixture's shape (the locked global scopes carry ram loader
+    /// symbols; a register/OTHER query finds no entry in the oracle's
+    /// per-space maptable either).
+    pub fn query_properties_spaced(
+        &self,
+        qpoint_scope_id: u64,
+        spc: crate::space::AddressSpace,
+        offset: u64,
+        size: i32,
+        usepoint: Address,
+    ) -> (Option<QueryContainerHit>, u32) {
+        // database.cc:1267 — mapScope(this, addr, usepoint). The legacy
+        // resolvemap projects the RAM partitions only; a non-RAM probe
+        // falls through to the query point, which is the mapScope answer
+        // for a namespace-free database.
+        let base = if spc == crate::space::AddressSpace::Ram {
+            self.map_scope(qpoint_scope_id, Address::new(offset))
+        } else {
+            qpoint_scope_id
+        };
+        let stack = self.ancestor_stack(base);
+        // database.cc:1268 — stackContainer(basescope, NULL, addr, size,
+        // usepoint, &res): findContainer first, then the inScope
+        // discovery arm (cc:957). The entry leg runs for RAM probes only
+        // (see the doc comment); ownership uses the spaced inScope.
+        let mut addrmatch: Option<usize> = None;
+        let mut finalscope: Option<usize> = None;
+        let mut i = 0;
+        while i < stack.len() {
+            let scope1 = stack[i];
+            if spc == crate::space::AddressSpace::Ram {
+                if let Some(entry_idx) = scope1.find_container(Address::new(offset), size, usepoint) {
+                    addrmatch = Some(entry_idx);
+                    finalscope = Some(i);
+                    break;
+                }
+            }
+            if scope1.in_scope_spaced(spc, offset, size) {
+                finalscope = Some(i);
+                break;
+            }
+            i += 1;
+        }
+        match (addrmatch, finalscope) {
+            (Some(entry_idx), Some(scope_idx)) => {
+                let flags = stack[scope_idx].entries[entry_idx].get_all_flags();
+                (self.container_hit(&stack, scope_idx, entry_idx), flags)
+            }
+            (None, Some(scope_idx)) => {
+                // database.cc:1271-1276 — mapped|addrtied(+persist for a
+                // global scope) OR the flagbase property.
+                let mut flags = crate::varnode::varnode_flags::MAPPED
+                    | crate::varnode::varnode_flags::ADDRTIED;
+                if stack[scope_idx].is_global() {
+                    flags |= crate::varnode::varnode_flags::PERSIST;
+                }
+                flags |= self.get_property_spaced(spc, offset);
+                (None, flags)
+            }
+            _ => {
+                // database.cc:1278-1279 — property only.
+                (None, self.get_property_spaced(spc, offset))
+            }
+        }
+    }
+
+    // RUGRA-GLUE: spaced `getProperty` (the flagbase partitions are
+    /// Address-keyed in the oracle — space index then offset, partmap.hh
+    /// ordering via address.hh:375); Rugra's flagbase is the legacy
+    /// spaceless partmap over RAM offsets, so a non-RAM probe reads the
+    /// default 0 partition — the same answer the oracle gives for spaces
+    /// no property range ever labeled.
+    fn get_property_spaced(&self, spc: crate::space::AddressSpace, offset: u64) -> u32 {
+        if spc != crate::space::AddressSpace::Ram {
+            return self.flagbase.defaultvalue;
+        }
+        self.flagbase.get_value(Address::new(offset))
+    }
+
+
+    // RUGRA-GLUE: parent-chain materializer (Ghidra's scopes carry
+    // `parent` pointers followed by stackContainer et al.; Rugra's Scopes
+    // are Database-owned values, so the chain is walked here from
+    // `parent_id` — the observable walk order is identical).
     /// Build the ordered ancestor stack of scopes starting at `scope_id`
     /// (`scope_stack[0]` = innermost, then parents up to the global scope).
     /// This is the Rugra equivalent of following `Scope::getParent()` links
