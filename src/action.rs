@@ -181,6 +181,12 @@ pub trait Action: Send + Sync {
     // RUGRA-GLUE: fixture/debug mutable pool view paired with as_action_pool
     fn as_action_pool_mut(&mut self) -> Option<&mut ActionPool> { None }
 
+    // RUGRA-GLUE: mutable restart-group view for the driver's restart-flow
+    // callback installation — the driver owns the loader/lifter bridge that
+    // stands in for the Architecture-owned followFlow of the oracle restart
+    // cycle (PIPE-RESTART-0001)
+    fn as_restart_group_mut(&mut self) -> Option<&mut ActionRestartGroup> { None }
+
     // Ghidra: action.cc:275 Action::getSubAction
     #[doc(hidden)]
     fn sub_action_match_count(&self, specify: &str) -> usize {
@@ -756,6 +762,12 @@ impl ActionGroup {
     pub fn num_actions(&self) -> usize { self.actions.len() }
     // RUGRA-GLUE: read-only fixture/debug view of Ghidra ActionGroup's protected iterator
     pub fn current_index(&self) -> usize { self.state }
+    // RUGRA-GLUE: resets the inherited ActionGroup iterator after a restart
+    // cycle — ActionRestartGroup::apply drives the embedded group's
+    // apply_children directly, bypassing perform/prepare_apply's
+    // status-based cursor re-initialization (action.cc:508-509
+    // `if (status != status_mid) state = list.begin()`).
+    pub fn reset_apply_cursor(&mut self) { self.state = 0; }
     // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.child_states.get(index)
@@ -979,14 +991,29 @@ impl Action for ActionGroup {
     }
 }
 
+/// Driver-boundary callback type for the restart cycle's flow regeneration.
+/// In the oracle, `ActionRestartGroup::apply` (action.cc:574) calls
+/// `Architecture::clearAnalysis`, and the second pass's `ActionStart` re-enters
+/// `Funcdata::startProcessing` → `followFlow` (funcdata.cc:157), regenerating
+/// the raw p-code through the Architecture-owned loader/lifter. Rugra's flow
+/// generation lives at the driver boundary (`rugra::flow::follow_flow*`,
+/// because the followFlow port inside `Funcdata::start_processing` is a
+/// registered gap), so the driver installs this callback — the Rust
+/// equivalent of the Architecture-owned followFlow — on the derived root it
+/// is about to perform.
+// RUGRA-GLUE: driver-side seam for the Architecture-owned loader/lifter half of the oracle restart cycle (PIPE-RESTART-0001)
+pub type RestartFlowCallback =
+    std::sync::Arc<dyn Fn(&mut Funcdata) -> crate::error::Result<()> + Send + Sync>;
+
 /// A partial restartable action group — the top-level container for the
 /// universal pipeline.
 ///
 /// Wraps an `ActionGroup`. After the group converges (apply returns 0), if
-/// `Funcdata::has_restart_pending()` is true, the current implementation
-/// resets and re-runs the child subtree. Ghidra additionally calls
-/// `Architecture::clearAnalysis`; that missing mutation is tracked by
-/// `PIPE-RESTART-0001`, so this type is not a complete port yet.
+/// `Funcdata::has_restart_pending()` is true, the group clears the analysis
+/// (`Architecture::clearAnalysis`), regenerates the flow through the
+/// driver-installed [`RestartFlowCallback`], resets every child Action and
+/// re-runs the subtree — mirroring `ActionRestartGroup::apply`
+/// (action.cc:553-582).
 pub struct ActionRestartGroup {
     name: String,
     group: ActionGroup,
@@ -996,6 +1023,11 @@ pub struct ActionRestartGroup {
     flags: u32,
     /// Changes accumulated by the embedded ActionGroup across restarts.
     pending_count: i32,
+    /// Driver-installed raw-flow regeneration hook used between
+    /// `clearAnalysis` and the child resets of each restart cycle. `None`
+    /// for standalone fixtures without a loader bridge; those take the
+    /// bounded-completion path in `apply_restart`.
+    restart_flow: Option<RestartFlowCallback>,
 }
 
 impl ActionRestartGroup {
@@ -1009,6 +1041,7 @@ impl ActionRestartGroup {
             curstart: 0,
             flags,
             pending_count: 0,
+            restart_flow: None,
         }
     }
 
@@ -1072,7 +1105,22 @@ impl ActionRestartGroup {
             curstart: 0,
             flags: self.flags,
             pending_count: 0,
+            // RUGRA-GLUE: the restart-flow callback is driver state, not
+            // tree state — the oracle's clone builds a fresh object and the
+            // Architecture reaches its loader through Funcdata::getArch();
+            // the driver installs the callback on the derived root it will
+            // actually perform (ActionDatabase::set_restart_flow).
+            restart_flow: None,
         })
+    }
+
+    // RUGRA-GLUE: driver-side installation point for the restart-cycle flow
+    // regeneration callback (see the `restart_flow` field and
+    // [`RestartFlowCallback`]). Install on the derived root that will
+    // actually run — the production driver's "decompile" clone — before
+    // performing it.
+    pub fn set_restart_flow(&mut self, callback: RestartFlowCallback) {
+        self.restart_flow = Some(callback);
     }
 
     // RUGRA-GLUE: fixture-only observation accessor (the locked C++ fixture reads the protected curstart field via its private/protected access hack)
@@ -1117,29 +1165,78 @@ impl ActionRestartGroup {
                 self.curstart = -1;
                 return Ok(0); // action.cc:568-573
             }
-            // data.getArch()->clearAnalysis(&data) (action.cc:574) =
-            // Funcdata::clear (funcdata.cc:84-112: blocks/obank/vbank/
-            // callspecs/jumptables/heritage are wiped, overrides survive)
-            // plus the warning-comment clear (architecture.cc:335-341).
-            // PIPE-RESTART-0001 (conservative degradation, documented):
-            // the oracle's restart cycle re-generates the raw p-code through
-            // Funcdata::startProcessing → followFlow (funcdata.cc:157); in
-            // Rugra the flow generation lives in the driver
-            // (rugra::flow::follow_flow*) before the pipeline runs, and
-            // Funcdata::start_processing cannot re-enter it. Running the
-            // oracle's reset+rerun here on the uncleared Funcdata would
-            // re-enter ActionStart → start_processing and hit its
-            // LowlevelError guard (funcdata.cc:153-154), destroying the
-            // worker. Until clearAnalysis + in-Funcdata flow regeneration
-            // land (PIPE-RESTART-0001), complete without the restart pass.
-            // The pending flag stays set, matching the oracle's end state on
-            // the maxrestarts path (only Funcdata::clear or an explicit
-            // setRestartPending(false) ever clear it; this loop is its sole
-            // consumer — action.cc:562).
-            eprintln!(
-                "[ACTION] restart pending after convergence: clearAnalysis/followFlow restart cycle not wired (PIPE-RESTART-0001); completing without restart"
-            );
-            return Ok(0);
+            // The oracle's restart cycle re-enters ActionStart →
+            // Funcdata::startProcessing → followFlow (funcdata.cc:157),
+            // regenerating the raw p-code through the Architecture-owned
+            // loader/lifter. Rugra's flow generation lives at the driver
+            // boundary, so the driver-installed restart_flow callback
+            // performs the regeneration here, after clearAnalysis and
+            // before the child resets — the same point relative to
+            // clearAnalysis as the oracle's followFlow, which runs inside
+            // the second pass's ActionStart after those resets.
+            // The oracle has no callback-less path (its Architecture
+            // always owns a loader); standalone Rugra callers without a
+            // driver bridge take the bounded completion BELOW, before any
+            // state mutation, so the print phase keeps the converged
+            // first-pass analysis.
+            let restart_flow = self.restart_flow.clone();
+            let Some(restart_flow) = restart_flow else {
+                // Bounded completion for callback-less callers (standalone
+                // fixtures without a loader bridge): the pending flag stays
+                // set, matching the oracle's end state on the maxrestarts
+                // path (only Funcdata::clear or an explicit
+                // setRestartPending(false) ever clear it; this loop is its
+                // sole consumer — action.cc:562). Documented degradation,
+                // PIPE-RESTART-0001.
+                eprintln!(
+                    "[ACTION] restart pending: no restart-flow callback installed (PIPE-RESTART-0001 bounded completion); completing without restart"
+                );
+                return Ok(0);
+            };
+            // data.getArch()->clearAnalysis(&data) (action.cc:574;
+            // architecture.cc:335-341) = Funcdata::clear (funcdata.cc:84-112:
+            // the analysis flag bits including restart_pending and
+            // processing_started, unlocked localmap symbols, active output,
+            // blocks, obank, vbank, callspecs, jumptables, heritage and
+            // covermerge are wiped; overrides survive funcdata.cc:106) plus
+            // the Architecture-owned comment wipe
+            // commentdb->clearType(fd->getAddress(),
+            //                        Comment::warning|Comment::warningheader)
+            // keyed by the function's entry address.
+            fd.clear();
+            let commentdb = fd
+                .get_arch()
+                .and_then(|arch| arch.commentdb.clone());
+            if let Some(commentdb) = commentdb {
+                if let Ok(mut comments) = commentdb.write() {
+                    comments.clear_type(
+                        fd.baseaddr,
+                        crate::comment::comment_type::WARNING
+                            | crate::comment::comment_type::WARNINGHEADER,
+                    );
+                }
+            }
+            restart_flow(fd)?;
+            // Reset everything but ourselves (action.cc:576-580): each
+            // subrule reset re-arms the rule_onceperfunc gates (e.g.
+            // mapglobals) for the second pass. ActionStart — the first
+            // child of the restarted subtree — invokes
+            // Funcdata::start_processing exactly once (coreaction.hh:41-43);
+            // Funcdata::clear cleared the processing_started guard, so this
+            // loop must NOT call start_processing itself (a second entry
+            // would trip the LowlevelError guard, funcdata.cc:153-154).
+            self.group.reset(fd);
+            // status = status_start (action.cc:581) plus the derived
+            // iterator re-initialization of the next ActionGroup::apply
+            // (action.cc:508-509 `if (status != status_mid)
+            // state = list.begin()`): the embedded-group composition drives
+            // apply_children directly, bypassing perform/prepare_apply's
+            // status-based cursor reset, so reset the child cursor
+            // explicitly.
+            self.group.reset_apply_cursor();
+            if let Some(state) = group_state.as_deref_mut() {
+                state.status = status_flags::STATUS_START;
+            }
         }
     }
 }
@@ -1178,6 +1275,8 @@ impl Action for ActionRestartGroup {
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
     // RUGRA-GLUE: fixture-only mutable nested tree view for subtree-driving fixtures (Ghidra ActionRestartGroup inherits ActionGroup::list)
     fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { Some(&mut self.group) }
+    // RUGRA-GLUE: mutable restart-group view for the driver's restart-flow callback installation (see Action::as_restart_group_mut)
+    fn as_restart_group_mut(&mut self) -> Option<&mut ActionRestartGroup> { Some(self) }
     // RUGRA-GLUE: trait-level read-only passthrough of the protected curstart for the stage-projection emitter (see Action::fixture_curstart)
     fn fixture_curstart(&self) -> i32 { self.curstart }
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
@@ -2189,6 +2288,32 @@ impl ActionDatabase {
         let flags = action.get_flags();
         let mut state = ActionState::new(flags);
         action.perform(fd, &mut state).map(Some)
+    }
+
+    // RUGRA-GLUE: driver-side installation of the restart-cycle flow
+    // regeneration callback (PIPE-RESTART-0001) on a registered root —
+    // the production driver's derived "decompile" clone. Ghidra's restart
+    // cycle reaches the Architecture-owned loader through
+    // Funcdata::getArch() inside the second pass's startProcessing →
+    // followFlow; Rugra's flow generation lives at the driver boundary, so
+    // the driver injects its loader bridge through the database handle it
+    // already owns, before performing the root. Returns false when the
+    // named root is absent or is not an ActionRestartGroup.
+    pub fn set_restart_flow(
+        &mut self,
+        root_name: &str,
+        callback: RestartFlowCallback,
+    ) -> bool {
+        match self.get_action_mut(root_name) {
+            Some(action) => match action.as_restart_group_mut() {
+                Some(restart_group) => {
+                    restart_group.set_restart_flow(callback);
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        }
     }
 
     // RUGRA-GLUE: mirrors the production driver (ghidra_process.cc:310 allacts.getCurrent()->perform(fd)); the former name is kept for the legacy callers
