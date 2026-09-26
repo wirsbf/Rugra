@@ -1443,3 +1443,25 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   `prod_set_call_output`（cc:5208-5230：opSetOutput + 非自身 INDIRECT
   opUnlink）。`prod_truncate_output` 为登记残差（commit-outputs 截断图编辑，
   FSPEC-DEINDIRECT-TRIGGER-0001 残项，CALLSPEC-0001 seam）。
+
+### 2026-09-26 — FSPEC-DEINDIRECT-TRIGGER-0001 补充（deindirect 名字段分离恢复 + B2 双侧 fixture，Lane FSPECDEIN）
+
+- **`deindirect` 名字段分离恢复**：Ghidra 的 `name` 挂在 FuncCallSpecs
+  （fspec.hh:1645）——`FuncProto::copy`（fspec.cc:3789-3804）只拷
+  model/extrapop/flags/store/effectlist/likelytrash/injectid，**从不触碰名**，
+  故 lateRestriction 的 copy 不会扰动 cc:5447 采纳的 display name。Rugra 的
+  FuncProto 内嵌 name 字段，copy_from 会连带覆盖——deindirect 在
+  lateRestriction 之后（commit 与 restart 两路）重新断言 display name 以镜像
+  字段分离（双侧 fixture const_hit 案例钉死：copy 后名保持 target_const）。
+- **B2 双侧 fixture** `tests/oracle/deindirect_arms_1204.{cc,rs}` +
+  `tools/run_deindirect_arms_oracle.sh`（BfdArchitecture host + 真全局 scope
+  addFunction/addExternalRef + 两个 runner 侧 throwaway-补丁访问器）：八案
+  覆盖三臂全路径——**6/8 双侧逐字节一致**（const_hit/const_miss/align_strip
+  （funcptr_align=2 双移位剥编码位）/copy_chain/override_site（isOverride
+  早退无重启）/funcptr_force（forceSet 锁+commit arity 折叠））；**2 案
+  MISMATCH 残差如实登记**：norestart_gate（db callee noreturn 位——Rugra 该
+  观测片走 flow 期 callee_func_protos 通道,deindirect 时点不可见,语料 0
+  触达）、extref（Scope 图不存 per-symbol refaddr——检测可达、referral 解析
+  落空=oracle newfd==0 形态,语料 0 触达）。metadata
+  `deindirect_arms_1204.metadata.json` 逐案 coverage 状态 + 残差
+  TODO ID（-R2/-R3）；fixture_registry 登记留 root 串行。

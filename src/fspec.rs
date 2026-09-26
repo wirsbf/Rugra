@@ -4458,7 +4458,29 @@ impl FuncCallSpecs {
                 }
             };
             if committed {
-                return false; // We have successfully updated the prototype, don't restart
+                // We have successfully updated the prototype, don't restart.
+                // Ghidra's `name` lives on FuncCallSpecs (fspec.hh:1645),
+                // outside FuncProto::copy's field set (fspec.cc:3789-3804
+                // copies model/extrapop/flags/store/effectlist/likelytrash/
+                // injectid — never a name), so lateRestriction's copy never
+                // disturbs the display name adopted at cc:5447. Rugra's
+                // FuncProto embeds the name, so re-assert it across the
+                // copy to mirror the field separation.
+                {
+                    let mut fc = owner.write().unwrap();
+                    if !newfd_display_name.is_empty() {
+                        fc.prototype.name = newfd_display_name.to_string();
+                    }
+                }
+                return false;
+            }
+        }
+        // The restart fall-through keeps the adopted name as well (the
+        // oracle's FuncCallSpecs name survives every path in deindirect).
+        {
+            let mut fc = owner.write().unwrap();
+            if !newfd_display_name.is_empty() {
+                fc.prototype.name = newfd_display_name.to_string();
             }
         }
         // Ghidra: data.setRestartPending(true);

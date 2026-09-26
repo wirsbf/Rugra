@@ -1,0 +1,52 @@
+{
+ "schema_version": 2,
+ "fixture_id": "DEINDIRECT-ARMS-1204",
+ "ticket": "FSPEC-DEINDIRECT-TRIGGER-0001",
+ "status_note": "ActionDeindirect three-arm bilateral projection: constant arm with funcptr_align encoding-bit strip, COPY-chain walk, miss path, isOverride early return, noreturn-callee restart gate, external-reference arm, typed-funcptr forceSet arm. 6/8 cases byte-identical against the locked oracle; 2 cases are honest MISMATCH coverage of production-channel residuals (see coverage).",
+ "decisive_semantics": {
+  "reference_output_parameters": "Ghidra's apply mutates fc/op/override/Funcdata in place through pointers; Rugra's owner-Arc scoped guards reproduce the same in-place mutations. The fixture dumps read the same observable slice on both sides (opcode enum value, entry address, display name, count, restart delta, input lock, override flag, CALL arity).",
+  "loop_bounds_traversal_order": "for(i=0;i<numCalls();++i) call-site index order; a conversion arm hit continues to the next site; the typed-funcptr arm is a plain if reached whenever neither conversion arm fired (including external-ref condition-true-but-query-miss).",
+  "counter_accumulator lifecycle": "count += 1 exactly after each deindirect (cc:1237/1254) and after each forceSet inside the !isInputLocked gate (cc:1270); apply returns 0; the restart flag is Funcdata-global and sticky so the fixture reports the per-apply delta.",
+  "sorting_comparison_keys": "no sorts; arm decision keys are the walked varnode's isPersist&&isExternalRef / isConstant; the constant arm's address key is addressToByte(offset, wordsize) then the funcptr_align double shift; lateRestriction's compat key set (model, dotdotdot, extrapop, inline|noreturn subset, effectlist) decides commit vs restart."
+ },
+ "oracle": {
+  "project": "Ghidra 12.0.4",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc,fspec.cc,fspec.hh,funcdata.cc,database.cc,type.cc,override.cc,libdecomp.cc,sleigh_arch.cc,inject_sleigh.cc,bfd_arch.cc,loadimage_bfd.cc}",
+  "signature": "int4 ActionDeindirect::apply(Funcdata &data); void FuncCallSpecs::deindirect(Funcdata &data,Funcdata *newfd); void FuncCallSpecs::forceSet(Funcdata &data,const FuncProto &fp); bool FuncCallSpecs::lateRestriction(const FuncProto &restrictedProto,vector<Varnode *> &newinput,vector<Varnode *> &newoutput)",
+  "fixture_accessors": "funcdata.hh fixtureAddToCallList (qlst install); varnode.hh fixtureSetExternRef (persist|externref pin)"
+ },
+ "architecture": "locked BfdArchitecture host (examples/curl image, x86:LE:64:default:gcc, GetStr at 0x36d0) with query targets installed on the real global scope (Scope::addFunction / Scope::addExternalRef at image-safe high addresses)",
+ "compiler_spec": {"id": "gcc"},
+ "analysis_options": "none (direct apply; no pipeline run; startTypeRecovery only for the typed-funcptr case)",
+ "cases": [
+  {"id": "const_hit", "input": "CALLIND(const 0x60000000) + global FunctionSymbol target_const at 0x60000000", "expected": "conversion: CALL(7), entry 0x60000000, name target_const, count 1, no restart, unlocked, arity 1"},
+  {"id": "const_miss", "input": "CALLIND(const 0x60001000), no function", "expected": "no-op: CALLIND(8) stays, count 0"},
+  {"id": "align_strip", "input": "funcptr_align=2, CALLIND(const 0x60002003), function at 0x60002000", "expected": "encoding bits stripped, converts to entry 0x60002000"},
+  {"id": "copy_chain", "input": "CALLIND(COPY(const 0x60000000))", "expected": "walked chain resolves, converts, name target_const"},
+  {"id": "norestart_gate", "input": "CALLIND(const 0x60003000), db callee proto noreturn=true", "expected": "converts + restart pending (fspec.cc:5461/5471)"},
+  {"id": "override_site", "input": "callspec setOverride(true) + constant hit", "expected": "converts, name adopted, NO restart, late restriction skipped (fspec.cc:5462)"},
+  {"id": "extref", "input": "persist|externref varnode at 0x60005000 + ExternRefSymbol -> function at 0x60006000", "expected": "external-ref arm resolves referral, converts, name ext_target"},
+  {"id": "funcptr_force", "input": "typeRecoveryStarted + PTR->CODE typed input with prototype, unlocked spec", "expected": "forceSet: CALLIND stays, input lock set, count 1, no restart, commit collapses arity per transferLockedInput [in0]"}
+ ],
+ "coverage": {
+  "const_hit": {"status": "MATCH", "covers": "constant arm queryFunction hit + full deindirect chain", "residual_todo_ids": []},
+  "const_miss": {"status": "MATCH", "covers": "miss path leaves CALLIND untouched", "residual_todo_ids": []},
+  "align_strip": {"status": "MATCH", "covers": "funcptr_align double-shift encoding-bit strip (cc:1245-1249)", "residual_todo_ids": []},
+  "copy_chain": {"status": "MATCH", "covers": "COPY-chain walk returns the walked varnode (cc:1231-1232)", "residual_todo_ids": []},
+  "override_site": {"status": "MATCH", "covers": "isOverride early return: conversion without late restriction or restart", "residual_todo_ids": []},
+  "funcptr_force": {"status": "MATCH", "covers": "typed-funcptr arm: forceSet prototype override + lock + commit arity", "residual_todo_ids": []},
+  "norestart_gate": {"status": "MISMATCH", "covers": "oracle fires restart via the db callee's noreturn bit; Rugra's db observable slice (default proto minted per call) cannot carry per-callee noreturn — the bit rides the flow-time callee_func_protos channel only (FLOW-NORETURN-DATA-0001). Corpus reach: 0 (TRIGFACE: both deindirect sites non-noreturn).", "residual_todo_ids": ["FSPEC-DEINDIRECT-TRIGGER-0001-R2"]},
+  "extref": {"status": "MISMATCH", "covers": "oracle resolves the ExternRefSymbol referral through the real scope; Rugra's Scope graph stores the exref symbol entry but not the per-symbol refaddr (Scope::add_external_ref returns the view, the scope keeps the base Symbol), so the production query detects but cannot resolve (= oracle newfd==0 behavior). Corpus reach: 0.", "residual_todo_ids": ["FSPEC-DEINDIRECT-TRIGGER-0001-R3"]}
+ },
+ "projection_status": "PARTIAL_MATCH",
+ "overall_status": "MISMATCH",
+ "residual_todo_ids": ["FSPEC-DEINDIRECT-TRIGGER-0001-R2", "FSPEC-DEINDIRECT-TRIGGER-0001-R3"],
+ "out_of_scope_observations": [
+  {"id": "model-copy-timing", "note": "The oracle's ActiveParam-vs-deindirect convergence ordering (finalize before the copy) is a pipeline-timing property the single-apply fixture cannot see; the production model-binding rationale lives on the ticket and docs/api/coreaction.md."},
+  {"id": "registry", "note": "fixture_registry.json registration is root-serial (existing convention); this lane delivers fixture + runner + metadata only."}
+ ]
+}
