@@ -3,6 +3,38 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-09-26：`TypeOpIntAdd::propagate_type` 休眠分歧修复（TYPEOP-INTADD-PROPTEST-0001）
+
+锁定 oracle（e40ed130）`TypeOpIntAdd::propagateType`（typeop.cc:1181-1201）的
+trait 侧实现按 oracle 逐臂重写（此前为仅单测触达的休眠分歧；主管线走
+coreaction.rs 的 ActionInferTypes 分发，不受影响）：
+
+- **int 臂 const 判定方向修正**（cc:1188）：`outslot != 1 || !in(1).is_constant`
+  才阻断——int/uint 只流入 slot-1 的**常量**操作数（修复前写反：常量被阻断、
+  非常量放行）。
+- **补 cc:1194-1195 `outvn->isConstant() && meta != TYPE_PTR` 分支**：目标边是
+  常量且 alttype 非 pointer 时直接返回 alttype；该分支先于 cc:1196 的
+  `inslot==-1` 阻断（int 型可经 output→常量 slot 反向流入，pointer 不行）。
+  `outvn` 按 `ActionInferTypes::propagateTypeEdge` 调用方约定（coreaction.cc:
+  5095-5098）从 `outslot` 派生（<0 取 op 输出，否则取 `in(outslot)`）。
+- **pointer 臂接 `propagate_add_in2out`**（cc:1199）：与 PTRADD/PTRSUB trait
+  兄弟（typeop.rs:2428/:2569）及 coreaction.rs:8431 活路径同构，不再
+  `Some(alt)` 直通。
+- **邻接修复 `propagate_add_in2out` AddZero 回退**（cc:1243-1245）：downChain
+  全灭且 `command==AddZero`（加了 0）时回退 alttype——此前 `pointer?` 一律
+  None。双侧 fixture `ptr + 0`（base pointee）用例 oracle 直跑 present=1
+  亲证该分支为 oracle 真行为。
+- **B2 双侧 fixture**（RAM 盘迭代形，`/dev/shm/rugra-tests/typeopfix/bilateral/`）：
+  12 用例（int const/非 const/outslot 形态、uint、pointer wrap/bad-add/
+  AddZero/NoPropagate/跨 input/反向）oracle 直跑 vs Rust **字节恒等**
+  （sha256 `0dcbea29…`，双侧 76 行投影零差异）。
+- **登记发现（未修，越界）**：`propagate_add_pointer` INT_ADD 臂 cc:1302 读
+  `othervn->getTempType()`（当轮浮动类型），Rust 镜像读永久 `v_type`——
+  Rugra 的 TempTypes 是 Action 帧侧表（coreaction.rs:7574），静态
+  `propagate_add_pointer` 结构上不可达；两侧在 buildLocaltypes 初始化态下
+  同结果（int8 ≠ PTR），但"常量当轮浮动成 pointer"的可达路径待
+  TYPEOP-INTADD-TEMPREAD-0001 分析。
+
 ## 2026-09-26：fd-aware facing 消费点收口（UNIONRESOLVE-PKG-B-0001）
 
 锁定 oracle（e40ed130）的四个 facing 方法（varnode.cc:626-672）在 typeop 消费
