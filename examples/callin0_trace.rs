@@ -5,7 +5,6 @@
 
 use rugra::action::ActionDatabase;
 use rugra::address::Address;
-use rugra::disasm::{Disassembler as _, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
 
 fn build_fd() -> anyhow::Result<(std::sync::Arc<std::sync::RwLock<Funcdata>>, Vec<u8>)> {
@@ -25,17 +24,9 @@ fn build_fd() -> anyhow::Result<(std::sync::Arc<std::sync::RwLock<Funcdata>>, Ve
     }
     let code = buffer[file_off..file_off + 50].to_vec();
 
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(&code, Address::new(target))?;
-    let mut lifter = X86Lifter::new();
-    let mut raw_ops = Vec::new();
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-        }
-        raw_ops.extend(ops);
-    }
+    // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (padding NOP
+    // filter) over the 50-byte ap_pregfree window.
+    let raw_ops = rugra::disasm::sleigh_lift::sleigh_raw_ops_skip_nops(&code, target);
 
     let mut fd = Funcdata::new("ap_pregfree", Address::new(target), 50);
     fd.add_symbol(0x31070, "ap_regfree".into());

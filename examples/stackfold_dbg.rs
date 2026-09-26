@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use rugra::action::ActionDatabase;
 use rugra::address::Address;
-use rugra::disasm::{Disassembler as _, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
 use rugra::opcodes::OpCode;
 
@@ -333,17 +332,11 @@ fn main() -> anyhow::Result<()> {
     }
     let code = &buffer[file_off..file_off + size];
 
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(code, Address::new(target))?;
-    let mut lifter = X86Lifter::new();
-    let mut raw_ops = Vec::new();
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-        }
-        raw_ops.extend(ops);
-    }
+    // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (the httpd
+    // driver's lift_instruction_skip_nops padding filter) — the 203-byte
+    // symbol window ends in a 7-byte `0f 1f 80` alignment NOP whose engine
+    // operand pcode the canon path never injects.
+    let raw_ops = rugra::disasm::sleigh_lift::sleigh_raw_ops_skip_nops(code, target);
 
     eprintln!("== raw lifted STORE/LOAD ops:");
     for op in raw_ops.iter() {

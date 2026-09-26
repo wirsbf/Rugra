@@ -87,11 +87,6 @@ pub enum Error {
     #[error("{0}")]
     Generic(String),
 
-    /// Capstone disassembler error
-    #[cfg(feature = "capstone")]
-    #[error("Capstone error: {0}")]
-    Capstone(String),
-
     /// Multiple errors occurred
     #[error("Multiple errors: {0:?}")]
     Multiple(Vec<Error>),
@@ -117,14 +112,6 @@ impl From<&str> for Error {
     // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(msg: &str) -> Self {
         Error::Generic(msg.to_string())
-    }
-}
-
-#[cfg(feature = "capstone")]
-impl From<capstone::Error> for Error {
-    // RUGRA-GLUE: from (no Ghidra counterpart found)
-    fn from(err: capstone::Error) -> Self {
-        Error::Capstone(err.to_string())
     }
 }
 

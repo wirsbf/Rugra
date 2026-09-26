@@ -2,7 +2,7 @@ use goblin::Object;
 use std::fs;
 
 use rugra::action::ActionDatabase;
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::block::BlockGraph;
 
@@ -52,25 +52,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let end_offset = std::cmp::min(main_offset as usize + size, buffer.len());
     let code_bytes = &buffer[main_offset as usize..end_offset];
 
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(code_bytes, rugra::address::Address::new(main_vaddr)).map_err(|e| e.to_string())?;
+    // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (padding NOP
+    // filter). The retired iced full-text listing becomes a mnemonic
+    // listing — the SLEIGH bridge exposes the Translate::printAssembly
+    // contract (translate.hh:442), not iced's formatter.
+    let mut lifter = SleighLifter::new();
+    lifter
+        .configure_x86_64(code_bytes, main_vaddr)
+        .map_err(|e| e.to_string())?;
 
-    println!("--- Disassembly ---");
-    for inst in &instructions {
-        println!("0x{:x}: [{}] {} (Operands: {:?})", inst.address, inst.mnemonic, inst.text, inst.operands);
+    println!("--- Disassembly (SLEIGH mnemonics) ---");
+    let mut raw_ops = Vec::new();
+    let mut addr = main_vaddr;
+    let limit = main_vaddr + code_bytes.len() as u64;
+    while addr < limit {
+        let mnemonic = lifter
+            .assembly_mnemonic(addr)
+            .unwrap_or_else(|| "?".to_string());
+        match lifter.lift_instruction_skip_nops(addr) {
+            Ok((step, ops)) => {
+                println!("0x{:x}: [{}] ({} ops)", addr, mnemonic, ops.len());
+                raw_ops.extend(ops);
+                addr += step as u64;
+            }
+            Err(_) => {
+                println!("0x{:x}: [undecodable]", addr);
+                addr += 1;
+            }
+        }
     }
     println!("-------------------");
-
-    let mut lifter = X86Lifter::new();
-    let mut raw_ops = Vec::new();
-
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-        }
-        raw_ops.extend(ops);
-    }
 
     let mut fd = Funcdata::new("main", rugra::address::Address::new(main_vaddr), main_size as i32);
     

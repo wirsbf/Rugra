@@ -242,6 +242,14 @@ impl SleighCtx {
             .unwrap_or_default()
     }
 
+    // RUGRA-GLUE: SLEIGH printAssembly mnemonic probe (translate.hh:442).
+    // Linear driver walks use this to drop no-effect padding ops by the
+    // .sla's own constructor classification (see the backend mirror for
+    // the full rationale).
+    pub fn assembly_mnemonic(&self, offset: u64) -> Option<String> {
+        self.backend.assembly_mnemonic(offset)
+    }
+
     // RUGRA-GLUE: legacy length-only wrapper retained until callers consume the
     // atomic `one_instruction` result in SLEIGH-0002D; &mut because the engine
     // freezes image/context here (decode_started, mirroring the retired
@@ -602,6 +610,34 @@ mod rust_backend {
                 }
                 Err(error) => Err(map_kuna_error(error)),
             }
+        }
+
+        // RUGRA-GLUE: SLEIGH printAssembly mnemonic probe (translate.hh:442
+        // Translate::printAssembly / sleigh.cc:722 Sleigh::printAssembly).
+        // The linear driver walks consume this to classify no-effect padding
+        // by the .sla's own constructor table (the :NOP rm32 constructors of
+        // ia.sinc:4136-4137 have empty templates but their rm operands carry
+        // attached address-computation semantics, so the ENGINE emits the
+        // operand pcode — both C++ SLEIGH and kuna do, Phase2 op-for-op
+        // 698,605 decodes zero-diff). Ghidra's own pipeline never lifts
+        // unreachable padding (followFlow is reachability-driven), so the
+        // oracle IR never contains those ops; a LINEAR walk must filter them
+        // by the oracle's own mnemonic classification to keep the same
+        // effective IR.
+        pub(crate) fn assembly_mnemonic(&self, offset: u64) -> Option<String> {
+            let code_space = self
+                .sleigh
+                .manager_rc()
+                .get_default_code_space()
+                .expect("default code space registered during .sla decode")
+                .clone();
+            let address = Address::new(code_space, offset);
+            let mut mnemonic = String::new();
+            let mut body = String::new();
+            self.sleigh
+                .print_assembly_into(&address, &mut mnemonic, &mut body)
+                .ok()?;
+            Some(mnemonic)
         }
 
         // RUGRA-GLUE: mirror of rugra_sleigh_instruction_length (rugra_sleigh.cpp:496-507):

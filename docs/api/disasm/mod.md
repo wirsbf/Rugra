@@ -4,440 +4,101 @@
 
 ## 文档状态
 
-- **状态**: 已核对（当前有效）
+- **状态**: 已核对（当前有效，2026-09-26 SLEIGH-RUSTIFY-PHASE3-0001 重写）
 - **可信度**: 高
-- **文档目标**: 说明 Rugra 当前反汇编层的角色、边界与公开接口
-- **可信边界**: 本文档以当前 `src/disasm/mod.rs` 的模块职责为中心，不把“目录存在”写成“多架构已完整支持”
-- **重要提醒**: 反汇编层是当前主链路的一部分，但它的存在**不等于**：
-  - 所有架构都已完整接入
-  - lifting 已与 Ghidra 完全一致
-  - CLI 已提供稳定的反汇编入口
-  - 端到端反编译已经达到成熟产品级
+- **文档目标**: 说明 Phase3 之后 Rugra 反汇编/P-code 发射层的角色、边界与公开接口
+- **重要提醒**: iced-x86 引导解码器与手写 `X86Lifter` 已于本车道退役删除；
+  本文档不再描述 `Instruction` / `Operand` / `Disassembler` trait /
+  `create_disassembler` 等已删除接口（历史版本见 git 历史）。
 
 ---
 
 ## 模块定位
 
-`disasm/mod.rs` 是 Rugra 当前的**架构相关反汇编入口层**。  
-它主要负责把底层机器码转换成 Rugra 可以继续处理的“指令级表示”，为后续阶段提供输入。
-
-从当前架构角度，它位于大致如下的位置：
+`disasm/` 现在只包含一个子模块 `sleigh_lift`——锁定 `.sla` 的 P-code 发射桥。
+机器码不再经过“反汇编成指令对象再手写提升”的两段式路径，而是与 Ghidra 同构：
+单一解码器（SLEIGH 引擎）直接从字节产出 P-code（`Translate::oneInstruction`，
+translate.hh:419；`Sleigh::oneInstruction`，sleigh.cc:741）。
 
 ```text
 binary bytes
   -> binary loading / section mapping
-  -> disasm
-  -> instruction representation
-  -> raw p-code / semantic lifting
+  -> disasm::sleigh_lift (SLEIGH oneInstruction -> PcodeOpRaw)
   -> Funcdata / PcodeOp / Varnode graph
   -> Action / Heritage / PrintC
 ```
 
-因此，这一层更适合被理解为：
+### 与 Ghidra 架构的对应关系
 
-- **机器码 -> 指令表示** 的桥接层
-- **架构相关语义入口**
-- 后续 lifting / raw p-code 注入前的准备阶段
-
-而不是：
-
-- 最终高层 IR 本身
-- 变量恢复层
-- 类型推断层
-- 最终 C 输出层
+Ghidra 反编译器只有一个解码入口：`Translate::oneInstruction` 按流跟随逐指令
+发射 P-code（flow.cc:421 的调用点）。Rugra Phase3 之后同样只有一个解码器
+（kuna-sleigh 引擎 + 锁定 `sleigh_specs/x86-64.sla`），不再保留第二套
+x86 语义实现。
 
 ---
 
-## 当前设计边界
+## 当前公开接口
 
-为了避免文档失真，下面明确 `disasm` 层应该负责什么、不应该负责什么。
+模块本身只重导出子模块：
 
-### 应负责
-- 读取给定地址上的机器码并解码成指令
-- 为指令附加地址、基本元信息和操作数
-- 标识基础控制流语义，如：
-  - branch
-  - call
-  - return
-- 为后续 lifting 或控制流构建提供足够的信息
+```rust
+pub mod sleigh_lift;
+```
 
-### 不应负责
-- 直接生成最终 C 风格伪代码
+全部能力在 `docs/api/disasm/sleigh_lift.md` 逐项说明，要点：
 
-- 直接完成 SSA
-- 直接恢复变量和类型
-- 单独保证与 Ghidra 的完整语义一致
-- 单独承担完整多架构支持承诺
-
----
-
-## 当前支持范围的正确表述
-
-从现有工程结构和历史文档线索看，`disasm/` 当前至少明确围绕 **x86-64** 有实现入口。  
-更保守、也更符合当前文档基线的说法应当是：
-
-> 当前反汇编层采用**按架构分实现**的组织方式，至少包含 x86-64 方向的具体实现；其它架构是否已完整支持，应以实际源码、测试和状态文档为准，不应在 API 文档中提前夸大。
-
-因此，后续引用本模块时建议使用以下口径：
-
-### 推荐表述
-- “`disasm` 是按架构组织的反汇编层”
-- “当前至少可见 x86-64 方向实现”
-- “是否支持更多架构应以实际源码和验证结果为准”
-
-### 不推荐表述
-- “已完整支持多架构反汇编”
-- “所有架构都可直接用于主线流程”
-- “只要有 `disasm/` 目录就说明反汇编层已成熟稳定”
+- `SleighLifter::configure_x86_64(image, base)`：为一个函数流配置独立
+  translator（pspec 兼容路径 + 镜像加载）。
+- `SleighLifter::lift_instruction(addr)`：一次严格 `oneInstruction`，原子
+  返回 `(step, ops)`；每个 op 自带 `SeqNum(addr, 0)`。
+- `SleighLifter::lift_instruction_skip_nops(addr)`：同上，但丢弃 `.sla`
+  自身分类为 `NOP` 的 no-effect padding 的引擎操作数 pcode（canon httpd
+  驱动线性 walk 的契约，见 sleigh_lift.md 的 Phase3 节）。
+- `SleighLifter::assembly_mnemonic(addr)`：`Translate::printAssembly`
+  （translate.hh:442）助记符探针，调试器列表打印用。
+- 自由函数 `sleigh_raw_ops(code, base)` / `sleigh_raw_ops_skip_nops(code, base)`：
+  线性 walk 胶水（Ghidra 无线性解码器，flow-following 是它唯一契约），
+  驱动器/测试的 raw-op 构造入口；后者带 canon 驱动的 padding 过滤。
 
 ---
 
-## 与其他模块的关系
-
-### 与 `binary/` 的关系
-`binary/` 更关注：
-
-- 文件格式
-- 节区 / 段
-- 符号与导入导出
-- 地址映射
-
-而 `disasm/` 更关注：
-
-- 在给定地址和字节流上如何解码出指令
-
-### 与 `pcoderaw.rs` 的关系
-`disasm` 产出的是**指令级表示**；  
-`pcoderaw.rs` 更接近**原始语义操作表示**。
-
-可以把两者理解为：
-
-- `disasm`: “这条机器码是什么指令”
-- `pcoderaw`: “这条指令应该如何拆成中间语义操作”
-
-### 与 `op.rs` / `varnode.rs` / `funcdata.rs` 的关系
-这些模块已经进入更高一级的正式 IR / 函数分析容器阶段。  
-`disasm` 是它们之前的输入准备层，而不是替代层。
-
-### 与 `align/` 的关系
-若未来要做更严格的 Ghidra 对齐验证，`disasm` 层可能成为重要比较点之一。  
-但当前 API 文档不应把这种“可能的验证方向”写成“已经完成的验证结论”。
-
----
-
-## 导出的公共 API
-
-以下内容围绕当前文档可见的公开接口组织说明。
-
----
-
-## `pub struct Instruction`
-
-表示一条已经被解码出来的指令。
-
-### 角色
-这是 `disasm` 层最核心的数据对象之一，用于承载：
-
-- 指令地址
-- 指令类别
-- 控制流属性
-- 操作数信息
-- 与后续处理有关的基础元数据
-
-### 当前应如何理解
-`Instruction` 更像：
-
-> “已解码机器指令的统一表示”
-
-而不是：
-
-> “已经完成语义提升的高级 IR 节点”
-
-它仍然处于比 `PcodeOp` 更低一级的层次。
-
----
-
-### `pub fn new(address: Address) -> Self`
-
-创建一条新的指令对象。
-
-#### 作用
-以给定地址为锚点初始化一条指令表示。
-
-#### 参数
-- `address`: 指令地址
-
-#### 使用语义
-通常用于：
-
-- 反汇编器内部构造指令对象
-- 测试中手工建立最小指令表示
-- 为后续填充操作数和元信息准备基础壳对象
-
-#### 注意事项
-创建成功只说明“有了一个指令对象”，不代表：
-
-- 指令已经完整解码
-- 操作数已经填充
-- 控制流语义已经判断完成
-
----
-
-### `pub fn is_branch(&self) -> bool`
-
-判断当前指令是否属于分支指令。
-
-#### 作用
-供控制流相关逻辑快速判断这条指令是否会改变顺序执行流。
-
-#### 典型用途
-- 基本块切分
-- CFG 边推断
-- branch target 读取前的预判
-- 后续结构化恢复前的控制流识别
-
-#### 边界
-这是“指令级控制流属性”判断，不等于已经构建完整 CFG。
-
----
-
-### `pub fn is_call(&self) -> bool`
-
-判断当前指令是否属于调用指令。
-
-#### 作用
-标识这条指令具有调用语义。
-
-#### 典型用途
-- 调用点识别
-- 参数/返回值恢复前的初筛
-- 输出层识别调用语句
-- 与导入符号或外部函数解析联动
-
-#### 注意事项
-“是 call”不自动意味着：
-
-- 目标函数已解析成功
-- 调用约定已恢复
-- 参数列表已完整恢复
-
----
-
-### `pub fn is_return(&self) -> bool`
-
-判断当前指令是否属于返回指令。
-
-#### 作用
-用于识别函数控制流终点或局部终止点。
-
-#### 典型用途
-- 基本块终结识别
-- CFG 终结边处理
-- 打印阶段语句收尾辅助
-
----
-
-### `pub fn next_address(&self) -> Address`
-
-获取
-顺序执行情况下的下一条指令地址。
-
-#### 作用
-用于推断默认 fallthrough 路径。
-
-#### 典型用途
-- 顺序流控制分析
-- 非 branch 情况下的下一地址计算
-- block 边界处理
-
-#### 注意事项
-该值更适合作为“默认顺序后继地址”，不应替代真实 CFG 分析中的全部边关系。
-
----
-
-### `pub fn branch_target(&self) -> Option<Address>`
-
-获取分支或调用目标地址。
-
-#### 返回
-- `Some(addr)`: 存在可解析的目标地址
-- `None`: 当前没有明确目标，或目标无法直接静态提取
-
-#### 作用
-用于：
-- 跳转边构建
-- 调用目标分析
-- 控制流图初步连接
-
-#### 注意事项
-返回 `Some(...)` 只说明当前层能给出一个目标地址，不代表：
-- 目标函数一定真实存在
-- 该目标一定可执行
-- 后续高层语义一定已恢复
-
----
-
-## `pub enum Operand`
-
-指令操作数表示。
-
-### 角色
-用于表达当前指令所携带的各类操作数。
-
-### 可能承载的内容
-按反汇编器的典型设计，它可能表达：
-
-- 寄存器操作数
-- 立即数
-- 内存引用
-- 地址引用
-- 其他架构相关操作数字段
-
-### `Memory` 变体的 `segment` 字段(2026-09-23,LIFT-FS-CANARY-FORM-0001)
-
-`Operand::Memory` 新增 `segment: Option<String>`,承载 fs/gs 段前缀
-(`"fs"`/`"gs"`);无前缀或 CS/DS/ES/SS 前缀(长模式架构性无效)为 `None`。
-该字段驱动 lifter 的 FS_OFFSET/GS_OFFSET 段基 INT_ADD
-(oracle `sleigh_specs/x86-64.sla` 段寻址构造器,见
-`docs/api/disasm/x86_lift.md` 2026-09-23 节)。`Display` 以 `fs:[...]`
-形式渲染段前缀。
-
-### 文档边界
-`Operand` 的存在说明 `disasm` 层已经有“操作数级表示”需求，  
-但 API 文档不应替代实际源码去宣称：
-
-- 所有操作数类别都已完整覆盖
-- 所有复杂寻址模式都已正确恢复
-- 所有架构都已统一到同样成熟度
-
----
-
-## `pub struct InstructionMetadata`
-
-表示一条指令的附加元数据。
-
-### 角色
-这是对 `Instruction` 主体之外的辅助信息封装。
-
-### 典型用途
-可能用于记录：
-
-- 指令长度
-- 编码相关信息
-- 分类信息
-- 辅助调试或显示信息
-
-### 应如何理解
-`InstructionMetadata` 是“辅助信息容器”，不是主语义节点本身。  
-它服务于反汇编层，但不应与高级分析结果混淆。
-
----
-
-## `pub trait Disassembler`
-
-架构相关反汇编器接口。
-
-### 角色
-这是 `disasm` 模块最重要的抽象之一，用于统一不同架构的反汇编器行为。
-
-### 设计意义
-通过 trait 抽象，可以让不同架构实现遵循共同接口，例如：
-
-- x86-64 反汇编器
-- 未来可能接入的 ARM / MIPS / 其他架构反汇编器
-
-### 当前更准确的理解
-`Disassembler` 说明项目在架构层采用了“抽象接口 + 架构特化实现”的设计思路。  
-但它**不自动意味着**所有架构实现都已经成熟。
-
----
-
-## `pub fn create_disassembler(arch: Architecture) -> Result<Box<dyn Disassembler>>`
-
-根据架构创建对应的反汇编器。
-
-### 作用
-作为工厂函数，根据传入架构返回相应的反汇编器实现。
-
-### 参数
-- `arch`: 目标架构
-
-### 返回
-- 成功时返回一个对应架构的 `Disassembler`
-- 失败时返回错误
-
-### 当前应如何理解
-这是反汇编层的统一入口之一，适合作为：
-
-- 上层按架构获取反汇编器的入口
-- 测试中动态选择实现的入口
-- 后续多架构扩展的分发点
-
-### 重要边界
-这个接口的存在只说明“设计上支持按架构创建反汇编器”，不说明：
-
-- 所有枚举架构都已有完整实现
-- 所有实现都已接入主链路
-- 所有实现都已通过系统验证
-
----
-
-## 当前推荐阅读方式
-
-如果你要理解当前 Rugra 的反汇编层，建议按以下顺序阅读：
-
-1. `disasm/mod.md`
-2. `disasm/x86_64.md`
-3. `disasm/x86_lift.md`
-4. `pcoderaw.md`
-5. `op.md`
-6. `funcdata.md`
-
-这样更容易按层次理解：
-
-- 先看指令如何解码
-- 再看指令如何进入语义提升
-- 再看如何进入正式函数级 IR
+## 已删除接口（2026-09-26，SLEIGH-RUSTIFY-PHASE3-0001）
+
+| 已删除 | 原角色 | 替代物 |
+|---|---|---|
+| `X86_64Disassembler`（iced-x86 封装） | 指令级线性反汇编 | `sleigh_lift` 线性 walk / 流跟随 |
+| `X86Lifter`（手写 x86→P-code） | 指令对象→PcodeOpRaw 提升 | SLEIGH 引擎发射 |
+| `Instruction` / `Operand` / `InstructionMetadata` | iced 指令表示 | 无——P-code 直接产出，不再有中间指令对象 |
+| `Disassembler` trait / `create_disassembler` | 多架构分发抽象 | 单解码器架构（Ghidra 同构） |
+| `binary::disassemble_function` | binary→disasm 桥接 | 已是死代码（仅注释态 `Decompiler` 旧壳引用），随桥一并删除 |
+
+删除依据：canon curl 换装后字节恒等（md5 与基线一致）、num_params A/B 30 函数
+0 差异、DAT 候选 840==840、call targets 479==479；canon httpd 的残差全部
+归因到持有域管线分歧（见 TODO_BOARD 票面）。完整证据链见
+`/dev/shm/rugra-reports/LANE_SLEIGHP3_2026-09-26.md`（root 集成后归档）。
 
 ---
 
 ## 风险与限制提示
 
-### 1. 反汇编层不等于完整 lifting
-能解码出 `Instruction`，不等于已经正确生成全部 P-code 语义。
+### 1. 线性 walk 是 Rugra 胶水，不是 Ghidra 契约
+Ghidra 只有 flow-following 解码；`sleigh_raw_ops*` 的线性 walk 是驱动器
+构造 raw-op 的胶水，其“不可解码字节跳 1 字节”契约沿袭退役 iced walk。
 
-### 2. 架构抽象不等于多架构成熟
-有 `Disassembler` trait，不等于多架构已经全面落地。
+### 2. padding 过滤依赖 `.sla` 自身分类
+`lift_instruction_skip_nops` 用 `printAssembly` 助记符判定 NOP；换 `.sla`
+版本时该分类随构造器表变化（ia.sinc:4136-4137 的 `:NOP rm32` 空模板 +
+rm 操作数附着语义是当前锁定 `.sla` 的实测行为）。
 
-### 3. 控制流属性不等于 CFG 完成
-`is_branch()`、`branch_target()` 等接口只提供指令级线索，不等于完整控制流图已经正确构建。
-
-### 4. API 存在不等于产品入口稳定
-即使 `disasm` 层具备接口，也不代表当前 CLI 已把其封装成稳定的用户可用命令。
+### 3. 模块整体状态仍是 L2/MISMATCH
+`ContextInternal` pspec 全量、Fspec 动态空间等缺口见 `SLEIGH-0002C/D`、
+`ADDR-0001`；状态以 `ALIGNMENT_ROADMAP.md` 为准。
 
 ---
 
 ## 与其他文档的关系
 
-若要确认本层在当前工程中的真实地位，请同时查看：
-
-- `../README.md`
-- `../../PROJECT_STRUCTURE.md`
-- `../../../CURRENT_STATUS.md`
-- `../../../ALIGNMENT_PROGRESS.md`
-- `../pcoderaw.md`
-- `../funcdata.md`
-
-这些文档能帮助区分：
-
-- 当前真实主线
-- 当前能力边界
-- 当前哪些结论已验证、哪些仍未验证
-
----
-
-## 一句话结论
-
-`disasm/mod.rs` 是 Rugra 当前**按架构组织的反汇编入口层**：它负责把机器码转换为可继续处理的指令表示，并为后续 lifting 与函数级分析提供基础输入；它很重要，但不应被文档夸大成“多架构已完整支持”或“完整反编译流程已稳定打通”的证明。
-<!-- annotation-pass: 2026-07-04 -->
-<!-- sleigh-lift: 1783180747.3947244 -->
+- `docs/api/disasm/sleigh_lift.md`：本模块唯一子模块的逐 API 参考
+- `docs/api/funcdata.md`：22 个测试站点的 `sleigh_raw_ops` 迁移记录
+- `docs/api/binary/mod.md`：`disassemble_function` 桥接删除记录
+- `ALIGNMENT_ROADMAP.md`：模块级 L1/L2/L3 状态账本

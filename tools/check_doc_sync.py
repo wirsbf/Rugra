@@ -84,6 +84,12 @@ def check_sync(rs_files: list[str], modified_docs: set[str] | None = None) -> li
     """
     missing = []
     for rs in rs_files:
+        # 2026-09-26 SLEIGHP3: staged DELETIONS of src files must not demand a
+        # doc update — a src file being removed (with its doc removed in the
+        # same wave) is a consistent state, not a sync gap. Skip src paths that
+        # no longer exist in the working tree.
+        if not (PROJECT_ROOT / rs).exists():
+            continue
         doc = rs_to_doc_path(rs)
         doc_rel = str(doc.relative_to(PROJECT_ROOT)).replace("\\", "/")
 

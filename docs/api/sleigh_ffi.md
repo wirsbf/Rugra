@@ -131,3 +131,13 @@ MOV 的跨 op pointer alias、BadData、三种 DataUnavail、owned source mutati
 `UnimplError`。runner 对 12 个已覆盖 case 为 `MATCH`；因
 `Unimpl` 及上列剩余分支仍为 `UNTESTED`，fixture overall status 是
 `PARTIAL_MATCH`，模块继续保持 L2。
+
+
+## 2026-09-26 SLEIGH-RUSTIFY-PHASE3-0001: assembly_mnemonic
+
+`SleighCtx::assembly_mnemonic(offset)` probes the engine's `printAssembly` mnemonic
+(`translate.hh:442` / `sleigh.cc:722`) for one instruction. The linear driver walks use it
+to classify no-effect padding by the .sla's own constructor table (the `:NOP rm32`
+constructors carry empty templates but their rm operands' attached address semantics make
+the engine emit operand pcode; Ghidra's flow-following pipeline never lifts unreachable
+padding, so a linear walk filters NOP-classified ops to keep the oracle's effective IR).

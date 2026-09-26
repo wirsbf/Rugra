@@ -43,8 +43,13 @@ alignment. Remaining blockers include complete pspec/context state, Flow overrid
 injection/jump tables, dynamic address spaces and call specs, canonical Heritage/Action
 execution, parameter recovery, types, and PrintC.
 
-The preliminary prototype-discovery pass still uses the older iced/native path. It is
-diagnostic compatibility code and is tracked separately by `PARAM-RECOVERY-0001` and
+The preliminary prototype-discovery pass now decodes through the production
+SLEIGH engine (SLEIGH-RUSTIFY-PHASE3-0001): one full-PT_LOAD-image
+`SleighLifter` at ELF-relative base 0 serves both pre-pass loops; CALL ops'
+ram-space input(0) replaces the retired iced `is_call`/`branch_target`
+metadata, and undecodable bytes skip one byte with zero ops (the iced
+walk's "Unimplemented" fallback contract). It remains diagnostic
+compatibility code, tracked separately by `PARAM-RECOVERY-0001` and
 `DWARF-PROTO-0001`.
 
 ## Verification
