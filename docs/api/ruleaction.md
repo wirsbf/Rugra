@@ -1228,14 +1228,24 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
   OpBank 生命周期仍为 MISMATCH/UNTESTED。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
-### 2026-06-29：RuleSubCommute（ruleaction.cc:4534-4673）
+### 2026-06-29：RuleSubCommute（ruleaction.cc:4443-4653）
 
 - `RuleSubCommute` — SUBPIECE 与二元算术的 commute：`SUBPIECE(INT_ADD(a,b), 0) → INT_ADD(SUBPIECE(a,0), SUBPIECE(b,0))`。把截断推进算术内部，使操作数能用更小宽度类型化。
-- 触发于 CPUI_SUBPIECE；支持的 longform op：INT_ADD/INT_MULT/INT_NEGATE/INT_XOR/INT_AND/INT_OR（offset 任意）、INT_LEFT/INT_DIV/INT_REM（offset==0）、INT_SDIV/INT_SREM（需 sign_extend，deferred）。
-- 守卫：base 必须 loneDescend == op（cc:4641）；INT_LEFT 的 in(0) 必须是 ZEXT/PIECE；INT_DIV/INT_REM 的输入必须是 ZEXT。
+- 触发于 CPUI_SUBPIECE；支持的 longform op：INT_ADD/INT_MULT/INT_NEGATE/INT_XOR/INT_AND/INT_OR（offset 任意）、INT_LEFT/INT_DIV/INT_REM（offset==0）、INT_SDIV/INT_SREM（offset==0，双侧 SEXT 或常量除数符号适配，cc:4570-4602——2026-09-26 补齐，见下）。
+- 守卫：base 必须 loneDescend == op（cc:4621）；INT_LEFT 的 in(0) 必须是 ZEXT/PIECE；INT_DIV/INT_REM 的输入必须是 ZEXT；INT_SDIV/INT_SREM 的 in(0) 必须 SEXT、in(1) 写则 SEXT（任一 sext 输入 > outvn 走 cancelExtensions 部分抵销 cc:4583-4589）、in(1) 常量则 sign_extend(smallval, outvn, insize) == val 符号适配（cc:4592-4597）。
 - 2 单元测试：test_rule_sub_commute_add（验证转换）+ test_rule_sub_commute_no_lone_descend（验证守卫）。注册进 oppool1（5577）。
 - 实测 curl/httpd 未触发（curl 的 P-code 已被前置简化），但模式匹配时正确生效。
 - 2026-08-15（VARNODE-INPLACE-MUTATION-SITES-0001）：尾部换绑改为 `fd.op_set_output(longform, outvn)`（cc:4650，funcdata_op.cc:70-87）——先对 longform 旧输出走 `makeFree`、把 outvn 从旧 SUBPIECE 解绑，再 `VarnodeBank::setDef` 重键；替换旧手写 `old_out.def=None` + `outvn` 原地 WRITTEN/def 突变（不还树造成 def 树残留死键）。随后 `op_destroy`（cc:4651）。
+
+### 2026-09-26：RuleSubCommute SDIV/SREM 臂补齐（RULEACTION-SUBCOMMUTE-SDIV-SEXT16-0001）
+
+- KUNASDIV 车道双侧实证的真缺口：Rugra 对 INT_SDIV/INT_SREM 臂树内 deferred（"need sign_extend helper"），16 字节除法成语不重写、折叠永不发生——g_div 100/-7 oracle 折成常量 `0xfffffffffffffff2`，Rugra 留 `SUB168(SEXT816(100)/SEXT816(-7),0)`；INT64_MIN/-1 的 E2E panic 被此缺口屏蔽。
+- 补齐（ruleaction.rs `RuleSubCommute::apply_op` SEXT 臂，逐字对齐 cc:4570-4602）：①offset==0 才 commute；②in(0) 必须 INT_SEXT（cc:4575-4578）；③in(1) 写则 def 必须 SEXT，任一 sext 输入尺寸 > outvn → `cancel_extensions` 部分抵销（SUBPIECE 保留，cc:4583-4589）；④in(1) 常量且 sext0In ≤ outvn 时 `sign_extend_size(val & calc_mask(outvn), outvn, insize) == val` 符号适配校验（cc:4592-4597，helper=rangeutil::sign_extend_size，address.cc:666 的忠实镜像）；⑤否则 return 0。
+- 新增两个 1:1 helper：`shorten_extension`（cc:4463-4472，extension 输出缩到 maxSize，BE 空间保最高位字节，保空间 new_varnode_out_full）与 `cancel_extensions`（cc:4483-4512：longform 输出 loneDescend==subOp 守卫、等尺寸双侧 isFree 守卫、不等尺寸侧 shortenExtension+loneDescend 守卫、opUnsetOutput→newUniqueOut(maxSize)→三处 opSetInput 重绑）。isFree 语义双侧同体（constants 无 INPUT/WRITTEN flag → free，varnode.cc:578）。
+- **INT64_MIN/-1 零守卫保持**（KUNAUB-SDIV-0001 裁决 (a)）：commute 后的 8 字节 SDIV/SREM 经 RuleSubCancel→RulePropagateCopy→RuleCollapseConstants 直通 opbehavior 除法——oracle SIGFPE（rc 136）/Rugra panic（opbehavior.rs:195/:212），无 golden、形态锁定。
+- B2 双侧 fixture `tests/oracle/rule_subcommute_sdiv_1204.{cc,rs}`：16 例（双侧 SEXT 常量/寄存器输入、正/负除数、SEXT4/8→16 宽度边界、常量符号适配 fit/mismatch/high-bits、offset!=0、in0 ZEXT、in1 COPY、in1 寄存器输入、cancelExtensions 等尺寸/不等尺寸/常量-isFree 守卫、SREM 镜像例）normal 模式 **字节恒等**（oracle 直跑 vs Rust 镜像，sha 28d3bcd1…，含 unique 空间偏移全等）；trap_sdiv/trap_srem 模式双侧记崩溃形态（oracle SIGFPE rc=136/0 字节 stdout vs Rugra rc=101 panic）。
+- 7 个新单元测试（sdiv_written/const_fit/const_sign_mismatch/offset_nonzero/zext_reject/partial_equal/partial_unequal）。
+- 发现并另行登记的邻臂缺口（非本票域）：`RULEACTION-SUBCOMMUTE-ZEXT-PARTIAL-0001`（ZEXT 臂 written-in1 部分抵销仍 deferred）与 `RULEACTION-SUBCOMMUTE-SUBZEXT-OVERLAP-0001`（cc:4623-4629 RuleSubZext 重叠检查缺失）。
 
 ### 2026-06-29：RuleFloatSign（ruleaction.cc:10714 + typeop.cc:153）
 - `RuleFloatSign` — 检测浮点符号位操作并转换为 FLOAT_ABS/FLOAT_NEG：`x & 0x7fffffff => FLOAT_ABS(x)`，`x ^ 0x80000000 => FLOAT_NEG(x)`。辅助函数 `float_sign_manipulation` 对应 Ghidra `TypeOp::floatSignManipulation`（typeop.cc:153-176）。
