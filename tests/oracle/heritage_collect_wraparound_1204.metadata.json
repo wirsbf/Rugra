@@ -73,7 +73,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

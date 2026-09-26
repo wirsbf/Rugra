@@ -105,7 +105,7 @@
     "expected": "the input's linkSymbol finds the 4-byte Symbol via queryProperties (usepoints match at base-1); handleSymbolConflict's isInput leg attaches the partial entry; HighVariable::setSymbol computes symboloffset=1 (variable.cc:258-270 branch 4), so the input high fails coreaction.cc:2965's getSymbolOffset() < 0 namerec gate and shares the whole symbol's name"
    }
   ],
-  "sha256": "c989633109ccc20cb99ca6c970df15e99f12b48218f3272d2670731c6642221d"
+  "sha256": "2bc4ac8d2d32aa0972a91e820e26d528b72ad79e350d6b52fd5ce2d86942cdfc"
  },
  "observation_schema": {
   "format": "Six fixed-order UTF-8 records (before/after for three cases) with a final newline",

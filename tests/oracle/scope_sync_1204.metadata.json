@@ -110,7 +110,7 @@
     "expected": "v_tl: mask never includes typelock/namelock so the symbol locks do not transfer; vn->updateType(int4) refuses (isTypeLock) keeping uint4; v_dyn: mapentry branch uses mask&~mapped (mapped held fixed), applies nolocalalias through the local mask, and updateType projects int4"
    }
   ],
-  "sha256": "2ddfd194a943ea1f5b044979bc55f317b7d4406710a05f950f23f7a504726b79"
+  "sha256": "7795e730dbb5f2394c65f20f9ad3e7400c71974f4b5a6fe425d3cbe8f3c867fc"
  },
  "observation_schema": {
   "format": "Eight fixed-order UTF-8 records (before/after for four cases) with a final newline",

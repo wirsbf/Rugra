@@ -421,7 +421,7 @@
   "arch_overlay_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
   "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
-  "runner_sha256": "c0dc5db6ca28f7eb10b36155a0debc3f4db9038d3bc431cd5c294cb7869fca13"
+  "runner_sha256": "ca3cc40bddb6142d2b46699b19d6cfa36fac5442b380e5a940a8a73397710ea8"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",

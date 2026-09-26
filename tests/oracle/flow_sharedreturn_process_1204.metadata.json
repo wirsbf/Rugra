@@ -191,9 +191,9 @@
  "comparand_sha256": {
   "cpp_fixture": "5ccb4917105ae1444f8220d08742a462bc6c1855e472874415515d1d97073fee",
   "rust_fixture": "a302200f85c533c2b09512c19b3420dc1248acff117c0e9770331e6113cc5149",
-  "program_flow_metadata": "adf5311c6979d14eb66acd91a05351fb65bb2f9448a2cd3f848279954c415cc5",
+  "program_flow_metadata": "43139b68055ede8683dd53d0e258028a45b8193976c6d55933f05c85ab85db72",
   "ghidra_curl_golden": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
-  "compare_ghidra": "3877d4c8580122f3755de7452378ab1ebdf09e6c1039ede4fb34e5bcfc349f1d",
+  "compare_ghidra": "82ad32e0d25a1cad309074f581d1178bd80008c5d100bb85da849b5604c5f3b9",
   "runner": "16310567bb676c8abd4ba7df5271cedd45046600c7aaa9b852f518ca77332b14"
  },
  "machine_input_sha256": {

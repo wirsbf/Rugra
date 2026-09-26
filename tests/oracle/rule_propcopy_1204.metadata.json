@@ -77,11 +77,11 @@
  "host_tools": {
   "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "8a9bc2b361ea84e970a198325ba27226f8ddce42dddd11b888aec26351fb010d",
+  "sha256": "a2d2f11a8044e6112f2d9a554ab63895f75c31909e166e7b03e5b0c07f878518",
   "binary": {
    "path": "examples/curl",
    "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
@@ -178,7 +178,7 @@
   "rust_fixture_sha256": "a8ffd289b2f0d5456edc968af551c37479cd97a75373549ca5ebd470d030a4f3",
   "runner_sha256": "b8e75df807447ba2e512610387ec23e7f92c4a1a2ce90f9b4210a7469cd7d377",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-propcopy-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "c595d3132a49400dc898b42ae6717bd75803167addbb9c9fc97976a4d5d5cc9e"
+  "rust_crate_tree_sha256": "c05366ca09c63f3372efbed6d2cb69aadf7e3e8966e14eefbd5d5a0c0d58e7e8"
  },
  "expected_stdout_sha256": "60cc346e8152c36a8dcb505041094e1160c631b029dd678a6ab421aa1aa989c5",
  "expected_exit_code": 0,

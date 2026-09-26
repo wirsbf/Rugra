@@ -108,12 +108,12 @@
   "varnode_doc_sha256": "5650e8516fd024fcdaacc4a22b13b45d7a155ad18f438cf6929a2bdd83597f82",
   "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
-  "double_precis_doc_sha256": "61ca917e6272ba6ab3e3cd0ed1622149af1826bb5eaf07590be811da5f14e1de",
+  "double_precis_doc_sha256": "92788e9fd70890e2d2f53d77d7710962ecbb98d7d79b1230728a0b8e3fd6bd5b",
   "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-varnode-init-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "357bb8c6a04e10b3ac3bf8450bc02d23e06025b1ea191a65b070dfb7135c91c7",
+  "rust_crate_tree_sha256": "93d5705269e18aad371d770e7412bbf91e8b67db4a468679afa964618413f247",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
@@ -127,7 +127,7 @@
   "host_python_path": "/usr/bin/python3.10",
   "host_git_path": "/usr/bin/git",
   "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "build": {
   "cpp_oracle": "full locked decompiler libdecomp.a rebuilt from git archive; fixture compiled in a separate directory against that archive",

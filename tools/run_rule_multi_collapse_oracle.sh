@@ -293,7 +293,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 reject_pending("input_manifest.sha256", manifest["sha256"])
 require("input manifest sha256", sha256(canonical), manifest["sha256"])
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 for key in (
     "absolute_root_skiplist_1",
     "loop_self_reference_mark_clear",

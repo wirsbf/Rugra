@@ -55,10 +55,10 @@
   "block_doc_sha256": "e4acec236a88e3e0df3805c9a53390820fb0786e356e7510dc8651f32b539538",
   "runner_sha256": "a5350853208eb5ae22b274aa750e0dac01bc9582ab77c143a0810b23ac7e6d00",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-block-index-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_tree_sha256": "f650b02adfe99e3d9de446437ffc80a48efa46d59f3668f2d3ddafc566cad5f9",
+  "rust_crate_tree_sha256": "fa076925ffdd59e61b69a56cc87ba5aaa8406a857acc8447021a743bda4d52a4",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -73,7 +73,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

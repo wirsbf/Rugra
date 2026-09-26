@@ -239,7 +239,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 expected_matches = {
     "collect_lane_sizes_sources_and_filter",
     "process_success_piece_split",

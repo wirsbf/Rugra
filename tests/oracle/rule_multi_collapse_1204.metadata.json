@@ -154,7 +154,7 @@
  "comparand": {
   "cpp_fixture_sha256": "5db89eecacdcbeae886b4e40cea9f189123d95a4750525f226772ac4e995f51f",
   "rust_fixture_sha256": "ffcfe86a94db594c25c94a24f325d994a21ab8c239c9735ba9f6b47a6c45e5fa",
-  "runner_sha256": "c4cf31ec3951d854dbe28bff35447083d70220ba1dc42b132c7702dfb6391cb9",
+  "runner_sha256": "e299935e1718d54632b3d1fcab26078808126c9ed66604a9a5c6906fde6a1ffd",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
   "rust_crate_tree_sha256": "d4d124cc057a5212b9b70ab84693909d7d62af41fa57c3441f554feb7e96ca7b"
  },

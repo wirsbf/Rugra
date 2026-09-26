@@ -339,7 +339,7 @@
   "cpp_fixture_sha256": "072731a6ade0060d77ef1968638bac1151174465b90fa443fec3e1d020d4516d",
   "rust_fixture_sha256": "0b8a0be9400306e2edf574cef19a473945caa76b5b6a0bfc9ed62e44d6060536",
   "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
-  "runner_sha256": "cb4c959024f8df56d4c480dbeffa340616865b7a2f0c1f4223e5dd347c9b5adc"
+  "runner_sha256": "3b4e0cc21c5b98c5f2b8aa2ad5f791711309950c01e3203108012c21dc44dcef"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "6524ac830011013eae0125d5905521dfeae0191c1d1c27c66622bc2dce2e5555",

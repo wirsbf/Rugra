@@ -88,14 +88,14 @@
   "rust_fixture_sha256": "b17bc40a71780854596d037a5e3884c52b667efbfe7cc3b8a71937f5f2396c50",
   "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
   "space_rs_sha256": "08bcdc1a81d0db2fb3b85a9a228ce9cba25a7ac0b296526a4cb2674fb977dc53",
-  "address_doc_sha256": "53eadc14deb5d4f0dbf6b62e752e55caa56b576f6b452e1ab40067a49965d998",
-  "space_doc_sha256": "d15ad5d7d954efcc75650867fd7a4a34cc32b7fb604b1eaa9bce68e3c55a13d2",
+  "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
+  "space_doc_sha256": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
   "runner_sha256": "6787fc8ae891125f4e9ab113041f2a4ce5b973fbf1ad71911c1a57fbd3fee94a",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-address-handle-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_tree_sha256": "23a858fe9c48d86f62800384b2b39dd9dcccf6f1ee4c9a19612835f6f8692151",
+  "rust_crate_tree_sha256": "d52ce0a0d7a25dd4206cf6a1454812423f49041bb931525a5b19aaa70d543184",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -110,7 +110,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

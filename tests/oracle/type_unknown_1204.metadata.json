@@ -84,7 +84,7 @@
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "29ff1b69085bdfdb33516df066d113ec0252aaf9eec31a9736875ee7b5877d1e",
+  "sha256": "c17979231f81e1b33e87d2763eb4b822afa08ae0a9ceca1ccb366c6ed5e44a42",
   "binary": {
    "path": "examples/curl",
    "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
@@ -157,7 +157,7 @@
   "host_python_path": "/usr/bin/python3.10",
   "host_git_path": "/usr/bin/git",
   "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "build": {
   "registry_packages": 164,

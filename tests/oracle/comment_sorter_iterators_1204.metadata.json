@@ -11,13 +11,13 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "rugra_source": {
   "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
   "base_cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-  "rust_overlay": "Archive Rugra base 8d59b7730472bde2147e9fdf28a494221c2f26c4 and overlay the owned src/comment.rs + src/block.rs candidates before the isolated offline build (block.rs carries the set_initial_range visibility the fixture's legal-cover construction needs, BLOCK-STOPADDR-FIXTURE-REGRESSION-0001)",
+  "rust_overlay": "Archive Rugra base 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d and overlay the owned src/comment.rs + src/block.rs candidates before the isolated offline build (block.rs carries the set_initial_range visibility the fixture's legal-cover construction needs, BLOCK-STOPADDR-FIXTURE-REGRESSION-0001)",
   "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d"
  },
  "architecture": {
@@ -139,16 +139,16 @@
   "cpp_fixture_sha256": "a23be7e654bcea45359460f12e253ec3fba7409b6e80ede8869a74b12adac98e",
   "rust_fixture_sha256": "094471779acedf18b3200bfd78e069845efe608042f9c7e629c99c87adc8ede5",
   "comment_rs_sha256": "5e3e15b9fc14fb0a4b5fad04028aa14f4feb9c10b3acbce2950c26cd868affe3",
-  "runner_sha256": "f227735409d056573fec1b834545470f95a9a82444684dc39cbb5d727e647bba",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "runner_sha256": "d6da2cb992c3966493dcee2aa81c2ffe9236689f6639caa3c35306b2f5eadce0",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "expected_ghidra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
   "expected_rugra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
-  "host_cxx": "g++ (GCC) 16.2.1 20260810",
-  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-  "block_rs_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82"
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "block_rs_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f"
  },
  "build": {
   "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",

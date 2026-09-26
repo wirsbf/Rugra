@@ -57,15 +57,15 @@
   "rust_fixture_sha256": "199135bc3139d611a72a453bd128855bc872ee9d3c19e940abeedf0cbcd03e96",
   "heritage_rs_sha256": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
   "coreaction_rs_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
-  "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
-  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-  "coreaction_doc_sha256": "fc1c99d6be8e23a0a15eac8720283317881e9bd6d1d6f337e30fa3b6f06a0dd7",
-  "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
+  "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
+  "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
+  "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "runner_sha256": "ca4d1432e4f00cd9a6e2ad79bc200663769eabd98cae5e1c78950d5143004ba9",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "9c29f681f1bb264945c47795c751c2026fb3ce5ee3640b85c9068add3134d9d4",
+  "rust_crate_tree_sha256": "fbb85b4e50ed3cefe7b4de548d7d5fcdc54c17f08448ec33667a412c2428ba1c",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -80,7 +80,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

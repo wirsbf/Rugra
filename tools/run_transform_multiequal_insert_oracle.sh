@@ -231,7 +231,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 expected_matches = {
     "replacement_multiequal_begin_order", "follow_multiequal_begin_order",
     "replacement_nonphi_order", "follow_nonphi_order", "identity_and_counts",
