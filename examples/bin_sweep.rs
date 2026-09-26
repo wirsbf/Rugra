@@ -331,9 +331,19 @@ impl rugra::pcodeparse::SleighSymbolLookup for SweepSpecHost {
 // with the locked cspec data_organization, inject library + userops,
 // pspec context/register decode, parse_compiler_config establishing
 // defaultfp, loader-backed string manager).
+// PERF-DUAL-SLEIGH-INIT-0001: also returns the register-catalog engine so
+// run_one's lifter adopts it (SleighLifter::from_ctx) — the oracle's ONE
+// translator per Architecture (sleigh_arch.cc:174 buildTranslator reuse),
+// not a second x86-64.sla deserialization.
 fn build_architecture(
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
-) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+) -> Result<
+    (
+        std::sync::Arc<rugra::arch::Architecture>,
+        rugra::sleigh_ffi::SleighCtx,
+    ),
+    String,
+> {
     use std::sync::Arc;
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
@@ -476,7 +486,7 @@ fn build_architecture(
         arch.loader = Some(loader);
         arch.build_string_manager();
     }
-    Ok(Arc::new(arch))
+    Ok((Arc::new(arch), sleigh))
 }
 
 
@@ -501,7 +511,7 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
             image.clone(),
         ),
     );
-    let arch = build_architecture(Some(loader))?;
+    let (arch, sleigh_ctx) = build_architecture(Some(loader))?;
 
     let func_size =
         i32::try_from(target.size).map_err(|_| format!("function {} is too large", target.name))?;
@@ -513,7 +523,11 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
         fd.add_symbol(function.vaddr, function.name.clone());
     }
 
-    let mut sleigh = SleighLifter::new();
+    // PERF-DUAL-SLEIGH-INIT-0001: adopt the register-catalog engine
+    // (single .sla load per child; oracle sleigh_arch.cc:174 buildTranslator
+    // keeps one translator per languageindex). The catalog leg was
+    // read-only, so configure_x86_64 sees fresh-engine state.
+    let mut sleigh = SleighLifter::from_ctx(sleigh_ctx);
     sleigh
         .configure_x86_64(&image, 0)
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;

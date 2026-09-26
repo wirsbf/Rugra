@@ -76,6 +76,33 @@ translator 或重放 spec。
 - 完整 pspec/cspec、长生命周期 parser cache、Flow 异常策略、space/opcode
   映射与最终反编译输出均不属于本层的窄域 raw ABI 结论。
 
+## PERF-DUAL-SLEIGH-INIT-0001 单次加载契约与加载计数
+
+oracle 形态：`SleighArchitecture` 维护 `static map<int4,Sleigh> translators`
+（sleigh_arch.hh:109），`buildTranslator`（sleigh_arch.cc:174-187）对同
+languageindex 复用已建实例（注释原文"try to reuse the previous Sleigh
+object, so we don't reload the .sla file"）；`Architecture::restoreFromSpec`
+（architecture.cc:624-641）只 `initialize` 一次并安装为 `translate`，寄存器
+目录（`SleighBase::getAllRegisters` → `varnode_xref`，sleighbase.cc:182-186）
+与全部解码共用这一个实例——即 **每个 Architecture 恰好一次 .sla 反序列化**。
+
+修复前 Rugra 侧同一线程内 `SleighCtx::new()` 建两个独立引擎（驱动
+build_architecture 寄存器目录枚举一个 + `SleighLifter::new()` 解码一个），
+hermetic 每子进程反序列化 `x86-64.sla` 两次（PERFBENCH gdb/strace 钉死，
+固定开销 ≈430–480ms/子 vs oracle 85–180ms）。修复后驱动经
+`SleighLifter::from_ctx`（docs/api/disasm/sleigh_lift.md）领养目录枚举用的
+同一引擎实例，恢复 oracle 单实例形态；枚举腿只读
+（`num_registers`/`register_info`），被领养引擎处于与全新构造完全一致的
+no-image/no-context/never-decoded 状态，`configure_x86_64` 观察零差异。
+
+本层提供的观测面：`ENGINE_LOADS`（进程级原子计数，仅统计
+`initialize_from_sla` 成功完成的构造）+ `engine_load_count()` 读取器。
+hermetic 单函数子进程期望值为 1；`gen_decompile --one` 在
+`RUGRA_SLEIGH_LOAD_REPORT=1` 时打印 `[GEN] sleigh engine loads=N`
+（默认静默，不改变任何协议输出）。亲证（2026-09-26，本车道）：
+修复前 strace openat `x86-64.sla` ×2 + 计数 N/A → 修复后 openat ×1 +
+计数 `loads=1`；canon curl/httpd E2E 输出字节恒等。
+
 ## 锁定 oracle 验证
 
 ```bash

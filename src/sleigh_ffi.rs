@@ -137,6 +137,23 @@ impl std::error::Error for SleighDecodeError {}
 // RUGRA-GLUE: process-wide Rust configuration for the default SLEIGH asset path
 static SLA_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 
+// RUGRA-GLUE: PERF-DUAL-SLEIGH-INIT-0001 observability — process-wide count
+// of full `.sla` deserializations (successful engine constructions). The
+// oracle instantiates one Sleigh translator per languageindex and reuses it
+// (sleigh_arch.cc:174 SleighArchitecture::buildTranslator, backed by the
+// static `translators` map, sleigh_arch.hh:109) — one load per
+// Architecture, shared by the register catalog
+// (SleighBase::getAllRegisters, sleighbase.cc:182) and all decoding
+// (architecture.cc:627-641 restoreFromSpec installs it as `translate`
+// once). Hermetic one-function drivers print this counter for the
+// load-count gate (RUGRA_SLEIGH_LOAD_REPORT=1); expected value is 1.
+static ENGINE_LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+// RUGRA-GLUE: read the PERF-DUAL-SLEIGH-INIT-0001 engine-load counter
+pub fn engine_load_count() -> usize {
+    ENGINE_LOADS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // RUGRA-GLUE: configure the default `.sla` location before the first context is made
 pub fn set_sla_path(path: &str) {
     let _ = SLA_PATH.set(std::path::PathBuf::from(path));
@@ -507,6 +524,9 @@ mod rust_backend {
             let loader = SharedLoadImage { shared: Rc::clone(&image) };
             let mut sleigh = Sleigh::new(Box::new(loader), Box::new(ContextInternal::new()));
             sleigh.initialize_from_sla(&bytes).ok()?;
+            // PERF-DUAL-SLEIGH-INIT-0001: count the completed deserialization
+            // (a failed initialize is not a load; see ENGINE_LOADS above).
+            super::ENGINE_LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Some(Self {
                 sleigh,
                 image,

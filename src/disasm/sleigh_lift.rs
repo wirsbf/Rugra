@@ -33,6 +33,31 @@ impl SleighLifter {
         }
     }
 
+    // Ghidra: sleigh_arch.cc:174 SleighArchitecture::buildTranslator
+    /// PERF-DUAL-SLEIGH-INIT-0001: adopt an already-initialized engine (the
+    /// register-catalog instance a driver's architecture build enumerated)
+    /// instead of deserializing the same `.sla` a second time. The oracle
+    /// keeps ONE `Sleigh` translator per languageindex in a static map
+    /// (`translators`, sleigh_arch.hh:109) and `buildTranslator` hands that
+    /// SAME instance to every consumer — the register catalog
+    /// (`SleighBase::getAllRegisters`, sleighbase.cc:182, reading the
+    /// translator's `varnode_xref`) and all instruction decoding
+    /// (`Architecture::restoreFromSpec`, architecture.cc:627-641,
+    /// `buildTranslator` + one `initialize` + `translate = newtrans`).
+    /// Rugra's two per-leg `SleighCtx::new()` calls deserialized
+    /// `x86-64.sla` twice per hermetic child; this constructor restores the
+    /// single-instance oracle shape by ownership transfer (Arc sharing is
+    /// unnecessary: the single-threaded engine lifecycle
+    /// —created, used, dropped on one thread— matches the driver's
+    /// same-thread build+lift sequence). The adopted engine must be in the
+    /// same never-decoded, no-image, no-context-default state a fresh
+    /// construction has (true for every register-catalog leg: they only
+    /// call `num_registers`/`register_info`), so a subsequent
+    /// `configure_x86_64` observes byte-identical engine state.
+    pub fn from_ctx(ctx: SleighCtx) -> Self {
+        Self { ctx: Some(ctx) }
+    }
+
     // RUGRA-GLUE: configure one owned SLEIGH translator before following a function
     pub fn configure_x86_64(
         &mut self,

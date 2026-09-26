@@ -16,6 +16,23 @@ equivalent to Ghidra.
   a function-flow run. It loads the repository x86-64 pspec compatibility path before the
   first decode. Full `ContextInternal::decodeFromSpec` behavior remains
   `SLEIGH-0002C`.
+- **PERF-DUAL-SLEIGH-INIT-0001** — `SleighLifter::from_ctx(ctx)` adopts an
+  already-initialized engine (ownership transfer) instead of re-deserializing the same
+  `.sla`, restoring the oracle's ONE translator per Architecture
+  (`sleigh_arch.cc:174` `buildTranslator` reuses the `translators[languageindex]`
+  instance, `sleigh_arch.hh:109`; `architecture.cc:627-641` initializes and installs it
+  once; the register catalog `SleighBase::getAllRegisters`, `sleighbase.cc:182-186`, and
+  all decoding share that instance). The adopted engine must be in the
+  never-decoded/no-image/no-context-default state a fresh construction has — true for
+  every driver register-catalog leg (read-only enumeration), so a subsequent
+  `configure_x86_64` observes byte-identical engine state. Callers:
+  `gen_decompile`/`bin_sweep`/`hermit_probe`/`tf_singleton_probe`/`pareval_poc`
+  (build_architecture returns the engine it enumerated from) and `curl_decompile`
+  (take-once pool beside the first-init Architecture cache; one worker process = one
+  job = one adopter; later in-process CompareFunctions jobs fall back to `new()`).
+  Evidence: load count 2→1 per hermetic child (strace + `engine_load_count`), canon
+  curl/httpd outputs byte-identical, interleaved 20-fn sqlite3 small-function A/B
+  −25.3% wall with all 20 functions faster.
 - `SleighLifter::lift_instruction` makes exactly one strict `one_instruction` call and
   returns its step together with every emitted op. A legal zero-op instruction remains a
   successful decode. Typed errors are preserved for `FlowInfo`.

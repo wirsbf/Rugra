@@ -281,9 +281,19 @@ impl rugra::pcodeparse::SleighSymbolLookup for SweepSpecHost {
     }
 }
 
+// PERF-DUAL-SLEIGH-INIT-0001: also returns the register-catalog engine so
+// prepare_fd's lifter adopts it (SleighLifter::from_ctx) — the oracle's ONE
+// translator per Architecture (sleigh_arch.cc:174 buildTranslator reuse),
+// not a second x86-64.sla deserialization.
 fn build_architecture(
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
-) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+) -> Result<
+    (
+        std::sync::Arc<rugra::arch::Architecture>,
+        rugra::sleigh_ffi::SleighCtx,
+    ),
+    String,
+> {
     use std::sync::Arc;
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
@@ -430,7 +440,7 @@ fn build_architecture(
         arch.loader = Some(loader);
         arch.build_string_manager();
     }
-    Ok(Arc::new(arch))
+    Ok((Arc::new(arch), sleigh))
 }
 
 // ===========================================================================
@@ -450,14 +460,17 @@ fn prepare_fd(
             0,
             image.to_vec(),
         ));
-    let arch = build_architecture(Some(loader))?;
+    let (arch, sleigh_ctx) = build_architecture(Some(loader))?;
     let func_size = i32::try_from(target.size).map_err(|_| "function too large".to_string())?;
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), func_size);
     fd.set_arch(arch);
     for function in functions {
         fd.add_symbol(function.vaddr, function.name.clone());
     }
-    let mut sleigh = SleighLifter::new();
+    // PERF-DUAL-SLEIGH-INIT-0001: adopt the register-catalog engine
+    // (single .sla load; oracle sleigh_arch.cc:174 buildTranslator reuses
+    // the one translator per languageindex). Catalog leg was read-only.
+    let mut sleigh = SleighLifter::from_ctx(sleigh_ctx);
     sleigh
         .configure_x86_64(image, 0)
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
