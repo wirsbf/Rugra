@@ -8396,6 +8396,43 @@
           "Architecture::addOtherSpace"
         ]
       }
+    },
+    {
+      "id": "rule_subcommute_freevn_1204",
+      "description": "RuleSubCommute generic tail commute opSetInput order vs locked 12.0.4 (BINSWEEP-SUBCOMMUTE-FREEVARNODE-0001, CR-SUBCOMMUTE finding 3): free-vn tails commute cleanly (cc:4640 frees slot before cc:4641 attaches - varnode.cc:334-336 single-descendant invariant), const identity survives (no opSetInput dedup copy, funcdata_op.cc:108-115), ADD/MULT/AND/OR/NEGATE/XOR-offset free tails, same-written-vn dup-reuse leg, RuleSubZext overlap reject (cc:4623-4628, pre-existing Rugra gap closed by this ticket), loneDescend reject; trap mode locks the crash-form pair for a free vn read twice (oracle LowlevelError rc=1 vs Rust panic rc=101 varnode.rs:2716, no golden)",
+      "runner": [
+        "tools/run_rule_subcommute_freevn_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/rule_subcommute_freevn_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/rule_subcommute_freevn_1204.cc",
+          "rust_fixture": "tests/oracle/rule_subcommute_freevn_1204.rs",
+          "oracle_record": "tests/oracle/rule_subcommute_freevn_1204.oracle.out"
+        },
+        "tools": {
+          "runner_1": "tools/run_rule_subcommute_freevn_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/ruleaction.rs",
+          "tests/oracle/rule_subcommute_freevn_1204.*",
+          "tools/run_rule_subcommute_freevn_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RuleSubCommute::apply_op"
+        ],
+        "ghidra_function_ids": [
+          "RuleSubCommute::applyOp"
+        ]
+      }
     }
   ]
 }

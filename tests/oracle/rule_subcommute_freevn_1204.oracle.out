@@ -1,0 +1,118 @@
+case=add_free_free|sub_apply=1
+  op=1@0x510010|nin=1|in0=c|8|0x11|out=-1
+  op=1@0x510018|nin=1|in0=c|8|0x22|out=-1
+  op=19@0x510030|nin=2|in0=w|4|0x1000001c|out=4
+  op=63@0x510040|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510040|nin=2|in0=o|8|0x10000000|out=4
+  op=63@0x510040|nin=2|in0=o|8|0x10000008|out=4
+  keep=f0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=add_free_const|sub_apply=1
+  op=1@0x510110|nin=1|in0=c|8|0x11|out=-1
+  op=19@0x510130|nin=2|in0=w|4|0x10000038|out=4
+  op=63@0x510140|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510140|nin=2|in0=o|8|0x10000024|out=4
+  op=63@0x510140|nin=2|in0=c|8|0x64|out=4
+  keep=f0|readers=1|descends=1
+  keep=c1|readers=1|descends=1
+endcase
+case=add_const_free|sub_apply=1
+  op=1@0x510218|nin=1|in0=c|8|0x22|out=-1
+  op=19@0x510230|nin=2|in0=w|4|0x10000054|out=4
+  op=63@0x510240|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510240|nin=2|in0=c|8|0x64|out=4
+  op=63@0x510240|nin=2|in0=o|8|0x10000040|out=4
+  keep=c0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=add_const_const|sub_apply=1
+  op=19@0x510330|nin=2|in0=w|4|0x10000068|out=4
+  op=63@0x510340|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510340|nin=2|in0=c|8|0x64|out=4
+  op=63@0x510340|nin=2|in0=c|8|0xc8|out=4
+  keep=c0|readers=1|descends=1
+  keep=c1|readers=1|descends=1
+endcase
+case=mult_free_free|sub_apply=1
+  op=1@0x510410|nin=1|in0=c|8|0x7|out=-1
+  op=1@0x510418|nin=1|in0=c|8|0x6|out=-1
+  op=32@0x510430|nin=2|in0=w|4|0x1000008c|out=4
+  op=63@0x510440|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510440|nin=2|in0=o|8|0x10000070|out=4
+  op=63@0x510440|nin=2|in0=o|8|0x10000078|out=4
+  keep=f0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=and_free_free|sub_apply=1
+  op=1@0x510510|nin=1|in0=c|8|0xf0|out=-1
+  op=1@0x510518|nin=1|in0=c|8|0xf|out=-1
+  op=27@0x510530|nin=2|in0=w|2|0x100000ae|out=2
+  op=63@0x510540|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510540|nin=2|in0=o|8|0x10000094|out=2
+  op=63@0x510540|nin=2|in0=o|8|0x1000009c|out=2
+  keep=f0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=or_free16|sub_apply=1
+  op=1@0x510610|nin=1|in0=c|16|0xa1|out=-1
+  op=1@0x510618|nin=1|in0=c|16|0xb2|out=-1
+  op=28@0x510630|nin=2|in0=w|8|0x100000ea|out=8
+  op=63@0x510640|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510640|nin=2|in0=o|16|0x100000b2|out=8
+  op=63@0x510640|nin=2|in0=o|16|0x100000c2|out=8
+  keep=f0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=negate_free|sub_apply=1
+  op=1@0x510710|nin=1|in0=c|8|0x33|out=-1
+  op=25@0x510730|nin=1|in0=w|4|0x1000010e|out=4
+  op=63@0x510740|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510740|nin=2|in0=o|8|0x100000fa|out=4
+  keep=f0|readers=1|descends=1
+endcase
+case=xor_free_off4|sub_apply=1
+  op=1@0x510810|nin=1|in0=c|8|0x44|out=-1
+  op=1@0x510818|nin=1|in0=c|8|0x55|out=-1
+  op=26@0x510830|nin=2|in0=w|4|0x1000012e|out=4
+  op=63@0x510840|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510840|nin=2|in0=o|8|0x10000112|out=4
+  op=63@0x510840|nin=2|in0=o|8|0x1000011a|out=4
+  keep=f0|readers=1|descends=1
+  keep=f1|readers=1|descends=1
+endcase
+case=mult_free_const|sub_apply=1
+  op=1@0x510910|nin=1|in0=c|8|0x9|out=-1
+  op=32@0x510930|nin=2|in0=w|4|0x1000014a|out=4
+  op=63@0x510940|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510940|nin=2|in0=o|8|0x10000136|out=4
+  op=63@0x510940|nin=2|in0=c|8|0x3|out=4
+  keep=f0|readers=1|descends=1
+  keep=c1|readers=1|descends=1
+endcase
+case=xor_same_written|sub_apply=1
+  op=1@0x510a10|nin=1|in0=c|8|0x66|out=8
+  op=26@0x510a30|nin=2|in0=w|4|0x10000166|out=4
+  op=63@0x510a40|nin=2|in0=_|0|0x0|out=-1
+  op=63@0x510a40|nin=2|in0=w|8|0x10000152|out=4
+  keep=w0|readers=1|descends=1
+  keep=w1|readers=1|descends=1
+endcase
+case=add_free_zext_overlap|sub_apply=0
+  op=1@0x510b10|nin=1|in0=c|8|0x11|out=-1
+  op=1@0x510b18|nin=1|in0=c|8|0x22|out=-1
+  op=19@0x510b30|nin=2|in0=o|8|0x1000016a|out=8
+  op=63@0x510b40|nin=2|in0=w|8|0x1000017a|out=4
+  op=17@0x510b50|nin=1|in0=w|4|0x10000182|out=8
+  keep=f0|readers=0|descends=1
+  keep=f1|readers=0|descends=1
+endcase
+case=add_two_readers|sub_apply=0
+  op=1@0x510c10|nin=1|in0=c|8|0x11|out=-1
+  op=1@0x510c18|nin=1|in0=c|8|0x22|out=-1
+  op=19@0x510c30|nin=2|in0=o|8|0x1000018e|out=8
+  op=63@0x510c40|nin=2|in0=w|8|0x1000019e|out=4
+  op=63@0x510c50|nin=2|in0=w|8|0x1000019e|out=4
+  keep=f0|readers=0|descends=1
+  keep=f1|readers=0|descends=1
+endcase
