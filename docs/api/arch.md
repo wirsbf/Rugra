@@ -506,3 +506,19 @@ wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — TF-SINGLETON-WIRING-0001 第一步：工厂所有权镜像
+
+- `set_types` 现同时把句柄发布为线程的 current-Architecture 工厂（oracle
+  `buildTypegrp` 时刻：sleigh_arch.cc:201 `types = new TypeFactory(this);`），
+  `TypeFactory::shared_default` 的 39 个无句柄引擎调用点据此解析——Architecture
+  获得工厂的瞬间即引擎解析域切换的瞬间，两路同步（票面"否则类型身份域再分裂"
+  风险的闭合）。
+- `ensure_types` fresh 路径改为构造 OWN `TypeFactory::fresh_canonical()`（不再
+  借用 process-canonical 单例）并发布；existing 路径同样（重）发布，保证调用
+  线程的解析域=本 Architecture。
+- 新增 `impl Drop for Architecture`（architecture.cc:211-212 `delete types`
+  镜像）：线程局部注册表仍指向自己的工厂时清除，恢复 process-canonical 回退
+  层；他人发布不动。
+- 详见 `docs/api/type_system/typefactory.md` 同日条目与
+  `docs/alignment_docs/TYPEFACTORY_PERARCH_2026-09-26.md`。

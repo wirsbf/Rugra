@@ -1168,3 +1168,31 @@ extra 恒 0）就此消灭；构造签名与去重键不变。
 - 本模块 2 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — TF-SINGLETON-WIRING-0001 第一步：current-Architecture 工厂解析
+
+- `TypeFactory::shared_default()` 从进程单例入口改造为**解析入口**：线程的
+  current-Architecture 工厂（`Architecture::set_types`/`ensure_types` 在 oracle
+  `buildTypegrp` 时刻——sleigh_arch.cc:201 / ghidra_arch.cc:321——发布）优先；
+  无发布时回退 process-canonical 工厂（原 OnceLock 构造配方逐字节冻结，更名
+  `process_canonical_factory`）。单 Architecture 进程两臂返回同一句柄（驱动经
+  `set_types` 安装 PC），全部既有观察字节恒等；多 Architecture 进程（bin_sweep
+  双二进制）各 Architecture 的类型累积表互相隔离，恢复 oracle
+  per-Architecture 工厂生命周期（architecture.cc:162 构造 null → buildTypegrp
+  new → 211-212 delete）。
+- 新增 `TypeFactory::fresh_canonical()`：per-Architecture 工厂构造配方（new(8)
+  核心类型 + architecture.cc:1350 decode 尾默认对齐表 type.cc:3164-3165 + 无租约
+  unknown1 预热），供 `ensure_types` fresh 路径与 per-binary 驱动使用。
+- 新增发布/退订/查询 API（`publish_current_arch`/`unpublish_current_arch`/
+  `current_arch_factory`，pub(crate)）：线程局部 current-Architecture 注册表
+  （工厂句柄 + 发布期预热的 1 字节 unknown 快照）。`canonical_unknown_base_1`
+  改为线程局部快照优先——MIRROR2 无锁快路径在发布期（无租约）武装，写租约
+  持有者（down_chain_pointer→get_sub_type）不再进入工厂 RwLock。
+- `Architecture::ensure_types` fresh 路径从借用 PC 改为构造 OWN fresh 工厂并
+  发布；`Architecture` 新增 `Drop`（architecture.cc:211-212 镜像）——注册表仍
+  指向自己的工厂时清除，否则不动（其它 Architecture 的发布优先）。
+- 39 个 `shared_default` 引用点（9 文件，含被持域 coreaction.rs 3 点）零改动：
+  全部经该单一入口自动获得 per-Architecture 解析。oracle 语义对照与调用点域
+  分类见 `docs/alignment_docs/TYPEFACTORY_PERARCH_2026-09-26.md`。已知限制：
+  线程局部=最后发布者胜；同线程交错双 Architecture 处理（无现存驱动形态）不在
+  覆盖面；跨线程 drop 不清原线程 TLS（Arc 保活，退化到旧工厂，不 panic）。
