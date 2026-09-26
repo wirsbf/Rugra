@@ -1441,6 +1441,17 @@ Override/重启标志生效，而非改 `HeritageInfo`。语义链：
 `delay < info->delay` 时 panic 镜像 LowlevelError）、`getDeadCodeDelay`
 =cc:2803、`seenDeadCode`=cc:2791。
 
+## 2026-09-26：`remove_revisited_markers` 空间来源改权威形式（TRIGFACE）
+
+`HeritageInfo` 的选取从"`remove[0]` 的空间（空表回退 Register）"改为
+调用方传入的**段空间** `memrange.space`（`place_multiequals` 调用点），
+镜像 oracle `getInfo(addr.getSpace())`（cc:247——用被 heritage 的大段
+地址取空间，而非被移除 varnode 的空间）。oracle 的 `placeMultiequals`
+以 `!removevars.empty()` 守卫调用（cc:2626）且 `collect` 的 loc-tree 窗口
+不跨空间，故两种推导在一切 oracle 可达输入上恒等——本改为保真形式修正，
+语料行为零变化（canon 双语料字节恒等亲证）。完整触发面 parity 测绘见
+`docs/alignment_docs/RESTART_TRIGFACE_PARITY_2026-09-26.md`。
+
 ## 2026-08-28：永久 ParamActive 容器调用点适配
 
 `guard_calls`、input/output overlap guard 及 stack-output guard 已适配
