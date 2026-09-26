@@ -2316,7 +2316,23 @@ impl PrintC {
         // HighVariable / parameter / symbol-table / unnamed-location cascades
         // into the existing get_varnode_display_name helper so the RPN path
         // shares the exact name-resolution behaviour of the legacy path.
-        let mut name = self.get_varnode_display_name(vn);
+        // The (op, slot) consult context (printlanguage.cc:257:
+        // inslot = isRead ? op->getSlot(vn) : -1) rides along: the
+        // assignment LHS (emit_expression_rpn sets is_lhs around this call,
+        // mirroring printc.cc:2475 pushSymbolDetail(outvn,op,false))
+        // consults the -1 output edge — the key
+        // ActionSetCasts::castOutput's last-chance resolveInFlow(op,-1)
+        // populates (coreaction.cc:2551-2556) — while a read leaf consults
+        // the edge it is read on.
+        let consult = Some((
+            op,
+            if self.is_lhs {
+                -1
+            } else {
+                Self::op_input_slot_of(op, vn)
+            },
+        ));
+        let mut name = self.get_varnode_display_name(vn, consult);
         if name.is_empty() {
             // pushUnnamedLocation fallback (printlanguage.cc:244 ->
             // printc.cc:1938-1945): space name + printRaw of the high name
@@ -2377,8 +2393,12 @@ impl PrintC {
                 self.rpn_push_op(self.rpn_tok_assignment);
                 // pushSymbolDetail(outvn, op, false) -> atom on the stack.
                 // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
+                // is_lhs selects the oracle's isRead=false consult slot
+                // (printc.cc:2475) for the partial-symbol walk below.
                 let out_vn = out.read().unwrap();
+                self.is_lhs = true;
                 let atom = self.make_atom_for_vn(&out_vn, op);
+                self.is_lhs = false;
                 drop(out_vn);
                 self.rpn_push_atom(&atom);
             }
@@ -3367,13 +3387,21 @@ impl PrintC {
                             resolved.unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
                         } else {
                             // printc.cc:991-1010 (TYPE_STRUCT): resolve the
-                            // field name via findTruncation(suboff,0). Rugra
-                            // uses find_partial_field (same offset/size
-                            // containment test). Default fallback name is
-                            // "field_0x<hex>"
+                            // field name via findTruncation(suboff,0,op,0).
+                            // Rugra uses the Datatype::find_truncation port
+                            // (TypeStruct arm is structural; the consult
+                            // context is inert for structs). Default
+                            // fallback name is "field_0x<hex>"
                             // (DataTypeComponent::getDefaultFieldName).
-                            Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
-                                .map(|(name, _, ftype)| (name, Some(ftype)))
+                            ct.unwrap()
+                                .find_truncation(
+                                    in1const as i64,
+                                    0,
+                                    None,
+                                    0,
+                                    Some(&self.union_resolutions),
+                                )
+                                .map(|(f, _)| (f.name, Some(f.type_ptr)))
                                 .unwrap_or_else(|| (format!("field_0x{:x}", in1const), None))
                         };
                         // printc.cc:1011-1016: arrayvalue = false; if the
@@ -7599,12 +7627,16 @@ impl PrintC {
 
     // RUGRA-GLUE: get_varnode_display_name (no Ghidra counterpart found)
     /// Get the display name for a varnode without emitting it
-    fn get_varnode_display_name(&mut self, vn: &Varnode) -> String {
+    fn get_varnode_display_name(
+        &mut self,
+        vn: &Varnode,
+        consult: Option<(&PcodeOp, i32)>,
+    ) -> String {
         // Names are final at print time: Ghidra finishes all symbol naming
         // in the Action phase (ActionNameVars::apply, coreaction.cc:2978-2998)
         // and PrintC only ever consumes Symbol::getDisplayName; there is no
         // print-time renumbering path in the oracle.
-        self.get_varnode_display_name_inner(vn)
+        self.get_varnode_display_name_inner(vn, consult)
     }
     // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
     /// Address source for every print-time unnamed-location fallback label
@@ -7924,6 +7956,7 @@ impl PrintC {
         &self,
         vn: &Varnode,
         allow_cast: bool,
+        consult: Option<(&PcodeOp, i32)>,
     ) -> Option<String> {
         let high_arc = vn.high.as_ref()?;
         let high = high_arc.read().unwrap();
@@ -7992,7 +8025,7 @@ impl PrintC {
                 self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
                 sym.get_display_name()
             );
-            Some(self.partial_symbol_text(
+            let res = self.partial_symbol_text(
                 &name,
                 symboloff as i64,
                 vn.get_size() as i64,
@@ -8000,7 +8033,9 @@ impl PrintC {
                 outtype_ref,
                 false,
                 allow_cast,
-            ))
+                consult,
+            );
+            Some(res)
         } else {
             // pushMismatchSymbol (printc.cc:2067-2083): off==0 -> '_' +
             // displayName; else pushUnnamedLocation(vn->getAddr()) —
@@ -8018,7 +8053,11 @@ impl PrintC {
     }
 
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
-    fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
+    fn get_varnode_display_name_inner(
+        &self,
+        vn: &Varnode,
+        consult: Option<(&PcodeOp, i32)>,
+    ) -> String {
         use crate::space::AddressSpace;
 
         // Priority 0.4: Parameter names for Register-space INPUT varnodes,
@@ -8068,7 +8107,7 @@ impl PrintC {
         // hold at that address. The Ram|Const proxy below is demoted to
         // the symbol-miss fallback (Rugra's stand-in for the oracle's
         // global-scope Data symbols reaching symbol-less varnodes).
-        if let Some(text) = self.push_symbol_detail_leaf(vn, true) {
+        if let Some(text) = self.push_symbol_detail_leaf(vn, true, consult) {
             return text;
         }
 
@@ -12201,7 +12240,7 @@ impl PrintLanguage for PrintC {
                     drop(base_vn);
                     if let Some(fname) = field_match {
                         let base_vn2 = op.inrefs[base_idx].read().unwrap();
-                        let base_text = self.get_varnode_display_name(&base_vn2);
+                        let base_text = self.get_varnode_display_name(&base_vn2, None);
                         drop(base_vn2);
                         self.is_lhs = true;
                         self.push_varnode(&out.read().unwrap(), Some(op));
@@ -12547,7 +12586,7 @@ impl PrintLanguage for PrintC {
     }
 
     // Ghidra: printc.cc:123 PrintC::pushVarnode
-    fn push_varnode(&mut self, vn: &Varnode, _op: Option<&PcodeOp>) {
+    fn push_varnode(&mut self, vn: &Varnode, op: Option<&PcodeOp>) {
         use crate::space::AddressSpace;
 
         // Faithful to Ghidra's implied-variable model: if this varnode is
@@ -12596,7 +12635,20 @@ impl PrintLanguage for PrintC {
         // for symbol-less varnodes. allow_cast is the oracle call-site's
         // isRead: true for reads (pushVnExplicit), false on assignment
         // LHS (emitExpression's pushSymbolDetail(outvn,op,false)).
-        if let Some(text) = self.push_symbol_detail_leaf(vn, !self.is_lhs) {
+        // consult (printlanguage.cc:257): inslot = isRead ?
+        // op->getSlot(vn) : -1 — the LHS (is_lhs) uses the output edge
+        // (-1), the key ActionSetCasts::castOutput's last-chance
+        // resolveInFlow(op,-1) populates (coreaction.cc:2551-2556); a
+        // read consults the edge it is read on.
+        let consult = op.map(|o| {
+            let slot = if self.is_lhs {
+                -1
+            } else {
+                Self::op_input_slot_of(o, vn)
+            };
+            (o, slot)
+        });
+        if let Some(text) = self.push_symbol_detail_leaf(vn, !self.is_lhs, consult) {
             self.used_varnode_names.insert(text.clone());
             if !self.discovery_pass {
                 self.emit.tag_variable(&text, 0);
@@ -12611,7 +12663,7 @@ impl PrintLanguage for PrintC {
         // Check if this constant is used in a bitwise operation — if so, skip string resolution.
         // Constants in XOR/AND/OR/shift are bitmasks, not string addresses, even if they
         // happen to fall within .rodata address range.
-        let is_bitwise_context = _op.map_or(false, |op| {
+        let is_bitwise_context = op.as_ref().map_or(false, |op| {
             matches!(
                 op.opcode,
             OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
@@ -12906,7 +12958,7 @@ impl PrintLanguage for PrintC {
         let propagated_type = vn
             .v_type
             .clone()
-            .or_else(|| _op.and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
+            .or_else(|| op.as_ref().and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
         );
         let name = match vn.get_space() {
             AddressSpace::Register => {
@@ -14176,13 +14228,23 @@ impl PrintC {
                             })
                             .unwrap_or_else(|| format!("field_0x{:x}", in1const))
                     } else {
-                        Self::find_partial_field(&ct, in1const as usize, 0)
-                            .map(|(name, _, _)| name)
-                            .unwrap_or_else(|| {
-                                // printc.cc:999-1001: default field name
-                                // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
-                                format!("field_0x{:x}", in1const)
-                            })
+                        // printc.cc:991-1010 (TYPE_STRUCT): findTruncation
+                        // (suboff, 0, op, 0) — structural; the Datatype
+                        // port keeps the getFieldIter containment + span
+                        // semantics.
+                        ct.find_truncation(
+                            in1const as i64,
+                            0,
+                            None,
+                            0,
+                            Some(&self.union_resolutions),
+                        )
+                        .map(|(f, _)| f.name)
+                        .unwrap_or_else(|| {
+                            // printc.cc:999-1001: default field name
+                            // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
+                            format!("field_0x{:x}", in1const)
+                        })
                     };
                     self.emit.print(if flex { "." } else { "->" });
                     self.emit.print(&fieldname);
@@ -14310,6 +14372,10 @@ impl PrintC {
                                 None,
                                 false,
                                 false,
+                                // printc.cc:1092: pushPartialSymbol(symbol,
+                                // off, 0, null, op, -1, false) — the
+                                // output-edge consult key.
+                                Some((op, -1)),
                             );
                         }
                     } else {
@@ -17670,12 +17736,14 @@ impl PrintC {
         outtype: Option<&Datatype>,
         out_space_bigend: bool,
         allow_cast: bool,
+        consult: Option<(&PcodeOp, i32)>,
     ) {
         // printc.cc:1954-2042: the PartialSymbolEntry collection walk,
         // shared with the leaf-atom text form
         // ([`Self::partial_symbol_text`], PRINTC-GLOBALSYM-LEAF-PRIORITY-0001).
-        let (finalcast, entries) =
-            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        let (finalcast, entries) = self.partial_symbol_walk(
+            off, sz, ct, outtype, out_space_bigend, allow_cast, consult,
+        );
         // printc.cc:2044-2047: final cast prefix
         //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
         //    pushType(finalcast); }`.
@@ -17706,6 +17774,18 @@ impl PrintC {
     /// needsResolution rejection waived for TYPE_PTR). Returns
     /// `(finalcast, entries)`; the caller renders
     /// `(<finalcast>)sym<entries...>` (2044-2064).
+    ///
+    /// `consult` carries the (op, slot) data-flow edge the oracle's
+    /// `pushPartialSymbol` always receives and feeds to the
+    /// STRUCT/UNION `findTruncation` virtuals. For TYPE_UNION,
+    /// `TypeUnion::findTruncation` (type.cc:2185-2199) is a READ-ONLY
+    /// consult of the (union,op,slot) resolution cache — a cache miss
+    /// never descends (the store-site arbitration between the whole
+    /// union member and a field is decided upstream by
+    /// ScoreUnionFields/resolveInFlow, never structurally here). The
+    /// RPN twin (`rpn_push_partial_symbol`) consults the same
+    /// `union_resolutions` snapshot channel; `None` mirrors a caller
+    /// without an op context and leaves unions undescended.
     fn partial_symbol_walk(
         &self,
         mut off: i64,
@@ -17714,6 +17794,7 @@ impl PrintC {
         outtype: Option<&Datatype>,
         out_space_bigend: bool,
         allow_cast: bool,
+        consult: Option<(&PcodeOp, i32)>,
     ) -> (Option<String>, Vec<String>) {
         let mut entries: Vec<String> = Vec::new();
         // printc.cc:1955: Datatype *finalcast = (Datatype *)0;
@@ -17741,14 +17822,77 @@ impl PrintC {
             }
             let metatype = dt.get_metatype();
             let mut succeeded = false;
-            if metatype == TypeMetatype::Struct || metatype == TypeMetatype::Union {
-                // printc.cc:1966-1985 / 2001-2016: findTruncation field.
-                if let Some((field_name, field_off, field_type)) =
-                        Self::find_partial_field(&dt, off as usize, sz as usize) {
-                    off -= field_off as i64;
-                    entries.push(format!(".{}", field_name));
-                    current = Some(field_type);
+            if metatype == TypeMetatype::Struct {
+                // printc.cc:1966-1985: TYPE_STRUCT.
+                if dt.needs_resolution() && dt.get_size() as i64 == sz {
+                    // printc.cc:1968-1972: ct->findResolve(op,slot); break
+                    // only when the resolution is ct itself (TypeStruct::
+                    // findResolve type.cc:1944-1951: cached resolution, or
+                    // field[0].type when nothing is cached).
+                    let resolved = match consult {
+                        Some((op, slot)) => self
+                            .union_resolutions
+                            .get(&crate::unionresolve::ResolveEdge::new(
+                                dt.as_ref(), op, slot,
+                            ))
+                            .map(|r| r.get_datatype().clone()),
+                        // No op context: findResolve's uncached fallback is
+                        // field[0].type, which never equals ct for a
+                        // fielded struct — keep descending.
+                        None => None,
+                    }
+                    .unwrap_or_else(|| {
+                        match dt.as_ref() {
+                            Datatype::Struct(s) => s
+                                .fields
+                                .first()
+                                .map(|f| f.type_ptr.clone())
+                                .unwrap_or_else(|| dt.clone()),
+                            _ => dt.clone(),
+                        }
+                    });
+                    if Arc::ptr_eq(&resolved, &dt) {
+                        break;
+                    }
+                }
+                // printc.cc:1973-1985: field = ct->findTruncation(off,sz,
+                // op,slot,newoff) — TypeStruct::findTruncation
+                // (type.cc:1624-1638) is structural.
+                if let Some((field, newoff)) = dt.find_truncation(
+                    off,
+                    sz as usize,
+                    consult.map(|(op, _)| op),
+                    consult.map(|(_, slot)| slot).unwrap_or(-1),
+                    Some(&self.union_resolutions),
+                ) {
+                    off = newoff;
+                    entries.push(format!(".{}", field.name));
+                    current = Some(field.type_ptr.clone());
                     continue;
+                }
+            } else if metatype == TypeMetatype::Union {
+                // printc.cc:2001-2016: TYPE_UNION — field =
+                // ct->findTruncation(off,sz,op,slot,newoff) is the
+                // READ-ONLY cache consult of TypeUnion::findTruncation
+                // (type.cc:2185-2199): no cached (union,op,slot)
+                // resolution, or a resolution that does not fit the
+                // requested span, means NO descent. Without an op context
+                // the consult misses by definition.
+                if let Some((field, newoff)) = dt.find_truncation(
+                    off,
+                    sz as usize,
+                    consult.map(|(op, _)| op),
+                    consult.map(|(_, slot)| slot).unwrap_or(-1),
+                    Some(&self.union_resolutions),
+                ) {
+                    off = newoff;
+                    entries.push(format!(".{}", field.name));
+                    current = Some(field.type_ptr.clone());
+                    continue;
+                } else if sz as usize == dt.get_size() {
+                    // printc.cc:2015-2016: Turns out we don't need to
+                    // resolve the field — stay on the whole union member.
+                    break;
                 }
             } else if metatype == TypeMetatype::Array {
                 // printc.cc:1986-2000: getSubEntry element index.
@@ -17809,9 +17953,11 @@ impl PrintC {
         outtype: Option<&Datatype>,
         out_space_bigend: bool,
         allow_cast: bool,
+        consult: Option<(&PcodeOp, i32)>,
     ) -> String {
-        let (finalcast, entries) =
-            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        let (finalcast, entries) = self.partial_symbol_walk(
+            off, sz, ct, outtype, out_space_bigend, allow_cast, consult,
+        );
         let mut text = String::new();
         if let Some(ft) = &finalcast {
             if !self.option_nocasts {
@@ -17869,35 +18015,28 @@ impl PrintC {
 
     // ---- private helpers backing the P0 ports ----
 
-    // Ghidra: printc.cc:1966-1985 (TYPE_STRUCT/UNION findTruncation)
-    fn find_partial_field(
-        dt: &Datatype, off: usize, sz: usize,
-    )
-        -> Option<(String, usize, Arc<Datatype>)> {
-        let fields = match dt {
-            Datatype::Struct(s) => &s.fields,
-            Datatype::Union(u) => &u.fields,
-            _ => return None,
-        };
-        for f in fields {
-            let f_size = f.type_ptr.get_size();
-            // Ghidra TypeStruct::findTruncation (type.cc:1624-1638) via
-            // getFieldIter (type.cc:1580-1602): field containment is the
-            // half-open range [offset, offset+size) — `curfield.offset <= off`
-            // AND `curfield.offset + size > off` — plus the span check
-            // `noff + sz <= size`. The previous closed upper bound
-            // (`off + sz <= offset + size` alone) matched the PREDECESSOR
-            // field when the offset lands exactly on a field start with
-            // sz == 0 (e.g. PTRSUB(bar,0x10) resolved to `prev` instead of
-            // `point`).
-            if off >= f.offset
-                && off < f.offset + f_size
-                && off + sz <= f.offset + f_size
-            {
-                return Some((f.name.clone(), f.offset, f.type_ptr.clone()));
+    // Ghidra: op.hh:166 PcodeOp::getSlot
+    /// The legacy-walk consult-slot helper mirroring `PcodeOp::getSlot`
+    /// (op.hh:166): the index of the input holding `vn`, or — matching
+    /// Ghidra's loop-exit value when the varnode is not an input (an
+    /// output printed with isRead semantics) — `numInput`. Rugra's
+    /// `push_varnode` borrows the varnode without its Arc, so identity is
+    /// (space, offset, size) rather than pointer equality; the first
+    /// match wins, as in the Ghidra scan.
+    fn op_input_slot_of(op: &PcodeOp, vn: &Varnode) -> i32 {
+        let n = op.inrefs.len() as i32;
+        for i in 0..n as usize {
+            if let Some(v) = op.get_in(i) {
+                let r = v.read().unwrap();
+                if r.get_space() == vn.get_space()
+                    && r.get_offset() == vn.get_offset()
+                    && r.get_size() == vn.get_size()
+                {
+                    return i as i32;
+                }
             }
         }
-        None
+        n
     }
 
     // Ghidra: printc.cc:1986-2000 (TYPE_ARRAY getSubEntry)
@@ -18158,6 +18297,13 @@ impl PrintC {
                                     outtype.as_ref(),
                                     out_space_bigend,
                                     true,
+                                    // printc.cc:858-859: int4 slot =
+                                    // ct->needsResolution() ? 1 : 0 — the
+                                    // artificial SUBPIECE consult slot.
+                                    Some((
+                                        op,
+                                        if ct.needs_resolution() { 1 } else { 0 },
+                                    )),
                                 );
                                 return;
                             }
@@ -18807,8 +18953,8 @@ mod tests {
             inst.write().unwrap().high = Some(ha.clone());
         }
 
-        let name_a = printer.get_varnode_display_name(&ta.read().unwrap());
-        let name_b = printer.get_varnode_display_name(&tb.read().unwrap());
+        let name_a = printer.get_varnode_display_name(&ta.read().unwrap(), None);
+        let name_b = printer.get_varnode_display_name(&tb.read().unwrap(), None);
         // Both sites collapse onto the representative's offset (10000000),
         // and site b no longer carries its own instance offset (10000008);
         // slice A carries the oracle token form: "unique" + printRaw
@@ -18822,7 +18968,7 @@ mod tests {
         // Ghidra never prints an explicit varnode without a high).
         let orphan_op = fd.new_op(1, Address::new(0x10d0));
         let orphan = fd.new_unique_out(4, &orphan_op);
-        let name_orphan = printer.get_varnode_display_name(&orphan.read().unwrap());
+        let name_orphan = printer.get_varnode_display_name(&orphan.read().unwrap(), None);
         assert_ne!(name_orphan, name_a);
         assert!(name_orphan.starts_with("unique0x"));
     }

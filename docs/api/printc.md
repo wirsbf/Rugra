@@ -3562,3 +3562,46 @@ this`）——union 分歧非潜伏（curl golden 含活 union
 - `emit_expression` 补 PTRADD 路由（typeop.hh:823 `TypeOpPtradd::push →
   lng->opPtradd(op)`；typeop.rs 的 push 表缺该臂，落 `_ => op_binary` 印出
   字面 `" op "` 占位——表缺口登记归 typeop.rs owner）。
+
+### 2026-09-26 — legacy/RPN 叶 partial-symbol 走 consult 门：union 下降仲裁（CURLCANON-UNIONSTORE-ARBITRATION-0001，Lane CURLD）
+
+- **根因**：legacy 走查 `partial_symbol_walk`（= printc.cc:1954-2042 的
+  partial_symbol_text/push_partial_symbol 双形态共享体）对 TYPE_UNION 用
+  结构性 `find_partial_field`（首包含字段即下降）。oracle 的
+  `TypeUnion::findTruncation`（type.cc:2185-2199）是**只读缓存 consult**：
+  按 `(union, op, slot)` 解析缓存取字段（带 `newoff+sz>field.size` 跨界拒
+  绝），miss 永不下降——整成员 vs 字段下降的站点仲裁全部由上游
+  ScoreUnionFields/resolveInFlow 决定（setcasts castOutput 的 last-chance
+  `resolveInFlow(op,-1)` cc:2551-2556 落键）。RPN 孪生
+  `rpn_push_partial_symbol` 已是 consult 形;legacy 缺口使 curl main 的 9 个
+  glob 初始化站点结构性下降 `.content.Set`（golden 8 站点整成员
+  `content` + 1 站点 `content._8_8_`，同函数 golden:746 反例站点确应全下降
+  `.content.Set.elements`——逐站点语义，非硬规则）。
+- **修复**（全部 printc.rs）：
+  - `partial_symbol_walk`/`partial_symbol_text`/`push_partial_symbol`/
+    `push_symbol_detail_leaf` 增 `consult: Option<(&PcodeOp, i32)>` 参数;
+    STRUCT 臂补 printc.cc:1966-1973 的 `needsResolution && size==sz →
+    findResolve==ct → break` 前置（snapshot consult + field[0] 回退）,
+    STRUCT/UNION 双臂统一走 `Datatype::find_truncation`（type.cc:1624
+    structural / type.cc:2185 cache-consult + span 检查的既有移植）;
+    UNION miss 且 `sz==union size` → break（cc:2015-2016 整成员停走）。
+  - consult 键按 oracle 四个 pushPartialSymbol 调用点喂入:赋值 LHS
+    （emit_expression_rpn 设 is_lhs + legacy push_varnode is_lhs 路径）=
+    `(op,-1)`（printc.cc:2475 `pushSymbolDetail(outvn,op,false)` /
+    printlanguage.cc:257 `inslot=-1`）;读叶 = `(op, op->getSlot(vn))`
+    （op.hh:166 loop-exit= numInput 语义,`op_input_slot_of` 以
+    (space,offset,size) 身份扫描）;PTRSUB spacebase 臂 = `(op,-1)`
+    （cc:1092）;SUBPIECE 特殊打印 = `(op, needsResolution?1:0)`（cc:858）。
+    `make_atom_for_vn → get_varnode_display_name(_inner)` 链路透传
+    （RPN 叶名路径此前丢 op 上下文）。
+  - 删 `find_partial_field`（被 Datatype::find_truncation 取代;两处
+    op_ptrsub STRUCT 臂调用点同步转换,UNION 臂本就 consult map）。
+- **效果（本 worktree fast-release 亲测,基=master 594d6982）**:curl canon
+  246→244（main 85→83）——D 族 9 站点全部 golden 形态:8 站点
+  `content = (union_5a7)V._8_16_`（整成员+RHS cast,cast 名残差=
+  DWARF-ANON-TYPENAME-0001 登记票）+`content._8_8_`;反例 golden:746 站点
+  `.content.Set.elements` 字节恒等（consult 命中 (union,COPY@t17136,-1)=
+  field 0）。cast 名落地后 curl canon=200（sed 模拟亲证 244→200,即 D 族
+  全额 −46,名字票面=−44 工具度量）。httpd/bank/镜面见 lane 报告。
+  - 测试侧 3 处 `get_varnode_display_name` 裸调用补 `None` consult 参数
+    （单测名诊断路径,无数据流边,语义=无 union consult）。
