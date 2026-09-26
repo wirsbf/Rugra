@@ -11,7 +11,7 @@
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
  "rugra_source": {
-  "base_commit": "e9baabd9f18d87899cbdad9a4186969afc140f4f",
+  "base_commit": "ae1a28e30eb97e09062d5b64a220c7682f527735",
   "base_varmap_blob": "a54ab2fae8439814c4b1629d3b81a6f513900d2b",
   "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
   "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
@@ -39,9 +39,9 @@
  "comparand": {
   "cpp_fixture_sha256": "9afac3f7945cc6383619be82ceb8cbe0ab2541efa810e33de61c72e0183859b5",
   "rust_fixture_sha256": "a98bbf0e9a157961c014002867f133acb69c4a425c7fbaa93a3747a695e8d2ef",
-  "runner_sha256": "02f96fa53d6003653e147b5e642211d8763d0b9e650caa295e7fce5c042784cc",
-  "doc_varmap_sha256": "666964778772b535c20aefbf187be6982de9288cd992e3203b5cdd78a86e7ca3",
-  "rust_crate_tree_sha256": "6d2211591ad0052575d838512af2bd804936edb3475028b598525ea8d07b1984",
+  "runner_sha256": "fd4c9f0de11f701983361ff8d49917cc0af8a63ba3d5c4dfbebeb86d5ab433d6",
+  "doc_varmap_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
+  "rust_crate_tree_sha256": "f8ab48c01a944a3287a144018292e82df225507114689ef06c6ac80b771d9d02",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-dynamicsym-base-v1 plus base commit and sorted length-prefixed paths and contents"
  },
  "assets": {

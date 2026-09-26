@@ -43,20 +43,20 @@
   "graph": "complete location-tree and definition-tree iteration orders with name, space, hex offset, size, class letter, and createIndex (definition tree adds the SeqNum order or dash)"
  },
  "comparand": {
-  "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
   "cpp_fixture_sha256": "ee903b5c7885c1be2b7aad086e578eb29eb510ad33ce624c3a1e59808952d6a4",
   "rust_fixture_sha256": "a2815557f2e2c7229efeeef7997e61bdcbd582e585c3009ae4de1c5b2a0f017e",
-  "varnode_rs_sha256": "7664862be14852f1bdc07b4a7c85c5ed1123112ab5d76cd9a6cb18ed470414b3",
-  "coreaction_rs_sha256": "9e3ab3986212197de9f28c766c8026ec2074d31108b0303191b8bbd0e0079f65",
-  "varnode_doc_sha256": "e8309221f793bd2b7f88889cd1602e8c86bbd15d5142734ea6815ab157f3f8ce",
-  "coreaction_doc_sha256": "4c2e9997fe938269fd03d6d4fa96b44f884810f30df358cb25bed8b176d3bf83",
-  "runner_sha256": "f1c17e9ed81a1f91cf282d95f99eaeef8ed7d3c7eef0344078c7211f6888d501",
+  "varnode_rs_sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7",
+  "coreaction_rs_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+  "varnode_doc_sha256": "5650e8516fd024fcdaacc4a22b13b45d7a155ad18f438cf6929a2bdd83597f82",
+  "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
+  "runner_sha256": "9d20e3835c5114f1042b683df8649d3b575824cf4aea026cc734766438d96d5c",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-setcasts-output-bank-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_tree_sha256": "fd1590945b694cd44c9774c3ad7715c6c71e177794706c96c5920234d4a6ad85",
+  "rust_crate_tree_sha256": "84b7321428462d1137e6f38a7db762965d1769b4d339cc612b0bdd5de6459f08",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -71,7 +71,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

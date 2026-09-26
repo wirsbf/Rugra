@@ -48,17 +48,17 @@
  },
  "comparand": {
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-flagfree-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rugra_base_commit": "17c64d3437966bb180312fcac92006d1074bd93e",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "11212874e9732da30d1c8de7e487deda58fefad0",
   "cpp_fixture_sha256": "0b59675ef73a5695c9344472ffc060abe6e1270555e065756e21c79b5a4e7dcf",
   "rust_fixture_sha256": "27a4de37228504c02e022b10c84247a3c5edcaeb01bb28ddc05cfa75a40e6fea",
-  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
-  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-  "runner_sha256": "6a683435ae427309d3c2f68f11f738bb58d5df9fa8be4571d5819e811e06816e",
+  "heritage_rs_sha256": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
+  "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
+  "runner_sha256": "36f7c8176ee939d9c2ca330701bc40711a9981baf2c4d343ce21264c50e31f09",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "1a2ae8c91169ceb8c953ec010b85a6ac748d7ddbfe147bd833eba3b99a01e5b3",
+  "rust_crate_tree_sha256": "ec14f81b19f3ce2935130dbae93ecd645b6c6fccc0b53320916f16a0300a60ac",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -73,7 +73,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

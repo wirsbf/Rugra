@@ -14,7 +14,7 @@ rugra_source_dynamic_blob=2bdfbcaa0c217b55d2173331876ac4e5d4fd23c6
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_input_commit=34a3febff160031c265cfbd841a94022c68c2c19
+rugra_input_commit=bd781781bcdca6595bd2fbe2bd4151b47b605d30
 rugra_input_blob=4e26a362f92ac1961bab63000215a84b4d7212dd
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/dynamic_gatherops_alive_1204.metadata.json"
@@ -242,7 +242,7 @@ canonical = json.dumps(
     fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("input manifest sha256", sha(canonical), manifest["sha256"])
-require("overall status", metadata["overall_status"], "MATCH")
+require("overall status", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 for key in (
     "output_append_preserved", "dead_filtered", "same_address_seqnum_order",
     "lower_address_excluded", "upper_address_excluded", "empty_range_append_only",

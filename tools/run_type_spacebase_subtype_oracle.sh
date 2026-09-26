@@ -7,8 +7,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=a0c4083e1e5645e6e73032d8fc571a09dda8f289
-rugra_base_tree=bbac9992afe484d43b74d51858ba01d3a3c46a35
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
 ghidra_root="$repo_root/ghidra"
 cpp_root="$ghidra_root/Ghidra/Features/Decompiler/src/decompile/cpp"
 metadata="$repo_root/tests/oracle/type_spacebase_subtype_1204.metadata.json"
@@ -225,7 +225,7 @@ mkdir -p "$snapshot_root/ghidra"
 git -C "$repo_root" archive --format=tar "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim examples/curl sleigh_specs/x86-64.sla \
+  src sleigh_shim crates examples/curl sleigh_specs/x86-64.sla \
   sleigh_specs/x86-64.pspec sleigh_specs/x86-64-gcc.cspec \
   sleigh_specs/x86.ldefs | tar -xf - -C "$snapshot_root"
 git -C "$ghidra_root" archive --format=tar "$oracle_commit" \

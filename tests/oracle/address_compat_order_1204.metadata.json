@@ -55,18 +55,18 @@
   "consumer_migration": "UNTESTED: SeqNum.addr/BlockBasic.start_addr mint sites, context partitions, varnode/comment/override/jumptable comparison domains still produce None addresses (phase 2)"
  },
  "comparand": {
-  "rugra_base_commit": "197b34cb6bde4959e93a8606eaa1f41f57814b82",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "f3e7c3c3db80178cf71f3e719f9508d16e10a638",
   "cpp_fixture_sha256": "6f21f4a0173a6e341f713cb8839d99100b1357650e94dfe5b6a8098e498c59e5",
   "rust_fixture_sha256": "1f565c59451b46ebcfb5ff7e635d33402cd59e2159719d6a1f4588181dcf21e4",
-  "address_rs_sha256": "83fa59d9d0aad7d455dceb284fe563b3ec840b85d54b7d4a599e941aa7da75b6",
-  "address_doc_sha256": "507cc5ad8da8cc023b92664e550f6a4d29ebae85a60d0b556dc8d57dd94b527c",
-  "runner_sha256": "d4e5edd2de8a993e778e041cfa3599faf5d004d5ff178e585e65503b9ab18846",
+  "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
+  "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
+  "runner_sha256": "fb12bc6fbef40e025e61a83441270e51759a0a1f34ed1010f6c71bd165e799d7",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-address-compat-order-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_tree_sha256": "1664f1e5fd5a00b14b30ecf73f713282c384b2eb27b17fa3e7b0d99f128a33a5",
+  "rust_crate_tree_sha256": "9b2d790002c8800e798006394b3f6a18649d50fb077a3fc75101c5e4bfa25a21",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -81,7 +81,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

@@ -50,8 +50,8 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by its verified object ID; never read the working-tree file and never require runtime HEAD equality",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
@@ -72,7 +72,7 @@
   "sha256": "d03913b659295591951516a7470f568e28457bc6da41f9ab7b22a89f5152e737",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -266,14 +266,14 @@
  "comparand": {
   "cpp_fixture_sha256": "e036e2c7d6a56967de1d4e14bc0d03706f0d0d6bc32e0b24e55cc125ae632fa8",
   "rust_fixture_sha256": "e5be09c0272154697e764f0bd92384a1329940ee4c97bcee61d53a50f7db352f",
-  "runner_sha256": "9e2353bf9a7041835dc3311d2d507e1cf70560ea7a2d02a8bd3807b27e209408",
-  "action_rs_sha256": "e1b191fe10daae003931405850beeb11c0d807945985f0a7ea2aa845715f9bfb",
-  "funcdata_rs_sha256": "3394112d5e4d969c45e0e6e64ed935a73624b3e504fc5e886de7a18ee9fb23b2",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "runner_sha256": "834ae925ef128b8f5216ac881fd4a62ccea6fb30d9e0e5907f1089b8f3df6b1f",
+  "action_rs_sha256": "c97e9ac8d029d751522f011fd404742d017c9a94985fedb627b16812b72fd26c",
+  "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-action-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "14b0bb2afc8fea21ebfbde6ea2fb988eea2870fd0887171bed53132c56efb6c4",
+  "rust_crate_tree_sha256": "b89ab5dc0e47f178b11280799f88d1ab4af848f08807e7e4c941d276183a8809",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
@@ -287,7 +287,7 @@
   "host_python_path": "/usr/bin/python3.10",
   "host_git_path": "/usr/bin/git",
   "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "expected_stdout_sha256": "78052f85d372b60575f5a3c26442a24f7201d163aa0a46168f44f9698c1472aa",
  "expected_exit_code": 0,

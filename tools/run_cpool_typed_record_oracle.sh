@@ -9,7 +9,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=71971b2a2bf8e3611f8690bcb6a0bcad34d29f34
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/cpool_typed_record_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/cpool_typed_record_1204.cc"
@@ -106,7 +106,7 @@ if metadata.get("fixture_id") != "CPOOL-TYPED-RECORD-0001":
     raise SystemExit("metadata fixture id mismatch")
 if metadata.get("projection_status") != "MATCH":
     raise SystemExit("projection_status must be MATCH")
-if metadata.get("overall_status") != "MISMATCH":
+if metadata.get("overall_status") != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("overall_status must be MISMATCH")
 if not metadata.get("status_note"):
     raise SystemExit("status_note must be non-empty")

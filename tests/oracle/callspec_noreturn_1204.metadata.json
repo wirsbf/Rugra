@@ -19,12 +19,12 @@
   "signature": "void FuncProto::copyFlowEffects(const FuncProto &op2); bool FuncProto::isNoReturn(void) const; void FuncProto::setNoReturn(bool val); void FuncProto::copy(const FuncProto &op2); FuncCallSpecs *FuncCallSpecs::clone(PcodeOp *newop) const; void FuncCallSpecs::initActiveInput(void); void FuncProto::decode(Decoder &decoder,Architecture *glb); void FuncProto::encode(Encoder &encoder) const"
  },
  "rugra_source": {
-  "base_commit": "584dcea6cccd9ec3c04db92654de32e67a6924fa",
-  "base_tree": "b087f84437e23d9af148c5f5930c282edde8d9fd",
-  "base_src_tree": "809870ba18a4d2ca19eaef8e320a651acd68a1dc",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_blobs": {
-   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "Cargo.toml": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+   "Cargo.lock": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
    "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
   "archive_paths": [
@@ -39,7 +39,7 @@
    "sleigh_shim"
   ],
   "overlays": {
-   "src/fspec.rs": "5d49169dfd5bbb674b0ee1e58b9545f4ca7adbab9cd0da4b279e5ce761dcb6c3"
+   "src/fspec.rs": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329"
   },
   "snapshot_build_link": {
    "path": "ghidra",
@@ -51,7 +51,7 @@
  "comparand": {
   "cpp_fixture_sha256": "537529dce610365a1e9a40154885bf61ffafdb1514bec822e6b25c30197f862b",
   "rust_fixture_sha256": "33a2a3d818daba87aa0c85b777598427bdf60ce0f0235e056d4253998fefa410",
-  "runner_sha256": "794efbcbaa0c9e62bad6dd855c56a13b16acdabdabf5b0b3d28a098efc43a20b"
+  "runner_sha256": "3cbdaf1386ec4ab55f050a07c52fe36ff86515fef2eb8b0d4e4c7d8ca55e82e1"
  },
  "architecture": "locked synthetic LE 64-bit fixture (const/other/unique/ram/register/stack/join/iop spaces, TypeFactory, decoded 'fixture' ProtoModel); no sleigh",
  "compiler_spec": {

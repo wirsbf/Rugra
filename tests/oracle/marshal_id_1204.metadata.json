@@ -104,7 +104,7 @@
   }
  ],
  "comparand": {
-  "rugra_base_commit": "08bc7b0a1d9337da31bb239b2c00688449ae07dd",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "e69de217098cb1c0a3a1a920f8d4740cf10b743b",
   "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
   "overlay_paths": [
@@ -117,11 +117,11 @@
   ],
   "cpp_fixture_sha256": "fff5398e5d93c870fb20613b41fad786f8112b2d36155086291195cb0cdc3bbf",
   "rust_fixture_sha256": "26e7c3482036362728434c1c5fc06d54b5f6df5e020566bcc59098c895985fdc",
-  "marshal_rs_sha256": "2a1010a565245190daf10bf49a1368a0ad176b94d774c413fa33177257eb832e",
-  "marshal_doc_sha256": "4633f0e44f28af6e9d459c44e3c1070b1aac8c5961629a0f3441abf676eb1c69",
-  "runner_sha256": "715ba1d0861fd7400782bad7702fe9ef44d8315b4d2ea699a696de0b953d2c82",
+  "marshal_rs_sha256": "aca873adaa3418212b5a7dbc12b255f56f110f87217e9c0d18709d22cca7fc14",
+  "marshal_doc_sha256": "e4384640e733e34191fa736b02932206a85fb24f679faadb4c92a58c233f54b4",
+  "runner_sha256": "d902cbbbeb475c521402986e11b119a70ea7a78b7483fef17d0557f517aa335c",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
  },
  "build": {

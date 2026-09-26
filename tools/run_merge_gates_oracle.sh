@@ -31,7 +31,7 @@ clean_path=/usr/bin:/bin
 rust_toolchain=nightly-x86_64-unknown-linux-gnu
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=b96e6f957dda722b6c4efa1d53db86efacccbac1
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
@@ -157,7 +157,7 @@ if metadata["oracle"]["tag"] != oracle_tag or metadata["oracle"]["commit"] != or
     raise SystemExit("metadata oracle mismatch")
 if metadata["rugra_base_commit"] != rugra_base_commit:
     raise SystemExit("metadata Rugra base commit mismatch")
-if metadata["overall_status"] != "MATCH":
+if metadata["overall_status"] != "UNTESTED: (B2 canonicalization)":
     raise SystemExit("fixture must remain MATCH overall (14/14 lines)")
 for gate in ("indirect_addrforce_gate", "dominant_copy_null_cache_merge",
              "multientry_required_gate", "cross_space_justloc_order"):

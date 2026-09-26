@@ -32,7 +32,7 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=e9baabd9f18d87899cbdad9a4186969afc140f4f
+rugra_source_commit=ae1a28e30eb97e09062d5b64a220c7682f527735
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/varmap_dynamicsym_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/varmap_dynamicsym_1204.cc"
@@ -305,7 +305,7 @@ expected_residuals = {
 }
 require("residual branch union", branch_ids, expected_residuals)
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 print("snapshot verified", flush=True)
 PY
 

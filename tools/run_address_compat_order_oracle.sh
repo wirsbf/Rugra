@@ -41,7 +41,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=197b34cb6bde4959e93a8606eaa1f41f57814b82
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_base_tree=f3e7c3c3db80178cf71f3e719f9508d16e10a638
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/address_compat_order_1204.metadata.json"
@@ -308,7 +308,7 @@ require(
     metadata["stable_function_id"],
     "GH12-F-085d210dd52f0abac240",
 )
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

@@ -16,14 +16,14 @@
   ]
  },
  "rugra_source": {
-  "commit": "8ce126c3be09235f1c25f6baf79f71e736a83b82",
-  "tree": "dc3deea10753d6bb19db5273f68c65ec4aa7afab",
-  "src_tree": "7d1ce7c20ed8955c1769372655963b99608dd9d1",
+  "commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
-  "base_coreaction_blob": "d0e304d4d37e7125bb0afcc6116c84232dd4f613",
+  "base_coreaction_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "base_coreaction_sha256": "79364848c7c134da6ba97e594ab0be2d486be35776d4abd657c23d568befdfe7",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -41,7 +41,7 @@
   "base_closure_sha256": "360522b3b926cffea9e2faa061c783ff4433e6cb692b941f9376bc1811e82d63",
   "overlay": {
    "path": "src/coreaction.rs",
-   "sha256": "6b7da863e0d87c363ae9794b7969b7cb67dc37b701c0871013861c2339fc6d84",
+   "sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
    "policy": "The sole live library-source input; hash before replacing the pinned archive's src/coreaction.rs"
   }
  },
@@ -93,8 +93,8 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree file and never require runtime HEAD equality",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
@@ -115,7 +115,7 @@
   "sha256": "ff6d76b987f375f8c5907b68172dbd3304053eb85093d81827d41955f1b3c918",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -204,7 +204,7 @@
  "comparand": {
   "cpp_fixture_sha256": "cde91c2eda1d79fcb0401a211fb4f609e44bc614ce7db293d8337c3553acdcaf",
   "rust_fixture_sha256": "e6c09e4e19c13782c25f5820eb583e12831342388b5a3031cb3ea01a98af96fe",
-  "runner_sha256": "232d2fda370b5ee2ac0faefb9010c415e37ec79d40449bdf5004cd342dbf3dd7",
+  "runner_sha256": "2f2c71045b9530e21ae7de1bf5c3ed7690ebc4f377434495a945438b3a54cace",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
@@ -218,7 +218,7 @@
   "host_python_path": "/usr/bin/python3.10",
   "host_git_path": "/usr/bin/git",
   "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "expected_stdout_sha256": "f53a197044b788099478036c7e0e8d00af0e60694904cbe0dc38e2add2b36268",
  "expected_exit_code": 0,

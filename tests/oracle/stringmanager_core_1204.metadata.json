@@ -103,10 +103,10 @@
    "detail": "fixture addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (ADDRESS-0001 transitional single-space discipline); cache-key ordering is observably identical within one space; cross-space key isolation is covered by the Rust unit test only"
   }
  },
- "host_compiler": "g++ (GCC) 16.2.1 20260810",
- "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
- "stringmanage_rs_sha256": "689b8b41e1e6bce1b0d0cc11214f1ef57b262fbbd75ae3b2586ac159bab29681",
- "arch_rs_sha256": "74fa6d643d1dfdc46f9cfc2b7e612fadf9971e1fca577976896007a62ce82fea",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "stringmanage_rs_sha256": "e260763f25faf46ee8726a8a9782a99f1cff8cba82e029a46f1fef2bb70ea660",
+ "arch_rs_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
  "cpp_fixture_sha256": "c0560e56da1a4ff29d378b5da50b2bac08f446a5731b3498f412951027cf3ff7",
  "rust_fixture_sha256": "04456f3e9a754b28a91018adb75da16b40847b8bb111300a1ce5f8c63eb01786",
  "expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",

@@ -44,25 +44,25 @@
   }
  },
  "rugra_source": {
-  "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
-  "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
-  "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_blobs": {
-   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "Cargo.toml": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+   "Cargo.lock": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
    "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
   "overlays": {
-   "examples/curl_decompile.rs": "0a2f2c3307af21e387324eaf5c9e5607178667bd7e7f22ccdd8282bd9829db37",
-   "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
-   "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
-   "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
-   "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
-   "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
-   "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
-   "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
-   "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
-   "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
+   "examples/curl_decompile.rs": "26eb8350299bf35d368a257288845b66eaab78841a997635332d39a258086d64",
+   "src/coreaction.rs": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+   "src/flow.rs": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
+   "src/fspec.rs": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329",
+   "src/funcdata.rs": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+   "src/heritage.rs": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
+   "src/ruleaction.rs": "ce83162551b9818f4cd0024f0d3c34e475d3f85fed7665409c86b7082239b002",
+   "src/signature.rs": "360936fff5a4a9d562648ae287d7d2ef2b49327340a1801647d37655effa7e84",
+   "src/unionresolve.rs": "fdac26d8ef55cd72d5fb2c480ad37648d2baf33c3e0204e911870d3bde5844ba",
+   "src/varnode.rs": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7"
   },
   "snapshot_build_link": {
    "path": "ghidra",
@@ -94,7 +94,7 @@
  },
  "assets": {
   "binary": {
-   "source_ref": "92daed300bcce3c4d855b311cf9667ba21eb475a:examples/curl",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "git_object_size": 161728,
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
@@ -191,10 +191,10 @@
  "comparand_sha256": {
   "cpp_fixture": "5ccb4917105ae1444f8220d08742a462bc6c1855e472874415515d1d97073fee",
   "rust_fixture": "a302200f85c533c2b09512c19b3420dc1248acff117c0e9770331e6113cc5149",
-  "program_flow_metadata": "adf5311c6979d14eb66acd91a05351fb65bb2f9448a2cd3f848279954c415cc5",
+  "program_flow_metadata": "43139b68055ede8683dd53d0e258028a45b8193976c6d55933f05c85ab85db72",
   "ghidra_curl_golden": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
-  "compare_ghidra": "3877d4c8580122f3755de7452378ab1ebdf09e6c1039ede4fb34e5bcfc349f1d",
-  "runner": "862139e2ae4fe18e5c38685aad162b8b1ccc0d8495940f78175ec37c21d6ecf6"
+  "compare_ghidra": "82ad32e0d25a1cad309074f581d1178bd80008c5d100bb85da849b5604c5f3b9",
+  "runner": "55939933e449e942c7130cd20ddde423a73a09441e320c449438dbdc8a4d2ef3"
  },
  "machine_input_sha256": {
   "curl_text": "287c95bed17616bd6e71c393fa61b28ae14e5671f1a7fac8a93137eda9e159d4"

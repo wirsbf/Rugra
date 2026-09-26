@@ -42,7 +42,7 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_commit": "8012627083360e0111506dc70d891552383a8c65",
+   "source_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
   }
  },
@@ -219,12 +219,12 @@
   "exceptions": "None"
  },
  "comparand": {
-  "rust_base_commit": "8012627083360e0111506dc70d891552383a8c65",
-  "rust_base_tree": "e94f9ee28049d6b26db645f74f0157a376116bf8",
+  "rust_base_commit": "0c607aa88b550eb07f6a8c443b34fcad86ec6d72",
+  "rust_base_tree": "054a8ddf2ab52561cf0c819637f3f1ae15f9b25a",
   "datatype_base_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
   "cpp_fixture_sha256": "44b05399e5a68088c2090e12bec28595e6cbf372188fc37b729b3e45a35b4bb7",
   "rust_fixture_sha256": "51984e0cb080f4746f50f820cb8633a77b9efb4f5531cde659e2e26283cc3277",
-  "datatype_rs_sha256": "7d12d27ce21af5249e010f53844832a272794aec938ba088f9687e78f3a83e12",
+  "datatype_rs_sha256": "8ea630941c8a2d6d2b0752b1fe7f576d44d2de3d8e7b66d14706c34f91b3e263",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",

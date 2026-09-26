@@ -10,7 +10,7 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "a4a2fe947e9798beccdf8c1b10641ad5c7a5e1e0",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
  "analysis_options": {
@@ -73,8 +73,8 @@
  "comparand": {
   "cpp_fixture_sha256": "16e1b01694acf16bcc4e7eda81e3c7b2048352cd0c986bdecb07b09a38b7764c",
   "rust_fixture_sha256": "31c465e06e71186dfd29d73d8631bc0579333526d6f4049a34fa264ef0c3c60b",
-  "merge_rs_sha256": "390275cf9c53fb964e19836ecdc61c3dcc64328eae2203a6cdb21de76838e37e",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "merge_rs_sha256": "e3410e6e0830819f928ed6a1a5eca13c3871b1eaa31053616ed7fe95498f2330",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "expected_ghidra_stdout_sha256": "05ddadd73dac17d0a1be2c852baa9fa11c33402ccd24208e6b07b8df42777dd0",
@@ -88,7 +88,7 @@
   "host_make_path": "/usr/bin/make",
   "host_git_path": "/usr/bin/git",
   "host_python_path": "/usr/bin/python3.10",
-  "runner_sha256": "a9d94b8f7855a150d93b32efc189e077cb66d2087e3320fe4d98e5801d4ffbfc"
+  "runner_sha256": "c213bff598a1e94b0bfb1343ac72ebe82b4f920a7bd74d4b29575e48a8418e7e"
  },
  "build": {
   "registry_packages": 164,

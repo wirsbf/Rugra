@@ -9,7 +9,7 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "87c6e06fb7f6dce503b0bfe560ef81faf63f4ef8",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
  "analysis_options": {
@@ -75,10 +75,10 @@
  "comparand": {
   "cpp_fixture_sha256": "fca416b223e898b0509d278d3e98c8dfe2bdc842ecb8d3f1ca7136c343de6285",
   "rust_fixture_sha256": "0822ee44754837aa254e39a05fcde4f9a47e075d095f9cd2363e84211df1a7b4",
-  "merge_rs_sha256": "4c1a9f6f71a0f78919b0efe92c4fb9aa80a0ae05ff6ce3149bd8ed1ee28fe7ff",
-  "merge_doc_sha256": "951340b30bc6e2934f3d764e9fe3472ba60eb957801c567895e98fc21059a89c",
-  "runner_sha256": "2262cae17b3d44a8c37da1922b69f77f758eaf7c5a8ac7ba1d91be8c3513c50f",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "merge_rs_sha256": "e3410e6e0830819f928ed6a1a5eca13c3871b1eaa31053616ed7fe95498f2330",
+  "merge_doc_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
+  "runner_sha256": "a1b124e72f7ac8f78a80199d75a64ef3068d6847a73af5fe6118eeb35d54da9f",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",

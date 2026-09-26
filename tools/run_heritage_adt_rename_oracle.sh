@@ -41,8 +41,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=194901d0de8bd45069829c948c9c0f991e097d84
-rugra_base_tree=1fe1b70437cc90d373a697770e45b2a686c5d8a4
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/heritage_adt_rename_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/heritage_adt_rename_1204.cc"
@@ -305,7 +305,7 @@ metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
 require("fixture id", metadata["fixture_id"], "HERITAGE-ADT-RENAME-0001")
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

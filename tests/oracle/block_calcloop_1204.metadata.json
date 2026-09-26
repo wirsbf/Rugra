@@ -45,7 +45,7 @@
    "irreducible_endtoend_calcloop: classic two-entry pair through the full structureLoops driver; findSpanningTree builds the tree, findIrreducible promotes the second entry b0!1->b2 to f_irreducible (irreduciblecount=1, forward classification cleared), then calcLoop runs (block.cc:2211-2214) and labels the cycle back edge b2!0->b1 f_loop_edge on top of the spanning labels (lb)",
    "structure_reset_chain_dominator: structureLoops followed by calcForwardDominator (funcdata_block.cc:711-712) on the nested irreducible-inside-loop FIND-reuse graph; irreduciblecount>0 so calcLoop labels both latches (b3!0->b2 lb, b4!0->b1 lb), b1!1->b3 carries i, and the projection pins the combined observable: immed_dom per block with entry null, rootlist [b0], unreachable=0"
   ],
-  "sha256": "a990a74055966d85c2a5c31a2d4c3001a312219b999daffe062e6d8e3f4f4a48"
+  "sha256": "175f5105f94b1940d4500b274a8f57da2c0f4ab84b3f9ce5a303dc1a5d629a13"
  },
  "observation_schema": {
   "format": "Ten fixed-order UTF-8 lines with final newline: one envelope plus nine case records (the two driver cases each emit a trailing _roots record)",
@@ -53,20 +53,20 @@
   "graph": "component list order, per-slot out-edge and mirrored in-edge label classification, final rootlist and the blocks_unreachable decision for driver cases"
  },
  "comparand": {
-  "rugra_base_commit": "d915255e200006c9a99dceed0b11311410ef63bb",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "76b42aa10bbc483630138a1b11cebba4ba8d569f",
   "cpp_fixture_sha256": "9af88021308952f93d94461905e033ec8e90b08d750e37a7dace9933a239c0bd",
   "rust_fixture_sha256": "d09c18733d0426ec52c7e13f189cb650c67694d4b9f87d47e4ed0005ad9b68dc",
-  "block_rs_sha256": "21e860d9b9d07478ed40e3414f717d3296d9195734f875d53cb2c505489a16ab",
-  "blockaction_rs_sha256": "9e32504a5285f911f031f910f2a473e0b2340162d89654f836bb279c1ccd3237",
-  "block_doc_sha256": "c186c2fbe265f4b1e184fe55c640e20b5046cf4083ef68a188211b8e3aa6f1a7",
-  "blockaction_doc_sha256": "e97a2a05612900ee09c119844306e2530d9eaebc901a7b4ebc8257f7207d1a08",
-  "runner_sha256": "0f014ad6ae8b7cb3154ffb4a4aa40a7d22ec7544cb6c29c6b62558a8e5cee86c",
+  "block_rs_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "blockaction_rs_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
+  "block_doc_sha256": "e4acec236a88e3e0df3805c9a53390820fb0786e356e7510dc8651f32b539538",
+  "blockaction_doc_sha256": "2a3cfbc2aba0cdd94d77690dcc482d490aac27d5710423b81f7c4c25bc2b2ced",
+  "runner_sha256": "cc8496ad5904eceeaa5f5745d66c8c0678da2b5715f4cfd856d89ea57c7f63d6",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-block-calcloop-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_tree_sha256": "b295eed151132fb5a0fa08cff2f4ce770716343f0d9a52825f837730accff3b2",
+  "rust_crate_tree_sha256": "75cead7867acf7e0a4b539d1c19fd264ea6b291be9ce347fa4f53450e283474a",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",

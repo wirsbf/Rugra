@@ -29,7 +29,7 @@ clean_path=/usr/bin:/bin
 rust_toolchain=nightly-x86_64-unknown-linux-gnu
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=8012627083360e0111506dc70d891552383a8c65
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
@@ -151,7 +151,7 @@ def require(label, actual, expected):
 require("schema", metadata["schema_version"], 2)
 require("fixture id", metadata["fixture_id"], "RULE-ADDUNSIGNED-TYPEPRECOND-0001")
 require("projection status", metadata["projection_status"], "MATCH")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
 require("oracle tag", metadata["oracle"]["tag"], oracle_tag)
 require("oracle C++ tree", metadata["oracle"]["decompiler_cpp_tree"], cpp_tree)

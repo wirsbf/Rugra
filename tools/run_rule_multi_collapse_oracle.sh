@@ -7,7 +7,7 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_input_commit=34a3febff160031c265cfbd841a94022c68c2c19
+rugra_input_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_input_blob=4e26a362f92ac1961bab63000215a84b4d7212dd
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/rule_multi_collapse_1204.metadata.json"
@@ -293,7 +293,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 reject_pending("input_manifest.sha256", manifest["sha256"])
 require("input manifest sha256", sha256(canonical), manifest["sha256"])
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 for key in (
     "absolute_root_skiplist_1",
     "loop_self_reference_mark_clear",

@@ -24,15 +24,15 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "10dac8e1d237763855e7d8c68c1bb89dfedbd82b",
-  "base_tree": "f819bdcf35ca262ab8a896b33063e2993fee6f6b",
-  "base_src_tree": "d1153332bc3ae2f138c3a19e13f9721ed697f738",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_condexe_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
   "base_block_blob": "10c0da4840eced04ed54701fe73c7bf355d0d738",
   "base_double_precis_blob": "9d4ffe1a072d45accd3e7eb87e3d9942d43d054c",
   "base_blockaction_blob": "76c7fd80219848d352c7ee156e2cbfa5a90ad221",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -234,10 +234,10 @@
   "cpp_fixture_sha256": "068dc2933c4f5e7f1d362410214619f2409f71c1a15ff80e02dddfc453fadf11",
   "rust_fixture_sha256": "c7430c23b66951304119caff24a413ffa4442266ba88c7eccd890516190499f6",
   "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
-  "block_overlay_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82",
-  "double_precis_overlay_sha256": "48c71587eb22e8cc652e65a725d5601c911a5a23d1d3a30d4d064a5b71ed295e",
-  "blockaction_overlay_sha256": "5b149fab0291bb6ef4c57768a5fc072f2c515b0af872a26c1765c8582c8e97b1",
-  "runner_sha256": "02bbf2b7825f029210df4755218f4819659e311db031c01171a6252b47511541"
+  "block_overlay_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "double_precis_overlay_sha256": "3bcfaefbe2e90a9fb581681ae9d8267852de5481946db0d515a82b6b010162d8",
+  "blockaction_overlay_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
+  "runner_sha256": "4939fd69f30299181c330ea547946ac3cf27898469265e5a2ae2c21b4cdbb290"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",

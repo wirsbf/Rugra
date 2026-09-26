@@ -83,7 +83,7 @@
  "comparand_sha256": {
   "cpp_fixture": "06b48f3d5305a50ad1abfd8f4ab99e1ccde35ad7e0ffb950f4d22078e9ca1447",
   "rust_fixture": "c1db34c7d19b218bfa2ccd8ce167e9e2e9692de7618d6499918c81f3cdbea65d",
-  "runner": "b83e5b5135ff73b4f41d29ff8d72046d0ee395873e5b8c0a0c771ab2d7e22963"
+  "runner": "130ae7c33b390b066de49d47db73c2570eb042999b19972a336f1d778faef6f5"
  },
  "expected_stdout_sha256": "f9153a942231e0ae34da7ffacdc8d57fd099031573d192e7a62a4f9da93e68f8",
  "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",

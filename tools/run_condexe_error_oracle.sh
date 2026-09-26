@@ -183,7 +183,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 expected_matches = {
     "error_illegal_iblock_op", "error_missing_dominator",
     "verify_failure_no_change", "unreachable_guard_early_return",

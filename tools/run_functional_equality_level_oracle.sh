@@ -49,7 +49,7 @@ oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
 input_commit=34a3febff160031c265cfbd841a94022c68c2c19
 input_blob=4e26a362f92ac1961bab63000215a84b4d7212dd
-rugra_base_commit=9161720cbe798e6f0b7ee93159a68591eea2c854
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/functional_equality_level_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/functional_equality_level_1204.cc"
@@ -308,7 +308,7 @@ for label, actual, expected in (
     ("oracle Makefile blob", oracle["decompiler_makefile_blob"], makefile_blob),
     ("architecture", metadata["architecture"], "x86:LE:64:default"),
     ("compiler spec", metadata["compiler_spec"]["id"], "gcc"),
-    ("overall status", metadata["overall_status"], "MISMATCH"),
+    ("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)"),
 ):
     require(label, actual, expected)
 

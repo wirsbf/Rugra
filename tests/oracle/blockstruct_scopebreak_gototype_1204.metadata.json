@@ -1,9 +1,9 @@
 {
  "comparand_sha256": {
   "cpp_fixture_sha256": "69267b1e4f365aad1247f1d2e4e89c1fdbd60b348189b95dfb6a0bed47166cba",
-  "rugra_block_sha256": "6feb58f2ba3dcfd4f7ae339dd8bc7a1016836573a888cef29610d9ba21508364",
-  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
-  "rugra_printc_sha256": "2124aa40cdb876a37dadf9d4e9ba66446d70ab2fd568dc78a2c053bbff8db773",
+  "rugra_block_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "rugra_blockaction_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
+  "rugra_printc_sha256": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962",
   "rust_fixture_sha256": "97f7798ae742882d7833bab2f8e25572f08b4ab5600e79a7c534c4b581276e59"
  },
  "fixture_id": "BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001",

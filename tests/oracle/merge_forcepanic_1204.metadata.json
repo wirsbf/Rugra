@@ -25,15 +25,15 @@
   "signature": "int4 ActionMergeType::apply(Funcdata &data); void Merge::mergeAddrTied(void); void Merge::mergeRangeMust(VarnodeLocSet::const_iterator,VarnodeLocSet::const_iterator); void Merge::mergeTestMust(Varnode *vn); void Merge::mergeByDatatype(VarnodeLocSet::const_iterator,VarnodeLocSet::const_iterator)"
  },
  "rugra_source": {
-  "base_commit": "8dc17e4453d4f14a26318de92d6a8120f6e0bceb",
-  "base_tree": "b6206fbd14a5542d69d4432336b205d202214fd4",
-  "base_src_tree": "d146e6d16a84c1d8084fe6fd9485a37284ab15eb",
-  "base_coreaction_blob": "dffd02708768be2044b298d33e425505fac8c9c4"
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_coreaction_blob": "e5fb0a75534d714556206c765e6cc075cf3bd8c3"
  },
  "comparand": {
   "cpp_fixture_sha256": "9844a0d4fb8ff29212957a45e008d2f836bb6a32d7913eee6a85f49637a82a29",
   "rust_fixture_sha256": "5efe5eb10688ff302c36348b3635e2a5357e8009b7ef094ace15eead0c474d93",
-  "runner_sha256": "3e92540e85b21bb1c06790cdb486699126b163193d95884155ac421646a9f926"
+  "runner_sha256": "331d84a2cbbd6fc5e7ddedd41c655173232cb89d760e6d620f4741d68a800c34"
  },
  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",

@@ -74,7 +74,7 @@
    "c5_explicit_varnode_and_max_val": "<set space='register' offset='0x20a' size='1' val='0x123'/> explicit storage form (VarnodeData::decodeFromAttributes space branch with rewind + AddrSpace::decodeAttributes) plus <set name='RAX' val='0xffffffffffffffff'/> (max uintb through cpp-stream hex parsing).",
    "errors": "Seven verbatim oracle texts: e1 <tracked_set> without space -> 'No address space indicated in range tag'; e2 <bogus/> child -> same range error first (Range::decodeFromAttributes runs before the child-name dispatch); e2b <bogus space='ram'/> -> 'Bad <context_data> tag' (only reachable when the range decodes); e3 first>last -> 'Illegal range tag'; e4 unknown register -> 'Unknown register name: NOSUCHREG'; e5 unknown space -> 'Unknown address space name: nosuchspace'; e6 <register val='0'/> inside tracked_set -> 'Expecting <set> but got <register>' (probe name chosen inside the locked ElementId table; TreeDecoder maps table-external names to XMLunknown \u2014 registered residual)."
   },
-  "sha256": "825bad914c4b6310177e485d35f97249ddf9062f6d7a524eeee78347f99e7c9c"
+  "sha256": "2f4ad4b98f91e986706242ebfd043242a14f2adc52a4d4c7121af1e3894313dc"
  },
  "observation_schema": {
   "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
@@ -83,16 +83,16 @@
   "errors": "Verbatim LowlevelError/DecoderError explain strings from seven malformed documents."
  },
  "comparand": {
-  "rugra_base_commit": "b2a92b8f84802e3c877c5c9bb5c0132cc5e3e808",
-  "rugra_base_tree": "7d634e36819bbced8031350ee6b265d8bb443b92",
+  "rugra_base_commit": "555aa1b8ebf410b8458aa9db9f0d5f1e6b9287a6",
+  "rugra_base_tree": "fb515359f6fcb8f4926bf4c57ab9f33148e9ad5b",
   "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "98d110cf5ea1ec69103aab48ab696cc971ef8dfe6bd585363b7e036963bedaad",
   "cpp_fixture_sha256": "2125a48ddfb8f97abc8c289e78095ed5e9f6b9aec1770f860d04eddd1f320df4",
   "rust_fixture_sha256": "cbe911efa8b4ab6705a13171f74d5eb78c8d26fb9208d408c37a1a90b8d6d4d6",
-  "arch_rs_sha256": "77349f5c409ed0f15ee6c97236a2950d7c56a8087eddd37423c116022b1691e5",
-  "arch_doc_sha256": "b04407dcf2c147c76dc056c8ab6f5a82d9cc69d5389583e68aefc71db574fb52",
+  "arch_rs_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
+  "arch_doc_sha256": "e7ec38f857601a8c65eb267950cb28c8038f9ed5c9cd31dfbde541f7a05aec01",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
  },
  "expected_stdout_sha256": "27db706a1b146a8f01fb4e9b263db24e81fe99f1d521c653f8b957c9b2c4342b",

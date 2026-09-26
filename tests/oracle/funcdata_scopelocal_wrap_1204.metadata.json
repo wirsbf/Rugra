@@ -79,12 +79,12 @@
  "comparand_sha256": {
   "cpp_fixture": "c85daadc3fff0f58d2a4ceab73e086b24216fadf2af594b4e0415eecfd4713a5",
   "rust_fixture": "1c483a69d898355654633d17c7f177d381ec8b70f81a3e63c4807416b75b8b46",
-  "rugra_funcdata_source": "81e9febb646680a4184627383dc208a0bc8221076b78873e684f7a5f141b8bdf",
-  "api_document": "1a7970022ee41eed408bbab951ddcb7ccc9f5952eb0a5034e2655e9707db0f72",
-  "runner": "f4fcc547b2982500d6d1ef640b371a9004a7e76d3f7c756c6b57e4ae6e6d7b6c"
+  "rugra_funcdata_source": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "api_document": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
+  "runner": "29e82da469011045f8ba8a476e54b96617eb391062dbbdafc9f46fc6d9602183"
  },
  "expected_stdout_sha256": "72fdc591f4ea3a61e9ffb8d702951c290a5d07cc80af4a9b684723aa6be4c6ec",
  "expected_record_count": 7,
  "overall_status": "MATCH: FUNCDATA-SCOPELOCALOVERFLOW-0001 wrap-domain queries; 7/7 records byte-identical on 2026-09-01 (master replay, base 94789db)",
- "input_sha256": "81e9febb646680a4184627383dc208a0bc8221076b78873e684f7a5f141b8bdf"
+ "input_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da"
 }

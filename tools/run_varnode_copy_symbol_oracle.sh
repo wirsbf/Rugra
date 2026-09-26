@@ -49,7 +49,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=dce02f7897757ba647105987b40a839425d30219
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_base_tree=885fd034236d56c66b2eead5a5786293b54ce8d1
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/varnode_copy_symbol_1204.metadata.json"
@@ -313,7 +313,7 @@ require(
     metadata["stable_function_id"],
     "GH12-F-edea5e55c75b6fc66820",
 )
-require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

@@ -9,7 +9,7 @@
   "cpp_fixture_sha256": "bd188dd9cf15d5c03c483ddb9f394ba0cd7fcf8ee1ee0deb1acf1f820a905149",
   "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
   "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
-  "rugra_blockaction_sha256": "9bd3fd519ad3b2e48328683ae392e176140eb97a16e9df9c6a29bfef8d9a522c",
+  "rugra_blockaction_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
   "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
   "runner_sha256": "dc753041338cec986e33e0389b9babcbd8a80b7b217f6448b4bae65f58e482f4",
   "rust_fixture_sha256": "767dd5752aedf66dc49ec6fdbdbb1232090fa7176b90883971f9172c7802dcdd"

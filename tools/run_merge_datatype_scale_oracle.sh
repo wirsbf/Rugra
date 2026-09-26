@@ -31,7 +31,7 @@ clean_path=/usr/bin:/bin
 rust_toolchain=nightly-x86_64-unknown-linux-gnu
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=87c6e06fb7f6dce503b0bfe560ef81faf63f4ef8
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
@@ -150,7 +150,7 @@ if metadata["oracle"]["tag"] != oracle_tag or metadata["oracle"]["commit"] != or
     raise SystemExit("metadata oracle mismatch")
 if metadata["rugra_base_commit"] != rugra_base_commit:
     raise SystemExit("metadata Rugra base commit mismatch")
-if metadata["overall_status"] != "MISMATCH":
+if metadata["overall_status"] != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("fixture must remain MISMATCH overall")
 if metadata["coverage"]["full_loc_target_projection"] != "MATCH":
     raise SystemExit("full-loc target projection must be MATCH")

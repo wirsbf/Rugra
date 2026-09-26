@@ -33,23 +33,23 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_input_commit=34a3febff160031c265cfbd841a94022c68c2c19
+rugra_input_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_input_blob=4e26a362f92ac1961bab63000215a84b4d7212dd
-rugra_source_commit=e1140912464f0e4912143de9f4fa9c6aeba0f644
-rugra_source_tree=ad1711e0973938e209d7d4a6542fec5a6b41b962
-rugra_source_src_tree=4f9ebbe096e91e290ea0736add7482da1ed44465
+rugra_source_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_source_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
+rugra_source_src_tree=2f252f03a1542c5e3aee261b4000b9614541390e
 rugra_source_sleigh_shim_tree=c7729d9d1554dc62c486bcd7d58fdbf44bebb97d
-rugra_source_coreaction_blob=474ce0b947f2ec3c3947848ade082fbb7a0e1a77
-rugra_source_fspec_blob=87e2e62276218b859ff357ad110d936ca8c45e63
-rugra_source_varnode_blob=52b68f6550bb4656ab284384d12ae749082084e0
-rugra_source_action_blob=a945ae46bb5a768189a0487c299c2a256b08df8b
-rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
-rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
+rugra_source_coreaction_blob=e5fb0a75534d714556206c765e6cc075cf3bd8c3
+rugra_source_fspec_blob=8c5c2a92a9346deac82ee73cb1d5ce5c76f5bd9f
+rugra_source_varnode_blob=13bec7c6e07f3f2b453cc9a7f7c28d26676e842e
+rugra_source_action_blob=40b15b0873e83caf6318ef26267d799be89e624c
+rugra_source_cargo_toml_blob=f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341
+rugra_source_cargo_lock_blob=c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_source_paths=(
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs
-  src sleigh_shim
+  src sleigh_shim crates
 )
 
 ghidra_root="$repo_root/ghidra"
@@ -68,8 +68,8 @@ host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
 host_timeout_bin=$(/usr/bin/readlink -f /usr/bin/timeout)
-host_cargo_bin=$(/usr/bin/readlink -f "$(command -v cargo)")
-host_rustc_bin=$(/usr/bin/readlink -f "$(command -v rustc)")
+host_cargo_bin=$(command -v cargo)
+host_rustc_bin=$(command -v rustc)
 for tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" "$host_make_bin" \
   "$host_python_bin" "$host_git_bin" "$host_timeout_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -229,7 +229,7 @@ def reject_pending(label, value):
 archive_paths = [
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
     "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
-    "tests/oracle/funcproto_lock_1204.rs", "src", "sleigh_shim",
+    "tests/oracle/funcproto_lock_1204.rs", "src", "sleigh_shim", "crates",
 ]
 archive_files = []
 for path in snapshot.rglob("*"):
@@ -494,7 +494,7 @@ fixture_target="$oracle_tmp/cargo-target"
 if ! (
   cd "$snapshot_root"
   /usr/bin/env -i HOME="$HOME" RUSTUP_HOME="$HOME/.rustup" \
-  PATH="$clean_path" LC_ALL=C.UTF-8 \
+  PATH="$clean_path:$(/usr/bin/dirname "$host_cargo_bin")" LC_ALL=C.UTF-8 \
   CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
   CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" AR="$host_ar_bin" \
   "$host_cargo_bin" build --quiet --locked --offline --lib

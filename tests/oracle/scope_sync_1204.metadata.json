@@ -9,7 +9,7 @@
   "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "609981d706edb3e384b148a12ed190028baa1984",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "x86:LE:64:default",
  "compiler_spec": {
   "id": "gcc",
@@ -77,7 +77,7 @@
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "609981d706edb3e384b148a12ed190028baa1984",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 161728
@@ -110,7 +110,7 @@
     "expected": "v_tl: mask never includes typelock/namelock so the symbol locks do not transfer; vn->updateType(int4) refuses (isTypeLock) keeping uint4; v_dyn: mapentry branch uses mask&~mapped (mapped held fixed), applies nolocalalias through the local mask, and updateType projects int4"
    }
   ],
-  "sha256": "2ddfd194a943ea1f5b044979bc55f317b7d4406710a05f950f23f7a504726b79"
+  "sha256": "19831d940e3bc963481a937374dac266dfe5e2014252582febf4a459bbe5d6cc"
  },
  "observation_schema": {
   "format": "Eight fixed-order UTF-8 records (before/after for four cases) with a final newline",
@@ -121,12 +121,12 @@
  "comparand": {
   "cpp_fixture_sha256": "03baae19e70e736f92bb49529e6946010e5defd415991e357aea7f13e2ad3e12",
   "rust_fixture_sha256": "9fea5b5b3db13669b63788e8ff05da810058054b8099234a1170e8f144a62435",
-  "runner_sha256": "9ad879fa9d0d6fbc151c3b0ba0ffe282847c03ef8993fb2cedf479f8cfc34da4",
-  "doc_funcdata_sha256": "0ec191a1cd272b0995a1f0636f67ffd16143293d317caa18c77d1955131a9aa2",
-  "doc_coreaction_sha256": "b9129211f1ffaba094a038d1fa60bef683ad4c7b06f1dafe0b4ac04fdfaf8f97",
-  "rust_crate_tree_sha256": "acf769d3591b7af803822b9197b6443114cc0497deaa3aeb90d4f5f810e97e9a",
+  "runner_sha256": "e1d0a598dfe3e619f7a5f9bf33a762009326a535e7eb0dcf8c8bc6949eb0c978",
+  "doc_funcdata_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
+  "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
+  "rust_crate_tree_sha256": "a4f46925d6565bd2bce07fa2b8c799c21d4bdbd9e184971dd6fdadff2ec5f1c3",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-scope-sync-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 609981d706edb3e384b148a12ed190028baa1984 Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
  },
  "known_dependencies": {},
  "record_verdicts": {

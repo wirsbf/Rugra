@@ -68,9 +68,9 @@
  "comparand_sha256": {
   "cpp_fixture_sha256": "eb5aca38c920ac44d827621b9f210d8351ea089384cc30eb78f9cb13bb47fb96",
   "rust_fixture_sha256": "ec195de480996313c03c02ae5616540e5051e01cd8ce8400fc7d4e4b55b33081",
-  "rugra_coreaction_sha256": "befb3c0c2ea85103d5d1c47ad93aa3070cfcd97fe7f3ed8afc128bb780a09b03",
-  "rugra_typeop_sha256": "ca8572187ec75207c1c2305234a5668b0a0032157ea252a786af7d57c47ee90c",
-  "rugra_printc_sha256": "e7abb1e73cc9e36615cd394ac0936302a190ad8bacee9e3196800a4f9d1b2a4a"
+  "rugra_coreaction_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+  "rugra_typeop_sha256": "3f4ba7f85dc11e690c786ca8f8cfab9897e79c0f7044529d65a5a0db5b7e383e",
+  "rugra_printc_sha256": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962"
  },
  "coverage": {
   "build_localtypes_needs_block_to_stop_up": "MATCH: A stop=1 vs B stop=0, identical bilateral projection",

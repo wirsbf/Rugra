@@ -77,13 +77,13 @@
   "cpp_fixture_sha256": "91b199e6b3512535b4c4e97f42a20f715459b3c0bc0467c79d5d44a2556ad5ac",
   "rust_fixture_sha256": "f961484cb08491ade786dbde7697189963bef169edb4c4cbd708dc8d1cf4a56b",
   "runner_sha256": "78d60f122bdd00a79ae212db58e3cbf92ce71b719565f2f802178b496cd2bd2d",
-  "funcdata_rs_sha256": "b3042608eb3249153bef852b4780557cc55ef201e6d0bed9bd0090867b566295",
-  "funcdata_doc_sha256": "d5ef279496dbf80b9a72dfcde8e86d3bc298d21f46edba7885e6cdac74eae945",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-funcdata-assignhigh-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "511599e109521b360b97e1086198090ab9302e775bb50afd0d3255692de7f5cc",
+  "rust_crate_tree_sha256": "ea25c9ad7a7ec60ed1557f8654e63e324397849a06dd605b9d90f0a4e65b98a6",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
@@ -97,7 +97,7 @@
   "host_python_path": "/usr/bin/python3.10",
   "host_git_path": "/usr/bin/git",
   "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-  "host_platform": "Linux 6.8.0-124-generic x86_64"
+  "host_platform": "Linux 6.8.0-138-generic x86_64"
  },
  "build": {
   "cpp_oracle": "full locked decompiler libdecomp.a rebuilt from the locked worktree; fixture compiled in a separate directory against that tree",

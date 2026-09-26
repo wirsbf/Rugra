@@ -28,40 +28,40 @@
   "source_policy": "Materialize the four SLEIGH/spec files and curl binary from verified Git blob IDs at the pinned Rugra provenance commit; never consume their working-tree copies",
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.sla",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86.ldefs",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544,
@@ -75,16 +75,16 @@
   }
  },
  "host_tools": {
-  "g++": "g++ (GCC) 16.2.1 20260810",
-  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "8a9bc2b361ea84e970a198325ba27226f8ddce42dddd11b888aec26351fb010d",
+  "sha256": "a2d2f11a8044e6112f2d9a554ab63895f75c31909e166e7b03e5b0c07f878518",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -176,9 +176,9 @@
  "comparand": {
   "cpp_fixture_sha256": "62d2b0ae81da7fea498c85b16601309a73738a03111b8bc1f0e757b24aad8623",
   "rust_fixture_sha256": "a8ffd289b2f0d5456edc968af551c37479cd97a75373549ca5ebd470d030a4f3",
-  "runner_sha256": "5a22e735efad960e76c76f5d33aae71541d02a5d1a3556be83ac077130d7cc8d",
+  "runner_sha256": "620279dbbd58ddc87628525d3d36b61a2fcebeed5d5a49d6293c0f60a1d10da6",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-propcopy-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "c595d3132a49400dc898b42ae6717bd75803167addbb9c9fc97976a4d5d5cc9e"
+  "rust_crate_tree_sha256": "c05366ca09c63f3372efbed6d2cb69aadf7e3e8966e14eefbd5d5a0c0d58e7e8"
  },
  "expected_stdout_sha256": "60cc346e8152c36a8dcb505041094e1160c631b029dd678a6ab421aa1aa989c5",
  "expected_exit_code": 0,

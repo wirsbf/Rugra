@@ -20,10 +20,10 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=463664610f23956530f627e28f9388a6af858a99
-rugra_base_tree=710c1e9b9698b4a6a4d1537a7efe549b1e1b1679
-rugra_base_src_tree=56e09aae43f4c091a5310997d6fbc96f7e0c4530
-rugra_base_merge_blob=ba8242f1aeb45610eb4fd1be4b13ff1b1d9dcce7
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
+rugra_base_src_tree=2f252f03a1542c5e3aee261b4000b9614541390e
+rugra_base_merge_blob=87bda740fb72f42c070fdef4fb32d34a8bd55ada
 
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/merge_overlaploc_1204.metadata.json"
@@ -89,7 +89,7 @@ def require(label, actual, expected):
 
 data = json.loads(pathlib.Path(metadata_raw).read_text(encoding="utf-8"))
 require("fixture", data["fixture_id"], "MERGE-OVERLAPLOC-FLAGUNION-1204")
-require("overall", data["overall_status"], "MATCH")
+require("overall", data["overall_status"], "UNTESTED: (B2 downgrade: two-sided output pinning incomplete; original claim was pre-B2 match prose)")
 comparand = data["comparand"]
 for key, path in (
     ("cpp_fixture_sha256", cpp_raw),
@@ -129,7 +129,7 @@ mkdir -p "$snapshot/tests/oracle" \
 git -C "$repo_root" archive --format=tar --output="$oracle_tmp/rugra.tar" \
   "$rugra_base_commit" Cargo.toml Cargo.lock build.rs README.md \
   benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
-  tests/oracle/funcproto_lock_1204.rs src sleigh_shim
+  tests/oracle/funcproto_lock_1204.rs src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra.tar" -C "$snapshot"
 cp "$repo_root/src/merge.rs" "$snapshot/src/merge.rs"
 cp "$rust_fixture" "$snapshot/tests/oracle/merge_overlaploc_1204.rs"

@@ -9,7 +9,7 @@
   "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "a51e0c5c14a5dec130d4e7a050e2512c9c518280",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "x86:LE:64:default",
  "compiler_spec": {
   "id": "gcc",
@@ -29,35 +29,35 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64.sla",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.sla",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64.pspec",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.pspec",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64-gcc.cspec",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64-gcc.cspec",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86.ldefs",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86.ldefs",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:examples/curl",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 161728,
@@ -77,10 +77,10 @@
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "607cffcb7092063441aba6b754b44d2d7ecac98f17b01e215a469315d1106cc1",
+  "sha256": "3b71bbf488826860936138e2bbe6cd6b1406cffeac15c39041c5b4cd2715b41a",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "a51e0c5c14a5dec130d4e7a050e2512c9c518280",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 161728
@@ -119,11 +119,11 @@
  "comparand": {
   "cpp_fixture_sha256": "acfb87381a83b40bb1b61d26fcc572b92a4b8ee36e83a3627521181530594c40",
   "rust_fixture_sha256": "f6ab61499cd05141cb23ec61b5fb025e134921bbbda567fce65aca6b9dbc562c",
-  "runner_sha256": "63cdad84bd63c5bc062e8cac34518d149c0b6449f2e7ff6382945ac43e864b06",
-  "doc_sha256": "de154014a33c6251e359c3ede33d34c6ba368c30ce335d2a81e896aa4bc12e64",
-  "rust_crate_tree_sha256": "0aad5094e1b9413b4f2fec5cd429e8515b55051baff9ed27fff42e5402791811",
+  "runner_sha256": "a15218e5f858f08c0fc1ed71f8855610cc635af530650960f4b02f1999c0880a",
+  "doc_sha256": "0efdd08ea2003e752d65ee1098c8843d2ba0f1f80cefaec056d994deb4ac7594",
+  "rust_crate_tree_sha256": "6a0afb3aa7942769364755b219c30411b44c370dcde6d2d0d2e9b4a1e7b70917",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-abort-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_source_policy": "Every crate file comes from the pinned base commit a51e0c5c14a5dec130d4e7a050e2512c9c518280 Git blob except the src/ruleaction.rs overlay, which is taken from the live working tree"
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d Git blob except the src/ruleaction.rs overlay, which is taken from the live working tree"
  },
  "known_dependencies": {
   "OPBANK-0001": {

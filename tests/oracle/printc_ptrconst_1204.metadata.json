@@ -115,9 +115,9 @@
    "detail": "resolved string addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (transitional single-space discipline, same key form as the rule-side consumer); printc.cc:1708 isInvalid arm is vacuous in Rust"
   }
  },
- "host_compiler": "g++ (GCC) 16.2.1 20260810",
- "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
- "printc_rs_sha256": "81163278fcc80dc55314b290f6ec83467327aec988ac9017af18ce02ccb76f9b",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "printc_rs_sha256": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962",
  "cpp_fixture_sha256": "07ac7dc8f11e6d38fc6fc74cbaa8df346b93dbc6cc1074b0cb2e28d7acaaaf20",
  "rust_fixture_sha256": "d833f4babc0ee6db10b24d93a61d2c8d3d1775567a294e66f49ed4dc75b49723",
  "expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",

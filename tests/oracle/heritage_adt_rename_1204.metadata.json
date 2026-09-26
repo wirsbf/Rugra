@@ -60,17 +60,17 @@
  },
  "comparand": {
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-adt-rename-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rugra_base_commit": "194901d0de8bd45069829c948c9c0f991e097d84",
-  "rugra_base_tree": "1fe1b70437cc90d373a697770e45b2a686c5d8a4",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "rugra_base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
   "cpp_fixture_sha256": "389417d81e43667c4cde7c6e151f085d38a8c99f2fd250cc902973b9fab2f173",
   "rust_fixture_sha256": "89d1d133656228927e591d0a583ea398d87f1f1991070460cf7289121893243f",
-  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
-  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-  "runner_sha256": "d8f83c748a393d49ede6084649e9037e29291169fa13ca40818f7eae43f7b297",
+  "heritage_rs_sha256": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
+  "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
+  "runner_sha256": "c886b9969b6fd0fca44677985c33e599c826af62c88f0104698c81da50a3d1d2",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "aeee825a01c3794706f35a230b55fc377544ecc5de382f855f9e22a27696b9d8",
+  "rust_crate_tree_sha256": "c90a19e827b06d7f8eeecf175310ade2d263eb1f36e75b992135aed42ee7c70a",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -85,7 +85,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

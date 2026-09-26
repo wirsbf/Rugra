@@ -6,7 +6,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=7b1da21a3a874598423a4b6b941eb2209545fc15
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_base_tree=$(git -C "$repo_root" rev-parse "${rugra_base_commit}^{tree}")
 rugra_base_src_tree=$(git -C "$repo_root" rev-parse "${rugra_base_commit}:src")
 rugra_cargo_toml_blob=$(git -C "$repo_root" rev-parse "${rugra_base_commit}:Cargo.toml")
@@ -199,7 +199,7 @@ canonical = json.dumps(
 require("manifest sha", sha(canonical), manifest["sha256"])
 
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")
@@ -321,7 +321,7 @@ mkdir -p "$snapshot_root/tests/oracle" "$snapshot_root/tools"
 git -C "$repo_root" archive --format=tar \
   --output="$oracle_tmp/rugra-source.tar" "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
-  src sleigh_shim
+  src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 for relative in "${overlay_paths[@]}"; do
   cp "$repo_root/$relative" "$snapshot_root/$relative"

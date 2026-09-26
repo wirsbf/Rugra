@@ -24,12 +24,12 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
-  "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
-  "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_blobs": {
-   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "Cargo.toml": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+   "Cargo.lock": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
    "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
   "archive_paths": [
@@ -44,15 +44,15 @@
    "sleigh_shim"
   ],
   "overlays": {
-   "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
-   "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
-   "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
-   "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
-   "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
-   "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
-   "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
-   "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
-   "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
+   "src/coreaction.rs": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+   "src/flow.rs": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
+   "src/fspec.rs": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329",
+   "src/funcdata.rs": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+   "src/heritage.rs": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
+   "src/ruleaction.rs": "ce83162551b9818f4cd0024f0d3c34e475d3f85fed7665409c86b7082239b002",
+   "src/signature.rs": "360936fff5a4a9d562648ae287d7d2ef2b49327340a1801647d37655effa7e84",
+   "src/unionresolve.rs": "fdac26d8ef55cd72d5fb2c480ad37648d2baf33c3e0204e911870d3bde5844ba",
+   "src/varnode.rs": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7"
   },
   "snapshot_build_link": {
    "path": "ghidra",
@@ -89,28 +89,28 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937,
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1"
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721,
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3"
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182,
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+   "source_repository_commit": "c38edbfbcbc9344a4deb331876a4b5dcf112c7e0",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390,
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94"
@@ -419,6 +419,6 @@
  "comparand": {
   "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
   "rust_fixture_sha256": "3df55dd3613b19d956a380d6306b6f6ca533a0b7af1d95f14f78dc82e558b092",
-  "runner_sha256": "074657f82a976d8084256d84009fe3408bd7d344416ccc09f718e86c449ff162"
+  "runner_sha256": "a87b82d368beeef66edfe58e61c0c15f64b9bec178cab6ec0f505fc13bada3fb"
  }
 }

@@ -41,7 +41,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=a51e0c5c14a5dec130d4e7a050e2512c9c518280
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_base_tree=acd0a8264e665bf11d8b6296ac93ca8026f7cae2
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/printc_format_1204.metadata.json"
@@ -314,7 +314,7 @@ metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
 require("fixture id", metadata["fixture_id"], "PRINTC-FORMAT-0001")
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

@@ -23,12 +23,12 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "5dc86bacaf959cf9921ad9b170494bb652c4a12f",
-  "base_tree": "e721a81955ad102d6b34d01a9e4df31cc2589b1f",
-  "base_src_tree": "a6d4ca9fe7d4688101153815233aa7827dffe7b4",
-  "base_transform_blob": "42dea35c14354256fc7df864eb25aceac7201cb9",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_transform_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -43,7 +43,7 @@
   ],
   "overlay": {
    "path": "src/transform.rs",
-   "sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
+   "sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
    "policy": "The only live library-source input; hash-verify before replacing the pinned base transform.rs"
   },
   "archive_policy": "Immutable explicit dependency closure plus one verified transform.rs overlay; unrelated worktree files are excluded"
@@ -79,35 +79,35 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -122,10 +122,10 @@
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "f5bf1875645eb68e579d40c98ffdec509bda06a41ac18ba38aca24e97aae7c04",
+  "sha256": "c85bf40ed30b4a3258ea0bafd2d66cc2ca0eb29ccd0b9b784d50808e73fba31e",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -338,8 +338,8 @@
  "comparand": {
   "cpp_fixture_sha256": "072731a6ade0060d77ef1968638bac1151174465b90fa443fec3e1d020d4516d",
   "rust_fixture_sha256": "0b8a0be9400306e2edf574cef19a473945caa76b5b6a0bfc9ed62e44d6060536",
-  "transform_overlay_sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
-  "runner_sha256": "8e557dba77eab12ebf88cc6e517724741a9928c0434c5377f99b81d64a52957c"
+  "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
+  "runner_sha256": "19c75c3c691d1a08e2deae307408f16429f08e9200e10547174ee55977647203"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "6524ac830011013eae0125d5905521dfeae0191c1d1c27c66622bc2dce2e5555",

@@ -81,7 +81,7 @@
    "c7_negative_setup": "integer_size=-2 survives decode as int4 and flows through sizeOfLong = (int==4) ? 8 : int.",
    "c8_sam_followed_by_child": "Synthetic document with <size_alignment_map> followed by <char_size value=\"3\">: children after the map are still consumed (oracle sam branch falls through to closeElement, type.cc:4604-4612); char reads 3 and align probes [-1,1] on both sides. Added in the review rework: a stray continue used to leave Rugra's TreeDecoder on the map element and silently drop the trailing child."
   },
-  "sha256": "21572366d57dd31edd887a298288833a474d9e65cef69d9358cb14d42a032e72"
+  "sha256": "6c0e247a872be5622925c67fe3c436f9b959c4503101c79e0d3e2e38ebce4917"
  },
  "observation_schema": {
   "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
@@ -91,16 +91,16 @@
   "errors": "Verbatim oracle LowlevelError text for the uninitialized alignment map."
  },
  "comparand": {
-  "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
-  "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
+  "rugra_base_commit": "bc62cf31140cda8d8c168ecbe03aa8e11f54a127",
+  "rugra_base_tree": "f01e524a16e3ae2488404e692f839a5710b98a3e",
   "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "d3861954655eb410ad045c1780bef8325e79e87415bc44bd0e42150dfb8502d1",
   "cpp_fixture_sha256": "f500bcf61699ae11f916581afb39302450bb36533e271213ec65656a3a8324b3",
   "rust_fixture_sha256": "c17f1252d7ed1e1c2ab99c09b310ba7d8a203716c4e69f52bc2e5d32128b48a4",
-  "typefactory_rs_sha256": "9c04b919088231ef2acdaf85c72c8c2d4ae542cc1565a669f11e56ff59bc1cd5",
-  "typefactory_doc_sha256": "36e8414fe5bb8198dd9d4cc6f6a1acb31877bca1ba62bb58cb2439531261c2cb",
+  "typefactory_rs_sha256": "15255e97974f4e02b6dd270d170fd070186dd3d11bed7d46adacfd632c911a2e",
+  "typefactory_doc_sha256": "203fdd751bb8fe1060d2838fbbaad1df3353ec056d8f202250268f7972c71360",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
  },
  "expected_stdout_sha256": "6158e6ab2d450f61c3a478c3ec9ec65238c0fb760fb38b97571d544d817f0675",

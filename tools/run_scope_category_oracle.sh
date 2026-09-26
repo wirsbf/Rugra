@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=0e2c87d5d75ca755198d1f2cae1218d8d0a88135
-rugra_base_tree=2eaa964981c4c49377888972d57d2a83b044be17
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
 ghidra_root="$repo_root/ghidra"
 oracle_cpp_path=Ghidra/Features/Decompiler/src/decompile/cpp
 metadata="$repo_root/tests/oracle/scope_category_1204.metadata.json"

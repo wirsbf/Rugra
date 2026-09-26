@@ -7,8 +7,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=8012627083360e0111506dc70d891552383a8c65
-rugra_base_tree=e94f9ee28049d6b26db645f74f0157a376116bf8
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
 rugra_datatype_base_blob=f766badaff4a4b2761edaa4e4ff0f138ba86679b
 ghidra_root="$repo_root/ghidra"
 cpp_root="$ghidra_root/Ghidra/Features/Decompiler/src/decompile/cpp"
@@ -187,7 +187,7 @@ canonical = json.dumps(
 actual_manifest = hashlib.sha256(canonical).hexdigest()
 if metadata["input_manifest"]["sha256"] != actual_manifest:
     raise SystemExit(f"input manifest hash mismatch: {actual_manifest}")
-if metadata["projection_status"] != "MATCH" or metadata["overall_status"] != "MISMATCH":
+if metadata["projection_status"] != "MATCH" or metadata["overall_status"] != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("fixture metadata status is not projection MATCH / overall MISMATCH")
 PY
 

@@ -30,10 +30,10 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=8d59b7730472bde2147e9fdf28a494221c2f26c4
-rugra_base_src_tree=593f652fa402b30eb3258b2b15b4a7c5a6ab0209
-rugra_base_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
-rugra_base_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_base_src_tree=2f252f03a1542c5e3aee261b4000b9614541390e
+rugra_base_cargo_toml_blob=f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341
+rugra_base_cargo_lock_blob=c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94
 rugra_base_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 ghidra_root="$repo_root/ghidra"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
@@ -132,7 +132,7 @@ fi
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/ghidra"
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_git_bin" -C "$repo_root" archive --format=tar "$rugra_base_commit" -- \
-  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim benches \
+  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim crates benches \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs | \
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/rugra"
 /usr/bin/cp -- "$comment_source" "$oracle_tmp/rugra/src/comment.rs"
@@ -174,7 +174,7 @@ def require(label, actual, expected):
 require("schema", metadata["schema_version"], 2)
 require("fixture id", metadata["fixture_id"], "COMMENT-SORTER-ITERATORS-0001")
 require("projection status", metadata["projection_status"], "MATCH")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
 require("oracle tag", metadata["oracle"]["tag"], oracle_tag)
 require("oracle C++ tree", metadata["oracle"]["decompiler_cpp_tree"], cpp_tree)

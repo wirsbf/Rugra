@@ -48,17 +48,17 @@
  },
  "comparand": {
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-collect-wraparound-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rugra_base_commit": "c48471545d38ef5db959deffde0aa5092cb96971",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "3d10e835076d21c38f6fb3fce9af2fe8799b262c",
   "cpp_fixture_sha256": "266e39b9cda437d897d4f9057517e3c3a6b396706340ecf7e1305f04a6a6f39f",
   "rust_fixture_sha256": "95005788979266321550f44974a9c12448746c4917348cb958f66b4f30d0847f",
-  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
-  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-  "runner_sha256": "d0a4da4744da8de6c9f8e07ed7982e4a20a96ccaaab9d7358ee92b83384a74ab",
+  "heritage_rs_sha256": "63a8763a8a0ecb54362dbd49beded975519ee039262b024cadca9a223eef18f9",
+  "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
+  "runner_sha256": "135404a02c3fb0b5cc569f54c6b14a419309660c0d68802bdee59121215fba3b",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "4b558dcde410c2d6dafc458756da8399259e716946f02505e9f2b1a2f5b79b27",
+  "rust_crate_tree_sha256": "650ad52b4b799bc6ea1cb7beff20975e85f6b241d8a7b8b5ebcf252b05ef6147",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",
@@ -73,7 +73,7 @@
    "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
    "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+   "platform": "Linux 6.8.0-138-generic x86_64"
   }
  },
  "build": {

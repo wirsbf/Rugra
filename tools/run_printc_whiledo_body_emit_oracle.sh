@@ -83,10 +83,10 @@ comparands = {
 }
 for key, path in comparands.items():
     actual = digest(path)
-    if metadata["comparand_sha256"].get(key) != actual:
+    if metadata["source_snapshot_sha256"].get(key) != actual:
         raise SystemExit(
             f"comparand mismatch for {key}: "
-            f"metadata={metadata['comparand_sha256'].get(key)} actual={actual}"
+            f"metadata={metadata['source_snapshot_sha256'].get(key)} actual={actual}"
         )
 
 compiler = subprocess.check_output(["g++", "--version"], text=True).splitlines()[0]

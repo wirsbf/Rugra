@@ -20,7 +20,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=102c476abf13a78f4a10062244286de53d46c755
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/space_printraw_special_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/space_printraw_special_1204.cc"
@@ -71,7 +71,7 @@ done
 rugra_workspace="$oracle_tmp/rugra-workspace"
 mkdir -p "$rugra_workspace"
 git -C "$repo_root" archive "$rugra_base_commit" -- \
-  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim benches \
+  Cargo.toml Cargo.lock build.rs README.md src sleigh_shim crates benches \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   | tar -x -C "$rugra_workspace"
 cp "$space_rs" "$rugra_workspace/src/space.rs"

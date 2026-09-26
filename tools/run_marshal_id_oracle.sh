@@ -56,7 +56,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=08bc7b0a1d9337da31bb239b2c00688449ae07dd
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_base_tree=e69de217098cb1c0a3a1a920f8d4740cf10b743b
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/marshal_id_1204.metadata.json"
@@ -203,7 +203,7 @@ require("base commit", metadata["comparand"]["rugra_base_commit"], base_commit)
 require("base tree", metadata["comparand"]["rugra_base_tree"], base_tree)
 require("architecture", metadata["architecture"], "process-global marshal scope-0")
 require("compiler spec", metadata["compiler_spec"], "N/A")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 require("source attr count", metadata["coverage"]["source_manifest_attribute_count"], 146)
 require("source elem count", metadata["coverage"]["source_manifest_element_count"], 274)
 require("source union count", metadata["coverage"]["source_manifest_union_count"], 420)
