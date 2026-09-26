@@ -1,0 +1,78 @@
+{
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "lane": "RETADDR (2026-09-26, wt/retaddr, base f3499354)",
+  "family": "HTTPDMAIN-RETADDR-FLOOR-0001 (dead-store survival boundary / canary chain)",
+  "provenance": {
+    "oracle_side": "tools/run_stage_drill_oracle.sh httpd 0x2b820 main (OPACTION_DEBUG stage drill, pinned comparand sha256 4e0aac505419f280bb48e82c45492d1260ba028b0eabc2db729bc0d6ebba32f1; harness tests/oracle/stage_drill_1204.cc; capture reused verbatim, no re-pin)",
+    "rugra_side_canon": "RUGRA_STAGE_DRILL=1 RUGRA_STAGE_FUNC=main RUGRA_STAGE_DRILL_OUT=... cargo run --profile fast-release --example httpd_decompile (oracle-drill grammar emitter, examples/httpd_decompile.rs emit_stage_drill)",
+    "rugra_side_bare": "RUGRA_SEEDS=0 same example, full corpus C output (seed A/B control arm)",
+    "canon_golden": "tests/golden/ghidra_httpd_1204.c main L3486+ (analyzeHeadless face)",
+    "mirror_golden": "tests/golden/ghidra_httpd_1204.direct-runner.c main (analyzer-less face)"
+  },
+  "input": {
+    "binary": "examples/httpd",
+    "function": "main",
+    "entry": "0x2b820",
+    "canary_site": {
+      "load_instruction": "0x2b851 mov %fs:0x28,%rax",
+      "store_instruction": "0x2b85a mov %rax,0x88(%rsp)",
+      "stack_slot": "s0xffffffffffffffc0 (local_40, 8 bytes)",
+      "check_instruction": "none (binary ground truth: exactly one fs:0x28 access, no __stack_chk_fail call in main - all exits go through exit()); the statement is genuinely dead write-only code in the input"
+    }
+  },
+  "invariants": {
+    "pass_count_parity": {
+      "oracle_heritage_applications": 7,
+      "rugra_heritage_applications": 7,
+      "oracle_restarts": 0,
+      "rugra_restarts": 0,
+      "verdict": "MATCH - the LOSS-247-v2 pass-count sensitivity does NOT manifest as a pass-count divergence on httpd main: both pipelines run 7 heritage applications (5 empty / 2 with records) and 7 mainloop deadcode applications, zero universal restarts, structurally identical bracket ladders"
+    },
+    "canary_storevarnode_conversion": {
+      "oracle": "YES (bracket 4060 oppool2:storevarnode: 0x2b85a:35 *(ram,..) = v -> s0x...c0(:35) = u0x23e00(:31))",
+      "rugra": "YES (bracket 4491 oppool2:storevarnode: 0x12b85a:32 *(ram,..) = v -> s0x...c0(:32) = u0x1068(:2f))",
+      "verdict": "MATCH"
+    },
+    "canary_copy_destruction": {
+      "oracle": "YES - RuleEarlyRemoval kills the converted stack COPY late in the run (bracket 6302/6817)",
+      "rugra": "YES - same rule, same relative position (bracket 12367/12973)",
+      "verdict": "MATCH - both sides destroy the named-local COPY; the printed statement comes from the surviving INDIRECT/MULTIEQUAL web, not from the COPY"
+    },
+    "canary_ssa_web_survival": {
+      "oracle": "ALIVE - the call-site INDIRECT chain over s0x...c0 (e.g. :27cd = u0x23e00(:31) [] i<call>) plus the loop-carried phi cycle (:2945 at 0x2ba58 reads INDIRECT outputs :27e3/:27e4 which read :2945) survives to pipeline end; hasNoDescend() is never true for cycle members; the LOAD 0x2b851:31 is never destroyed",
+      "rugra_canon_with_typeseed": "DEAD - INDIRECTs over s0x...c0 collapsed by RuleIndirectCollapse (brackets 4562/5297/5298) because their output vns carry nolocalalias=true; phi inputs then canonicalize; RuleMultiCollapse destroys the loop phi cluster in one application (bracket 12400); RuleEarlyRemoval peels the rest including the LOAD (bracket 12453)",
+      "rugra_bare_face": "ALIVE (RUGRA_SEEDS=0 output keeps 'uStack_40 = *(undefined8 *)(in_FS_OFFSET + 0x28);' - 11 fs:0x28 statements across the corpus, same as golden direction)",
+      "verdict": "MISMATCH on the canon face, root-caused to the seed data model (see root_cause); the library-side chain (funcdata.rs sync / ruleaction.rs indirectcollapse / varmap.rs markUnaliased) is oracle-faithful - proven by the bare-face control arm"
+    },
+    "final_c_output": {
+      "canon_golden": "keeps 'long in_FS_OFFSET;' + 'undefined8 local_40;' + 'local_40 = *(undefined8 *)(in_FS_OFFSET + 0x28);' (dead statement printed from the surviving web)",
+      "mirror_golden": "keeps 'xStack_40 = *(xunknown8 *)(in_FS_OFFSET + 0x28);' (analyzer-less oracle keeps it too - survival does not depend on analyzer data)",
+      "rugra_canon": "statement absent; dangling 'undefined8 local_40;' declaration remains (the RETADDR x2 residual: golden-only in_FS_OFFSET decl + canary read)",
+      "rugra_bare": "statement present (uStack_40 form)"
+    }
+  },
+  "root_cause": {
+    "chain": "typeseed manifest tests/golden/manifests/local_seed_httpd_1204.json commits 'local_70 long[6]' (and local_80/local_c8 arrays) as name+type-LOCKED stack symbols -> ScopeLocal::markUnaliased (varmap.cc:1376-1385) alias_block branch fires on the locked ARRAY at -0x70 (alias_block_level=2 blocks arrays) turning aliason off -> the NEXT entry (canary local_40 at -0x40) inherits aliason=false (sticky flag, no new alias to consume at its curoff) and is marked unaliased -> Funcdata::syncVarnodesWithSymbols mapped branch (funcdata_varnode.cc:954 getAllFlags carries the symbol nolocalalias attribute) sets Varnode::nolocalalias on every canary-slot vn -> RuleIndirectCollapse first guard (ruleaction.cc:3199 hasNoLocalAlias()==true, not indirect_creation) collapses the call-site INDIRECT web -> propagatecopy canonicalizes phi inputs -> RuleMultiCollapse folds the loop-carried cycle -> RuleEarlyRemoval peels the remainder incl. the fs:0x28 LOAD -> dead canary statement lost",
+    "oracle_why_immune": "the canon oracle's 'long local_70 [6]' is a decompiler-RECOVERED array (createEntry varmap.cc:622-627, unlocked - httpd has no DWARF, params print as param_1/param_2) so isTypeLocked() is false and alias_block never fires for it; the analyzer-less oracle has no array at -0x70 at all. Neither oracle face ever locks a local at a position that would un-alias the canary slot.",
+    "funcdata_rs_verdict": "MATCH-shaped under equal inputs: startProcessing/clear/restart bookkeeping (funcdata.cc:150/84), syncVarnodesWithSymbols flag rules (funcdata_varnode.cc:938/1048 incl. the set-only nolocalalias mask), and the heritage deadcode-delay plumbing (funcdata.cc:167 applyDeadCodeDelay) all follow the oracle lines; the flag that diverges enters through driver-side seed data, not through a funcdata.rs port defect. Registered as evidence, not as a fixture-MATCH: the canon-face web survival remains MISMATCH until the seed model is arbitrated.",
+    "fix_owner": "HTTPDMAIN-TYPESEED-LOCK-ARBITRATION-0001 (new ticket): decide whether recovered-array locals (local_70[6]/local_80[2]/local_c8[4]) may be seeded with typelock, or must be seeded name-only / left unseeded so the decompiler recovers them unlocked, as both oracle faces do. When that lands, this fixture's web_survival invariant must flip to MATCH (canon face web ALIVE) and be re-pinned.",
+    "f8_note": "HTTPDMAIN-F8-FORLOOP-0001 is NOT same-root: F8 is the missing findLoopVariable/iterateOp port (block.cc:3155/3373) affecting for-loop rendering everywhere; the canary web lives in main's server loop which both sides structure identically post-F1. No F8 coupling."
+  },
+  "pinned_artifacts": {
+    "oracle_drill_sha256": "4e0aac505419f280bb48e82c45492d1260ba028b0eabc2db729bc0d6ebba32f1",
+    "rugra_canon_drill_sha256": "a5054aa2c29248241ec9fc2b5394e33e782ae5f20ed24aabe0c9ab2d49073e62",
+    "rugra_canon_output_sha256": "bccb085125f2b31a1657fa0690249740901f645296ee577b1b7ac708bbe75561",
+    "rugra_bare_output_sha256": "a4d5a5a5957374dbcf3da1d68952d52cb05e6616b780cb6c2a309ebc27e30afb",
+    "pin_note": "rugra shas measured at wt/retaddr f3499354+fixtures (no src change vs base); they pin the runner's drift alarm, not an oracle contract"
+  },
+  "observation": {
+    "kind": "bilateral_invariant_pin_over_real_function_drills",
+    "overall_status": "MISMATCH",
+    "mismatch_binding": "HTTPDMAIN-RETADDR-FLOOR-0001 root re-attributed to HTTPDMAIN-TYPESEED-LOCK-ARBITRATION-0001 (data model), not a funcdata.rs pass-count defect; every other invariant is MATCH"
+  }
+}
