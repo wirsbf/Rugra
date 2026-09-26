@@ -8398,18 +8398,153 @@ impl Rule for RuleConcatCommute {
 }
 
 /// Commute SUBPIECE with a binary op on its input. Faithful to Ghidra's
-/// `RuleSubCommute` (ruleaction.cc:4534-4673).
+/// `RuleSubCommute` (ruleaction.cc:4443-4653).
 ///
 /// Transforms `SUBPIECE(INT_ADD(a,b), 0)` into `INT_ADD(SUBPIECE(a,0),
 /// SUBPIECE(b,0))` — pushing the truncation inside the arithmetic so the
 /// operands can be typed at the smaller width. Commutes for: INT_ADD,
 /// INT_MULT, INT_NEGATE, INT_XOR, INT_AND, INT_OR, INT_LEFT, INT_DIV,
-/// INT_REM (and INT_SDIV/INT_SREM with sign-extension, deferred).
+/// INT_REM (zero-extended inputs) and INT_SDIV/INT_SREM (sign-extended
+/// inputs, incl. the constant-divisor sign-fit check and the
+/// cancelExtensions partial commute).
 pub struct RuleSubCommute;
 
 impl RuleSubCommute {
     // Ghidra: ruleaction.cc:4463 RuleSubCommute
     pub fn new() -> Self { Self }
+
+    // Ghidra: ruleaction.cc:4463 RuleSubCommute::shortenExtension
+    /// Shrink the output of an INT_ZEXT/INT_SEXT to `max_size` bytes.
+    /// Faithful to `RuleSubCommute::shortenExtension`
+    /// (ruleaction.cc:4456-4472): the extension op's output is unset and a
+    /// smaller varnode is created at the same address, keeping the original
+    /// space; on a big-endian space the address is bumped up by the size
+    /// difference so the most-significant bytes are retained
+    /// (`addr + (origOut->getSize() - maxSize)`, cc:4468-4469).
+    fn shorten_extension(
+        ext_op: &crate::op::PcodeOpRef,
+        max_size: usize,
+        fd: &mut Funcdata,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:4466: origOut = extOp->getOut() — the extension's output always
+        // exists here (cancelExtensions only runs when it feeds longform).
+        let orig_out = ext_op
+            .0
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .expect("shortenExtension: extension op has no output")
+            .clone();
+        let (orig_space, orig_size, orig_offset, big_endian) = {
+            let g = orig_out.read().unwrap();
+            (
+                g.get_space(),
+                g.get_size(),
+                g.get_offset(),
+                g.get_space().is_big_endian(),
+            )
+        };
+        let addr = if big_endian {
+            // cc:4468-4469: keep the most-significant bytes.
+            crate::address::Address::new(orig_offset + (orig_size - max_size) as u64)
+        } else {
+            crate::address::Address::new(orig_offset)
+        };
+        fd.op_unset_output(ext_op);
+        fd.new_varnode_out_full(max_size, orig_space, addr, ext_op)
+    }
+
+    // Ghidra: ruleaction.cc:4483 RuleSubCommute::cancelExtensions
+    /// Eliminate input extensions on a binary longform op.
+    /// Faithful to `RuleSubCommute::cancelExtensions` (ruleaction.cc:4474-4512):
+    ///   - longform's current output must feed only `sub_op` (loneDescend,
+    ///     cc:4488);
+    ///   - equal ext-input sizes take that size as `max_size` with both
+    ///     inputs required non-free (cc:4489-4493);
+    ///   - the smaller side is extended up via `shortenExtension`, guarded
+    ///     by that side's loneDescend == longform (cc:4494-4505);
+    ///   - longform then gets a fresh `max_size` unique output, the
+    ///     extension inputs wired in directly, and the surviving SUBPIECE
+    ///     reads the truncated longform output (cc:4506-4511). The SUBPIECE
+    ///     itself is left intact.
+    fn cancel_extensions(
+        longform: &crate::op::PcodeOpRef,
+        sub_op: &crate::op::PcodeOpRef,
+        ext0_in: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        ext1_in: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
+    ) -> bool {
+        // cc:4487-4488: must be exactly one output to SUBPIECE.
+        let outvn = match longform.0.read().unwrap().output.as_ref() {
+            Some(o) => o.clone(),
+            None => return false, // no output: loneDescend() == null != subOp
+        };
+        let lone_is_sub = match outvn.read().unwrap().lone_descend() {
+            Some(l) => std::sync::Arc::ptr_eq(&l, &sub_op.0),
+            None => false,
+        };
+        if !lone_is_sub { return false; }
+        // Local rebindable copies (cc:4498/4504 reassign the shrunk side).
+        let mut ext0_in = ext0_in.clone();
+        let mut ext1_in = ext1_in.clone();
+        let ext0_size = ext0_in.read().unwrap().get_size();
+        let ext1_size = ext1_in.read().unwrap().get_size();
+        let max_size;
+        if ext0_size == ext1_size {
+            // cc:4489-4493: must be able to propagate inputs.
+            max_size = ext0_size;
+            if ext0_in.read().unwrap().is_free() { return false; }
+            if ext1_in.read().unwrap().is_free() { return false; }
+        } else if ext0_size < ext1_size {
+            // cc:4494-4499: grow in(0)'s extension up to ext1's size.
+            max_size = ext1_size;
+            if ext1_in.read().unwrap().is_free() { return false; }
+            let in0 = match longform.0.read().unwrap().inrefs.get(0).cloned() {
+                Some(v) => v,
+                None => return false,
+            };
+            let lone_is_longform = match in0.read().unwrap().lone_descend() {
+                Some(l) => std::sync::Arc::ptr_eq(&l, &longform.0),
+                None => false,
+            };
+            if !lone_is_longform { return false; }
+            let ext0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a,
+                None => return false,
+            };
+            // cc:4498: ext0In is rebinding — the shortened output replaces
+            // the original extension input for the opSetInput below.
+            ext0_in = Self::shorten_extension(&crate::op::PcodeOpRef(ext0_def), max_size, fd);
+        } else {
+            // cc:4500-4505: grow in(1)'s extension up to ext0's size.
+            max_size = ext0_size;
+            if ext0_in.read().unwrap().is_free() { return false; }
+            let in1 = match longform.0.read().unwrap().inrefs.get(1).cloned() {
+                Some(v) => v,
+                None => return false,
+            };
+            let lone_is_longform = match in1.read().unwrap().lone_descend() {
+                Some(l) => std::sync::Arc::ptr_eq(&l, &longform.0),
+                None => false,
+            };
+            if !lone_is_longform { return false; }
+            let ext1_def = match in1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a,
+                None => return false,
+            };
+            ext1_in = Self::shorten_extension(&crate::op::PcodeOpRef(ext1_def), max_size, fd);
+        }
+        // cc:4506-4511: rewire longform to the (possibly shortened)
+        // extension inputs and give it a truncated unique output; the
+        // SUBPIECE reads the truncated output.
+        fd.op_unset_output(longform);
+        let outvn = fd.new_unique_out(max_size, longform);
+        fd.op_set_input(longform, ext0_in, 0);
+        fd.op_set_input(longform, ext1_in, 1);
+        fd.op_set_input(sub_op, outvn, 0);
+        true
+    }
 }
 
 impl Rule for RuleSubCommute {
@@ -8417,7 +8552,7 @@ impl Rule for RuleSubCommute {
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to RuleSubCommute::applyOp (ruleaction.cc:4534-4673).
+        // Faithful to RuleSubCommute::applyOp (ruleaction.cc:4514-4653).
         // This rule triggers on CPUI_SUBPIECE.
         let op_addr = { op_arc.read().unwrap().start.get_addr() };
         let (base, offset, outvn_size, longform_arc) = {
@@ -8452,7 +8587,7 @@ impl Rule for RuleSubCommute {
         };
         let _ = base;
 
-        // Determine if the longform op commutes with SUBPIECE (cc:4545-4638).
+        // Determine if the longform op commutes with SUBPIECE (cc:4525-4618).
         let longform_opc = longform_arc.read().unwrap().opcode;
         let insize = longform_arc
             .read()
@@ -8526,7 +8661,72 @@ impl Rule for RuleSubCommute {
                     }
                 }
             }
-            // INT_SDIV / INT_SREM deferred (need sign_extend helper).
+            OpCode::CPUI_INT_SREM | OpCode::CPUI_INT_SDIV => {
+                // Only commutes if inputs are sign extended (cc:4570-4602).
+                j = -1;
+                if offset != 0 { return Ok(action_status::NO_CHANGE); }
+                let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
+                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
+                if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+                let sext0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+                };
+                if sext0_def.read().unwrap().opcode != OpCode::CPUI_INT_SEXT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let sext0_in = sext0_def.read().unwrap().inrefs.get(0).cloned();
+                let sext0_in = match sext0_in { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
+                let in1 = longform_arc.read().unwrap().inrefs.get(1).cloned();
+                if let Some(in1v) = in1 {
+                    if in1v.read().unwrap().is_written() {
+                        let sext1_def = match in1v.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+                        };
+                        if sext1_def.read().unwrap().opcode != OpCode::CPUI_INT_SEXT {
+                            return Ok(action_status::NO_CHANGE);
+                        }
+                        let sext1_in = match sext1_def.read().unwrap().inrefs.get(0).cloned() {
+                            Some(v) => v, None => return Ok(action_status::NO_CHANGE),
+                        };
+                        if sext1_in.read().unwrap().get_size() > outvn_size
+                            || sext0_in.read().unwrap().get_size() > outvn_size
+                        {
+                            // Special case where we need a PARTIAL commute of
+                            // the SUBPIECE: SUBPIECE cancels the SEXTs, but
+                            // there is still some SUBPIECE left (cc:4583-4589).
+                            if Self::cancel_extensions(
+                                &crate::op::PcodeOpRef(longform_arc.clone()),
+                                &crate::op::PcodeOpRef(op_arc.clone()),
+                                &sext0_in,
+                                &sext1_in,
+                                fd,
+                            ) {
+                                // Leave SUBPIECE intact.
+                                return Ok(action_status::CHANGE);
+                            }
+                            return Ok(action_status::NO_CHANGE);
+                        }
+                        // If SEXT sizes are both not bigger, go ahead and
+                        // commute SUBPIECE (fallthru, cc:4590).
+                    } else if in1v.read().unwrap().is_constant()
+                        && sext0_in.read().unwrap().get_size() <= outvn_size
+                    {
+                        // cc:4592-4597: the raw constant must equal the
+                        // sign-extension (address.cc:666) of its low outvn
+                        // bytes when re-extended to the longform size, else
+                        // truncation would change the signed divisor.
+                        let val = in1v.read().unwrap().get_offset();
+                        let smallval = val & crate::address::calc_mask(outvn_size);
+                        let smallval =
+                            crate::rangeutil::sign_extend_size(smallval, outvn_size, insize);
+                        if val != smallval { return Ok(action_status::NO_CHANGE); }
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                }
+            }
             OpCode::CPUI_INT_ADD => {
                 j = -1;
                 if offset != 0 { return Ok(action_status::NO_CHANGE); }
@@ -8547,7 +8747,7 @@ impl Rule for RuleSubCommute {
             _ => return Ok(action_status::NO_CHANGE), // Most ops don't commute
         }
 
-        // Make sure no other piece of base is getting used (cc:4641).
+        // Make sure no other piece of base is getting used (cc:4620-4621).
         // base->loneDescend() != op  =>  bail.
         let lone = {
             let out_vn = {
@@ -8565,7 +8765,7 @@ impl Rule for RuleSubCommute {
         if !is_lone { return Ok(action_status::NO_CHANGE); }
 
         // For each input of longform (except the special j slot), push a
-        // SUBPIECE inside (cc:4651-4669).
+        // SUBPIECE inside (cc:4633-4649).
         let num_inputs = longform_arc.read().unwrap().inrefs.len();
         let outvn = op_arc.read().unwrap().output.as_ref().unwrap().clone();
         let mut new_vn_for: Vec<
@@ -8613,7 +8813,6 @@ impl Rule for RuleSubCommute {
         // output was already severed by opSetOutput, so opDestroy only
         // unsets the inputs and marks the op dead).
         fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
-        let _ = insize;
         Ok(action_status::CHANGE)
     }
 
@@ -25274,6 +25473,390 @@ mod tests {
         assert_eq!(
             result, action_status::NO_CHANGE, "RuleSubCommute must NOT fire when base has 2 descendants"
         );
+    }
+
+    /// Helper: build SUB{out_size}( {opc}{long_size}(SEXT{long_size}(in0),
+    /// SEXT{long_size}(in1)), offset ) with constant SEXT inputs
+    /// (ruleaction.cc:4570-4602 both-written arm).
+    fn build_sub_sext_form(
+        fd: &mut Funcdata,
+        opc: OpCode,
+        in0_val: u64,
+        in1_val: u64,
+        ext_in_size: usize,
+        long_size: usize,
+        out_size: usize,
+        offset: u64,
+    ) -> (crate::op::PcodeOpRef, crate::op::PcodeOpRef) {
+        let mut ext_defs = Vec::new();
+        for (slot, val) in [(0usize, in0_val), (1usize, in1_val)] {
+            let c = fd.new_constant(ext_in_size, val);
+            let ext_op = fd.new_op(1, Address::new(0x1000));
+            fd.op_set_opcode(&ext_op, OpCode::CPUI_INT_SEXT);
+            fd.new_unique_out(long_size, &ext_op);
+            fd.op_set_input(&ext_op, c, 0);
+            fd.obank.alivelist.push(ext_op.clone());
+            ext_defs.push(ext_op);
+        }
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, opc);
+        let long_out = fd.new_unique_out(long_size, &longform);
+        let _ = long_out;
+        fd.op_set_input(
+            &longform,
+            ext_defs[0].0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        fd.op_set_input(
+            &longform,
+            ext_defs[1].0.read().unwrap().output.as_ref().unwrap().clone(),
+            1,
+        );
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(out_size, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let off_const = fd.new_constant(4, offset);
+        fd.op_set_input(&sub_op, off_const, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+        (longform, sub_op)
+    }
+
+    /// cc:4570-4601 both-SEXT arm at the x86-64 idiom width (the KUNASDIV
+    /// g_div 100/-7 form): SUB8(SDIV16(SEXT816(100), SEXT816(-7)), 0)
+    /// commutes — SDIV reads two SUB168 truncations and inherits the
+    /// SUBPIECE's 8-byte output; the old SUBPIECE dies.
+    #[test]
+    fn test_rule_sub_commute_sdiv_sext_written() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv", Address::new(0x1000), 0x10);
+        let (longform, sub_op) = build_sub_sext_form(
+            &mut fd, OpCode::CPUI_INT_SDIV, 100, 0xfffffffffffffff9, 8, 16, 8, 0,
+        );
+        let sub_out = sub_op.0.read().unwrap().output.as_ref().unwrap().clone();
+
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+
+        // Old SUBPIECE destroyed (inputs nulled to the shared sentinel,
+        // output varnode destroyed); longform output is the 8-byte sub_out.
+        {
+            let g = sub_op.0.read().unwrap();
+            assert!(Arc::ptr_eq(
+                &g.inrefs[0],
+                &crate::op::null_slot_sentinel()
+            ));
+            assert!(g.output.is_none());
+        }
+        let (long_in0, long_in1) = {
+            let g = longform.0.read().unwrap();
+            (g.inrefs[0].clone(), g.inrefs[1].clone())
+        };
+        for vn in [long_in0, long_in1] {
+            let g = vn.read().unwrap();
+            assert_eq!(g.get_size(), 8);
+            assert!(g.is_written());
+            let def = g.def.as_ref().and_then(|w| w.upgrade()).unwrap();
+            assert_eq!(def.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
+            // each truncation reads a 16-byte SEXT output
+            let inner = def.read().unwrap().inrefs[0].clone();
+            assert_eq!(inner.read().unwrap().get_size(), 16);
+        }
+        let long_out = longform.0.read().unwrap().output.as_ref().unwrap().clone();
+        assert!(Arc::ptr_eq(&long_out, &sub_out));
+    }
+
+    /// cc:4592-4597 constant-divisor arm at a different width: sext input
+    /// (4B) <= outvn (4B) and the constant is the sign-extension of its low
+    /// outvn bytes at insize (sign_extend address.cc:666) — commutes.
+    #[test]
+    fn test_rule_sub_commute_sdiv_const_fit() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_c", Address::new(0x1000), 0x10);
+        // SEXT48(const 100@4) feeds SDIV8; in(1) = const8 -7.
+        let c4 = fd.new_constant(4, 100);
+        let ext_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext_op, OpCode::CPUI_INT_SEXT);
+        fd.new_unique_out(8, &ext_op);
+        fd.op_set_input(&ext_op, c4, 0);
+        fd.obank.alivelist.push(ext_op.clone());
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, OpCode::CPUI_INT_SDIV);
+        fd.new_unique_out(8, &longform);
+        fd.op_set_input(
+            &longform,
+            ext_op.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let neg7 = fd.new_constant(8, 0xfffffffffffffff7);
+        fd.op_set_input(&longform, neg7, 1);
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let zero_off = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, zero_off, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert!(sub_op.0.read().unwrap().output.is_none());
+    }
+
+    /// cc:4595-4597: constant 0x00000000ffffff80 at 8 bytes is NOT the
+    /// sign-extension of its low 4 bytes (they would read as -128 after
+    /// SEXT), so the truncation would change the signed divisor — no
+    /// commute.
+    #[test]
+    fn test_rule_sub_commute_sdiv_const_sign_mismatch() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_m", Address::new(0x1000), 0x10);
+        let c4 = fd.new_constant(4, 100);
+        let ext_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext_op, OpCode::CPUI_INT_SEXT);
+        fd.new_unique_out(8, &ext_op);
+        fd.op_set_input(&ext_op, c4, 0);
+        fd.obank.alivelist.push(ext_op.clone());
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, OpCode::CPUI_INT_SDIV);
+        fd.new_unique_out(8, &longform);
+        fd.op_set_input(
+            &longform,
+            ext_op.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        // 0x00000000ffffff80: low 4 bytes read as -128 after SEXT — the
+        // truncation would change the signed divisor (cc:4595-4597).
+        let c80 = fd.new_constant(8, 0x00000000ffffff80);
+        fd.op_set_input(&longform, c80, 1);
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let zero_off = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, zero_off, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        // 0x00000000ffffff80: the low 4 bytes read as -128 after SEXT, but
+        // the 8-byte constant is positive — truncation would change the
+        // signed divisor, so no commute (cc:4595-4597).
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:4574: only the least-significant SUBPIECE commutes.
+    #[test]
+    fn test_rule_sub_commute_sdiv_offset_nonzero() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_o", Address::new(0x1000), 0x10);
+        let (_longform, sub_op) = build_sub_sext_form(
+            &mut fd, OpCode::CPUI_INT_SDIV, 100, 0xfffffffffffffff9, 8, 16, 8, 1,
+        );
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:4577: in(0) must be written by INT_SEXT (a ZEXT divisor chain
+    /// belongs to the unsigned arm's different checks).
+    #[test]
+    fn test_rule_sub_commute_sdiv_zext_reject() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_z", Address::new(0x1000), 0x10);
+        let c = fd.new_constant(8, 100);
+        let ext_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext_op, OpCode::CPUI_INT_ZEXT);
+        fd.new_unique_out(16, &ext_op);
+        fd.op_set_input(&ext_op, c, 0);
+        fd.obank.alivelist.push(ext_op.clone());
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, OpCode::CPUI_INT_SDIV);
+        fd.new_unique_out(16, &longform);
+        fd.op_set_input(
+            &longform,
+            ext_op.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let c2 = fd.new_constant(8, 0xfffffffffffffff9);
+        let ext2 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext2, OpCode::CPUI_INT_SEXT);
+        fd.new_unique_out(16, &ext2);
+        fd.op_set_input(&ext2, c2, 0);
+        fd.obank.alivelist.push(ext2.clone());
+        fd.op_set_input(
+            &longform,
+            ext2.0.read().unwrap().output.as_ref().unwrap().clone(),
+            1,
+        );
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(8, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let zero_off = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, zero_off, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:4583-4589 partial commute (cancelExtensions equal-size path):
+    /// SEXT inputs (8B register inputs, non-free) bigger than outvn (4B) —
+    /// the SEXTs cancel, longform is rewired to the raw inputs with a
+    /// truncated 8-byte output, and the SUBPIECE survives reading that
+    /// output. Constant ext inputs would bail at the isFree guard
+    /// (varnode.cc:578: constants carry neither V_input nor V_written).
+    #[test]
+    fn test_rule_sub_commute_sdiv_partial_equal() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_p", Address::new(0x1000), 0x10);
+        let mut ext_outs = Vec::new();
+        for (slot, off) in [(0usize, 0x200u64), (1usize, 0x208u64)] {
+            let reg = fd
+                .vbank
+                .create_with_space(8, crate::space::AddressSpace::Register, off);
+            let reg = fd.vbank.set_input(reg).unwrap();
+            let ext_op = fd.new_op(1, Address::new(0x1000));
+            fd.op_set_opcode(&ext_op, OpCode::CPUI_INT_SEXT);
+            fd.new_unique_out(16, &ext_op);
+            fd.op_set_input(&ext_op, reg, 0);
+            fd.obank.alivelist.push(ext_op.clone());
+            let _ = slot;
+            ext_outs.push(ext_op);
+        }
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, OpCode::CPUI_INT_SDIV);
+        fd.new_unique_out(16, &longform);
+        fd.op_set_input(
+            &longform,
+            ext_outs[0].0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        fd.op_set_input(
+            &longform,
+            ext_outs[1].0.read().unwrap().output.as_ref().unwrap().clone(),
+            1,
+        );
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let zero_off = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, zero_off, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        // SUBPIECE intact: output kept, in(0) rewired to the truncated
+        // longform output (opDestroy would have nulled the inputs).
+        assert!(sub_op.0.read().unwrap().output.is_some());
+        let sub_in0 = sub_op.0.read().unwrap().inrefs[0].clone();
+        assert!(!Arc::ptr_eq(&sub_in0, &crate::op::null_slot_sentinel()));
+        // longform: output now 8 bytes feeding the SUBPIECE, inputs are the
+        // raw 8-byte register inputs (SEXTs cancelled).
+        let (long_out, long_in0, long_in1) = {
+            let g = longform.0.read().unwrap();
+            (
+                g.output.as_ref().unwrap().clone(),
+                g.inrefs[0].clone(),
+                g.inrefs[1].clone(),
+            )
+        };
+        assert_eq!(long_out.read().unwrap().get_size(), 8);
+        assert!(Arc::ptr_eq(&long_out, &sub_in0));
+        assert!(long_in0.read().unwrap().is_input());
+        assert_eq!(long_in0.read().unwrap().get_size(), 8);
+        assert!(long_in1.read().unwrap().is_input());
+    }
+
+    /// cc:4494-4499 partial commute unequal sizes: ext0In (4B register
+    /// input) < ext1In (8B register input) — in(0)'s extension is shortened
+    /// up to 8 bytes via shortenExtension (its op keeps opcode INT_SEXT with
+    /// a resized output) before the inputs are rewired.
+    #[test]
+    fn test_rule_sub_commute_sdiv_partial_unequal() {
+        let mut fd = Funcdata::new("test_subcommute_sdiv_u", Address::new(0x1000), 0x10);
+        // SEXT(reg4 input) -> out16 (ext0 side)
+        let reg4 = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let reg4 = fd.vbank.set_input(reg4).unwrap();
+        let ext0 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext0, OpCode::CPUI_INT_SEXT);
+        fd.new_unique_out(16, &ext0);
+        fd.op_set_input(&ext0, reg4, 0);
+        fd.obank.alivelist.push(ext0.clone());
+        // SEXT(reg8 input) -> out16 (ext1 side)
+        let reg8 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        let reg8 = fd.vbank.set_input(reg8).unwrap();
+        let ext1 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&ext1, OpCode::CPUI_INT_SEXT);
+        fd.new_unique_out(16, &ext1);
+        fd.op_set_input(&ext1, reg8, 0);
+        fd.obank.alivelist.push(ext1.clone());
+        let longform = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&longform, OpCode::CPUI_INT_SDIV);
+        fd.new_unique_out(16, &longform);
+        fd.op_set_input(
+            &longform,
+            ext0.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        fd.op_set_input(
+            &longform,
+            ext1.0.read().unwrap().output.as_ref().unwrap().clone(),
+            1,
+        );
+        fd.obank.alivelist.push(longform.clone());
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(
+            &sub_op,
+            longform.0.read().unwrap().output.as_ref().unwrap().clone(),
+            0,
+        );
+        let zero_off = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, zero_off, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert!(sub_op.0.read().unwrap().output.is_some());
+        // ext0 was shortened to an 8-byte output still defining the SEXT.
+        let ext0_out = ext0.0.read().unwrap().output.as_ref().unwrap().clone();
+        assert_eq!(ext0_out.read().unwrap().get_size(), 8);
+        assert_eq!(ext0.0.read().unwrap().opcode, OpCode::CPUI_INT_SEXT);
+        // longform in(0) is that shortened output; in(1) is the raw reg8.
+        let (long_in0, long_in1) = {
+            let g = longform.0.read().unwrap();
+            (g.inrefs[0].clone(), g.inrefs[1].clone())
+        };
+        assert!(Arc::ptr_eq(&long_in0, &ext0_out));
+        assert!(long_in1.read().unwrap().is_input());
+        assert_eq!(long_in1.read().unwrap().get_size(), 8);
+        let long_out = longform.0.read().unwrap().output.as_ref().unwrap().clone();
+        assert_eq!(long_out.read().unwrap().get_size(), 8);
     }
 
     // ========================================================================
