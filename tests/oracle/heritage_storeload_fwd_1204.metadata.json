@@ -1,0 +1,96 @@
+{
+  "schema_version": 2,
+  "fixture_id": "HERITAGE-STORELOAD-FWD-FIXTURE-0001",
+  "ticket": "KUNABUGS-STORELOAD-FWD-0001",
+  "status_note": "Pre-heritage stack store->load forwarding chain (kuna losses LOSS-237 shape) verified MATCH on the full fixture observation surface against the locked oracle: loadGuard discovery/records, guardStores INDIRECT insertion and input aliasing, guardLoads COPY-guard placement and propagate-away, analyzeNewLoadGuards window refinement, handleNewLoadCopies ADDRFORCE landing, join MULTIEQUAL wiring, per-space bank census, restart bit, complete op/slot order and first-seen alias equivalence. The F-RESIDE/STACKSLOT LOSS-237 candidate root cause (missing forwarding) is EXCLUDED on this surface; the family's remaining candidates (DB-LOCALSCOPE cluster, merge sort ties) are unaffected. Ticket-domain scoped: Heritage::guardLoads and the forwarding chain are MATCH on this fixture; whole-function and module closure remains UNTESTED.",
+  "decisive_semantics": {
+    "reference_output_parameters": "guardStores' newIndirectOp (heritage.cc:1553) inserts the INDIRECT before the STORE and pushes its OUTPUT onto the write list by reference; guardLoads' COPY (cc:1590-1599) creates out (newVarnodeOut, addr-forced + active-heritage) and a free input at the same stack address, inserted before the LOAD, appended to loadCopyOps; handleNewLoadCopies propagates the COPY away via totalReplace(op->getOut(), earliest same-address COPY-chain input) + opDestroy, and setAddrForce lands on force outputs INSIDE the analyzed guard ranges only.",
+    "loop_bounds_traversal_order": "discoverIndexedStackPointers walks spc->numSpacebase() spacebases, then the descend list per StackNode with explicit marks; INT_ADD constant arm accumulates wrapOffset, non-constant arm sets nonconstant_index; COPY/INDIRECT/SEGMENTOP preserve offset; MULTIEQUAL sets multiequal; LOAD/STORE generate guards only when traversals != 0 (cc:1071-1088); guardStores iterates fd->beginOp(CPUI_STORE)..endOp; guardLoads iterates loadGuard front-to-back erasing invalid records in place; heritage() order: per-space disjoint build -> placeMultiequals (collect -> guardInput -> guard -> calcMultiequals -> MULTIEQUAL insert) -> rename -> reprocessFreeStores -> analyzeNewLoadGuards -> handleNewLoadCopies (cc:2663-2758).",
+    "counter_accumulator_lens": "LoadGuard::set starts minimumOffset=0, maximumOffset=space highest, step=0, analysisState=0; establishRange (cc:740-785) for a full value set takes minimumOffset=pointerBase, size=0x1000, analysisState=1 (no full widening); the observed record is pb=30,min=30,max=102f,step=0,st=1. loadCopyOps is cleared by handleNewLoadCopies; reprocessStackCount stays 0 (no spacebase dead-ends); heritage pass counter increments once per opHeritage call; restart_pending never set (deadremoved==0).",
+    "sorting_comparison_keys": "The guard window test (cc:1587-1589) compares the RANGE START offset against [minimumOffset, maximumOffset] inclusive, per record, space equality first; findAddressForces stops at addr-forced varnodes and classifies COPY/MULTIEQUAL with all inputs at the same address and store-INDIRECTs as artificial, everything else as forces; guardRecords dump in loadGuard list order."
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (SpacebaseSpace delay=1), join=6, iop=7; register delay=0, stack delay=1; spacebase pointer register:0x20:8",
+  "compiler_spec": {
+    "id": "fixture",
+    "path": "inline <prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+    "note": "model defaultLocalRange/defaultParamRange give the construction-path ScopeLocal (funcdata.cc:66-70 + setModel + resetLocalWindow) the window [highest-999999,highest] union [0,511]; slot stack:0x40 sits in the param half so Scope::queryProperties answers mapped|addrtied and the guardLoads addrtied gate opens"
+  },
+  "analysis_options": "none: two canonical Funcdata::opHeritage calls per case after structureLoops/calcForwardDominator/buildInfoList (stack delay=1: pass 0 heritages the register space, pass 1 the stack space). No Action tree, no deadcode removal, no C emission.",
+  "rugra_source": {
+    "base_commit": "f7e2b23757441393c778b54b381de4b3fbdcf5bc",
+    "note": "comment-refresh commit f7e2b237 (guard_loads_range header doc); the forwarding chain itself landed earlier via SB-MATCHURL-ORD55-0001 + GETPARAM-OPPOOL-COUNT-0001 + RANGEUTIL-VSEMPTY-0001. Runner builds the live worktree lib; this base_commit records the verified provenance."
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "a2bd5c2da6d6e7a940075d3af8fb3d38e67140475e00622cf7a4392f8b1e61bd",
+    "rust_fixture_sha256": "e627410a54d6e5eaa8da6dcf8056c3bca6e0852ff793655968aa553d43fb9831",
+    "oracle_record_sha256": "468bf48ef02de3c0b4c3a7856eb2cb6b534bb4df0dedbc27158c5578ae20632b",
+    "runner_sha256": "e75fde7ea5230ac05c7ee9faed4b09056fc5bd8a860ae4440b369a9f7cf9cfd1"
+  },
+  "expected_results": {
+    "normal_stdout_sha256": "468bf48ef02de3c0b4c3a7856eb2cb6b534bb4df0dedbc27158c5578ae20632b",
+    "normal_stdout_lines": 13,
+    "normal_stderr": "empty both sides",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "case_order": [
+      "schema=1|fixture=HERITAGE-STORELOAD-FWD-0001|",
+      "case=fwd_indexed_load|phase=pre|",
+      "case=fwd_indexed_load|phase=p0|",
+      "case=fwd_indexed_load|phase=p1|",
+      "case=fwd_indexed_load|phase=check|",
+      "case=const_load_no_fwd|phase=pre|",
+      "case=const_load_no_fwd|phase=p0|",
+      "case=const_load_no_fwd|phase=p1|",
+      "case=const_load_no_fwd|phase=check|",
+      "case=phi_fwd|phase=pre|",
+      "case=phi_fwd|phase=p0|",
+      "case=phi_fwd|phase=p1|",
+      "case=phi_fwd|phase=check|"
+    ]
+  },
+  "stable_function_closure": [
+    "GH12-F-0d6899714e32f1f0c0ff ghidra::Heritage::discoverIndexedStackPointers heritage.cc:986",
+    "GH12-F-c2645a43ad3796774adb ghidra::Heritage::generateLoadGuard heritage.cc:909",
+    "GH12-F-d0453caac19f728f37f8 ghidra::Heritage::generateStoreGuard heritage.cc:926",
+    "GH12-F-0813bbc828190d5fa6a0 ghidra::Heritage::guard heritage.cc:1156",
+    "GH12-F-13fc40985b2ad1410e6b ghidra::Heritage::guardStores heritage.cc:1538",
+    "GH12-F-4e476d713a3f857249ac ghidra::Heritage::guardLoads heritage.cc:1570",
+    "GH12-F-18fa37122dd00da59412 ghidra::Heritage::collect heritage.cc:307",
+    "GH12-F-96ecf8b90e2ecb42b147 ghidra::Heritage::placeMultiequals heritage.cc:2599",
+    "GH12-F-d4a2475107e818f1412c ghidra::Heritage::renameRecurse heritage.cc:2479",
+    "GH12-F-7da47c79af2f9ec5d392 ghidra::Heritage::rename heritage.cc:2587",
+    "GH12-F-8ed8bc82f312d197cd5d ghidra::Heritage::analyzeNewLoadGuards heritage.cc:834",
+    "GH12-F-116630aef4df5682ce54 ghidra::LoadGuard::establishRange heritage.cc:740",
+    "GH12-F-51603f0f7b3c63de5d07 ghidra::LoadGuard::finalizeRange heritage.cc:787",
+    "GH12-F-0e11b8cce859afbbb174 ghidra::Heritage::findAddressForces heritage.cc:618",
+    "GH12-F-a4891e31044f5cd70ed7 ghidra::Heritage::propagateCopyAway heritage.cc:674",
+    "GH12-F-a763e9102cac6e51d61a ghidra::Heritage::handleNewLoadCopies heritage.cc:695",
+    "GH12-F-fb4e4d165fa4fe336897 ghidra::Heritage::heritage heritage.cc:2663",
+    "GH12-F-3bd206f6d39ff7d37715 ghidra::LoadGuard::set heritage.hh:159",
+    "GH12-F-042293c4359110a861b4 ghidra::LoadGuard::isGuarded heritage.hh:167"
+  ],
+  "coverage": {
+    "fwd_indexed_load_full_chain": {
+      "status": "MATCH",
+      "note": "guard record pb=30,min=30,max=102f,step=0,st=1; INDIRECT inserted before the STORE reading the last write; guard COPY placed before the LOAD and propagated away (no adjacent COPY); last write ADDRFORCE inside the analyzed window, first write not; register-space index promotion at pass 0; stack delay=1 staging"
+    },
+    "const_load_no_fwd_negative_control": {
+      "status": "MATCH",
+      "note": "constant-offset LOAD pointer produces no loadGuard, no COPY lifecycle and no ADDRFORCE, while the STORE INDIRECT still appears and reads the last write"
+    },
+    "phi_fwd_join_multiequal": {
+      "status": "MATCH",
+      "note": "join MULTIEQUAL reads both arm writes in predecessor order, both arm writes ADDRFORCE, guard COPY propagated away, block re-indexing identical"
+    },
+    "remaining_storeload_closure": {
+      "status": "UNTESTED",
+      "note": "multi-space interleavings, storeGuard records (indexed STORE pointers), free-store reprocessing, guardCalls/guardReturns interaction with the forwarding chain, and the downstream RuleLoadVarnode/RuleStoreVarnode consumers remain outside this fixture"
+    }
+  }
+}
