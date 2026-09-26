@@ -668,6 +668,27 @@ fn canonical_arch() -> Arc<crate::arch::Architecture> {
         .clone()
 }
 
+/// Membership in the oracle `beginLoc(s,addr,pc,uniq)..endLoc` span,
+/// mirroring the inconsistent-but-deterministic std::set bound semantics
+/// of VarnodeCompareLocDef over SeqNum (uniq-only `!=` at
+/// address.hh:150-151, pc-first `<` at address.hh:153-157).
+// Ghidra: varnode.cc:1732 VarnodeBank::beginLoc(int4,const Address&,const Address&,uintm)
+fn loc_pc_in_span(
+    def_pc: Address, def_uniq: u32, key_pc: Address, low_uniq: u32, high_uniq: u32,
+) -> bool {
+    let lt = |x_pc: Address, x_u: u32, y_pc: Address, y_u: u32| -> bool {
+        if x_u == y_u {
+            false // SeqNum::operator!= (uniq-only) says equivalent
+        } else if x_pc == y_pc {
+            x_u < y_u
+        } else {
+            x_pc < y_pc
+        }
+    };
+    // In span iff NOT(elem < low) AND NOT(high < elem).
+    !lt(def_pc, def_uniq, key_pc, low_uniq) && !lt(key_pc, high_uniq, def_pc, def_uniq)
+}
+
 // Ghidra: address.cc:32 operator<<(ostream&, const SeqNum&)
 /// Stream form of a SeqNum: `pc.printRaw() ':' uniq` — the uniq counter
 /// prints in DECIMAL (no hex manipulator is active on a fresh stream).
@@ -5216,25 +5237,33 @@ impl Funcdata {
     // Ghidra: funcdata.hh:371 Funcdata::endLoc(int4,const Address&,const Address&,uintm)
     /// Start/end of Varnodes matching storage and definition address. The
     /// Ghidra pair (funcdata.hh:367/371) forwards to the bank's
-    /// definition-bounded bounds (varnode.cc:1716-1790): size+loc match
-    /// plus the varnode's def-op address (and optional seq time) match.
-    /// Expressed as the same predicate over the loc_tree ordering
-    /// (FUNCDATA-LOCSIZE-BOUND-0001).
+    /// definition-bounded bounds (varnode.cc:1732-1780). CRITICAL oracle
+    /// semantics: the loc-tree comparator (VarnodeCompareLocDef,
+    /// varnode.cc:37) decides "different" via `SeqNum::operator!=` which
+    /// compares ONLY the uniq counter (address.hh:150-151), while the
+    /// ordering `SeqNum::operator<` is pc-first (address.hh:153-157) — so
+    /// two written varnodes whose def seqnums share the uniq value are
+    /// COMPARATOR-EQUIVALENT regardless of pc, and the span
+    /// [lower_bound(SeqNum(pc,uniq==~0?0:uniq)),
+    /// upper_bound(SeqNum(pc,uniq)))] admits any def seqnum that is not
+    /// strictly-less than the low key and not strictly-greater-or-equal
+    /// under the high key, with lt(x,y) := (x.uniq==y.uniq) ? false :
+    /// (x.pc,x.uniq) < (y.pc,y.uniq). Expressed as the same predicate over
+    /// the loc_tree ordering (FUNCDATA-LOCSIZE-BOUND-0001).
     pub fn begin_loc_pc(
         &self, size: usize, addr: Address, pc: Address, uniq: u32,
     ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        let low_uniq = if uniq == u32::MAX { 0 } else { uniq };
         self.vbank.begin_loc().filter(move |v| {
             let vn = v.0.read().unwrap();
-            if vn.loc != addr || vn.size != size {
+            if vn.loc != addr || vn.size != size || !vn.is_written() {
                 return false;
             }
-            match vn.def.as_ref().and_then(|w| w.upgrade()) {
-                Some(def_op) => {
-                    let op = def_op.read().unwrap();
-                    op.get_addr() == pc && (uniq == u32::MAX || op.start.get_time() == uniq)
-                }
-                None => false,
-            }
+            let Some(def_op) = vn.def.as_ref().and_then(|w| w.upgrade()) else {
+                return false;
+            };
+            let d = def_op.read().unwrap();
+            loc_pc_in_span(d.get_addr(), d.start.get_time(), pc, low_uniq, uniq)
         })
     }
 
@@ -5280,32 +5309,70 @@ impl Funcdata {
     pub fn begin_def_fl(
         &self, fl: u32,
     ) -> impl Iterator<Item = &crate::varnode::VarnodeDefRef> {
-        self.vbank.begin_def_fl(fl)
+        // cc:1831-1881 (varnode.cc): inputs head the def tree, written
+        // occupy the middle (def-seqnum order), frees the tail. Rugra's
+        // bank begin_def_fl interprets fl as a 0/1 selector (divergence);
+        // this forwarder restores the oracle Varnode::input(8) /
+        // Varnode::written(16) / 0-free semantics locally
+        // (FUNCDATA-DEF-FL-0001).
+        self.vbank.begin_def().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if fl == crate::varnode::varnode_flags::INPUT {
+                vn.is_input()
+            } else if fl == crate::varnode::varnode_flags::WRITTEN {
+                vn.is_written()
+            } else {
+                !vn.is_input() && !vn.is_written()
+            }
+        })
     }
 
     // Ghidra: funcdata.hh:388 Funcdata::endDef(uint4)
     pub fn end_def_fl(
-        &self, fl: u32,
+        &self, _fl: u32,
     ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
-        self.vbank.end_def_fl(fl)
+        self.vbank.begin_def()
     }
 
     // Ghidra: funcdata.hh:391 Funcdata::beginDef(uint4,const Address&)
     // Ghidra: funcdata.hh:394 Funcdata::endDef(uint4,const Address&)
     /// Start/end of (input or free) Varnodes at a given storage address.
-    /// Faithful to `beginDef(uint4 fl,const Address&)`/`endDef`
-    /// (funcdata.hh:391/394).
+    /// The Ghidra pair (funcdata.hh:391/394) forwards to the bank's
+    /// address-restricted def bounds (varnode.cc:1908-1961). CRITICAL:
+    /// `fl == Varnode::written` is an ILLEGAL combination — the oracle
+    /// throws `LowlevelError("Cannot get contiguous written AND
+    /// addressed")` (varnode.cc:1913-1914); Rugra mirrors the throw as a
+    /// panic with the same message. The span covers inputs (fl==input) or
+    /// frees (anything else) whose storage starts at the address.
     pub fn begin_def_addr(
         &self, fl: u32, addr: Address,
     ) -> impl Iterator<Item = &crate::varnode::VarnodeDefRef> {
-        self.vbank.begin_def_addr(fl, addr)
+        if fl == crate::varnode::varnode_flags::WRITTEN {
+            // varnode.cc:1913-1914: the written+addressed combination is
+            // rejected before any bound is formed.
+            panic!("Cannot get contiguous written AND addressed");
+        }
+        self.vbank.begin_def().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if vn.loc.as_u64() != addr.as_u64() {
+                return false;
+            }
+            if fl == crate::varnode::varnode_flags::INPUT {
+                vn.is_input()
+            } else {
+                !vn.is_input() && !vn.is_written()
+            }
+        })
     }
 
     // Ghidra: funcdata.hh:394 Funcdata::endDef(uint4,const Address&)
     pub fn end_def_addr(
-        &self, fl: u32, addr: Address,
-    ) -> impl Iterator<Item = &crate::varnode::VarnodeDefRef> {
-        self.vbank.end_def_addr(fl, addr)
+        &self, fl: u32, _addr: Address,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
+        if fl == crate::varnode::varnode_flags::WRITTEN {
+            panic!("Cannot get contiguous written AND addressed");
+        }
+        self.vbank.begin_def()
     }
 
     // Ghidra: funcdata.hh:398 Funcdata::endLaneAccess

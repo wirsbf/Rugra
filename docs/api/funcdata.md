@@ -3050,3 +3050,22 @@ deleteScope/clearCallSpecs/delete jumpvec 在 Rust 所有权模型下由字段 D
 返回完整 alivelist，与 op.cc:1158-1185 的 `alivelist.end()` 空 range 语义相悖），改为
 本地实现 op.cc 的 switch：仅 STORE/LOAD/RETURN/CALLOTHER 有 per-opcode 列表，其余
 opcode 空 range（FUNCDATA-OPBEGIN-DEFAULT-0001，bank 侧修复归 op.rs 租约）。
+
+### 批次一补丁 2：oracle 差分揭示的三处 bank 级语义在转发层本地还原
+
+`funcdata_fwd_query_1204` 双侧 fixture 首轮差分暴露三处 varnode.cc/op.cc 语义在
+Rust 转发层需本地还原（bank 侧修复归 varnode.rs/op.rs 租约）：
+1. `begin_loc_pc`（hh:367/371）：oracle loc-tree 比较器的 "不等" 判定用
+   `SeqNum::operator!=`（**仅比较 uniq**，address.hh:150-151），而排序 `<` 是
+   pc 优先（address.hh:153-157）——uniq 相同而 pc 不同的 def 视为比较器等价，
+   `beginLoc(pc,uniq)` 半开区间因此比字面读更宽（`loc_pc_in_span` 谓词逐条
+   编码该行为，by5020=2 双侧 byte-MATCH 验证）。
+2. `begin_def_fl`/`begin_def_addr`（hh:385-394）：fl 语义是
+   `Varnode::input(8)/Varnode::written(16)/0=free`，且 **written+addr 组合是非法
+   输入**——oracle 抛 `LowlevelError("Cannot get contiguous written AND
+   addressed")`（varnode.cc:1913-1914），Rugra 以同文 panic 镜像（fixture
+   catch 双侧对拍）。
+3. `begin_op_code`（hh:500）：默认臂空 range（前批已修）。
+另：oracle `PcodeOpBank::target` 从命中 op 反向走 startmark（op.cc:360-370），
+未标 startmark 的裸 op 会越界——fixture 按真实流形态给每条指令首 op 补
+`opMarkStartInstruction`（同时覆盖该转发器）。
