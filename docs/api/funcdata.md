@@ -959,10 +959,17 @@ funcdata.cc:84-112 逐步对齐）。
    Rust 字段，coreaction.rs 标记为忠实 no-op，此处为 no-op）。
 3. `min_laned_size` 重新从 Architecture 派生（cc:93，无 lane 记录时为 -1，
    Rust 用 `u32::MAX` 表示同一哨兵）。
-4. localmap 建模（cc:95-96）：`scope.symbols.clear()` + 伴生
-   `high_symbols`/`symbol_entry_cache` 清空（与 start_processing 相同的
-   wholesale-clear 约定），`min_param_offset`/`max_param_offset` 复位
-   （varmap.cc:443-444）；typelock 符号存活为已登记 MISMATCH 残差
+4. localmap 建模（cc:95-96）：`scope.clear_symbols_wholesale()`（symbols +
+   nametree + category_lists + mapentry_log 同拍清空——镜像 oracle
+   clearUnlocked→removeSymbol→removeSymbolMappings 的原子对，
+   database.cc:2117-2149；2026-09-26 GENWIRE 起 start_processing/clear
+   两 seam 统一换用，PIPE-RESTART-0001 链②——重启第二遍在 populated
+   scope 上清空时，旧 `symbols.clear()` 单清 arena 会留下三处 id 配对
+   结构的陈旧索引：mapentry_log 残留条目在 materialize_maptable/
+   entry_in_use 索引死槽 panic，且 slot id 从 0 复用会让 nametree 残留
+   key 把名字错绑到新占位符号）+ 伴生 `high_symbols`/
+   `symbol_entry_cache` 清空，`min_param_offset`/`max_param_offset`
+   复位（varmap.cc:443-444）；typelock 符号存活为已登记 MISMATCH 残差
    （MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001）。
 5. `active_output = None`（cc:98 clearActiveOutput）。
 6. `funcp.clear_unlocked_output()`（cc:99；fspec.rs 侧为简化版，残差同上）。

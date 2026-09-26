@@ -544,6 +544,34 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
 
     let mut db = ActionDatabase::new();
     db.set_default_actions();
+    // PIPE-RESTART-0001 (chain ②): install the driver-owned raw-flow
+    // regeneration callback for the oracle's restart cycle (action.cc:574
+    // clearAnalysis → second-pass ActionStart → startProcessing →
+    // followFlow, funcdata.cc:157-163). Rugra's flow generation lives at
+    // the driver boundary, so the configured SLEIGH lifter moves into the
+    // callback (no second holder during the pipeline — pass 1 completed
+    // above); a restart re-runs the same flow contract the first pass
+    // used: the bare-face full-space followFlow(code:0, code:highest)
+    // with no callee protos (gen has no mirror/bounded split — the single
+    // contract in the flow comment above covers both passes). Installed
+    // on the derived "decompile" root that perform_action actually runs.
+    let restart_lifter = Arc::new(std::sync::Mutex::new(sleigh));
+    let restart_protos = empty_protos.clone();
+    db.set_restart_flow(
+        "decompile",
+        Arc::new(move |restart_fd| {
+            let mut lifter = restart_lifter.lock().map_err(|_| {
+                rugra::Error::from("restart SLEIGH lifter lock poisoned".to_string())
+            })?;
+            rugra::flow::follow_flow_range(
+                restart_fd,
+                &mut lifter,
+                0,
+                u64::MAX,
+                &restart_protos,
+            )
+        }),
+    );
     {
         let mut fd_write = fd_arc
             .write()

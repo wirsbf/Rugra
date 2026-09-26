@@ -3676,6 +3676,32 @@ impl ScopeLocal {
         }
     }
 
+    // RUGRA-GLUE: wholesale-reset companion for the funcdata
+    // startProcessing/clear `scope.symbols.clear()` seam (Ghidra's
+    // localmap->clearUnlocked() projection, database.cc:2042-2064). The
+    // oracle's clearUnlocked reaches removeSymbol, whose
+    // removeSymbolMappings (database.cc:2117-2136) erases every dying
+    // symbol's entries from maptable ATOMICALLY with the symbol dropping
+    // out of nametree/category (database.cc:2148-2149) — the scope's
+    // derived state never survives the symbols it indexes. Rugra's
+    // wholesale drop instead empties the slot arena, which REUSES slot ids
+    // from 0 on the next push, so every id-holding companion (nametree,
+    // category_lists, mapentry_log) must clear in the same breath: a
+    // survivor would alias a reused id (wrong-symbol resolution, e.g.
+    // find_first_by_name's liveness check passes on the new occupant) or
+    // index a dead slot (panic at materialize_maptable/entry_in_use). The
+    // restart cycle (ActionRestartGroup::apply → Funcdata::clear →
+    // second-pass startProcessing — the first production path that clears
+    // a POPULATED scope) exposed the incoherence (PIPE-RESTART-0001
+    // chain ②). The established typelock-survival deviation of the
+    // wholesale model (MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001) is unchanged.
+    pub fn clear_symbols_wholesale(&mut self) {
+        self.symbols.clear();
+        self.nametree.clear();
+        self.category_lists.clear();
+        self.mapentry_log.clear();
+    }
+
     // Ghidra: database.cc:2071 ScopeInternal::clearUnlockedCategory (cat >= 0)
     /// Clear unlocked symbols of the given category, mirroring
     /// `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) for the
@@ -4318,11 +4344,16 @@ impl ScopeLocal {
     /// name. Faithful to `ScopeInternal::findFirstByName`
     /// (database.cc:2733-2742): a `lower_bound` lookup on `(nm, 0)` that
     /// returns `None` (nametree.end()) unless the found symbol's name equals
-    /// `nm` exactly. Ids invalidated by an external
-    /// `symbols.clear()` (funcdata.rs startProcessing clears only the store,
-    /// modeling Ghidra's `localmap->clearUnlocked()` whose Rugra counterpart
-    /// cannot touch the private nametree) read as dead slots — absent, like
-    /// the oracle's null pointer.
+    /// `nm` exactly. Ids invalidated by the wholesale clear
+    /// (`clear_symbols_wholesale` — the funcdata clear/startProcessing
+    /// seam now clears symbols + nametree + category_lists + mapentry_log
+    /// in the same breath, mirroring the oracle's atomic
+    /// removeSymbol/removeSymbolMappings pair, database.cc:2117-2149;
+    /// PIPE-RESTART-0001 chain ②) read as dead slots — absent, like
+    /// the oracle's null pointer. (Doc updated at MERGEBATCH17 per
+    /// CR-GENWIRE finding 2: the pre-fix text described the old
+    /// store-only clear whose nametree residue could alias reused
+    /// slot ids — that residue class no longer exists.)
     pub fn find_first_by_name(&self, nm: &str) -> Option<usize> {
         self.nametree
             .range((nm.to_string(), 0u32)..)

@@ -19,7 +19,7 @@
 #   skeleton ≤ ceiling 即 PASS（低于上限不算失败；收紧上限须先登记 TODO）
 #
 # 用法：
-#   tools/verify_mirror_gate.sh [--corpus curl|httpd|vsh|sq|all] [--bin-dir DIR] [--keep-dir DIR]
+#   tools/verify_mirror_gate.sh [--corpus curl|httpd|vsh|sq|sqlite|all] [--bin-dir DIR] [--keep-dir DIR]
 #   tools/verify_mirror_gate.sh --update-baseline <TODO_ID>   # 重钉（须给 TODO ID，写入台账行）
 #   tools/verify_mirror_gate.sh --self-test                   # 无二进制自检（解析/断言逻辑）
 #
@@ -114,6 +114,17 @@ run_face() {
             fi
             RUGRA_GEN_MIRROR=1 RUGRA_GEN_TIMEOUT_SECS=600 \
                 "$BIN_DIR/gen_decompile" "$sq_bin" > "$bin_out" 2> "$err_log" || true ;;
+        sqlite)
+            # GENWIRE-SQLITE-RATCHET-REPIN-0001 (MERGEBATCH17): fifth gate
+            # face — the libsqlite3 corpus (SQLITE3_SCOREBOARD §10 proposal,
+            # genwire −140 landing). Same mirror-arm contract as vsh/sq.
+            local sqlite_bin="${SQLITE3_BINARY:-/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6}"
+            if [[ ! -e "$sqlite_bin" ]]; then
+                echo "MIRROR-GATE[sqlite] SKIP: corpus binary $sqlite_bin absent (host-specific asset)"
+                return
+            fi
+            RUGRA_GEN_MIRROR=1 RUGRA_GEN_TIMEOUT_SECS=600 \
+                "$BIN_DIR/gen_decompile" "$sqlite_bin" > "$bin_out" 2> "$err_log" || true ;;
     esac
 
     # ---- 2. compare 摘要 ----
@@ -151,7 +162,7 @@ run_face() {
                 health="fail"; health_detail="timeout markers=$ntimeouts"
             fi
             ;;
-        vsh|sq)
+        vsh|sq|sqlite)
             local okline
             okline=$(grep -o '\[GEN\] ok=[0-9]*/[0-9]* functions' "$err_log" | tail -1)
             local ok total
@@ -258,6 +269,7 @@ run_face curl
 run_face httpd
 run_face vsh
 run_face sq
+run_face sqlite
 
 if [[ "$KEEP" == "1" ]]; then
     echo "artifacts kept in $WORK_DIR"

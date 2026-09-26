@@ -9166,11 +9166,14 @@ impl Funcdata {
         // 160): the varmap ScopeLocal keeps its index-keyed nametree/category
         // lists private, so the faithful typelock-preserving clearUnlocked
         // (database.cc:2042-2064) cannot be projected from this module; the
-        // wholesale clear below is the established model. Typelocked-symbol
-        // survival is a registered MISMATCH residual
-        // (MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001 / localmap_typelock_survival).
+        // wholesale reset below (symbols + nametree + category_lists +
+        // mapentry_log, mirroring the oracle's atomic
+        // removeSymbol/removeSymbolMappings pair, database.cc:2117-2149) is
+        // the established model. Typelocked-symbol survival is a registered
+        // MISMATCH residual (MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001 /
+        // localmap_typelock_survival).
         if let Some(scope) = self.scope.as_mut() {
-            scope.symbols.clear();
+            scope.clear_symbols_wholesale();
             // cc:96: localmap->resetLocalWindow() (varmap.cc:432-463).
             // minParamOffset = ~(uintb)0; maxParamOffset = 0 (varmap.cc:443-444);
             // the stackGrowsNegative/local-range re-derivation reads
@@ -10502,9 +10505,12 @@ impl Funcdata {
         // RUGRA-GAP: FuncProto has no is_inline flag yet.
 
         // Ghidra: localmap->clearUnlocked();
-        // RUGRA-GAP: ScopeLocal has no clear_unlocked; clear symbol table instead.
+        // RUGRA modeling: same wholesale reset as Funcdata::clear (see the
+        // cc:95 seam above) — symbols + nametree + category_lists +
+        // mapentry_log clear together, mirroring the oracle's atomic
+        // removeSymbol/removeSymbolMappings pair (database.cc:2117-2149).
         if let Some(scope) = self.scope.as_mut() {
-            scope.symbols.clear();
+            scope.clear_symbols_wholesale();
         }
         // The HighVariable→Symbol associations die with the symbols.
         self.high_symbols.clear();

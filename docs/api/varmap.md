@@ -356,6 +356,21 @@ oracle 证据承担：
   `materialize_maptable` 每查询按序重放成 `RangeMap`（`ScopeLocal: Clone`
   无法持有非 Clone 的 RangeMap；等价键插入序与 erase 后幸存者相对序由
   重放保真，fixture 的 removal 案例覆盖）。
+- `clear_symbols_wholesale`（RUGRA-GLUE，2026-09-26 GENWIRE）——funcdata
+  startProcessing/clear 两 seam 的 wholesale-clear 配套（Ghidra
+  `localmap->clearUnlocked()` 投影）：symbols + nametree +
+  category_lists + mapentry_log **同拍清空**。oracle 侧符号经
+  clearUnlocked→removeSymbol 死亡时其 maptable 条目
+  （removeSymbolMappings，database.cc:2117-2136）与 nametree/category
+  引用（database.cc:2148-2149）原子同步消亡——派生状态永不持有死符号
+  引用。Rugra 的 `SymbolStore::clear` 清空 arena 后 slot id 从 0 复用，
+  若 id 配对结构（nametree/category_lists/mapentry_log）单方残留：
+  mapentry_log 陈旧条目在 materialize_maptable/entry_in_use 索引死槽
+  panic（重启第二遍首现，PIPE-RESTART-0001 链②），nametree 残留 key
+  会把名字解析错绑到 id 复用后的新占位符号（find_first_by_name 的
+  liveness 检查对复用 id 通过）。单删路径（remove_symbol）本就配对
+  （retain+erase+remove_slot）；本方法把同一配对纪律延伸到整体清 seam。
+  typelock 幸存偏差不变（MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001）。
 - `add_map_entry`（database.cc:1843 addMapInternal）——条目安装（无属性折入
   的生产形态，`property` 恒 0——Database 未接线，DB-LOCALSCOPE-MAP-0001）：
   委托 `add_map_entry_with_property`。

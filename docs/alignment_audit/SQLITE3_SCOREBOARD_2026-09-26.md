@@ -183,3 +183,26 @@ python3 /dev/shm/rugra-reports/gen5c-evidence/newcomers_official.py
 2. 四巨物（VdbeExec/vmprintf/mprintf/Pragma，14269 行=45.7%）是 sqlite 面收敛的
    最大单点——LOOPSHAPE（for 形）+CAST-TEMP-HOIST 两族合计占其 60%+，修 F8FOR 残差
    票（F8FOR-REJECT-RESIDUAL-0001）与 CASTFUSE 的收益在 sqlite 面将直接放大。
+
+## 11. GENWIRE 重启环附录（2026-09-26，wt/genwire 链②收口后 fresh 全量）
+
+PIPE-RESTART-0001 解锁链②（gen 驱动 RestartFlowCallback 接线）落地后的第五语料棘轮增量：
+
+- 驱动 `examples/gen_decompile` 安装重启回调（镜像 curl 先例 `48a66fab`，裸面单流契约
+  follow_flow_range(0, u64::MAX, empty_protos) 双遍同形）+ `ScopeLocal::clear_symbols_wholesale`
+  id 配对一致性修复（varmap.rs/funcdata.rs，重启第二遍在 populated scope 上清空 seam 的
+  panic 根因；详证 LANE_GENWIRE 终报）。
+- **重启环首次生产点火**：3 函数（sqlite3_config/sqlite3_db_config/sqlite3_test_control，
+  `--one` 603/608/623）第二遍真实执行，输出带 `Restarted to delay deadcode elimination
+  for space: stack` 警告头（oracle 重启指纹）。
+- **棘轮数字（fresh 16 分片全量，205s，ok=1385/1385）**：skeleton **31214→…→27318（本档
+  基线，master `512c5600` 现态）→27178（GENWIRE 后）**，defects=0/numbering=0 不变；
+  −140 精确=3 函数改善（config 129→78 / db_config 18→11 / test_control 205→123，
+  TRIGFACE §③ oracle 侧量化 272 行的方向与域落地：栈槽去物化+类型精化+警告重定位）。
+- **零回退铁证**：1385 块逐块对照基线，**恰 3 块差异**（603/608/623），其余 1382 块字节恒等。
+- root 重钉已执行（**MERGEBATCH17, 2026-09-26**）：`tools/mirror_gate_baselines.tsv` sqlite 行首钉
+  ceiling **27178** / floor **1385**（todo_id=GENWIRE-SQLITE-RATCHET-REPIN-0001,
+  pinned_commit=wt/genwire tip `28e3fb26`——27178 实测锚;`tools/verify_mirror_gate.sh`
+  sqlite 臂同批上线,单进程全量形态与 vsh/sq 同契约,SQLITE3_BINARY 可覆盖语料路径;
+  16 分片 mirror 臂为记分板测量协议,门禁臂为单进程全量——两协议口径差若实测显形,
+  以门禁臂实测重钉并注记）。
