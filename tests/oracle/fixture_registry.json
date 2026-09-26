@@ -8508,6 +8508,30 @@
           "GH12-F-2a6f55228a2d38d1f1c6"
         ]
       }
+    },
+    {
+      "id": "deindirect_arms_1204",
+      "description": "FSPECDEIN lane bilateral fixture: ActionDeindirect three arms via production call points (const hit/miss, align_strip, copy_chain, override_site, funcptr_force, norestart_gate, extref); 6/8 byte-identical MATCH, 2 registered MISMATCH residuals (-R2 noreturn channel, -R3 refaddr storage), zero corpus reach.",
+      "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+      "entry_kind": "bilateral-runner",
+      "paths": [
+        "tools/run_deindirect_arms_oracle.sh"
+      ],
+      "rust_function_ids": [],
+      "ghidra_function_ids": [],
+      "status_note": "registered root-serial at MB18 merge per CR-FSPECDEIN condition"
+    },
+    {
+      "id": "typingpx_pxname_1204",
+      "description": "TYPINGPX lane bilateral fixture: mapGlobals persist-arm pointer naming (px/pax/pi/pc/ppx/x) via forced v_type persist varnode + setHighLevel + queryProperties observation; six records byte-identical MATCH.",
+      "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+      "entry_kind": "bilateral-runner",
+      "paths": [
+        "tools/run_typingpx_pxname_oracle.sh"
+      ],
+      "rust_function_ids": [],
+      "ghidra_function_ids": [],
+      "status_note": "registered root-serial at MB18 merge (PENDING-ROOT-REGISTER condition)"
     }
   ]
 }

@@ -1405,3 +1405,63 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   （ghidra=rugra=df4b4fbd…，25 行字节全等）；全部门禁在最终态复跑：
   cargo test --lib 1758/0、canon curl+httpd vs 基线 0/0 行差、
   镜面四面 PASS、bank 391/391、annotations/refs OK。
+
+### 2026-09-26 — FSPEC-DEINDIRECT-TRIGGER-0001（FuncProto is_override / deindirect+forceSet 生产化 / commit 生产 hook 族，Lane FSPECDEIN）
+
+以锁定 oracle `Ghidra 12.0.4`（commit `e40ed13014025f82488b1f8f7bca566894ac376b`）
+亲读 `fspec.cc:5005-5027/5150-5190/5201-5329/5408-5431/5443-5472/5485-5509` 与
+`fspec.hh:1544-1545` 后落地（TRIGFACE 测绘票：oracle fspec 两触发点在 Rugra
+生产不可达——ActionDeindirect 部分重实现，永不 pending）：
+
+- **`FuncProto` 补 `is_override` 旗标**（fspec.hh:1357 `is_override=0x1000`、
+  :1544-1545 访问器）：`FuncProto::copy`（fspec.cc:3794 `flags = op2.flags`）整
+  位携带进 `copy_from`。这是 `Override::insertProtoOverride`（override.cc:130）
+  在存储副本上打标、重启后 `Override::applyPrototype`（flow.cc:714）把带标
+  proto 重拷回 callspec 的通道——`deindirect` 的 `isOverride()` 早退门
+  （fspec.cc:5462）据此跳过已 override 站点的 late restriction。
+- **`FuncCallSpecs::deindirect` 生产化**（fspec.cc:5443-5472 逐句）：签名改为
+  `(owner: &Arc<RwLock<FuncCallSpecs>>, fd, call_op, entry, display_name,
+  &FuncProto) -> bool`——Rugra 无 per-callee Funcdata（flow.rs queryCall 确立的
+  前端边界），生产调用方 `ActionDeindirect` 交 oracle `newfd` 三元观测片
+  （getAddress/getDisplayName/getFuncProto）。语义链：entry/name 采纳 →
+  typed annotation 重写 in(0) → CALLIND→CALL → `insertIndirectOverride` →
+  （非 noreturn/inline 且非 override 时）`lateRestriction` 成功即 commit +
+  不重启 / 失败 `setRestartPending(true)`。guard 以分段 scope 取用（annotation
+  铸造需在读锁间读更新后的 entry）。旧 hook 形态与 `DeindirectOutcome` 枚举
+  （零调用方死代码）随之退役。
+- **`FuncCallSpecs::force_set` 生产化**（fspec.cc:5485-5509 逐句）：
+  proto override 登记（Rugra `Override` 尚不存储 proto 本体，CALLSPEC-0001
+  seam——重启重应用面维持未接线）→ lateRestriction commit/重启二择 → 无论结果
+  `setInputLock(true)` + 双 error 旗标采纳。
+- **`commit_new_inputs` 补 `stackref` 读取**（fspec.cc:5154 `getSpacebaseRelative()`
+  在 placeholder 状态清空前读取）+ hook 扩展为
+  `(fd, op, existing, pspace, paddr, psize, stackref)`——`buildParam` 的
+  spacebase 参数臂需要空间与栈参照。
+- **生产 hook 族**（free fn）：`prod_get_call_in`（cc:5103/5110 内联读）、
+  `prod_build_param`（fspec.cc:5005-5027 逐句：null→opStackLoad、等宽直返、
+  SUBPIECE(0) 前插 + free 重版本化）、`prod_get_return_addr_size`/
+  `prod_set_call_output`（cc:5208-5230：opSetOutput + 非自身 INDIRECT
+  opUnlink）。`prod_truncate_output` 为登记残差（commit-outputs 截断图编辑，
+  FSPEC-DEINDIRECT-TRIGGER-0001 残项，CALLSPEC-0001 seam）。
+
+### 2026-09-26 — FSPEC-DEINDIRECT-TRIGGER-0001 补充（deindirect 名字段分离恢复 + B2 双侧 fixture，Lane FSPECDEIN）
+
+- **`deindirect` 名字段分离恢复**：Ghidra 的 `name` 挂在 FuncCallSpecs
+  （fspec.hh:1645）——`FuncProto::copy`（fspec.cc:3789-3804）只拷
+  model/extrapop/flags/store/effectlist/likelytrash/injectid，**从不触碰名**，
+  故 lateRestriction 的 copy 不会扰动 cc:5447 采纳的 display name。Rugra 的
+  FuncProto 内嵌 name 字段，copy_from 会连带覆盖——deindirect 在
+  lateRestriction 之后（commit 与 restart 两路）重新断言 display name 以镜像
+  字段分离（双侧 fixture const_hit 案例钉死：copy 后名保持 target_const）。
+- **B2 双侧 fixture** `tests/oracle/deindirect_arms_1204.{cc,rs}` +
+  `tools/run_deindirect_arms_oracle.sh`（BfdArchitecture host + 真全局 scope
+  addFunction/addExternalRef + 两个 runner 侧 throwaway-补丁访问器）：八案
+  覆盖三臂全路径——**6/8 双侧逐字节一致**（const_hit/const_miss/align_strip
+  （funcptr_align=2 双移位剥编码位）/copy_chain/override_site（isOverride
+  早退无重启）/funcptr_force（forceSet 锁+commit arity 折叠））；**2 案
+  MISMATCH 残差如实登记**：norestart_gate（db callee noreturn 位——Rugra 该
+  观测片走 flow 期 callee_func_protos 通道,deindirect 时点不可见,语料 0
+  触达）、extref（Scope 图不存 per-symbol refaddr——检测可达、referral 解析
+  落空=oracle newfd==0 形态,语料 0 触达）。metadata
+  `deindirect_arms_1204.metadata.json` 逐案 coverage 状态 + 残差
+  TODO ID（-R2/-R3）；fixture_registry 登记留 root 串行。

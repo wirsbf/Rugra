@@ -3819,3 +3819,45 @@ commit1 / commit2）: canon curl+httpd 字节恒等（md5 c33052a3/6923d6c1）,
 镜面 curl 74/58/0/0、vsh 71/15/0/0、sq 810/4530/0/0、httpd 29/156/0/0
 全同 commit1;1778P/0F;bank 391/391。CR-STACKSPILL 时代"单独落地打破
 httpd canon(460367b2)"不再复现。
+## 2026-09-26：ActionDeindirect 三臂全量重写（FSPEC-DEINDIRECT-TRIGGER-0001，Lane FSPECDEIN）
+
+以锁定 oracle 亲读 `coreaction.cc:1219-1280` 全函数体后，把部分重实现升级为
+逐句 1:1（TRIGFACE 车道测绘钉死：oracle fspec 两触发点——fspec.cc:5471/5503——
+因缺臂而生产不可达）：
+
+- **COPY 链追踪改忠实形态**（cc:1231-1232）：`walk_copy_chain` 返回**走链后的
+  varnode**（不是只返回常量终点），臂判定用 walked vn 的
+  persist/externref/constant 三性质；旧 20 跳上限与"先查常量再走链"两自创
+  结构退役。
+- **external-ref 臂**（cc:1233-1240）：`isPersist && isExternalRef` → 生产
+  `queryExternalRefFunction`（arch.symboltab 全局 scope stack_external_ref；
+  per-symbol `refaddr` 存储为 CALLSPEC-0001 seam 残差——检测可达、referral
+  解析无生产通道时行为=oracle `newfd==0` 不转换）→ `deindirect` + count+=1 +
+  continue。
+- **constant 臂**（cc:1241-1257，`else if` 语义保真）：wordsize 取函数入口空间
+  → `AddrSpace::addressToByte` 缩放 → `funcptr_align != 0` 时
+  `offset >>= align; offset <<= align` 剥编码位（x86-64 funcptr_align=0 恒等）→
+  生产 `queryFunction`（主=arch.symboltab 全局 scope `query_function_addr`
+  FunctionSymbol 层；fallback=驱动 `symbol_table`/`external_prototypes` 通道，
+  保住既有转换集）→ `deindirect`（entry/name/annotation/CALLIND→CALL/
+  indirectOverride/lateRestriction 全链）+ count+=1 + continue。
+- **typed-funcptr 臂**（cc:1258-1277，独立 `if`——前两臂条件成立但查询落空仍
+  进入）：`hasTypeRecoveryStarted()` 门（stackstall 在 ActionInferTypes 之后，
+  生产恒真）→ `op->getIn(0)->getTypeReadFacing(op)`（原始输入，非 walked vn）
+  PTR→CODE → `TypeCode::proto` 存在且 `!isInputLocked()` → `force_set` +
+  count+=1（isInputLocked 注释保留 oracle FIXME 语义）。
+- **callee proto 生产形**：`db_default_callee_proto` = 默认构造 FuncProto（无锁/
+  noreturn/参数——database.cc:557 惰性 new 的 db 函数 `funcp` 旗标面）**+ 默认
+  model 绑定**（`setInternal(evalfp/defaultfp, void)`——与 `ActionDefaultParams`
+  （cc:2311-2332）给 callspec 的形态一致）。绑定理由（探针实证,站点 0xead55）：
+  oracle 的常量折叠收敛在 ActiveParam finalize **之后**才到达 deindirect 拷贝
+  （拷贝后的 model-null deriveInputMap 在 oracle 会崩,coreaction.cc:1753→
+  fspec.hh:1494——golden 存在=该状态 oracle 从不可达）；Rugra 的常量在迭代 1
+  即析出（npasses=1、6 活跃 trial 时即拷贝）,model-less 拷贝把仍活跃的 finalize
+  晾在简化模型 fallback 上丢光 trial（sqlite3_blob_write 调用参数丢失）。绑定
+  默认 model 使拷贝 model-中性;oracle 已行使的每个门结果不变（isCompatible
+  经 `this==op2` 通过,恰如 oracle null model 经 `compatModel==op2`（fspec.cc:
+  2406-2411）通过;noreturn/inline/lock 门同读 false）。分歧面=非默认 model 的
+  callspec（锁定单 model gcc 语料为空,登记于本票）。
+- 循环内调用 `deindirect` 后**同一 op 的 opcode 已改 CALL**，后续迭代经
+  cc:1229 的 CALLIND 门自然跳过（与 oracle 相同的幂等闭包）。
