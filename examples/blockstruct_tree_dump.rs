@@ -15,7 +15,6 @@ use std::fs;
 use rugra::action::ActionDatabase;
 use rugra::address::Address;
 use rugra::block::{BlockGraph, BlockType, FlowBlock};
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
 use rugra::funcdata::Funcdata;
 use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
@@ -349,19 +348,9 @@ fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
     let (symbol_table, string_table) = build_tables(elf, &buffer);
     let code_bytes = &buffer[file_offset as usize..file_offset as usize + func_size];
 
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm
-        .disassemble(code_bytes, Address::new(target_addr))
-        .map_err(|e| e.to_string())?;
-    let mut lifter = X86Lifter::new();
-    let mut raw_ops = Vec::new();
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-        }
-        raw_ops.extend(ops);
-    }
+    // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (padding NOP
+    // filter); lift_instruction stamps SeqNum(addr, 0) itself.
+    let raw_ops = rugra::disasm::sleigh_lift::sleigh_raw_ops_skip_nops(code_bytes, target_addr);
 
     let mut fd = Funcdata::new(&func_name, Address::new(target_addr), func_size as i32);
     for (&addr, n) in &symbol_table {

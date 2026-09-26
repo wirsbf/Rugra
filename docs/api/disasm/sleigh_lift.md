@@ -116,3 +116,26 @@ pspec 全量、Fspec 动态空间等见 `SLEIGH-0002C/D`、`ADDR-0001`）。
   Rugra glue: decode each boundary in `[base, base+len)`, and on an undecodable byte skip
   one byte with zero ops (the retired iced walk's "Unimplemented" fallback contract). The
   funcdata X86Lifter test sites and the remaining probe drivers consume it.
+
+## 2026-09-26 SLEIGH-RUSTIFY-PHASE3-0001 debugger-walk additions
+
+The seven pipeline debugger examples (stackfold_dbg / callin0_trace / diag_stack /
+rugra_decompile_func / debug_cfg / debug_my_fwrite / blockstruct_tree_dump) migrated off
+the retired iced lift in the same lane:
+
+- `SleighLifter::assembly_mnemonic(addr) -> Option<String>`: passthrough of
+  `SleighCtx::assembly_mnemonic`, the `Translate::printAssembly` mnemonic contract
+  (translate.hh:442). `lift_instruction_skip_nops` probes it internally; the two
+  debuggers that printed iced full-text listings (debug_cfg, debug_my_fwrite) now print
+  a mnemonic-only listing through it (the bridge exposes printAssembly, not iced's
+  formatter).
+- `sleigh_raw_ops_skip_nops(code, base)` (free function): `sleigh_raw_ops` with the
+  canon httpd driver's `lift_instruction_skip_nops` padding filter. Function windows cut
+  at symbol size can end in alignment padding (measured: ap_parse_vhost_addrs's
+  203-byte window ends in a 7-byte `0f 1f 80` NOP); the engine emits operand pcode
+  (`INT_MULT`/`INT_ADD`) for those `:NOP rm32` constructors that Ghidra's
+  flow-following pipeline never lifts, so a debugger walk over a function window must
+  drop them to observe the same effective IR the canon driver builds. stackfold_dbg —
+  the HTTPD-STACKSLOT-FOLD-0001 B2 fixture driver — rides this entry; the
+  `tools/run_stackslot_fold_oracle.sh` observable (in_RSP fold count 0) is unchanged
+  by the migration.

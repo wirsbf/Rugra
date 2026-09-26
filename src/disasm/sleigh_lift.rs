@@ -47,6 +47,16 @@ impl SleighLifter {
         ctx.try_set_image(image, image_base)
     }
 
+    // RUGRA-GLUE: SLEIGH printAssembly mnemonic probe (translate.hh:442),
+    // SleighCtx::assembly_mnemonic passthrough. Driver disassembly listings
+    // (debug_cfg / debug_my_fwrite) print it per decode boundary; the canon
+    // drivers use the same probe internally via lift_instruction_skip_nops.
+    pub fn assembly_mnemonic(&self, address: u64) -> Option<String> {
+        self.ctx
+            .as_ref()
+            .and_then(|ctx| ctx.assembly_mnemonic(address))
+    }
+
     // RUGRA-GLUE: atomically consume Sleigh::oneInstruction step and emitted ops
     pub fn lift_instruction(
         &mut self,
@@ -190,6 +200,35 @@ pub fn sleigh_raw_ops(code: &[u8], base: u64) -> Vec<PcodeOpRaw> {
     let limit = base + code.len() as u64;
     while addr < limit {
         match lifter.lift_instruction(addr) {
+            Ok((step, decoded)) => {
+                ops.extend(decoded);
+                addr += step as u64;
+            }
+            Err(_) => {
+                addr += 1;
+            }
+        }
+    }
+    ops
+}
+
+// RUGRA-GLUE: canon-contract linear walk — sleigh_raw_ops with the httpd
+// driver's lift_instruction_skip_nops padding filter (SLEIGH-RUSTIFY-
+// PHASE3-0001). Function windows cut at symbol size can include trailing
+// alignment padding; the engine emits operand pcode for multi-byte `:NOP`
+// constructors (ia.sinc:4136-4137) that Ghidra's flow-following pipeline
+// never lifts, so a debugger walk over a function window must drop them to
+// observe the same effective IR the canon driver builds.
+pub fn sleigh_raw_ops_skip_nops(code: &[u8], base: u64) -> Vec<PcodeOpRaw> {
+    let mut lifter = SleighLifter::new();
+    if lifter.configure_x86_64(code, base).is_err() {
+        return Vec::new();
+    }
+    let mut ops = Vec::new();
+    let mut addr = base;
+    let limit = base + code.len() as u64;
+    while addr < limit {
+        match lifter.lift_instruction_skip_nops(addr) {
             Ok((step, decoded)) => {
                 ops.extend(decoded);
                 addr += step as u64;

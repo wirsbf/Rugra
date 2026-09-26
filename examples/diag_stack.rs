@@ -3,7 +3,6 @@
 //! returns 0 hints. Run: cargo run --release --example diag_stack
 
 use goblin::Object;
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
 use rugra::funcdata::Funcdata;
 use rugra::address::Address;
 use rugra::opcodes::OpCode;
@@ -50,17 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let end = std::cmp::min(file_off as usize + size, buffer.len());
         let code = &buffer[file_off as usize..end];
 
-        let mut dis = X86_64Disassembler::new();
-        let insts = dis.disassemble(code, Address::new(vaddr))?;
-        let mut lifter = X86Lifter::new();
-        let mut raw = Vec::new();
-        for inst in &insts {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-            }
-            raw.extend(ops);
-        }
+        // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (padding
+        // NOP filter) over each function window.
+        let raw = rugra::disasm::sleigh_lift::sleigh_raw_ops_skip_nops(code, vaddr);
 
         let mut fd = Funcdata::new(name, Address::new(vaddr), size as i32);
         fd.inject_raw_ops(&raw);

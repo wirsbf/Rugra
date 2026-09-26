@@ -7,7 +7,7 @@ use std::fs;
 
 use rugra::action::{Action, ActionDatabase};
 use rugra::address::Address;
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::opcodes::OpCode;
 use rugra::printc::PrintC;
@@ -139,22 +139,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let code_bytes = &buffer[file_offset as usize..file_offset as usize + func_size];
 
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(code_bytes, Address::new(target_addr))?;
+    // SLEIGH-RUSTIFY-PHASE3-0001: canon-contract linear walk (padding NOP
+    // filter). The retired iced full-text listing becomes a mnemonic
+    // listing (Translate::printAssembly contract, translate.hh:442).
+    let mut lifter = SleighLifter::new();
+    lifter.configure_x86_64(code_bytes, target_addr)?;
 
-    eprintln!("=== Instructions ({}) ===", instructions.len());
-    for inst in &instructions {
-        eprintln!("  0x{:x}: {}", inst.address, inst.text);
-    }
-
-    let mut lifter = X86Lifter::new();
+    eprintln!("=== Instructions ===");
     let mut raw_ops = Vec::new();
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+    let mut addr = target_addr;
+    let limit = target_addr + code_bytes.len() as u64;
+    while addr < limit {
+        let mnemonic = lifter
+            .assembly_mnemonic(addr)
+            .unwrap_or_else(|| "?".to_string());
+        match lifter.lift_instruction_skip_nops(addr) {
+            Ok((step, ops)) => {
+                eprintln!("  0x{:x}: [{}] ({} ops)", addr, mnemonic, ops.len());
+                raw_ops.extend(ops);
+                addr += step as u64;
+            }
+            Err(_) => {
+                eprintln!("  0x{:x}: [undecodable]", addr);
+                addr += 1;
+            }
         }
-        raw_ops.extend(ops);
     }
 
     eprintln!("\n=== RAW OPS (before inject): {} ===", raw_ops.len());
