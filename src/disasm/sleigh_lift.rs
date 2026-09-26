@@ -71,6 +71,32 @@ impl SleighLifter {
         Ok((step, ops))
     }
 
+    // RUGRA-GLUE: lift one instruction, dropping the ops of no-effect
+    // padding classified as NOP by the .sla's own constructor table
+    // (SLEIGH-RUSTIFY-PHASE3-0001). The :NOP rm32 constructors carry
+    // empty templates but their rm operands' attached address semantics
+    // make the ENGINE emit operand pcode (ia.sinc:4136-4137; both C++
+    // SLEIGH and kuna emit it — Phase2 op-for-op zero-diff). Ghidra's
+    // flow-following pipeline never lifts unreachable padding, so the
+    // oracle IR never contains those ops; a LINEAR walk filters them by
+    // the oracle's own mnemonic to keep the same effective IR.
+    pub fn lift_instruction_skip_nops(
+        &mut self,
+        address: u64,
+    ) -> Result<(usize, Vec<PcodeOpRaw>), SleighDecodeError> {
+        let is_nop = self
+            .ctx
+            .as_ref()
+            .and_then(|ctx| ctx.assembly_mnemonic(address))
+            .map(|mnemonic| mnemonic == "NOP")
+            .unwrap_or(false);
+        let (step, ops) = self.lift_instruction(address)?;
+        if is_nop {
+            return Ok((step, Vec::new()));
+        }
+        Ok((step, ops))
+    }
+
     // RUGRA-GLUE: construct the typed failure used when the C++ engine could not be created
     fn unavailable_error() -> SleighDecodeError {
         SleighDecodeError {
@@ -145,4 +171,33 @@ impl SleighLifter {
             .map(|(_, ops)| ops)
             .unwrap_or_default()
     }
+
+}
+
+// RUGRA-GLUE: linear SLEIGH decode over a byte window (driver/test raw-op
+// construction). Ghidra itself has no linear decoder — its only contract is
+// flow-following through Translate::oneInstruction (flow.cc:421) — so this
+// walk is pure Rugra glue: decode each boundary in [base, base+len), and on
+// an undecodable byte skip one byte with zero ops (the retired iced walk's
+// "Unimplemented" fallback contract).
+pub fn sleigh_raw_ops(code: &[u8], base: u64) -> Vec<PcodeOpRaw> {
+    let mut lifter = SleighLifter::new();
+    if lifter.configure_x86_64(code, base).is_err() {
+        return Vec::new();
+    }
+    let mut ops = Vec::new();
+    let mut addr = base;
+    let limit = base + code.len() as u64;
+    while addr < limit {
+        match lifter.lift_instruction(addr) {
+            Ok((step, decoded)) => {
+                ops.extend(decoded);
+                addr += step as u64;
+            }
+            Err(_) => {
+                addr += 1;
+            }
+        }
+    }
+    ops
 }

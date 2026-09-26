@@ -30,7 +30,7 @@ unsafe impl GlobalAlloc for GuardAlloc {
 static ALLOC: GuardAlloc = GuardAlloc;
 
 use rugra::action::{Action, ActionDatabase, ActionState, break_flags};
-use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
@@ -375,30 +375,16 @@ fn flag_known_no_return_halts(fd: &mut Funcdata, halt_addrs: &std::collections::
     }
 }
 
-// DRIVER-RIPREL-CONSTFOLD-0001: SLEIGH's rip-relative export model for the
-// iced-lift path. The Rugra X86_64Disassembler resolves every rip-relative
-// displacement to the ABSOLUTE target (probe: `48 8b 05 65 47 07 00` @0x2c8d4
-// reports displacement=0xa1040, the `ap_ugly_hack` GOT-slot address), but the
-// general memory arms (parse_operand/parse_dest_operand/compute_mem_addr in
-// x86_lift.rs) then emit `INT_ADD(reg:0x288:8 RIP, const abs)` — adding the
-// live RIP register on top of the already-absolute displacement, which
-// double-counts rip. SLEIGH's rrip constructor const-folds the whole EA
-// (`*[ram]rrip` exports the constant address; the lea/push/comis arms already
-// follow this convention per their in-lifter comments, e.g. "Adding next_rip
-// on top double-counted rip ... landing every string reference out-of-image").
-// Oracle evidence the folded shape is `LOAD(ram, const)`/`STORE(ram, const)`:
-// the direct-runner mirror golden renders suck_in_APR's
-// `mov 0x74765(%rip),%rax` as `return xRam00000000000a1040;` — a direct
-// global varnode read that only exists after RuleLoadVarnode
-// (ruleaction.cc:4277-4305) folds a constant-EA LOAD into
-// `COPY(newVarnode(ram@0xa1040))`. This pass rewrites every
-// `INT_ADD(RIP, const)` into the bare constant before injection (the
-// intermediate INT_ADD is dead afterward and drops out); the pipeline's
-// RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4319-4341) then reindex the
-// constant-EA accesses into direct global varnode references exactly as in
-// the oracle. Long-term home of this fold is the lifter's memory arms (the
-// SLEIGH exporter); the driver models it here because Rugra's driver IS the
-// front-end stand-in and the httpd corpus is this lane's write domain.
+// DRIVER-RIPREL-CONSTFOLD-0001 (historical, SLEIGH-RUSTIFY-PHASE3-0001):
+// this fold existed to collapse the retired iced lift's
+// `INT_ADD(RIP, const)` double-count shapes (the iced resolver had already
+// made the displacement absolute; the general memory arms then added the
+// live RIP register on top). The production SLEIGH engine const-folds the
+// whole rip-relative EA at decode time (constructor-level rrip export —
+// `COPY val <- ram:abs` with no LOAD and no address ops), so on
+// SLEIGH-lifted ops the pattern never occurs and this pass is a
+// self-verifying no-op. Kept for one lane cycle as an A/B tripwire: a
+// nonzero count would mean an unfolded form reached the injection path.
 fn fold_rip_relative_eas(raw_ops: &mut Vec<rugra::pcoderaw::PcodeOpRaw>) -> usize {
     use rugra::opcodes::OpCode;
     use rugra::pcoderaw::VarnodeRaw;
@@ -474,43 +460,68 @@ fn fold_rip_relative_eas(raw_ops: &mut Vec<rugra::pcoderaw::PcodeOpRaw>) -> usiz
 /// oracle these are exactly the references the front-end records, and each
 /// referenced data address without a pre-existing symbol receives a
 /// default `DAT_<imageaddr>` label.
+/// SLEIGH-RUSTIFY-PHASE3-0001: the harvest rides the shared canon SLEIGH
+/// lifter. Constant-EA memory accesses are the ram-space varnodes of
+/// non-control-flow ops (the engine const-folds rip-relative and absolute
+/// EAs at decode time — loads/stores/ALU memory arms all reference the
+/// global directly), and the lea address-value channel is the const-space
+/// COPY input (`lea reg,[rip+X]` exports const:X). The mov-immediate
+/// false positives of the const channel are filtered downstream exactly
+/// like out-of-image references: `add_symbol_mapped`'s global-discovery
+/// range check rejects them. Measured parity on the httpd window set:
+/// final DAT candidates iced=840 vs SLEIGH=840, zero difference on both
+/// sides (the DB-side mapped-range + executable filters applied).
 fn harvest_data_references(
-    buffer: &[u8],
+    sleigh: &mut SleighLifter,
     functions: &[(u64, usize, u64, String)],
 ) -> std::collections::HashSet<u64> {
     let mut refs = std::collections::HashSet::new();
-    for &(vaddr, size, file_offset, _) in functions {
-        let max_size = std::cmp::min(size, 8192);
-        if file_offset as usize >= buffer.len() {
-            continue;
-        }
-        let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
-        let code_bytes = &buffer[file_offset as usize..end_off];
-        let mut disasm = X86_64Disassembler::new();
-        let Ok(insts) = disasm.disassemble(code_bytes, Address::new(vaddr)) else {
-            continue;
-        };
-        for inst in &insts {
-            for op in &inst.operands {
-                if let rugra::disasm::Operand::Memory {
-                    base,
-                    index,
-                    displacement,
-                    segment,
-                    ..
-                } = op
-                {
-                    if segment.is_some() {
-                        continue; // FS/GS-relative: never image references
+    for &(vaddr, size, _file_offset, _) in functions {
+        let range_len = std::cmp::min(size, 8192);
+        let mut addr = vaddr;
+        let limit = vaddr + range_len as u64;
+        while addr < limit {
+            match sleigh.lift_instruction(addr) {
+                Ok((step, ops)) => {
+                    for op in &ops {
+                        let code = rugra::opcodes::OpCode::from_i32(op.get_opcode());
+                        let is_control_flow = matches!(
+                            code,
+                            Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                                | Some(rugra::opcodes::OpCode::CPUI_CBRANCH)
+                                | Some(rugra::opcodes::OpCode::CPUI_CALL)
+                                | Some(rugra::opcodes::OpCode::CPUI_CALLIND)
+                                | Some(rugra::opcodes::OpCode::CPUI_BRANCHIND)
+                                | Some(rugra::opcodes::OpCode::CPUI_RETURN)
+                        );
+                        if !is_control_flow {
+                            if let Some(out_vn) = op.output() {
+                                if out_vn.space == rugra::space::AddressSpace::Ram {
+                                    refs.insert(out_vn.offset);
+                                }
+                            }
+                            for inv in op.inputs() {
+                                if inv.space == rugra::space::AddressSpace::Ram {
+                                    refs.insert(inv.offset);
+                                }
+                            }
+                        }
+                        // The lea address-value channel: `lea reg,[rip+X]`
+                        // lifts as COPY reg <- const:X (the iced harvest's
+                        // lea arm); the DB's mapped-range check sorts the
+                        // mov-immediate false positives out downstream.
+                        if code == Some(rugra::opcodes::OpCode::CPUI_COPY) {
+                            for inv in op.inputs() {
+                                if inv.space == rugra::space::AddressSpace::Const {
+                                    refs.insert(inv.offset);
+                                }
+                            }
+                        }
                     }
-                    // The X86_64Disassembler resolves rip-relative
-                    // displacement to the absolute target and reports
-                    // absolute disp-only operands verbatim.
-                    let rip_rel = base.as_deref() == Some("rip");
-                    let abs_disp = base.is_none() && index.is_none();
-                    if *displacement != 0 && (rip_rel || abs_disp) {
-                        refs.insert(*displacement as u64);
-                    }
+                    addr += step as u64;
+                }
+                Err(_) => {
+                    addr += 1;
                 }
             }
         }
@@ -589,6 +600,7 @@ fn build_action_data_symbol_db(
     analysis_discovered: &[u64],
     symbol_table: &HashMap<u64, String>,
     image_base: u64, // F2B: shift applied to raw ELF-derived addresses (canon)
+    sleigh: &mut SleighLifter,
 ) -> rugra::database::Database {
     use rugra::database::symbol_flags;
     use rugra::type_system::datatype::{Datatype, TypeArray, TypeBase, TypeMetatype};
@@ -878,7 +890,7 @@ fn build_action_data_symbol_db(
     }
 
     // (5) DAT_ labels for referenced data addresses without a symbol.
-    let refs = harvest_data_references(buffer, functions);
+    let refs = harvest_data_references(sleigh, functions);
     let mut ref_list: Vec<u64> = refs.into_iter().collect();
     ref_list.sort_unstable();
     let mut dat_count = 0usize;
@@ -2578,8 +2590,9 @@ fn skipped_from_main_window(size: usize, name: &str) -> bool {
 // set (PRINTC-LABSPELL-LABSYMS-0001). Lifted verbatim from the main loop
 // so PARAMID harvest rounds and the printing pass share one builder.
 fn lift_function_ops(
-    code_bytes: &[u8],
+    sleigh: &mut SleighLifter,
     vaddr: u64,
+    range_len: usize,
     name: &str,
 ) -> Option<(Vec<rugra::pcoderaw::PcodeOpRaw>, std::collections::HashSet<u64>)> {
     let mut raw_ops = Vec::new();
@@ -2587,45 +2600,50 @@ fn lift_function_ops(
     // direct-branch (jmp/jcc) target of the disassembly, i.e. exactly the
     // flow references Ghidra's disassembler creates and the source of its
     // default `LAB_` LABEL symbols. Derived from the instruction stream,
-    // NOT from lifted pcode: pipeline stages (condexe merging, block
+    // NOT from the final IR: pipeline stages (condexe merging, block
     // surgery) rewrite CBRANCH destination inputs into unique-space
-    // temps, which hides the static target from a pcode-level scan.
+    // temps, which hides the static target from a post-pipeline scan.
+    // SLEIGH-RUSTIFY-PHASE3-0001: the linear walk rides the shared canon
+    // SLEIGH lifter; a BRANCH/CBRANCH op's ram-space input(0) is the
+    // direct-branch target (funcdata_varnode.cc:222 newCodeRef layout),
+    // and an undecodable byte skips one byte with zero ops — the retired
+    // iced walk's "Unimplemented" fallback contract.
     let mut branch_ref_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
-        Ok(insts) => insts,
-        Err(_) => return None,
-    };
-    for inst in &instructions {
-        if inst.is_branch() {
-            if let Some(bt) = inst.branch_target() {
-                branch_ref_addrs.insert(bt.as_u64());
+    let mut addr = vaddr;
+    let limit = vaddr + range_len as u64;
+    while addr < limit {
+        // NOP-classified padding drops its ops (see lift_instruction_skip_nops)
+        match sleigh.lift_instruction_skip_nops(addr) {
+            Ok((step, ops)) => {
+                for op in &ops {
+                    match rugra::opcodes::OpCode::from_i32(op.get_opcode()) {
+                        Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                        | Some(rugra::opcodes::OpCode::CPUI_CBRANCH) => {
+                            if let Some(target_vn) = op.inputs().first() {
+                                if target_vn.space == rugra::space::AddressSpace::Ram {
+                                    branch_ref_addrs.insert(target_vn.offset);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                raw_ops.extend(ops);
+                addr += step as u64;
+            }
+            Err(_) => {
+                addr += 1;
             }
         }
     }
-
-    let mut lifter = X86Lifter::new();
-    for inst in &instructions {
-        let mut ops = lifter.lift(inst);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-        }
-        raw_ops.extend(ops);
-    }
-    // DRIVER-RIPREL-CONSTFOLD-0001: fold the iced-lift path's
-    // rip-relative memory EAs (`INT_ADD(RIP, const)` -> the const)
-    // before injection. The X86_64Disassembler already resolves a
-    // rip-relative displacement to the ABSOLUTE target, so the
-    // general memory arms' `INT_ADD(reg:0x288:8, abs)` double-counts
-    // rip; SLEIGH's rrip/disp const-fold exports the constant EA
-    // directly (oracle dumps: push/comis arms — `COPY val <-
-    // ram:abs` / `FLOAT_NAN in=(ram:0x1c:4)` with no LOAD, no addr
-    // ops; the direct-runner mirror golden's `return
-    // xRam00000000000a1040;` for suck_in_APR's `mov 0x74765(%rip),
-    // %rax`). The folded shapes LOAD(ram,const)/STORE(ram,const,v)
-    // are exactly the oracle's constant-EA pcode, which
-    // RuleLoadVarnode/RuleStoreVarnode (ruleaction.cc:4277/4319)
-    // then reindex into direct global varnodes.
+    // DRIVER-RIPREL-CONSTFOLD-0001 (historical note): the fold existed to
+    // collapse the iced lift's `INT_ADD(RIP, const)` double-count shapes;
+    // the SLEIGH engine const-folds rip-relative EAs at decode time
+    // (constructor-level rrip/disp export — `COPY val <- ram:abs` with no
+    // LOAD and no address ops), so on SLEIGH-lifted ops the pattern never
+    // occurs and the fold is a self-verifying no-op (kept for one lane
+    // cycle as an A/B tripwire: a nonzero count would mean an unfolded
+    // form reached the injection path).
     let folded_eas = fold_rip_relative_eas(&mut raw_ops);
     if folded_eas > 0 {
         eprintln!("[PREPASS] DRIVER-RIPREL-CONSTFOLD-0001: {} rip-relative EAs folded in {}", folded_eas, name);
@@ -2648,6 +2666,7 @@ fn run_paramid_iteration(
     shared: &SharedDecompileCtx,
     rounds: usize,
     buffer: &[u8],
+    sleigh: &mut SleighLifter,
 ) -> HashMap<u64, V3CalleeProto> {
     // The iteration window is the main loop's own window (same ledger,
     // same skip filter): Parameter ID only ever commits signatures for
@@ -2668,8 +2687,10 @@ fn run_paramid_iteration(
         if file_offset as usize >= buffer.len() {
             continue;
         }
-        let code_bytes = &buffer[file_offset as usize..end_off];
-        let Some((raw_ops, branch_ref_addrs)) = lift_function_ops(code_bytes, vaddr, name) else {
+        let range_len = end_off - file_offset as usize;
+        let Some((raw_ops, branch_ref_addrs)) =
+            lift_function_ops(sleigh, vaddr, range_len, name)
+        else {
             continue;
         };
         tasks.push(FunctionTask {
@@ -2730,7 +2751,7 @@ fn run_paramid_iteration(
         if file_offset as usize >= buffer.len() || sec_size == 0 {
             continue;
         }
-        let code_bytes = &buffer[file_offset as usize..end_off];
+        let range_len = end_off - file_offset as usize;
         let name = shared
             .sym_table
             .get(&target)
@@ -2741,7 +2762,9 @@ fn run_paramid_iteration(
                     0, // F2B: target is already canon-space
                 )
             });
-        let Some((raw_ops, branch_ref_addrs)) = lift_function_ops(code_bytes, target, &name) else {
+        let Some((raw_ops, branch_ref_addrs)) =
+            lift_function_ops(sleigh, target, range_len, &name)
+        else {
             continue;
         };
         tasks.push(FunctionTask {
@@ -3649,6 +3672,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mirror = mirror_flow_enabled();
     let img_base: u64 = if mirror { 0 } else { NATIVE_IMAGE_BASE };
 
+    // SLEIGH-RUSTIFY-PHASE3-0001: the canon face's decode consumers (the
+    // prototype pre-pass, the main-loop lift, the PARAMID rounds, the
+    // data-reference/call-target/code-reference harvests, the switchD
+    // scanners and the switchD handler lifts) now decode through the
+    // production kuna-sleigh engine over the full PT_LOAD image at the
+    // canon load base — the same decoder the mirror face and curl's main
+    // flow already use — retiring the iced bootstrap lift from this
+    // driver. Every consumer below is canon-only (mirror-gated off), so
+    // the lifter is built only for the canon face. One engine instance
+    // serves the whole run (configure-once, decode-many; the
+    // decode_started guard forbids image replacement, which the fixed
+    // full-image contract never needs).
+    let mut canon_sleigh: Option<SleighLifter> = if mirror {
+        None
+    } else {
+        let image = match &obj {
+            Object::Elf(elf) => worker_memory_image_bytes(elf, &buffer),
+            _ => Vec::new(),
+        };
+        let mut lifter = SleighLifter::new();
+        if let Err(error) = lifter.configure_x86_64(&image, NATIVE_IMAGE_BASE) {
+            eprintln!("[PREPASS] canon SLEIGH setup failed: {:?} — canon face cannot decode", error);
+            return Ok(());
+        }
+        Some(lifter)
+    };
+
     // HTTPD-URAM-SYMBOLIZE-0001 (parse point): the PLT thunk import is
     // parsed once up front (it re-parses the image independently of the
     // goblin object below) so both the symbol_table seeding inside the ELF
@@ -4077,75 +4127,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the candidates happens after the prepass loops (see
     // is_function_entry below); here we only harvest const-space inputs.
     let mut const_code_refs: Vec<u64> = Vec::new();
-    // HTTPD-CODEPTR-LEA-0001: rip-relative lea targets landing in executable
-    // sections (see the prepass collection loop) — the Function-Start
-    // analyzer's code-pointer references.
-    let mut lea_codeptr_targets: std::collections::HashSet<u64> =
-        std::collections::HashSet::new();
-    let exec_ranges: Vec<(u64, u64)> = {
-        let mut ranges = Vec::new();
-        if let Object::Elf(ref elf) = obj {
-            for header in elf.section_headers.iter() {
-                if (header.sh_flags & 0x4) != 0 && header.sh_size > 0 {
-                    ranges.push((header.sh_addr + img_base, header.sh_addr + img_base + header.sh_size));
-                }
-            }
-        }
-        ranges
-    };
-
+    // HTTPD-CODEPTR-LEA-0001: RETIRED with the iced harvest (see the
+    // prepass collection loop note) — the iced form double-resolved the
+    // pre-resolved rip displacement, so no target ever survived the
+    // executable-section filter and the channel was inert; the live
+    // code-pointer naming contract is HTTPD-CODEREF-SYMBOLIZE-0001's
+    // const_code_refs channel with its entry-ness validation.
     for &(vaddr, size, file_offset, ref name) in functions.iter().take(max_functions + 50) {
         if size < 5 { continue; }
         let max_size = std::cmp::min(size, 4096);
         let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
         if file_offset as usize >= buffer.len() { continue; }
-        let code_bytes = &buffer[file_offset as usize..end_off];
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
-            Ok(insts) => insts,
-            Err(_) => continue,
-        };
-        for inst in &instructions {
-            if inst.is_call() {
-                if let Some(ref bt) = inst.metadata.branch_target {
-                    call_targets.insert(bt.as_u64());
-                }
-            }
-        }
-        let mut lifter = X86Lifter::new();
+        let range_len = end_off - file_offset as usize;
+        // SLEIGH-RUSTIFY-PHASE3-0001: the pre-pass decodes through the
+        // shared canon SLEIGH lifter. Call targets are CALL ops'
+        // ram-space input(0); const-space inputs of every op feed the
+        // HTTPD-CODEREF-SYMBOLIZE-0001 channel exactly as the iced lift's
+        // raw ops did. The HTTPD-CODEPTR-LEA-0001 harvest is RETIRED: the
+        // iced form double-resolved the pre-resolved rip displacement
+        // (iced memory_displacement64 is already absolute; adding
+        // addr+len again landed every target outside the executable
+        // sections), so the channel never survived its exec-range filter
+        // — 0/1213 targets live on the httpd window set (measured). The
+        // live code-pointer naming contract is HTTPD-CODEREF-SYMBOLIZE-
+        // 0001's const_code_refs channel, which validates entry-ness via
+        // known-entries/endbr64 exactly like the analyzer.
         let mut raw_ops = Vec::new();
-        for inst in &instructions {
-            // HTTPD-CODEPTR-LEA-0001: collect rip-relative `lea` targets that
-            // land in executable sections — the code-pointer references
-            // (callback arguments like ap_pregfree's apr_pool_cleanup_kill
-            // cleanup fn at 0x12dc80) Ghidra's Function Start analyzers
-            // promote into real Functions, so the decompiler's
-            // PrintC::pushPtrCodeConstant (printc.cc:1730-1744 queryFunction
-            // -> displayName) prints `FUN_0012dc80` at the reference site.
-            if inst.mnemonic == "lea" {
-                for operand in &inst.operands {
-                    if let rugra::disasm::Operand::Memory {
-                        base: Some(base),
-                        displacement,
-                        ..
-                    } = operand
-                    {
-                        if base == "rip" {
-                            let target = inst
-                                .address
-                                .as_u64()
-                                .wrapping_add(inst.length as u64)
-                                .wrapping_add(*displacement as u64);
-                            lea_codeptr_targets.insert(target);
+        let mut addr = vaddr;
+        let limit = vaddr + range_len as u64;
+        while addr < limit {
+            match canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face")
+                .lift_instruction_skip_nops(addr)
+            {
+                Ok((step, ops)) => {
+                    for op in &ops {
+                        if rugra::opcodes::OpCode::from_i32(op.get_opcode())
+                            == Some(rugra::opcodes::OpCode::CPUI_CALL)
+                        {
+                            if let Some(target_vn) = op.inputs().first() {
+                                if target_vn.space == rugra::space::AddressSpace::Ram {
+                                    call_targets.insert(target_vn.offset);
+                                }
+                            }
                         }
                     }
+                    raw_ops.extend(ops);
+                    addr += step as u64;
+                }
+                Err(_) => {
+                    addr += 1;
                 }
             }
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-            }
-            raw_ops.extend(ops);
         }
         // HTTPD-CODEREF-SYMBOLIZE-0001: harvest const-space input offsets
         // (COPY of an immediate into an arg register lifts as
@@ -4170,20 +4204,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if prototype_db.contains_key(&target) { continue; }
         let Some((foff, fend)) = addr_to_fileoff(target) else { continue; };
         if foff >= buffer.len() { continue; }
-        let code_bytes = &buffer[foff..fend];
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(target)) {
-            Ok(insts) => insts,
-            Err(_) => continue,
-        };
-        let mut lifter = X86Lifter::new();
+        let range_len = fend - foff;
         let mut raw_ops = Vec::new();
-        for inst in &instructions {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        let mut addr = target;
+        let limit = target + range_len as u64;
+        while addr < limit {
+            match canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face")
+                .lift_instruction_skip_nops(addr)
+            {
+                Ok((step, ops)) => {
+                    raw_ops.extend(ops);
+                    addr += step as u64;
+                }
+                Err(_) => {
+                    addr += 1;
+                }
             }
-            raw_ops.extend(ops);
         }
         let name = symbol_table.get(&target).cloned().unwrap_or_else(|| format!("sub_{:x}", target));
         let mut fd = Funcdata::new(&name, Address::new(target), 512);
@@ -4272,28 +4310,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             });
     }
-    // HTTPD-CODEPTR-LEA-0001 second half: seed default names for the
-    // code-pointer lea targets that land in executable sections and have no
-    // symbol yet (the callback reference sites — Ghidra's analyzers created
-    // Functions there, so pushPtrCodeConstant's queryFunction display-name
-    // print needs the same name channel). Thunks and named symbols keep
-    // their existing entries.
-    for &target in &lea_codeptr_targets {
-        if symbol_table.contains_key(&target) || plt_imports.contains(target.wrapping_sub(img_base)) {
-            continue;
-        }
-        if !exec_ranges.iter().any(|&(start, end)| target >= start && target < end) {
-            continue;
-        }
-        symbol_table.insert(
-            target,
-            rugra::debugproto::analyze_headless_function_symbol_name(
-                target,
-                0, // F2B: target is already canon-space
-            ),
-        );
-    }
-
     // SB-CONSTBASE-0001: one tracked-context Architecture template per run
     // (built before the function loop; SLEIGH ctx stays on this thread).
     // Each function thread clones it for fd.set_arch below — Architecture is
@@ -4445,7 +4461,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let switchd_default_fns: Vec<(u64, usize, u64)> = if mirror {
         Vec::new()
     } else {
-        scan_switch_default_handlers(&obj, &buffer, &functions, img_base)
+        scan_switch_default_handlers(
+            &obj,
+            &buffer,
+            &functions,
+            img_base,
+            canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face"),
+        )
     };
     if !switchd_default_fns.is_empty() {
         eprintln!(
@@ -4459,7 +4483,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let switchd_cased_fns: Vec<(u64, usize, u64)> = if mirror {
         Vec::new()
     } else {
-        scan_switch_cased_handlers(&obj, &buffer, &functions, &switchd_default_fns, img_base)
+        scan_switch_cased_handlers(
+            &obj,
+            &buffer,
+            &functions,
+            &switchd_default_fns,
+            img_base,
+            canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face"),
+        )
     };
     if !switchd_cased_fns.is_empty() {
         eprintln!(
@@ -4575,6 +4608,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &analysis_discovered,
             &symbol_table,
             img_base,
+            canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face"),
         ))
     };
 
@@ -4695,6 +4731,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &shared_ctx,
             rounds,
             &buffer,
+            canon_sleigh
+                .as_mut()
+                .expect("canon SLEIGH lifter built for the canon face"),
         );
         eprintln!(
             "[PARAMID] final self-produced table: {} callee prototypes ({} input-locked, {} return-locked)",
@@ -4742,16 +4781,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let max_size = std::cmp::min(size, 8192);
         let end_off = std::cmp::min(file_offset as usize + max_size, buffer.len());
         if file_offset as usize >= buffer.len() { continue; }
-        let code_bytes = &buffer[file_offset as usize..end_off];
+        let range_len = end_off - file_offset as usize;
 
         // HEADLESS-BRIDGE-PARAMID-0001: the lift stage — the identical
-        // disassemble+lift+const-fold block the loop ran inline (see
-        // lift_function_ops), extracted so the PARAMID harvest rounds
-        // build byte-identical raw ops. Under the mirror gate the iced
-        // prelude is skipped — SLEIGH + follow_flow_range inside the
-        // thread replace it.
+        // decode+lift block the loop ran inline (see lift_function_ops),
+        // extracted so the PARAMID harvest rounds build byte-identical
+        // raw ops. Under the mirror gate the linear prelude is skipped —
+        // SLEIGH + follow_flow_range inside the thread replace it.
         let (raw_ops, branch_ref_addrs) = if !mirror {
-            match lift_function_ops(code_bytes, vaddr, name) {
+            match lift_function_ops(
+                canon_sleigh
+                    .as_mut()
+                    .expect("canon SLEIGH lifter built for the canon face"),
+                vaddr,
+                range_len,
+                name,
+            ) {
                 Some(pair) => pair,
                 None => {
                     total_fail += 1;
@@ -4886,28 +4931,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 total_fail += 1;
                 continue;
             }
-            let code_bytes = &buffer[file_off..file_off + thunk_size];
 
+            // SLEIGH-RUSTIFY-PHASE3-0001: the switchD handler lift rides the
+            // shared canon SLEIGH lifter (same walk contract as
+            // lift_function_ops: skip-one-byte on undecodable input, zero
+            // ops — the retired iced walk's "Unimplemented" fallback).
             let mut raw_ops = Vec::new();
-            let mut disasm = X86_64Disassembler::new();
-            let instructions = match disasm.disassemble(code_bytes, Address::new(thunk_addr)) {
-                Ok(insts) => insts,
-                Err(_) => {
-                    total_fail += 1;
-                    continue;
+            let mut addr = thunk_addr;
+            let limit = thunk_addr + thunk_size as u64;
+            while addr < limit {
+                match canon_sleigh
+                    .as_mut()
+                    .expect("canon SLEIGH lifter built for the canon face")
+                    .lift_instruction_skip_nops(addr)
+                {
+                    Ok((step, ops)) => {
+                        raw_ops.extend(ops);
+                        addr += step as u64;
+                    }
+                    Err(_) => {
+                        addr += 1;
+                    }
                 }
-            };
-            let mut lifter = X86Lifter::new();
-            for inst in &instructions {
-                let mut ops = lifter.lift(inst);
-                for op in &mut ops {
-                    op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
-                }
-                raw_ops.extend(ops);
             }
-            // DRIVER-RIPREL-CONSTFOLD-0001: same SLEIGH rrip const-fold as
-            // the main loop's lift path (the switchD bodies are canon-only,
-            // never mirrored).
+            // DRIVER-RIPREL-CONSTFOLD-0001: kept as the A/B tripwire — on
+            // SLEIGH-lifted ops the INT_ADD(RIP, const) pattern never
+            // occurs (decode-time const-fold), so a nonzero count would
+            // flag an unfolded form reaching the injection path.
             let folded_eas = fold_rip_relative_eas(&mut raw_ops);
             if folded_eas > 0 {
                 eprintln!(
@@ -5110,11 +5160,196 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // every default destination is in-function there). Skipped under the
 // raw-BFD mirror, which has no analyzer symbol layer.
 // ===========================================================================
+// SLEIGH-RUSTIFY-PHASE3-0001: the switchD scanners' linear instruction
+// record. The retired iced sweep classified instructions from
+// FlowControl/mnemonic metadata; the SLEIGH walk derives the same
+// classification from the engine's pcode (one control-flow op per x86
+// instruction): BRANCH = direct unconditional (iced jmp), CBRANCH =
+// direct conditional (jcc), BRANCHIND = indirect branch (no target),
+// CALL/CALLIND = direct/indirect call, RETURN = return. The operand-level
+// reads the iced sweep made become pcode reads: a rip-relative `lea`
+// exports its address value as a const-space COPY input (lea_const), and a
+// `cmp $imm` chain's bound is the const input of its INT_SUB (whose
+// output is a unique-space temp — the discriminator vs `sub`, whose
+// INT_SUB writes the register directly).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ScanFlow {
+    Fallthrough,
+    Branch,
+    Cbranch,
+    Branchind,
+    Call,
+    Callind,
+    Return,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScanInsn {
+    addr: u64,
+    length: usize,
+    flow: ScanFlow,
+    /// direct target (BRANCH/CBRANCH/CALL ram input(0))
+    target: Option<u64>,
+    /// `lea reg,[rip+X]` address value (COPY const-space input)
+    lea_const: Option<u64>,
+    /// `cmp $imm` bound (const input of the temp-output INT_SUB)
+    cmp_bound: Option<i64>,
+}
+
+impl ScanInsn {
+    fn is_branch(&self) -> bool {
+        matches!(
+            self.flow,
+            ScanFlow::Branch | ScanFlow::Cbranch | ScanFlow::Branchind | ScanFlow::Callind
+        )
+    }
+    fn is_call(&self) -> bool {
+        matches!(self.flow, ScanFlow::Call | ScanFlow::Callind)
+    }
+    fn is_return(&self) -> bool {
+        self.flow == ScanFlow::Return
+    }
+    fn branch_target(&self) -> Option<u64> {
+        match self.flow {
+            ScanFlow::Branch | ScanFlow::Cbranch => self.target,
+            _ => None,
+        }
+    }
+}
+
+// RUGRA-GLUE: linear SLEIGH scan producing the switchD scanners'
+// instruction records (ops are classified and dropped — the .text walk is
+// ~100k instructions and holds no pcode).
+fn sleigh_scan_range(sleigh: &mut SleighLifter, start: u64, end: u64) -> Vec<ScanInsn> {
+    let mut out = Vec::new();
+    let mut addr = start;
+    while addr < end {
+        match sleigh.lift_instruction(addr) {
+            Ok((step, ops)) => {
+                let mut flow = ScanFlow::Fallthrough;
+                let mut target = None;
+                let mut lea_const = None;
+                let mut cmp_bound = None;
+                for op in &ops {
+                    let code = rugra::opcodes::OpCode::from_i32(op.get_opcode());
+                    match code {
+                        Some(rugra::opcodes::OpCode::CPUI_BRANCH) => {
+                            flow = ScanFlow::Branch;
+                            if let Some(t) = op.inputs().first() {
+                                if t.space == rugra::space::AddressSpace::Ram {
+                                    target = Some(t.offset);
+                                }
+                            }
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_CBRANCH) => {
+                            flow = ScanFlow::Cbranch;
+                            if let Some(t) = op.inputs().first() {
+                                if t.space == rugra::space::AddressSpace::Ram {
+                                    target = Some(t.offset);
+                                }
+                            }
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_BRANCHIND) => {
+                            flow = ScanFlow::Branchind;
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_CALL) => {
+                            flow = ScanFlow::Call;
+                            if let Some(t) = op.inputs().first() {
+                                if t.space == rugra::space::AddressSpace::Ram {
+                                    target = Some(t.offset);
+                                }
+                            }
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_CALLIND) => {
+                            flow = ScanFlow::Callind;
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_RETURN) => {
+                            flow = ScanFlow::Return;
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_COPY) => {
+                            // `lea reg,[rip+X]` exports const:X (the iced
+                            // sweep's rip-relative lea arm). The width gate
+                            // (8-byte const into an 8-byte register — the
+                            // full address form) excludes the flag-clearing
+                            // COPYs of xor/test (`COPY CF <- const:0` is a
+                            // 1-byte output) and the narrow mov-immediate
+                            // arms; same-width mov-imm64 false positives
+                            // are ruled out downstream by the section and
+                            // table-extent validation.
+                            if let (Some(out_vn), Some(inv)) = (op.output(), op.inputs().first())
+                            {
+                                if inv.space == rugra::space::AddressSpace::Const
+                                    && inv.size == 8
+                                    && out_vn.space == rugra::space::AddressSpace::Register
+                                    && out_vn.size == 8
+                                {
+                                    lea_const = Some(inv.offset);
+                                }
+                            }
+                        }
+                        Some(rugra::opcodes::OpCode::CPUI_INT_SUB) => {
+                            // `cmp $imm` chain: INT_SUB with a unique-space
+                            // (temp) output and a const input carries the
+                            // bound (any width — the guard cmps on this
+                            // corpus are 32-bit, whose const input is a
+                            // 4-byte varnode); `sub reg,$imm` writes the
+                            // register directly and never qualifies.
+                            if let (Some(out_vn), Some(c0), Some(c1)) =
+                                (op.output(), op.inputs().first(), op.inputs().get(1))
+                            {
+                                if out_vn.space == rugra::space::AddressSpace::Unique {
+                                    let bound = if c0.space
+                                        == rugra::space::AddressSpace::Const
+                                    {
+                                        Some(c0.offset as i64)
+                                    } else if c1.space
+                                        == rugra::space::AddressSpace::Const
+                                    {
+                                        Some(c1.offset as i64)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(bound) = bound {
+                                        cmp_bound = Some(bound);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                out.push(ScanInsn {
+                    addr,
+                    length: step,
+                    flow,
+                    target,
+                    lea_const,
+                    cmp_bound,
+                });
+                addr += step as u64;
+            }
+            Err(_) => {
+                out.push(ScanInsn {
+                    addr,
+                    length: 1,
+                    flow: ScanFlow::Fallthrough,
+                    target: None,
+                    lea_const: None,
+                    cmp_bound: None,
+                });
+                addr += 1;
+            }
+        }
+    }
+    out
+}
+
 fn scan_switch_default_handlers(
     obj: &Object,
     buffer: &[u8],
     functions: &[(u64, usize, u64, String)],
     image_base: u64, // F2B: canon shift (identity under mirror; scanner is canon-only)
+    sleigh: &mut SleighLifter,
 ) -> Vec<(u64, usize, u64)> {
     // .text bounds (vaddr, file offset, length).
     let mut text: Option<(u64, usize, usize)> = None;
@@ -5138,15 +5373,31 @@ fn scan_switch_default_handlers(
     let text_va = text_va + image_base;
     let text_end = text_va + text_len as u64;
 
-    let mut disasm = X86_64Disassembler::new();
-    let Ok(insns) = disasm.disassemble(&buffer[text_off..text_off + text_len], Address::new(text_va)) else {
-        return Vec::new();
-    };
+    // SLEIGH-RUSTIFY-PHASE3-0001: the .text sweep rides the shared canon
+    // SLEIGH lifter (see ScanInsn for the classification contract). The
+    // endbr64 entry-candidate signal is the raw CET mark bytes at an
+    // instruction boundary (f3 0f 1e fa) — the same witness the
+    // HTTPD-CODEREF-SYMBOLIZE-0001 entry validation reads.
+    let insns = sleigh_scan_range(sleigh, text_va, text_end);
     let insn_at: HashMap<u64, usize> = insns
         .iter()
         .enumerate()
-        .map(|(idx, inst)| (inst.address.as_u64(), idx))
+        .map(|(idx, inst)| (inst.addr, idx))
         .collect();
+    let byte_at = |vaddr: u64| -> Option<u8> {
+        if vaddr < text_va {
+            return None;
+        }
+        let off = text_off + (vaddr - text_va) as usize;
+        buffer.get(off).copied()
+    };
+    let is_endbr64 = |vaddr: u64| -> bool {
+        vaddr + 4 <= text_end
+            && byte_at(vaddr) == Some(0xf3)
+            && byte_at(vaddr + 1) == Some(0x0f)
+            && byte_at(vaddr + 2) == Some(0x1e)
+            && byte_at(vaddr + 3) == Some(0xfa)
+    };
 
     // Function-entry candidates: ELF function symbols plus every endbr64.
     // Entry spans tile .text between consecutive candidates, so a block is
@@ -5155,8 +5406,8 @@ fn scan_switch_default_handlers(
     entries.extend(
         insns
             .iter()
-            .filter(|inst| inst.mnemonic == "endbr64")
-            .map(|inst| inst.address.as_u64()),
+            .filter(|inst| is_endbr64(inst.addr))
+            .map(|inst| inst.addr),
     );
     entries.retain(|addr| *addr >= text_va && *addr < text_end);
     entries.sort_unstable();
@@ -5170,15 +5421,13 @@ fn scan_switch_default_handlers(
 
     let mut found: HashMap<u64, (usize, u64)> = HashMap::new();
     for (idx, inst) in insns.iter().enumerate() {
-        // Conditional branch with a direct in-.text target.
-        if !inst.is_branch() || inst.is_call() || inst.is_return() {
+        // Conditional branch with a direct in-.text target (the retired
+        // iced sweep's jcc-only filter: is_branch && !is_call &&
+        // !is_return && mnemonic != "jmp").
+        if inst.flow != ScanFlow::Cbranch {
             continue;
         }
-        if inst.mnemonic == "jmp" {
-            continue;
-        }
-        let Some(target_addr) = inst.branch_target() else { continue };
-        let target = target_addr.as_u64();
+        let Some(target) = inst.branch_target() else { continue };
         if target < text_va || target >= text_end {
             continue;
         }
@@ -5189,16 +5438,15 @@ fn scan_switch_default_handlers(
         // from the guard to the BRANCHIND with no intervening control
         // transfer (the table lookup is a handful of ALU/mov insns).
         let mut dispatch: Option<u64> = None;
-        let mut cur_end = inst.address.as_u64() + inst.length as u64;
+        let mut cur_end = inst.addr + inst.length as u64;
         let mut steps = 0usize;
         'fallthrough: for next in &insns[idx + 1..] {
-            if next.address.as_u64() != cur_end {
+            if next.addr != cur_end {
                 break; // alignment gap or data — not adjacent
             }
-            let indirect_jump =
-                next.is_branch() && !next.is_call() && next.branch_target().is_none();
+            let indirect_jump = next.flow == ScanFlow::Branchind;
             if indirect_jump {
-                dispatch = Some(next.address.as_u64());
+                dispatch = Some(next.addr);
                 break 'fallthrough;
             }
             if next.is_branch() || next.is_call() || next.is_return() {
@@ -5292,6 +5540,7 @@ fn scan_switch_cased_handlers(
     functions: &[(u64, usize, u64, String)],
     default_fns: &[(u64, usize, u64)],
     image_base: u64, // F2B: canon shift (identity under mirror; canon-only scanner)
+    sleigh: &mut SleighLifter,
 ) -> Vec<(u64, usize, u64)> {
     // .text bounds (vaddr, file offset, length) — same construction as the
     // DEFFN scan.
@@ -5316,14 +5565,29 @@ fn scan_switch_cased_handlers(
     let text_va = text_va + image_base;
     let text_end = text_va + text_len as u64;
 
-    let mut disasm = X86_64Disassembler::new();
-    let Ok(insns) = disasm.disassemble(&buffer[text_off..text_off + text_len], Address::new(text_va)) else {
-        return Vec::new() };
+    // SLEIGH-RUSTIFY-PHASE3-0001: same SLEIGH .text sweep as the DEFFN
+    // scan (ScanInsn classification; endbr64 = the raw CET mark bytes at
+    // an instruction boundary).
+    let insns = sleigh_scan_range(sleigh, text_va, text_end);
     let insn_at: HashMap<u64, usize> = insns
         .iter()
         .enumerate()
-        .map(|(idx, inst)| (inst.address.as_u64(), idx))
+        .map(|(idx, inst)| (inst.addr, idx))
         .collect();
+    let byte_at = |vaddr: u64| -> Option<u8> {
+        if vaddr < text_va {
+            return None;
+        }
+        let off = text_off + (vaddr - text_va) as usize;
+        buffer.get(off).copied()
+    };
+    let is_endbr64 = |vaddr: u64| -> bool {
+        vaddr + 4 <= text_end
+            && byte_at(vaddr) == Some(0xf3)
+            && byte_at(vaddr + 1) == Some(0x0f)
+            && byte_at(vaddr + 2) == Some(0x1e)
+            && byte_at(vaddr + 3) == Some(0xfa)
+    };
 
     // Entry candidates (ELF symbols ∪ endbr64) — c0 must not already be a
     // function start.
@@ -5331,8 +5595,8 @@ fn scan_switch_cased_handlers(
     entries.extend(
         insns
             .iter()
-            .filter(|inst| inst.mnemonic == "endbr64")
-            .map(|inst| inst.address.as_u64()),
+            .filter(|inst| is_endbr64(inst.addr))
+            .map(|inst| inst.addr),
     );
     entries.retain(|addr| *addr >= text_va && *addr < text_end);
     entries.sort_unstable();
@@ -5357,75 +5621,57 @@ fn scan_switch_cased_handlers(
     let mut found: HashMap<u64, (usize, u64)> = HashMap::new();
     for (idx, inst) in insns.iter().enumerate() {
         // BRANCHIND: a jmp with no direct target (`jmp *%rax`).
-        if !inst.is_branch() || inst.is_call() || inst.branch_target().is_some() {
+        if inst.flow != ScanFlow::Branchind {
             continue;
         }
-        let dispatch = inst.address.as_u64();
+        let dispatch = inst.addr;
         // Walk back through contiguous instructions for the table load:
         // `lea table(%rip),%rXX` and `cmp $bound,...`; the guard cbranch is
-        // the instruction right after the cmp.
-        let mut table_base: Option<(u64, u64)> = None;
+        // the instruction right after the cmp. SLEIGH-RUSTIFY-PHASE3-0001:
+        // the lea arm is the instruction's const-space COPY input (the
+        // engine resolves the rip-relative address at decode time — a
+        // single unambiguous candidate, where the iced sweep had to keep
+        // the raw/double-resolved pair), and the cmp bound is the const
+        // input of its temp-output INT_SUB (ScanInsn::cmp_bound).
+        let mut table_base: Option<u64> = None;
         let mut guard_target: Option<u64> = None;
         let mut case_count: usize = 0usize;
         let mut cur_start = dispatch;
         for back in (0..idx).rev().take(8) {
             let prev = &insns[back];
-            if prev.address.as_u64() + prev.length as u64 != cur_start {
+            if prev.addr + prev.length as u64 != cur_start {
                 break; // not the GCC switch-lowering adjacency
             }
-            cur_start = prev.address.as_u64();
-            if prev.mnemonic.starts_with("lea") {
-                if let Some(rugra::disasm::Operand::Memory { base: Some(b), displacement, .. }) =
-                    prev.operands.get(1)
-                {
-                    if b == "rip" {
-                        // iced's memory_displacement64 for RIP-relative lea
-                        // resolves to the absolute target in this build
-                        // (observed 0x88e84 for `lea rcx,[rip+0x34c62]` at
-                        // 0x5421b); keep the raw-relative candidate too and
-                        // resolve after the section lookup.
-                        table_base = Some((*displacement as u64, prev.address.as_u64()
-                            + prev.length as u64
-                            + *displacement as u64));
-                    }
-                }
-            } else if prev.mnemonic.starts_with("cmp") {
-                // Intel operand order puts the immediate last (`cmp r/m, imm`
-                // / `cmp reg, imm`) — take the first immediate present.
-                if let Some(value) = prev.operands.iter().find_map(|o| {
-                    if let rugra::disasm::Operand::Immediate { value, .. } = o {
-                        Some(*value)
-                    } else {
-                        None
-                    }
-                }) {
-                    if value >= 0 {
-                        case_count = value as usize + 1;
-                    }
+            cur_start = prev.addr;
+            if let Some(lea_value) = prev.lea_const {
+                table_base = Some(lea_value);
+            } else if let Some(bound) = prev.cmp_bound {
+                if bound >= 0 {
+                    case_count = bound as usize + 1;
                 }
                 // The guard cbranch sits immediately after the cmp.
                 if let Some(g) = insns.get(back + 1) {
-                    if g.is_branch() && !g.is_call() && g.branch_target().is_some() {
-                        guard_target = g.branch_target().map(|a| a.as_u64());
+                    if g.flow == ScanFlow::Cbranch {
+                        guard_target = g.branch_target();
                     }
                 }
                 break; // cmp is the earliest member of the sequence
             }
         }
-        let (Some(table_candidates), Some(guard_target)) = (table_base, guard_target) else { continue };
+        let (Some(table_candidate), Some(guard_target)) = (table_base, guard_target) else { continue };
         if case_count == 0 || case_count > 4096 {
             continue;
         }
-        // Resolve which lea candidate is the mapped table base (absolute
-        // vs raw-relative).
+        // Resolve the mapped table base (the SLEIGH lea value is the
+        // absolute target — the section lookup is the validation).
         let mut table_base: Option<u64> = None;
         let mut table_off: Option<usize> = None;
-        for cand in [table_candidates.0, table_candidates.1] {
+        {
+            let cand = table_candidate;
             if let Some(off) = section_file_off(cand) {
                 if off + case_count * 4 <= buffer.len() {
                     table_base = Some(cand);
                     table_off = Some(off);
-                    break;
                 }
             }
         }
@@ -5466,11 +5712,10 @@ fn scan_switch_cased_handlers(
         let mut shape_ok = false;
         for probe in &insns[start..] {
             size += probe.length;
-            let direct_jmp =
-                probe.mnemonic == "jmp" && probe.branch_target().is_some() && !probe.is_call();
+            let direct_jmp = probe.flow == ScanFlow::Branch && probe.branch_target().is_some();
             if probe.is_return() || (probe.is_branch() && !probe.is_call()) {
                 shape_ok = direct_jmp;
-                tail_target = probe.branch_target().map(|a| a.as_u64());
+                tail_target = probe.branch_target();
                 break;
             }
             if size > 256 {

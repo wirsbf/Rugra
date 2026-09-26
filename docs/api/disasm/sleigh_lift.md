@@ -99,3 +99,20 @@ NDJSON 逐字节相同。
 81 ops / 33 Const branches / 34 blocks / 49 双向边，与锁定 Ghidra capture
 （sha256 `7490edf5…`）逐字节一致。模块整体仍为 L2/MISMATCH（ContextInternal
 pspec 全量、Fspec 动态空间等见 `SLEIGH-0002C/D`、`ADDR-0001`）。
+
+## 2026-09-26 SLEIGH-RUSTIFY-PHASE3-0001 additions
+
+- `SleighLifter::lift_instruction_skip_nops`: one-instruction lift that drops the ops of
+  no-effect padding the .sla classifies as `NOP` (via `SleighCtx::assembly_mnemonic`, the
+  `Translate::printAssembly` contract `translate.hh:442`). The locked .sla's `:NOP rm32`
+  constructors (ia.sinc:4136-4137) carry empty templates, but their rm operands' attached
+  address semantics make the engine emit operand pcode (`INT_MULT`/`INT_ADD`) — both C++
+  SLEIGH and kuna emit it (Phase2 op-for-op, 698,605 decodes zero-diff). Ghidra's
+  flow-following pipeline never lifts unreachable padding, so the oracle IR never contains
+  those ops; the httpd driver's LINEAR walks call this entry to keep the same effective IR.
+- `sleigh_raw_ops(code, base)` (free function): linear SLEIGH decode over a byte window —
+  driver/test raw-op construction. Ghidra itself has no linear decoder (its only contract
+  is flow-following through `Translate::oneInstruction`, flow.cc:421), so this walk is pure
+  Rugra glue: decode each boundary in `[base, base+len)`, and on an undecodable byte skip
+  one byte with zero ops (the retired iced walk's "Unimplemented" fallback contract). The
+  funcdata X86Lifter test sites and the remaining probe drivers consume it.

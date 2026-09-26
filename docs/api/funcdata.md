@@ -3082,3 +3082,13 @@ Rust 转发层需本地还原（bank 侧修复归 varnode.rs/op.rs 租约）：
 另：oracle `PcodeOpBank::target` 从命中 op 反向走 startmark（op.cc:360-370），
 未标 startmark 的裸 op 会越界——fixture 按真实流形态给每条指令首 op 补
 `opMarkStartInstruction`（同时覆盖该转发器）。
+
+
+## 2026-09-26 SLEIGH-RUSTIFY-PHASE3-0001 (test-module decode source)
+
+The 22 `#[cfg(test)]` X86Lifter sites decode through
+`disasm::sleigh_lift::sleigh_raw_ops` (linear SLEIGH walk) instead of the retired iced
+bootstrap lift. Three shape-assert families were re-derived from actual SLEIGH output:
+`cmp` is the .sla's 10-op temp chain (`COPY tmp <- rm` leads; the iced lift computed flags
+straight off the registers in 9 ops), `mov [rbx],rax` is the engine's COPY-to-temp + STORE
+pair (2 ops vs the iced direct-register STORE), and the seq_cmp_je fixture is 27 ops.
