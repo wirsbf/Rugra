@@ -503,3 +503,187 @@ analyzeHeadless 函数符号层）；门禁数据见 docs/api/printc.md 同日�
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+## 2026-09-26（MIGW1-DATABASE-0005）：真缺失 63 定义 Rust 化（wave MIGW1 phase 1）
+
+来源=车道 DECOMP 未映射分解（`UNMAPPED_DECOMPOSITION_2026-09-26.md` §6，database
+76 条真缺失中 MapIterator×9 + NullSubsort×4 共 13 条按结构吸收裁决，63 条逐定义
+Rust 化）。本 phase 落地全部 63 条的 Rust 侧定义 + `// Ghidra:` 锚；B2 双侧
+fixture 见 tests/oracle/ 四件套（`database_symface_1204` / `database_scope_tree_1204`
+/ `database_scopeinternal_1204` / `database_scope_name_parse_1204`）。
+
+### 新增函数（锚 = 锁定 oracle e40ed130 定义起始行）
+
+| Rust | Ghidra 锚 | 说明 |
+|---|---|---|
+| `SymbolEntry::get_first_use_address` | database.cc:122 | 空 uselimit → invalid Address |
+| `SymbolEntry::print_entry` | database.cc:166 | Ghidra 文本格式；`<space>:` 前缀仅在地址带空间时出现（legacy 无空间模型投影为裸 hex，B2 记 MISMATCH） |
+| `EntrySubsort::{from_parts,earliest,from_bool,lt}` | database.hh:112/114/119/129 | 同地址 sub-sort（useindex,useoffset）字典序 |
+| `Symbol::get_bytes_consumed` | database.cc:508 | dtype size；FunctionSymbol 覆写为 consume_size |
+| `Symbol::get_map_entry_position` | database.cc:301 | 逐字保留 cc:309 计数器读**被查条目** size 的怪癖 |
+| `Symbol::{depth_scope,depth_resolution}` 字段 | database.hh:190-191 | getResolutionDepth 的 memo 对 |
+| `Database::get_resolution_depth` | database.cc:323 | 含 memo 短路（stale 返回 bug 兼容）+ isNameUsed 终止域 |
+| `Database::is_name_used_terminating` | database.cc:2417 | op2 终止 + 永不进全局域 |
+| `FunctionSymbol::build_type` | database.cc:514 | getTypeCode + namelock\|typelock；`new` 按构造序调用 |
+| `FunctionSymbol::get_function_shell` | database.cc:557 | MIGRATION RULING：暴露惰性 Funcdata 构造参数四元组，Funcdata* 身份通道 UNTESTED（driver 层持有） |
+| `LabSymbol::build_type` / `new_decode` | database.cc:728/745 | base(1,unknown)；"label" type-name 仍是子类判别通道 |
+| `ExternRefSymbol::build_name_type` / `new` 调用 / `new_decode` / `get_ref_addr` | database.cc:768/789；hh:351/352 | code 指针类型 + `_exref` 名生成 + externref\|typelock；decode 末尾按 cc:821 接线 |
+| `UnionFacetSymbol::{new,new_decode,get_field_number}`；`field_num: i32` | database.cc:691；hh:323/324 | fieldNum 为 int4（-1=整 union）；ctor 置 union_facet 类别 |
+| `Scope::hash_scope_name` | database.cc:880 | crc 级联；名字字节 ≥0x80 按**有符号 char** 符号扩展进 uint4（cc:888） |
+| `Scope::attach_child` / `detach_child`（锚更新） | database.cc:857/866 | 拆分实现：back-pointer=parent_id（Database 侧写）+ children 表 |
+| `Scope::children_begin` / `children_end` | database.hh:765/766 | children 切片迭代器 |
+| `Scope::decode_wrapping_attributes` | database.hh:719 | 基类 no-op 逐字 Rust 化 |
+| `Scope::print_bounds` | database.hh:789 | rangetree printBounds（address.cc:588 格式） |
+| `Scope::override_size_lock_type` / `reset_size_lock_type` | database.cc:1387/1402 | LowlevelError 文本走 Err 通道；reset 恢复同尺寸 unknown 基类型 |
+| `Scope::add_dynamic_map_internal` | database.cc:1874 | whole_count 计数 + multi-entry（whole_count>1 即集合成员） |
+| `Scope::category_sanity` | database.cc:1992 | 内部 NULL 槽 → 整类清 no_category；先收集 id 再改（C++ 拷贝 list 等价） |
+| `Scope::resolve_external_ref_function` | database.cc:2362 | `queryFunction(refAddr)` → find_function 层投影 |
+| `Scope::print_entries` | database.cc:2791 | `Scope <name>` + 每条 printEntry；单空间插入序=maptable 序，跨空间 MISMATCH 记档 |
+| `Scope::multi_entry_symbols` | database.hh:865-866 | multiEntrySet 迭代面；固定 symbol-id 序（C++ 指针序=分配噪声，B2 双侧归一化） |
+| `Database::resolve_scope_by_name` | database.cc:1315 | 三分支逐字：hash+名验证 / 十进制直名（istringstream 语义）/ id 序线性扫 |
+| `Database::is_sub_scope` / `get_full_name` / `get_scope_path` / `find_distinguishing_scope` | database.cc:1432/1443/1458/1481 | 含四快查 + 双 path 对比全部边界 |
+| `Database::clear_references` | database.cc:2893 | 子树 idmap+resolvemap 清除；global 豁免 clearResolve；delete_scope 组合它 |
+| `Database::adjust_caches` | database.cc:2975 | 按 id 序（=ScopeMap 序）逐 scope |
+| `Database::resolve_scope_from_symbol_name` | database.cc:3113 | delim 解析 + 绝对路径（位置 0 delim）+ 失败 null |
+| `Database::find_create_scope_from_symbol_name` | database.cc:3151 | !idByNameHash → Err("Scope name hashes not allowed")；hash id 链创建 |
+| `SymbolCompareName::is_before` | database.hh:366 | name 字典序 + nameDedup tie-break |
+| `DuplicateFunctionError::new` | database.hh:435 | 字段 address/function_name/message |
+
+### 结构吸收/等价裁决（13+ 条，记录依据不硬移植）
+
+- **MapIterator 全家 ×9**（hh:384/391/398/401/406/414/421 + cc:826/841）：C++
+  手写双游标（EntryMap 表 + list 游标）跳空推进 = Rust `entries` 切片迭代；
+  `ScopeInternal::begin/end/beginDynamic/endDynamic`（cc:1889/1914/1921/1927/1933/1939）
+  的迭代器端点由 `Scope::begin_end`/`begin_end_dynamic` 切片投影承载。
+- **NullSubsort ×4**（hh:879-882）：恒 false 比较器；Rust resolvemap
+  （`Vec<(Range,u64)>`）无 sub-sort 维度，比较器语义恒 false 由"无该维度"承载。
+- **ScopeMapper ctor+getter ×5**（hh:893-898）：`(Range, scope_id)` 元组的字段
+  投影（first/last/scope）。
+- **EntryInitData ctor**（hh:99-100）：`SymbolEntry::new_static` 的具名参数即
+  initdata 载荷。EntrySubsort 拷贝构造（hh:124）= `#[derive(Copy)]`。
+- **ctor/dtor**：`Scope` ctor（hh:566，现有 `Scope::new`）；`ScopeInternal` ctor×2
+  （cc:1948/1955 — `maptable.resize(numSpaces)` 由惰性 AddrIndex 承载）；`~Scope`
+  （cc:1182）/`~ScopeInternal`（cc:1962）/`~Database`（cc:2933）/`~FunctionSymbol`
+  （cc:552）/`~ExternRefSymbol`（hh:348）= Rust 所有权模型（BTreeMap/Arc Drop），
+  删除顺序（id 序）与 C++ 递归 children 删除的观察等价性由
+  database_scope_ownership_1204 fixture 锚定。
+- **Scope::restrictScope**（cc:1096）：`fd = f` 绑定在 Rust 模型中由 varmap.rs
+  的 ScopeLocal（构造即持 Funcdata）承载——database::Scope 值模型无函数域角色；
+  状态 UNTESTED（跨文件域界，移交 root 裁量是否开 varmap 侧票）。
+- **turnOnDebug/turnOffDebug**（hh:562-563）：`#ifdef OPACTION_DEBUG` 门控；锁定
+  oracle 编译不带该宏（fixture runner 的 make 无 -DOPACTION_DEBUG），双侧同不
+  存在——按编译期等价裁决，不 Rust 化死代码。
+- **ScopeInternal::buildSubScope**（cc:1804）：未附着中间 Scope 在 Rust 公共
+  Database API 下不可观察；`findCreateScope`（buildSubScope+attachScope 复合）
+  承载其可观察面。
+
+### 与在案票据的交叉引用
+
+- **CSPEC-GLOBAL-APPLY-0001**（P0）：范围=database.cc:1271-1277
+  `Scope::queryProperties` 的 finalscope fold + 全局作用域 DB 写入。本票 63 条
+  清单**不含** queryProperties——零重叠；本票不实现该写入路径。
+- **VARMREKEY**：varmap.rs SymbolStore 稳定槽位；本票未触碰 varmap.rs。
+
+## 2026-09-26（MIGW1-DATABASE-0005 phase 2）：Scope 查询面 B2 双侧 fixture + 工厂参数化裁决
+
+### DATABASE-SCOPE-TREE-FIXTURE-0001（tests/oracle/database_scope_tree_1204.{cc,rs}）
+
+双侧 fixture 覆盖 14 个清单函数（oracle 侧 = BfdArchitecture 生产环境 + 显式 id
+scope 树；Rust 侧 = 生产 `Database`/`Scope`/`TypeFactory` 值模型，零 fixture 侧重复
+实现）。50 case 全量 stdout 逐字节 **MATCH**（runner
+`tools/run_database_scope_tree_oracle.sh`，registry
+`database_scope_tree_1204`）：
+
+| 函数 | Ghidra 锚 | fixture 覆盖面 |
+|---|---|---|
+| `Scope::hashScopeName` | database.cc:880 | crc 级联 4 输入（含 ≥0x80 字节有符号 char 符号扩展——双侧同字节序列 `\xc3\xbf`，见下裁决） |
+| `Scope::resolveScope` | database.cc:1315 | 三分支：hash+名验证 / 十进制直名（istringstream 前缀解析）/ id 序线性扫 |
+| `Scope::isSubScope` | database.cc:1432 | self/parent/global/reverse/反身 5 边界 |
+| `Scope::getFullName` | database.cc:1443 | 嵌套名/全局空串 |
+| `Scope::getScopePath` | database.cc:1458 | 含 global+self 的路径 |
+| `Scope::findDistinguishingScope` | database.cc:1481 | 四快查 + 双 path 对比 8 边界 |
+| `Symbol::getResolutionDepth` | database.cc:323 | same/null/ancestor/memo/collision/sibling 6 case |
+| `ScopeInternal::isNameUsed` | database.cc:2417 | 终止域 + 永不进全局域（经 resdepth 碰撞/兄弟 case） |
+| `Scope::overrideSizeLockType` | database.cc:1387 | 同尺寸成功/异尺寸/未锁三条 LowlevelError 文本 |
+| `Scope::resetSizeLockType` | database.cc:1402 | 恢复同尺寸 unknown 基类型 + 幂等 no-op |
+| `Scope::attachScope`/`detachScope` | database.cc:857/866 | 生产注册路径（Database::attachScope/deleteScope 复合）子数+父别名 |
+| `Database::clearReferences` | database.cc:2893 | 子树递归 idmap+resolvemap 清除（deleteScope 投影） |
+| `Database::adjustCaches` | database.cc:2975 | 全 idmap 扫描 no-throw + 成员不变 |
+
+### 裁决 R1：`getBase(size,TYPE_UNKNOWN)` 工厂参数化（前次遗留脏改的收敛）
+
+phase 1 提交时 `LabSymbol::build_type`/`Scope::reset_size_lock_type` 内联构造
+`"undefined"` 命名的 unknown 基类型。fixture 对拍发现这是**环境依赖语义**：
+Ghidra 的 `glb->types->getBase(size,TYPE_UNKNOWN)` 经 TypeFactory 核心类型表解析
+——standalone SLEIGH 表（sleigh_arch.cc:229-232）产出 `xunknownN`，
+ArchitectureGhidra 回退表（ghidra_arch.cc:349-352）产出 `undefinedN`，未注册尺寸
+产出**无名** TypeBase（type.cc:3631 findAdd 规范化路径）。硬编码任一名字都在另一
+环境错误。收敛为**工厂参数形态**：两函数签名增加
+`types: &crate::type_system::typefactory::TypeFactory`（RUGRA-GLUE：C++ 经
+`scope->getArch()->types` 取工厂，Rust 值模型 Scope 无 arch 句柄），调用生产
+`TypeFactory::get_base`（type.cc:3631 的既有移植）。fixture 侧
+`TypeFactory::new_flavor(8, CoreTypeFlavor::Standalone)` 镜像 oracle 的
+BfdArchitecture 环境，双侧 `reset_sizelock|name=xunknown4` 一致。canon 管线零
+影响：两函数无生产调用方（仅单测+fixture），canon 的 `undefinedN` 命名由
+`CoreTypeFlavor::DataOrg` 工厂承载。
+
+### 裁决 R2：有符号字节 case 的双侧可表达性
+
+C++ `hashViaProduction(db, global, "\xff")` 喂单字节 0xFF；Rust 名字通道是 UTF-8
+`&str`，孤立 0xFF 字节不可表达。双侧 fixture 统一改喂 `"\xc3\xbf"`（Rust
+`"\u{ff}"` 的 UTF-8 编码，两个高位字节均触发符号扩展）——语义覆盖不减（两个符号
+扩展字节强于一个），双侧字节序列恒等是 B2 对拍的先决条件。fixture 注释记录该约束。
+
+### 残余 UNTESTED（诚实记账，不升 MATCH）
+
+63 条清单中 fixture 未覆盖者维持 UNTESTED：`addDynamicMapInternal` whole-count、
+`categorySanity`、`multi_entry_symbols`、`resolveExternalRefFunction`、
+`decodeWrappingAttributes`、children 迭代器端点、`printEntries`（多空间聚合面）、
+`Scope::decode` 族 encode/decode 残项。结构吸收裁决（MapIterator/NullSubsort 等
+13 条）不在此列（裁决即交付物）。
+
+## 2026-09-26（MIGW1-DATABASE-0005 phase 2 续）：Symbol 子类面第二双侧 fixture
+
+### DATABASE-SYMBOL-SUBCLASS-FIXTURE-0001（tests/oracle/database_symbol_subclass_1204.{cc,rs}）
+
+31 case 全量 stdout 逐字节 **MATCH**（runner
+`tools/run_database_symbol_subclass_oracle.sh`，registry
+`database_symbol_subclass_1204`），覆盖 18 个清单函数/载体：
+
+| 函数/载体 | Ghidra 锚 | 覆盖面 |
+|---|---|---|
+| `FunctionSymbol::buildType` + 双 ctor | database.cc:514/534/545 | code 类型 size 1 + namelock\|typelock + 构造序（name 后置）+ consumeSize 覆写 |
+| `LabSymbol::buildType` + 双 ctor | database.cc:728/736/745 | 工厂解析的 xunknown1 占位类型（裁决 R1 的双侧见证） |
+| `ExternRefSymbol::buildNameType`/ctor/`getRefAddr` | database.cc:768/789；hh:351 | 自动名 `<shortcut><printRaw>_exref` + externref\|typelock + code 指针尺寸=refaddr 地址尺寸 |
+| `UnionFacetSymbol` ctor 族 + `getFieldNumber` | database.cc:691；hh:323/324 | fieldNum i32（-1=整 union）+ union_facet 类别 |
+| `Symbol::getBytesConsumed` | database.cc:508 | 类型尺寸通道 |
+| `Symbol::getMapEntryPosition` | database.cc:301 | **cc:309 怪癖双侧钉死**：计数器条件读被查 entry 尺寸（非迭代项）——whole 被查项=全表索引、partial 被查项恒 0、缺席 -1 |
+| `SymbolEntry::getFirstUseAddress` | database.cc:122 | 首用范围/空 uselimit 无效地址 |
+| `SymbolEntry::printEntry` | database.cc:166 | 三形态逐字串：静态空 uselimit（`all`）/静态范围 uselimit（`ram: 4000-4fff`）/动态（`<dynamic>`） |
+| `SymbolEntry::EntrySubsort` | database.hh:107-134 | earliest/latest 边界 + (useindex,useoffset) 字典序 + 相等 |
+| `SymbolCompareName` | database.hh:366 | name 字典序 + nameDedup tie-break |
+| `DuplicateFunctionError` | database.hh:435 | "Duplicate Function" 消息 + address/functionName 载体 |
+| `Scope::printBounds` | database.hh:789 | rangetree 排序范围打印 |
+
+**载体裁决（fixture 注释+此处记录）**：① C++ `FunctionSymbol(Scope*,int4)` decode
+ctor 的可观察状态（空名+consumeSize+code 类型+锁旗标）在 Rust 值模型经空名命名
+ctor 等价到达（字段恒等，构造路径差）；② C++ Symbol 自持 `mapentry` 表，Rust
+`get_map_entry_position` 以参数收表——fixture 以同插入序组装；③ 动态 entry 经
+`SymbolEntry` 动态 ctor（hh:140）直接构造——`addMapInternal` 对无效地址解引用
+space（C++ 同样崩溃路径），双侧一致不经过。
+
+### 跨文件发现（报 root 裁量，非本票写域）：DATATYPE-PRINTRAW-0001
+
+fixture 设计时亲读 type.cc 发现 `src/type_system/datatype.rs:1804 print_raw`
+（锚 type.cc:139 Datatype::printRaw）的 Code/Union/Enum/Struct/Spacebase/Array
+臂与锁定 oracle 偏差：
+
+| 臂 | C++ 真值 | Rust 现值 |
+|---|---|---|
+| Code | `TypeCode::printRaw`（type.cc:2772）：`<name\|funcptr>()` | `code {name}` |
+| Union/Enum/Struct/Spacebase | 无 override→`Datatype::printRaw`（type.cc:139）：`<name\|unkbyteN>` | `union {name}`/`enum {name}`/`struct{…}`/`spacebase {name}` |
+| Array | `TypeArray::printRaw`（type.cc:1204）：`<elem> [N]`（空格） | `{elem}[{n}]` |
+| Pointer | `TypePointer::printRaw`（type.cc:910）：`<ptrto> *` + spacebase 指针 `(<space>)` 臂 | `{ptr_to} *`（缺 spaceid 臂） |
+
+本票 fixture 刻意用基类型（printRaw=纯名）避开该偏差面；修复属 datatype.rs
+租约，建议 root 开票。
