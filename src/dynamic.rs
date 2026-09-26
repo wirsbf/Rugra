@@ -537,13 +537,20 @@ impl DynamicHash {
         self.opedgeproc = 0;
         self.vn_edge.push(root.clone());
         self.gather_unmarked_vn();
-        let mut i = 0;
+        // dynamic.cc:277-280 four-class semantics: the up pass walks a
+        // LOCAL index from vnproc (still 0) without consuming it, then the
+        // down pass re-runs from vnproc=0 — the root gets BOTH its up edge
+        // (defining op, walking up through skip ops) AND its down edges
+        // (every reader, walking down through skip ops) in the base level
+        // of every calcHash(Varnode*, method) call. The previous shape set
+        // vnproc = mark_vn.len() between the two loops, which killed the
+        // down pass entirely (DYNHASH-UNIQUE-ANCHOR-0001).
+        let mut i = self.vnproc;
         while i < self.mark_vn.len() {
             let vn = self.mark_vn[i].clone();
             i += 1;
             self.build_vn_up(&vn);
         }
-        self.vnproc = self.mark_vn.len();
         while self.vnproc < self.mark_vn.len() {
             let vn = self.mark_vn[self.vnproc].clone();
             self.vnproc += 1;

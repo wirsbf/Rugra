@@ -48,6 +48,18 @@ opcode 索引到哈希翻译值的映射表，将变体合并到同一哈希值�
 
 ### 哈希计算（公共）
 - `calc_hash_vn(root, method)` — Varnode 根哈希 (dynamic.cc:268-316)。method 0=立即读写, 1=多一层输入, 2=多一层输出, 3=双向
+- `calc_hash_vn` 基线走位修正（2026-09-26，DYNHASH-UNIQUE-ANCHOR-0001，车道
+  wt/dynhash）：dynamic.cc:277-280 的基线两级里，up 级用**局部下标**从 vnproc
+  （=0）走、**不消耗** vnproc；down 级随后仍从 vnproc=0 重走——根在**每次**
+  `calcHash(Varnode*, method)` 的第 0 级同时获得 up 边（定义 op，向上穿越
+  skip op）与 down 边（全部读者，向下穿越 skip op）。旧 Rust 形态在两循环间
+  `vnproc = mark_vn.len()` 把 down 级整体杀死：读者边永不入 CRC、CAST 驻接
+  temp 的锚点从「附着于读 op」错成「not-attached 回退到前跳 varnode 的定义
+  COPY」——`unique_hash_vn` 全部 vn 根铸造与 oracle 跨运行恒等性破坏。修正
+  =删毒化行；双侧 fixture `tests/oracle/dynhash_anchor_1204.*`（10 case × 73
+  records，B2 四件套）逐字节 MATCH，含冠军环（全 method 碰撞时 champion 取
+  method-0 列表、hash 位取逃逸循环的 method-3 tmphash、pos 0/1 区分）与
+  opedge[0] 全跳过回退位。
 - `calc_hash_op(op, slot, method)` — PcodeOp+slot 哈希 (dynamic.cc:202-255)。method 4=仅op, 5=输入, 6=输出
 - `piece_together_hash(root, method)` — 组装最终 64 位哈希 (dynamic.cc:323-381)。CRC 种子 `0x3ba0fe06`
 
