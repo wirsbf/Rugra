@@ -213,3 +213,70 @@ python3 /dev/shm/rugra-reports/decomp/classify2.py   # 四类 + 闭环断言（s
 # 产物: classified_final.json（2645+747+383+1181 明细）、unlinked_link_candidates.json、
 #       glue_documentation_candidates.json、sleigh_replacement_layer.json（同目录）
 ```
+
+---
+
+## 再基线 2026-09-26 晚（车道 REBASE0 / WORKPKG-UNMAP-REBASE-0000）
+
+> 本节为同日晚间增补：**分诊车道 UNMAPPED 的终报已归档为
+> `docs/alignment_docs/LANE_UNMAPPED_2026-09-26.md`（362 行）,该归档件是未映射工作包的
+> 权威包表（§4 十八工作包）与全部派单数字的唯一来源**;本报告（DECOMP 分解报告）退居
+> 分诊输入件。以下三件事把本报告的过期数字与分诊结论对上账。
+
+### R1 分母勘误——2645 是过期分母,当前真缺失 ≈ 2290
+
+本报告 §6 的"真缺失 2645"是 **REGEN checkpoint `80ffb7d1`（2026-09-26 早晨）快照口径**。
+同日下午以下车道已落地并集成,消耗了快照中的部分真缺失项:
+
+| 已落地车道 | 消耗簇 | 消耗 defs（估） | 证据 |
+|---|---|---:|---|
+| MIGW-FSPEC | fspec 136 | 136 | TODO:77-102（136 条全部处置） |
+| MIGW-TYPEOP | typeop 52 push + PTRADD push | 53 | TODO:684（三层承载落地） |
+| MIGW-FUNCDATA | funcdata 77/80 | 80 | TODO:3166（含 7 依赖阻塞转 FUNCDATA-ENCODE-DEP-0001） |
+| MIGW-DATABASE | database 63（phase1+2） | 63 | TODO:24（残余 ~13 已列名） |
+| F8FOR | block.cc WhileDo 六函数族 | ~8 | TODO:2950 |
+| F7NAME | varmap.hh NameRecommend 族 + coreaction lookForFuncParamNames/makeRec | ~8 | TODO:2959 |
+| RESIDE | merge.hh StackAffectingOps + cover.hh PcodeOpSet 族 | ~4 | TODO:2935 |
+| PKGG/SUBCOMMUTE/DATATYPEPR/PRINTCS 等 | 行为修复,defs 消耗 0-2 | ~2 | 各 lane 行 |
+| **净消耗** | | **≈ 354**（±20,lane 记账粒度差异） | |
+
+**口径更新**: 全层真缺失 2645 → **≈ 2290**（主管线 ~1445 / 分析外围 228 / UI-控制台桥
+618 豁免维持）;主管线 1799 → ~1445。本报告 §6 分层表、§6 per-module 表与 §6 工作量预估表
+中的绝对数一律按此比例读为 **checkpoint `80ffb7d1` 历史口径**;相对结论（簇排名/结构吸收
+占比/依赖序）不受影响。**推论（分诊报告 §1 同款）**: 每个工作包 step 0 必须是 ledger
+再基线（当前 master 重跑 `tools/generate_function_ledger.py` + 与 80ffb7d1 快照 diff）,
+避免对着过期清单重复实现已存在物;精确消耗值以该 diff 为准。
+
+### R2 recall-gap 校准——"missing" ≠ "不存在"（12 名抽查结论入账）
+
+分诊车道对快照真缺失口袋做 12 名 Rust 侧 grep 存在性抽查,结论分两族:
+
+- **改名/形态偏移的未链接 → 转 REGEN 边（不进移植票）**: `findLoopVariable`（F8FOR 已在,
+  快照过期）、varmap.hh `NameRecommend` 族（F7NAME 已消耗,`name_recommend` 在 varmap.rs）、
+  coreaction `lookForFuncParamNames`/`makeRec`（F7NAME 证此前已移植,改名族）、blockaction
+  `ruleBlockProperIf`（`try_rule_proper_if` 在,F5 审计亲证）。
+- **确认真缺失（保留在工作包内）**: `protectSwitchPathIndirects`（coreaction.cc:2206）、
+  `genericFunctionName`（printc.cc:3357）、`emitSymbolScope`（printc.cc:233）、
+  `pushMismatchSymbol`（printc.cc:2067）、`remapSymbol`/`remapSymbolDynamic`（varmap.cc:1457）——
+  Rust 侧均无对应物。
+- **部分存在（逐臂核验后再定）**: type.cc `resolveInFlow`/`findResolve` 虚分派族（PKGG 删死
+  孪生后需逐臂核验）、printc `emitSwitchCase`（部分在,形态核验）、stringmanage
+  `getStringData`（hash 通道已在,惰性读载臂缺）。
+
+**入账动作**: 未链接族移交 REGEN 车道批量链接（排除清单沿用 typeop push 52 禁链）;本报告
+§5"召回下界声明"所列两族（类级注解/迭代器改名）按此落账,不再按真缺失计数。工作包内逐项
+标注预估核验/移植比,分诊按"先核验后实现"原则执行。
+
+### R3 权威包表指针
+
+- **18 工作包（P0×6 + P1×6 + P2×5 + meta×1）全表**: 归档分诊报告 `docs/alignment_docs/
+  LANE_UNMAPPED_2026-09-26.md` §4（含包内项/oracle 锚/可观测面/验收/依赖/量级六要素）;
+  登记形态 = `docs/TODO_BOARD.md`「UNMAPPED 工作包池」节（root 已裁决依赖序注记）。
+- 本报告 §6 的移植优先级排序（fspec→typeop→block…）**被分诊报告 §5 波次（Wave-A~D）取代**:
+  fspec/database/funcdata 主体已由 MIGW 系车道消耗,剩余真缺失按 P0 残差杠杆
+  （typeop cast 仲裁/type union 仲裁/printc 单例/varmap remap/constseq+stringmanage）重排。
+- 依赖裁决（2026-09-26 root）: STRFOLD-0006 已派 STRFOLD 车道在飞;TYPEOP-0001 排队
+  TYPEOPFIX 交付后;TYPEUNION-0003 排队 TYPINGPX 交付后且与 CURLCANON-UNIONSTORE-
+  ARBITRATION-0001 合一派发;COREACT-0002 排队 MB18 后;PRINTC-0004 排队 HERMETICITY
+  交付后;VARMAP-0005 排队 TYPINGPX+VARMPOISON 后;其余照分诊报告 §6 串行约束。
+
