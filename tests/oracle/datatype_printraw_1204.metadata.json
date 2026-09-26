@@ -1,0 +1,113 @@
+{
+  "fixture_id": "DATATYPE-PRINTRAW-FIXTURE-0001",
+  "ticket": "DATATYPE-PRINTRAW-0001",
+  "lane": "DATATYPEPR",
+  "created": "2026-09-26",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "anchors": [
+      "type.cc:139 Datatype::printRaw",
+      "type.cc:910 TypePointer::printRaw",
+      "type.cc:1204 TypeArray::printRaw",
+      "type.cc:2264 TypePartialEnum::printRaw",
+      "type.cc:2356 TypePartialStruct::printRaw",
+      "type.cc:2433 TypePartialUnion::printRaw",
+      "type.cc:2597 TypePointerRel::printRaw",
+      "type.cc:2772 TypeCode::printRaw"
+    ]
+  },
+  "input": {
+    "architecture": "x86:LE:64:default:gcc (BfdArchitecture over pinned examples/curl blob)",
+    "cases": [
+      "base_named",
+      "base_unnamed",
+      "base_unnamed_zero",
+      "void_default",
+      "enum_named",
+      "enum_unnamed",
+      "struct_incomplete",
+      "union_incomplete",
+      "spacebase_ram",
+      "spacebase_nospace",
+      "ptr_plain",
+      "ptr_to_unnamed",
+      "ptr_space_ram",
+      "ptr_space_stack",
+      "ptr_chain",
+      "ptr_wordsize4",
+      "array_int3",
+      "array_unnamed",
+      "array_of_ptr",
+      "ptr_to_array",
+      "array_of_array",
+      "code_anon",
+      "code_named",
+      "ptr_to_code",
+      "partial_struct",
+      "partial_struct_negoff",
+      "partial_enum",
+      "partial_union",
+      "ptrrel_zero",
+      "ptrrel_off16",
+      "ptrrel_neg",
+      "ptr_to_ptrrel"
+    ],
+    "construction": "public type.hh constructors on both sides; named TypeCode mirrors the private TypeFactory::getTypeCode(const string&) body (type.cc:3711-3719); spaces from the live BfdArchitecture (ram/stack)",
+    "observation_surface": "printRaw stdout bytes per case, wrapped as case=<id>|[<raw>]|"
+  },
+  "input_fingerprint": "sha256:4a093139f465ab642b0774b9047589bf5d6d5274409eba7a32f43f52f0f0367f",
+  "comparand": {
+    "rugra_base_commit": "85942b7e7e9e7adb6ee5f07ca8936cde6b04c717",
+    "rugra_base_tree": "d0a6eade00a365a1fadf790838335ad00b5c5c4a",
+    "cpp_fixture_sha256": "2d7be7e81f2bc91c216567daa713c243bb160985483721398d4d7aad62939a85",
+    "rust_fixture_sha256": "3078bc8e9cb9f23034587068b6aecda38e9388d61b9570c963fbd25a32bbf2a9",
+    "runner_sha256": "70bdf66943b4254991cfb3599219768eb078c208a69d8bafa04478e9d76b45ae",
+    "datatype_rs_sha256": "8ea630941c8a2d6d2b0752b1fe7f576d44d2de3d8e7b66d14706c34f91b3e263",
+    "datatype_doc_sha256": "be33c7fcd281f52049d8e612f95f2fd8eb12b05291ca2550aa0009b5e090473b",
+    "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
+    "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "ghidra_type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
+    "ghidra_type_hh_blob": "92d4882b25b602464909fdeea63bbc278761ac6d",
+    "ghidra_sleigh_arch_cc_blob": "cb0848a4de0dc9dc78f6fe8598a4745cb0c97545",
+    "ghidra_ghidra_arch_cc_blob": "34226889c3688b8b331b9854553d86b574310583"
+  },
+  "assets": {
+    "sla": {
+      "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+      "path": "sleigh_specs/x86-64.sla"
+    },
+    "processor_spec": {
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "path": "sleigh_specs/x86-64.pspec"
+    },
+    "compiler_spec": {
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "path": "sleigh_specs/x86-64-gcc.cspec"
+    },
+    "language_definitions": {
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "path": "sleigh_specs/x86.ldefs"
+    },
+    "binary": {
+      "name": "curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "path": "examples/curl"
+    },
+    "bfd": {
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "observation": {
+    "expected_stdout_sha256": "5cd15a0bf9d1d08d471ba3d19e64d8d5695e1f5116ab2237ab1a46f1f85077f9",
+    "cases": 32,
+    "overall_status": "MATCH"
+  },
+  "expected_stdout_sha256": "5cd15a0bf9d1d08d471ba3d19e64d8d5695e1f5116ab2237ab1a46f1f85077f9",
+  "cases": 32
+}
