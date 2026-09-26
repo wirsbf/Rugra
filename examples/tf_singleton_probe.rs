@@ -313,10 +313,14 @@ enum FactoryMode {
 // bin_sweep build_architecture 逐字同构，唯二差异：①工厂来源按
 // FactoryMode 选择；②工厂取件后**立即** decode dataorg（保持两模式
 // 工厂内容装配一致——差异只剩"是否跨 Architecture 共享"）。
+// PERF-DUAL-SLEIGH-INIT-0001: also returns the register-catalog engine so
+// decompile_to_text's lifter adopts it (SleighLifter::from_ctx) — the
+// oracle's ONE translator per Architecture (sleigh_arch.cc:174
+// buildTranslator reuse), not a second x86-64.sla deserialization.
 fn build_architecture(
     loader: Option<Arc<dyn rugra::loadimage::LoadImage>>,
     mode: FactoryMode,
-) -> Result<Arc<rugra::arch::Architecture>, String> {
+) -> Result<(Arc<rugra::arch::Architecture>, rugra::sleigh_ffi::SleighCtx), String> {
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
     let sleigh = rugra::sleigh_ffi::SleighCtx::new()
@@ -463,7 +467,7 @@ fn build_architecture(
         arch.loader = Some(loader);
         arch.build_string_manager();
     }
-    Ok(Arc::new(arch))
+    Ok((Arc::new(arch), sleigh))
 }
 
 // bin_sweep run_one 的文本产出形态（返回完整 C 文本而非长度）。
@@ -482,7 +486,7 @@ fn decompile_to_text(
             image.to_vec(),
         ),
     );
-    let arch = build_architecture(Some(loader), mode)?;
+    let (arch, sleigh_ctx) = build_architecture(Some(loader), mode)?;
     let func_size =
         i32::try_from(target.size).map_err(|_| format!("function {} is too large", target.name))?;
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), func_size);
@@ -490,7 +494,10 @@ fn decompile_to_text(
     for function in functions {
         fd.add_symbol(function.vaddr, function.name.clone());
     }
-    let mut sleigh = SleighLifter::new();
+    // PERF-DUAL-SLEIGH-INIT-0001: adopt the register-catalog engine
+    // (single .sla load; oracle sleigh_arch.cc:174 buildTranslator reuses
+    // the one translator per languageindex). Catalog leg was read-only.
+    let mut sleigh = SleighLifter::from_ctx(sleigh_ctx);
     sleigh
         .configure_x86_64(image, 0)
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;

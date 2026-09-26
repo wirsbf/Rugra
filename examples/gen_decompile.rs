@@ -329,9 +329,14 @@ impl rugra::pcodeparse::SleighSymbolLookup for GenSpecHost {
 // parseCompilerConfig (defaultfp, architecture.cc:1239-1351) before any
 // Funcdata is constructed (Funcdata::Funcdata -> funcp.setScope ->
 // setModel(defaultfp), funcdata.cc:48-69).
+// PERF-DUAL-SLEIGH-INIT-0001: also returns the engine instance the
+// register catalog was enumerated from, so run_one's lifter adopts it
+// (SleighLifter::from_ctx) — the oracle's ONE translator per Architecture
+// (sleigh_arch.cc:174 buildTranslator reuse) instead of a second
+// x86-64.sla deserialization.
 fn build_architecture(
     loader: Option<Arc<dyn rugra::loadimage::LoadImage>>,
-) -> Result<Arc<rugra::arch::Architecture>, String> {
+) -> Result<(Arc<rugra::arch::Architecture>, rugra::sleigh_ffi::SleighCtx), String> {
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
     let sleigh = rugra::sleigh_ffi::SleighCtx::new()
@@ -482,7 +487,7 @@ fn build_architecture(
         arch.loader = Some(loader);
         arch.build_string_manager();
     }
-    Ok(Arc::new(arch))
+    Ok((Arc::new(arch), sleigh))
 }
 
 // RUGRA-GLUE: hermetic single-function decompile, the shape the oracle
@@ -505,7 +510,7 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
             image.clone(),
         ),
     );
-    let arch = build_architecture(Some(loader))?;
+    let (arch, sleigh_ctx) = build_architecture(Some(loader))?;
 
     let func_size =
         i32::try_from(target.size).map_err(|_| format!("function {} is too large", target.name))?;
@@ -517,7 +522,16 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
         fd.add_symbol(function.vaddr, function.name.clone());
     }
 
-    let mut sleigh = SleighLifter::new();
+    // PERF-DUAL-SLEIGH-INIT-0001: adopt the register-catalog engine as the
+    // lifter instead of re-deserializing x86-64.sla — the oracle builds ONE
+    // Sleigh translator per Architecture (sleigh_arch.cc:174 buildTranslator
+    // reuses the languageindex instance; architecture.cc:627 initializes it
+    // once) and reads both the register catalog (SleighBase::getAllRegisters,
+    // sleighbase.cc:182) and every decode from that single instance. The
+    // catalog leg above only enumerated registers (no image, no context
+    // default, no decode), so configure_x86_64 below observes exactly the
+    // fresh-engine state a second SleighCtx::new() would have produced.
+    let mut sleigh = SleighLifter::from_ctx(sleigh_ctx);
     sleigh
         .configure_x86_64(&image, 0)
         .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
@@ -604,6 +618,15 @@ fn run_one(binary_path: &str, functions: &[GenFunction], index: usize) -> Result
             .get_size()
     );
     println!("{}", c_code.trim_end());
+    // PERF-DUAL-SLEIGH-INIT-0001 load-count gate: report this process's
+    // full .sla deserializations when asked (default silent — the canon and
+    // mirror protocols see no extra output line).
+    if std::env::var("RUGRA_SLEIGH_LOAD_REPORT").is_ok_and(|value| value != "0") {
+        eprintln!(
+            "[GEN] sleigh engine loads={}",
+            rugra::sleigh_ffi::engine_load_count()
+        );
+    }
     Ok(())
 }
 

@@ -321,10 +321,21 @@ impl FactoryMode {
     }
 }
 
+// PERF-DUAL-SLEIGH-INIT-0001: also returns the register-catalog engine so
+// decompile_one's lifter adopts it (SleighLifter::from_ctx) — the oracle's
+// ONE translator per Architecture (sleigh_arch.cc:174 buildTranslator
+// reuse), not a second x86-64.sla deserialization. The per-function arch
+// rebuild itself is PAREVAL-ARCH-BUILD-COST-0001 scope (separate seam).
 fn build_architecture(
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
     mode: FactoryMode,
-) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+) -> Result<
+    (
+        std::sync::Arc<rugra::arch::Architecture>,
+        rugra::sleigh_ffi::SleighCtx,
+    ),
+    String,
+> {
     use std::sync::Arc;
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
@@ -473,7 +484,7 @@ fn build_architecture(
         arch.loader = Some(loader);
         arch.build_string_manager();
     }
-    Ok(Arc::new(arch))
+    Ok((Arc::new(arch), sleigh))
 }
 
 // ===========================================================================
@@ -541,8 +552,8 @@ fn decompile_one(
                 0,
                 image.to_vec(),
             ));
-        let arch = match build_architecture(Some(loader), mode) {
-            Ok(arch) => arch,
+        let (arch, sleigh_ctx) = match build_architecture(Some(loader), mode) {
+            Ok(built) => built,
             Err(msg) => return Outcome::Err {
                 stage: "arch".to_string(),
                 msg,
@@ -565,7 +576,10 @@ fn decompile_one(
         for function in functions {
             fd.add_symbol(function.vaddr, function.name.clone());
         }
-        let mut sleigh = SleighLifter::new();
+        // PERF-DUAL-SLEIGH-INIT-0001: adopt the register-catalog engine
+        // (single .sla load per function build; oracle sleigh_arch.cc:174
+        // buildTranslator reuses the one translator). Read-only catalog leg.
+        let mut sleigh = SleighLifter::from_ctx(sleigh_ctx);
         if let Err(error) = sleigh.configure_x86_64(image, 0) {
             return Outcome::Err {
                 stage: "sleigh".to_string(),

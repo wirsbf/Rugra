@@ -3582,6 +3582,14 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
 // buildStringManager reads through the loader, architecture.cc:1391-1401
 // — buildLoader precedes buildStringManager). One worker process serves
 // one job, so the first initializer fixes these for the process.
+// PERF-DUAL-SLEIGH-INIT-0001: the engine built for the register catalog is
+// parked in WORKER_SLEIGH_ENGINE and adopted by decompile_request's
+// SleighLifter (same worker thread) — the oracle's ONE translator per
+// Architecture (sleigh_arch.cc:174 buildTranslator reuses the
+// languageindex instance from the static map, sleigh_arch.hh:109), not a
+// second x86-64.sla deserialization per worker process. Take-once: one
+// job per worker process means exactly one adopter; the in-process
+// CompareFunctions mode falls back to a fresh engine for later jobs.
 fn worker_architecture_with_program_db(
     symboltab: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>>,
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
@@ -3591,7 +3599,15 @@ fn worker_architecture_with_program_db(
     if let Some(cached) = CACHE.get() {
         return cached.clone();
     }
-    let built = build_worker_architecture(symboltab, loader);
+    let built = build_worker_architecture(symboltab, loader).map(|(arch, ctx)| {
+        // PERF-DUAL-SLEIGH-INIT-0001: park the register-catalog engine for
+        // the decompile leg's lifter (single-threaded worker, one park by
+        // construction — see WORKER_SLEIGH_ENGINE above).
+        if let Ok(mut pool) = WORKER_SLEIGH_ENGINE.lock() {
+            *pool = Some(ctx);
+        }
+        arch
+    });
     // One initializer per worker process (one job per process); a losing
     // racing writer is impossible by construction, the set result is still
     // checked for symmetry with the OnceLock contract.
@@ -3599,10 +3615,34 @@ fn worker_architecture_with_program_db(
     built
 }
 
+// RUGRA-GLUE: PERF-DUAL-SLEIGH-INIT-0001 take-once engine pool beside the
+// first-init Architecture cache above (same single-threaded worker
+// lifecycle; parking order == build order, single writer by construction).
+static WORKER_SLEIGH_ENGINE: std::sync::Mutex<Option<rugra::sleigh_ffi::SleighCtx>> =
+    std::sync::Mutex::new(None);
+
+// RUGRA-GLUE: adopt the parked register-catalog engine (first caller) or
+// fall back to a fresh deserialization (pool empty — later jobs of the
+// in-process CompareFunctions mode)
+fn take_worker_sleigh_lifter() -> SleighLifter {
+    if let Ok(mut pool) = WORKER_SLEIGH_ENGINE.lock() {
+        if let Some(ctx) = pool.take() {
+            return SleighLifter::from_ctx(ctx);
+        }
+    }
+    SleighLifter::new()
+}
+
 fn build_worker_architecture(
     symboltab: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>>,
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
-) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+) -> Result<
+    (
+        std::sync::Arc<rugra::arch::Architecture>,
+        rugra::sleigh_ffi::SleighCtx,
+    ),
+    String,
+> {
     (|| {
         let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
             .map_err(|error| format!("unable to read compiler spec: {error}"))?;
@@ -4076,7 +4116,7 @@ fn build_worker_architecture(
             let mut tf = types.write().unwrap();
             tf.set_default_alignment_map();
             tf.set_spacebase_scope_source(symboltab.clone());        }
-        Ok(Arc::new(arch))
+        Ok((Arc::new(arch), sleigh))
     })()
 }
 
@@ -5843,7 +5883,12 @@ fn decompile_request(
 
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
-    let mut sleigh = SleighLifter::new();
+    // PERF-DUAL-SLEIGH-INIT-0001: adopt the parked register-catalog engine
+    // (single .sla load per worker process; oracle sleigh_arch.cc:174
+    // buildTranslator reuses the one translator per languageindex). The
+    // catalog leg was read-only, so both configure arms below observe the
+    // same fresh-engine state a second construction would have produced.
+    let mut sleigh = take_worker_sleigh_lifter();
     if mirror_flow_enabled() {
         // RUGRA-FLOW-MIRROR-0001: the oracle load contract decodes through
         // the full-segment LoadImage (BfdArchitecture maps every PT_LOAD),
