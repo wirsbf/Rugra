@@ -1030,6 +1030,15 @@ FAIL（2026-09-25 事故形态：pre-tier 二进制在 mirror env 下打出 cano
 CARGO_TARGET_DIR=<dir> cargo build --profile fast-release --examples
 ```
 
+**canon 门禁 env 卫生（CR-TRIGFACE F-4 操作规程，2026-09-26）**：
+`RUGRA_MIRROR`/`RUGRA_FLOW_MIRROR`/`RUGRA_GEN_MIRROR` 是**存在性开关**——驱动侧
+判定为 `env::var(...).is_ok()`/`.ok()`（curl_decompile.rs:41、httpd_decompile.rs:87、
+gen_decompile.rs:663 亲核），**置空串（`RUGRA_MIRROR=`）也切换输出形态到镜面脸**。
+canon 门禁（默认脸差分）运行前必须显式
+`unset RUGRA_MIRROR RUGRA_FLOW_MIRROR RUGRA_GEN_MIRROR`——继承环境里残留的空值
+变量足以让 canon 跑出镜面脸静默爆 diff（与上方 2026-09-25 事故同族；CR-TRIGFACE
+终判发现项 F-4，root 波次账本 2026-09-26 在案）。
+
 **用法**（亲测）：
 
 ```bash

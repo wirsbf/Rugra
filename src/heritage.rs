@@ -3130,20 +3130,24 @@ impl Heritage {
         &mut self,
         fd: &mut Funcdata,
         remove: &[Arc<RwLock<Varnode>>],
+        space: AddressSpace,
         addr: Address,
         size: i32,
     ) {
-        let space = remove
-            .first()
-            .map(|v| v.read().unwrap().address_space)
-            .unwrap_or(AddressSpace::Register);
+        // cc:247: HeritageInfo *info = getInfo(addr.getSpace()); — the
+        // space of the heritaged RANGE (the caller's MemRange space), not
+        // the space of the first removed varnode. The two coincide on
+        // every oracle-reachable input (placeMultiequals cc:2626 guards
+        // !removevars.empty() and collect()'s loc-tree window stays within
+        // one space), but the derivation here mirrors the oracle form
+        // directly: the range's space is authoritative.
+        let info_idx = self.infolist.iter().position(|i| i.space == space);
         // cc:247-257: if deadremoved > 0, bump delay + one-time warning
         // header naming the revisited address in printRaw form.
         // AddrSpace::printRaw (space.cc:206-221): "0x" plus the offset
         // zero-filled to 2*addrsize hex digits, with the leading-zero
         // shrink rule (offset>>32==0 -> 4 bytes, else >>48==0 -> 6 for
         // 8-byte spaces); no space name.
-        let info_idx = self.infolist.iter().position(|i| i.space == space);
         if let Some(idx) = info_idx {
             if self.infolist[idx].deadremoved > 0 {
                 self.bump_deadcode_delay(fd, space);
@@ -6090,8 +6094,9 @@ impl Heritage {
                 }
             }
             // Ghidra cc:2626-2627: removeRevisitedMarkers(remove, addr, size)
+            // — the range's space (memrange.space) mirrors addr.getSpace().
             if !removevars.is_empty() {
-                self.remove_revisited_markers(fd, &removevars, memrange.addr, size);
+                self.remove_revisited_markers(fd, &removevars, memrange.space, memrange.addr, size);
             }
             // Ghidra cc:2628: guardInput(addr, size, inputvars)
             self.guard_input(fd, memrange.addr, size, &mut inputvars);
