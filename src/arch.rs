@@ -504,10 +504,13 @@ pub struct Architecture {
     pub infer_ptr_spaces: Vec<crate::space::AddressSpace>,
     /// The `(space, first, last)` triples applied to the global scope by
     /// the deferred `<global>` loop and `addOtherSpace`
-    /// (architecture.cc:1332-1335), in application order.  Rugra's
-    /// `Database` scope range tree is not space-keyed yet, so the applied
-    /// triples are recorded here (registered residual
-    /// CSPEC-GLOBAL-APPLY-0001 for the Database-side application).
+    /// (architecture.cc:1332-1335), in application order.  Since
+    /// CSPEC-GLOBAL-APPLY-0001 the same triples also land in the
+    /// constructor-built symbol table's global scope at parse time
+    /// (the space-keyed `ScopeRangeTree`, `add_range_spaced` —
+    /// architecture.cc:833/852 `symboltab->addRange` write-through);
+    /// this record remains as the source-order projection the
+    /// fixtures and drivers observe.
     pub global_scope_ranges: Vec<(crate::space::AddressSpace, u64, u64)>,
     /// Ranges for which high-level pointers are not possible. Faithful to
     /// `nohighptr`.
@@ -697,7 +700,19 @@ impl Architecture {
             nohighptr: RangeList::new(),
             overrides: Override::new(),
             loadersymbols_parsed: false,
-            symboltab: None,
+            // Ghidra: architecture.cc:597 Architecture::buildDatabase —
+            // `symboltab = new Database(this,true);` (cc:600) + the global
+            // scope attach (architecture.cc:601-602). The Architecture
+            // ALWAYS owns a symbol table in the oracle; the cspec `<global>`
+            // ranges land in its global scope at parse time (the
+            // `add_to_global_scope` write-through). Drivers that install
+            // their own Program DB replace the whole handle
+            // (`set_symboltab`), which drops these ranges in favor of
+            // their own — the canon-face contract
+            // (CSPEC-GLOBAL-APPLY-0001).
+            symboltab: Some(std::sync::Arc::new(std::sync::RwLock::new(
+                crate::database::Database::new(true),
+            ))),
             loader: None,
             type_factory_name: None,
             types: None,
@@ -1197,11 +1212,14 @@ impl Architecture {
     /// Faithful to `addToGlobalScope` (architecture.cc:826-844): the space
     /// is appended to `inferPtrSpaces` and the range is applied to the
     /// global scope; when the space is an overlay base the range is
-    /// duplicated into every overlay space contained in it.  Rugra's
-    /// `Database` scope range tree is not space-keyed yet, so the applied
-    /// (space, first, last) triples are recorded in source order on the
-    /// Architecture (`global_scope_ranges`) — registered residual
-    /// CSPEC-GLOBAL-APPLY-0001 for the Database-side application.
+    /// duplicated into every overlay space contained in it.  Since
+    /// CSPEC-GLOBAL-APPLY-0001 the range lands in the constructor-built
+    /// symbol table's global scope at parse time (the space-keyed
+    /// `ScopeRangeTree` via `add_range_spaced` — the
+    /// architecture.cc:833/841/852 `symboltab->addRange` write-through);
+    /// the `(space, first, last)` triples are additionally recorded in
+    /// source order on the Architecture (`global_scope_ranges`) as the
+    /// projection the fixtures and drivers observe.
     pub fn add_to_global_scope(
         &mut self,
         props: &RangeProperties,
@@ -1209,6 +1227,18 @@ impl Architecture {
     ) -> Result<(), String> {
         let (spc, first, last) = Self::range_from_properties(props, host)?;
         self.infer_ptr_spaces.push(spc);
+        // database.cc:833 — `symboltab->addRange(scope,spc,...)`: the
+        // range lands in the global scope's space-keyed rangetree NOW
+        // (the same `Database::addRange` call the C++ makes, live at
+        // parse time). The `global_scope_ranges` record below keeps the
+        // source-order projection the CSPEC-GLOBAL-APPLY fixture observes.
+        if let Some(symboltab) = &self.symboltab {
+            let global_id = symboltab.read().expect("lock poisoned").global_scope_id;
+            symboltab
+                .write()
+                .expect("lock poisoned")
+                .add_range_spaced(global_id, spc, first, last);
+        }
         self.global_scope_ranges.push((spc, first, last));
         if host.is_overlay_base(spc) {
             // We need to duplicate the range being marked as global into
@@ -1221,6 +1251,15 @@ impl Architecture {
                 }
                 if host.contain_space(ospc) != Some(spc) {
                     continue;
+                }
+                // database.cc:841 — the overlay duplicate addRange.
+                if let Some(symboltab) = &self.symboltab {
+                    let global_id =
+                        symboltab.read().expect("lock poisoned").global_scope_id;
+                    symboltab
+                        .write()
+                        .expect("lock poisoned")
+                        .add_range_spaced(global_id, ospc, first, last);
                 }
                 self.global_scope_ranges.push((ospc, first, last));
             }
@@ -1236,6 +1275,14 @@ impl Architecture {
             return Err("Undefined space: other".to_string());
         };
         let highest = host.space_highest(other_space);
+        // database.cc:852 — `symboltab->addRange(scope,otherSpace,0,...)`.
+        if let Some(symboltab) = &self.symboltab {
+            let global_id = symboltab.read().expect("lock poisoned").global_scope_id;
+            symboltab
+                .write()
+                .expect("lock poisoned")
+                .add_range_spaced(global_id, other_space, 0, highest);
+        }
         self.global_scope_ranges.push((other_space, 0, highest));
         if host.is_overlay_base(other_space) {
             let num = host.num_spaces();
@@ -1246,6 +1293,15 @@ impl Architecture {
                 }
                 if host.contain_space(ospc) != Some(other_space) {
                     continue;
+                }
+                // database.cc:859 — the overlay duplicate addRange.
+                if let Some(symboltab) = &self.symboltab {
+                    let global_id =
+                        symboltab.read().expect("lock poisoned").global_scope_id;
+                    symboltab
+                        .write()
+                        .expect("lock poisoned")
+                        .add_range_spaced(global_id, ospc, 0, highest);
                 }
                 self.global_scope_ranges.push((ospc, 0, highest));
             }
@@ -2934,6 +2990,44 @@ mod tests {
         assert_eq!(arch.global_scope_ranges.len(), 2);
         assert_eq!(arch.global_scope_ranges[0], (crate::space::AddressSpace::Ram, 0, u64::MAX));
         assert_eq!(arch.infer_ptr_spaces, vec![crate::space::AddressSpace::Ram]);
+        // CSPEC-GLOBAL-APPLY-0001: the same ranges land in the symbol
+        // table's global scope (architecture.cc:833/852
+        // `symboltab->addRange`), in the space-keyed tree — ram full range
+        // and OTHER full range as separate partitions.
+        {
+            let db = arch.symboltab.as_ref().expect("constructor DB").read().unwrap();
+            let global = db.get_global_scope().expect("global scope");
+            // TestHost maps "other" to Other(0) (index 0), which sorts
+            // before ram (index 3) — the drivers' real host uses
+            // Other(SPACEID_OTHER=1), same order.
+            assert_eq!(
+                global.rangetree.ranges(),
+                &[
+                    crate::database::ScopeRange::new(
+                        crate::space::AddressSpace::Other(0),
+                        0,
+                        u64::MAX,
+                    ),
+                    crate::database::ScopeRange::new(crate::space::AddressSpace::Ram, 0, u64::MAX),
+                ][..],
+                "sorted by (space index, first)"
+            );
+            // The queryProperties fold is live: a ram offset inside the
+            // global range answers mapped|addrtied|persist
+            // (database.cc:1271-1276).
+            let (_, flags) = db.query_properties(
+                db.global_scope_id,
+                crate::address::Address::new(0x1234),
+                1,
+                crate::address::Address::new(0),
+            );
+            assert_eq!(
+                flags,
+                crate::varnode::varnode_flags::MAPPED
+                    | crate::varnode::varnode_flags::ADDRTIED
+                    | crate::varnode::varnode_flags::PERSIST
+            );
+        }
 
         let mut bare = parse_store("<compiler_spec/>");
         let mut arch2 = Architecture::new();

@@ -3796,3 +3796,26 @@ d6fd730a）已在 /dev/shm/rugra-reports/stackspill-evidence/ 执行。
 - **验证**：剂量实验 k=0..5 全部恒等 fnv `4110e793…`（=变体 A=oracle 语句序
   `pppppuVar18` 先 `param_2` 后），双进程复跑一致；7 剂量 IR 全量转储归一化后
   单一 md5（完全封闭）。canon/镜面/bank/测试门禁见车道终报。
+
+## 2026-09-26：mapglobals 单测改产线形态（CSPEC-GLOBAL-APPLY-0001 连带，Lane CSPECGLOBAL）
+
+`test_action_mapglobals_creates_symbol_for_persistent_ram_varnodes`：自
+CSPEC-GLOBAL-APPLY-0001 起每个 `Architecture` 构造即持有 Database
+（architecture.cc:600 buildDatabase），Funcdata 的 canonical 默认 arch 的
+空 rangetree 使 `map_globals` 忠实抛 "Could not discover scope"
+（funcdata_varnode.cc:1704-1705）。测试改为自带 ram 全域 DB 的 arch（产线
+parse 后形态），可观察面从 legacy symbol_table proxy 改为 DB 全局 scope 的
+addSymbol（cc:1709）。生产行为零改动；cc:4404 承重补偿合取（:14342 注记）
+的 A/B 摘除见同车道第二 commit。
+
+## 2026-09-26：cc:4404 oracle 精确形还原（CSPEC-GLOBAL-APPLY-0001 第二 commit，Lane CSPECGLOBAL）
+
+`ActionConditionalConst::propagate_constant` MULTIEQUAL 臂的守卫还原为
+coreaction.cc:4404 逐字形：`varVn->isAddrTied() && varVn->getAddr() ==
+op->getOut()->getAddr()`——摘除输出侧 `out.is_addr_tied()` 承重补偿合取
+（裸面无 DB 时代的补偿;constructor symboltab 落地后每面 ram varnode 经同
+一 newVarnode 折叠取得 addrtied,合取冗余）。A/B 三态（base d153c868 /
+commit1 / commit2）: canon curl+httpd 字节恒等（md5 c33052a3/6923d6c1）,
+镜面 curl 74/58/0/0、vsh 71/15/0/0、sq 810/4530/0/0、httpd 29/156/0/0
+全同 commit1;1778P/0F;bank 391/391。CR-STACKSPILL 时代"单独落地打破
+httpd canon(460367b2)"不再复现。

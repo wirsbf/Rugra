@@ -533,7 +533,9 @@ fixture 见 tests/oracle/ 四件套（`database_symface_1204` / `database_scope_
 | `Scope::attach_child` / `detach_child`（锚更新） | database.cc:857/866 | 拆分实现：back-pointer=parent_id（Database 侧写）+ children 表 |
 | `Scope::children_begin` / `children_end` | database.hh:765/766 | children 切片迭代器 |
 | `Scope::decode_wrapping_attributes` | database.hh:719 | 基类 no-op 逐字 Rust 化 |
-| `Scope::print_bounds` | database.hh:789 | rangetree printBounds（address.cc:588 格式） |
+| `Scope::print_bounds` | database.hh:789 | rangetree printBounds（address.cc:588 格式；space-keyed 树每行带 `<space>: ` 前缀，Range::printBounds address.cc:283） |
+| `ScopeRangeTree` / `ScopeRange` | address.hh:169/194 | CSPEC-GLOBAL-APPLY-0001：`Scope.rangetree` 的 space-keyed 形态（`set<Range>` 按 (space index, first) 序）；`insert_range`/`remove_range`/`in_range`/`print_bounds` 逐字移植 address.cc:383/417/468/588（与 address.rs `SpaceRangeList` 同 oracle 双子——DB 树键 IR-space enum，SpecQuery 流无 SpaceRegistry）；`Scope::add_range_spaced`/`remove_range_spaced`/`in_scope_spaced` 为 database.cc:1105/1114/hh:597 正形，旧 spaceless `add_range`/`remove_range`/`in_scope` 为 RAM 绑定委托（驱动 PT_LOAD/fixture 兼容）；`Database::add_range_spaced`=cc:3050 正形（clearResolve→addRange→fillResolve，resolvemap 只投影 RAM 分区）；rangetree encode 带 `space` 名属性、decode 读之（Range::encode/decode address.cc:292/300） |
+| `Database::query_properties_spaced` | database.cc:1263 | CSPEC-GLOBAL-DB-0001（CSPEC-GLOBAL-APPLY-0001 B2）：space-carrying queryProperties 正形——mapScope（非 RAM 探针 fallthrough qpoint）+ stack walk（entry 臂仅 RAM entries=DB-LOCALSCOPE-MAP-0001 split 残差）+ in_scope_spaced 发现臂 + cc:1271-1279 三臂折叠；`get_property_spaced` 非 RAM 读 flagbase 默认分区；双侧 fixture 8 探针格（ram/register 窗内外/unique/OTHER/const）byte-identical MATCH |
 | `Scope::override_size_lock_type` / `reset_size_lock_type` | database.cc:1387/1402 | LowlevelError 文本走 Err 通道；reset 恢复同尺寸 unknown 基类型 |
 | `Scope::add_dynamic_map_internal` | database.cc:1874 | whole_count 计数 + multi-entry（whole_count>1 即集合成员） |
 | `Scope::category_sanity` | database.cc:1992 | 内部 NULL 槽 → 整类清 no_category；先收集 id 再改（C++ 拷贝 list 等价） |
@@ -663,7 +665,7 @@ C++ `hashViaProduction(db, global, "\xff")` 喂单字节 0xFF；Rust 名字通�
 | `SymbolEntry::EntrySubsort` | database.hh:107-134 | earliest/latest 边界 + (useindex,useoffset) 字典序 + 相等 |
 | `SymbolCompareName` | database.hh:366 | name 字典序 + nameDedup tie-break |
 | `DuplicateFunctionError` | database.hh:435 | "Duplicate Function" 消息 + address/functionName 载体 |
-| `Scope::printBounds` | database.hh:789 | rangetree 排序范围打印 |
+| `Scope::printBounds` | database.hh:789 | rangetree 排序范围打印（CSPEC-GLOBAL-APPLY-0001 后经 `ScopeRangeTree::print_bounds`，行格式=address.cc:283 `space: first-last`） |
 
 **载体裁决（fixture 注释+此处记录）**：① C++ `FunctionSymbol(Scope*,int4)` decode
 ctor 的可观察状态（空名+consumeSize+code 类型+锁旗标）在 Rust 值模型经空名命名

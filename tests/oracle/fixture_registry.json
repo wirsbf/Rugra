@@ -8344,6 +8344,58 @@
           "TypeCode::printRaw"
         ]
       }
+    },
+    {
+      "id": "cspec_global_db_1204",
+      "description": "CSPEC-GLOBAL-DB-0001 global-scope Database write path vs locked 12.0.4 (CSPEC-GLOBAL-APPLY-0001): cspec <global> + OTHER triples land in the constructor-built symbol table's global scope (architecture.cc:833/841/852 symboltab->addRange write-through, space-keyed ScopeRangeTree); DBTREE three-partition printBounds tree (OTHER/ram/register windows, address.cc:283/588 form) + 8-probe QPROP fold grid (mapped|addrtied|persist 0x20c000 inside owned ranges, database.cc:1271-1276; register-outside/unique/const-bail 0x0); ram probes in curl's sole PF_W segment avoid loader-readonly coupling",
+      "runner": [
+        "tools/run_cspec_global_db_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/cspec_global_db_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/cspec_global_db_1204.cc",
+          "rust_fixture": "tests/oracle/cspec_global_db_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_cspec_global_db_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/database.rs",
+          "src/arch.rs",
+          "src/coreaction.rs",
+          "tests/oracle/cspec_global_db_1204.*",
+          "tools/run_cspec_global_db_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "ScopeRangeTree::insert_range",
+          "ScopeRangeTree::remove_range",
+          "ScopeRangeTree::in_range",
+          "ScopeRangeTree::print_bounds",
+          "Database::add_range_spaced",
+          "Database::query_properties_spaced",
+          "Architecture::add_to_global_scope",
+          "Architecture::add_other_space"
+        ],
+        "ghidra_function_ids": [
+          "RangeList::insertRange",
+          "RangeList::removeRange",
+          "RangeList::inRange",
+          "Range::printBounds",
+          "Database::addRange",
+          "ScopeInternal::queryProperties",
+          "Architecture::addToGlobalScope",
+          "Architecture::addOtherSpace"
+        ]
+      }
     }
   ]
 }

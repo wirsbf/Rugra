@@ -140,7 +140,7 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 | `evalfp_current_name` / `evalfp_called_name` | `Option<String>` | Eval model names. |
 | `evalfp_current` / `evalfp_called` | `Option<Arc<ProtoModelFull>>` | `evalfp_current`/`evalfp_called` (architecture.hh:195-196). |
 | `infer_ptr_spaces` | `Vec<AddressSpace>` | `inferPtrSpaces` (architecture.hh:182), appended by `add_to_global_scope`. |
-| `global_scope_ranges` | `Vec<(AddressSpace, u64, u64)>` | Applied `<global>` + OTHER-space triples in application order (Database-side application is a registered residual). |
+| `global_scope_ranges` | `Vec<(AddressSpace, u64, u64)>` | Applied `<global>` + OTHER-space triples in application order; since CSPEC-GLOBAL-APPLY-0001 the same triples are ALSO written into the constructor symbol table's global scope (`add_range_spaced` at `add_to_global_scope`/`add_other_space`, architecture.cc:833/852) — the Vec keeps the source-order fixture projection. |
 | `pcodeinjectlib` | `Option<Arc<RwLock<PcodeInjectLibrary>>>` | `pcodeinjectlib` (architecture.hh:200). |
 | `nohighptr` | `RangeList` | No-high-pointer ranges. |
 | `overrides` | `Override` | Override commands. |
@@ -218,7 +218,7 @@ model has no per-space record store).
 
 ## 2026-06-27 历史实现记录（“达到 L3”结论已于 2026-08-11 撤回）
 
-- **Architecture 新增子组件字段**：symboltab (Database)、loader (LoadImage)、commentdb、string_manager、cpool、context_db、options_db、split_records、lane_records。
+- **Architecture 新增子组件字段**：symboltab (Database)、loader (LoadImage)、commentdb、string_manager、cpool、context_db、options_db、split_records、lane_records。symboltab 自 CSPEC-GLOBAL-APPLY-0001 起在构造器即建（`Database::new(true)`，architecture.cc:600 `buildDatabase`），cspec `<global>` 三元组在 parse 期直写其全局 scope；驱动自装 Program DB 时经 `set_symboltab` 整体替换（canon 契约）。
 - **虚拟工厂钩子等价物**：`set_symboltab`/`set_loader`/`set_commentdb`/`set_string_manager`/`set_cpool`/`set_context_db`/`set_options_db`/`set_split_records`/`set_lane_records` — 替代 Ghidra 的 buildXxx 虚函数。
 - **init()**：验证架构 ID 已设置，编排初始化流程。
 - **clear_analysis()**、**read_loader_symbols()**、**encode()**。
