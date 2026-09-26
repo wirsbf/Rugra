@@ -1,8 +1,31 @@
-**日期**: 2026-09-26（PFLIP 自产参数锁默认转正 + W-2026-09-26 波次快照；更早为历史快照族）
+**日期**: 2026-09-26（F2B image-base 原生载入 + PFLIP 自产参数锁默认转正 + W-2026-09-26 波次快照；更早为历史快照族）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
 
-## 2026-09-26 PFLIP 自产参数锁默认转正快照（当前事实源——评测语义分界点）
+## 2026-09-26 F2B 双驱动原生 0x100000 载入快照（当前事实源——评测语义分界点②）
+
+**canon 面原生 image base 载入**（Lane F2B，wt/f2b @ master 594d6982，用户拍板
+HTTPDMAIN-F2-IMAGEBASE-DECISION-0001 方案 (b)；examples 双驱动，**零 src/ 改动**）：
+httpd+curl 的 canon 反编译面以 analyzeHeadless 首选基 **0x100000 原生载入**
+（ELF 真实 image base——oracle 直跑实证：canon golden=analyzeHeadless 0x100000 载入，
+stage-projection oracle=BfdArchitecture 原始 vma base 0，故 mirror/bank 面恒等保持
+base 0）。manifest 键本就 canon 数值（零重键），驱动侧查找直取。
+
+**⚠ 评测语义分界点②（F2B commit=分界）**：分界后 canon 输出地址为 image-based
+（`0x10xxxx/0x12xxxx` 形）。**raw-diff 与地址计数类指标与历史不可比**（F2 假差异族
+从 raw 口径整体消失：httpd main base-0 常量 135→0、retaddr 行 14/14 字节恒等、
+main raw diff 713→685、全窗 1747→1711 零回退；curl H 族值愈 `0x3af8`→`0x103af8`）。
+compare 的 skeleton 口径因 hex→LIT 掩码对 F2 中性，**数字连续可比**
+（httpd 34/255/0/0、curl 124/246/0/0，分界前后恒等）。
+
+**门禁与钉板**: bank 391/391 PASS（冻结锚未动，镜像再捕获投影体字节恒等）；
+mirror gate httpd PASS 138/150·29/29（==冻结基线，**bank/镜面基线均无需重钉**）；
+五脸极性复验通过（默认 255 / PARAMID=0 255 / V3SIG=1 255 / IMPORTSIG=0 525 /
+SEEDS=0 749，方向保持）；gcc 审计 httpd 15OK/14FAIL==基线。O5（MIRROORGATE-BASE-
+ORAL-0001）随两面各同基收口。残差：curl `(undefined *)0x103af8` 常量 cast 半
+（PRINTC-CONST-DISPLAYREBASE-0001 半残差，printc 域）与 F4 主体族（独立在账）。
+
+## 2026-09-26 PFLIP 自产参数锁默认转正快照（评测语义分界点①）
 
 **自产 Parameter ID 模式默认转正**（Lane PFLIP，wt/pflip @ master efc28f4a，用户拍板
 PARAMID-DEFAULT-FLIP-0001；examples 驱动层极性翻转，**零 src/ 改动**）：httpd+curl 双驱动的
