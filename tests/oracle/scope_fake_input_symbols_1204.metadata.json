@@ -69,7 +69,7 @@
   "api_document": "572e1ee365b5c0cf8a6f73f4e7a9eb87e06a79209cecdd5846ced894ea7f9fd7",
   "runner": "8cb71316b964986615f86c7628db1764dbfc951aa8388f1e80fd86e89f0179f4",
   "rugra_build_inputs": "bd96a7bbf490780cbc67e5446e30e36e2dc9485c67ec6e45e05770748d6e3d8f",
-  "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
  },
  "expected_stdout_sha256": "9c6aed68e7372a8d5a857451941a3a20c7c7a809400dca66fc43090fe3c664c9",

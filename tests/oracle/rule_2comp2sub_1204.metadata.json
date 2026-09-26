@@ -102,7 +102,7 @@
   "ruleaction_rs_sha256": "a12a9e1a041d675f4f90c8b45e2d222088590bf8f72a1e8e85a1fa8b2ce7e0d9",
   "runner_sha256": "79d608a9c69e6aa4f6b21cbb3cbce41ffcdd7fc807e132298cc96581f44d1e9e",
   "cargo_toml_sha256": "b5e6dea467d92c03e3bee43dbf24fd237119f28186ad663f90c197494eb8c3de",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "expected_ghidra_stdout_sha256": "69b45e38845d6e1f1909ad2cbd2b8d8c75205c77daf7c501b5de2f82da5d09db",
   "expected_rugra_stdout_sha256": "69b45e38845d6e1f1909ad2cbd2b8d8c75205c77daf7c501b5de2f82da5d09db",

@@ -168,7 +168,7 @@
   "flow_doc_sha256": "8b736d05583ce5522ea00c7c088297fc92ff01555719899964bba601059c8741",
   "funcdata_doc_sha256": "f1657aa2698d4866f7de0d45643006d27cde61e7ebb662cf92b8a4a10df40e9b",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-sleigh-flow-relative-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents from the pinned base commit with the leased SLEIGH-FLOW-REL-0001 overlay files taken from the working tree",
   "rust_crate_tree_sha256": "1070c042f883f933bd0a893540d434931bee523e414ef921c67478a0a5ae8991",
