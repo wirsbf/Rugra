@@ -190,9 +190,26 @@ PKGG 结论（"单线程无争用非问题"）在并行后**部分翻案**：单
 
 | 语料面 | 函数数 | 门禁结论 |
 |---|---|---|
-| curl（examples/curl，31 全量） | 31 | **GREEN**：31/31 字节恒等 |
+| curl（examples/curl，31 全量） | 31 | **GREEN**：31/31 字节恒等（jobs=8；jobs=16 复验同 GREEN） |
 | httpd（examples/httpd，34 全量） | 34 | **GREEN**：34/34 字节恒等 |
-| sqlite3（/tmp/sqlite3，48 最大筛 3 病态 = 45） | 45 | 见车道终报（PHASE1LAND） |
+| sqlite3（/tmp/sqlite3，48 最大筛 3 病态 = 45） | 45 | **GREEN**：45/45 字节恒等（shell_exec 经 HERMIT 修复后经生产驱动确认封闭） |
+
+**加速比曲线（生产驱动实测，load 95-140 共机——全部显著偏保守；PoC 期 load 45-50 时
+sqlite3 8w 同口径 6.28×）**：
+
+| 语料 | 1w | 2w | 4w | 8w | 16w |
+|---|---|---|---|---|---|
+| sqlite3 45f | 591.4s | 321.5s（1.84×） | 160.2s（3.69×） | 97.5s（**6.06×**） | 101.4s（5.83×，平台期） |
+| curl 31f | 19.2s | 9.3s（2.07×） | 5.8s（3.30×） | 5.4s（**3.55×**） | 5.9s（3.27×） |
+
+平台期主因不变（§2.3）：作业数 < 有效并行度、最长函数链、每函数 arch 构建并行 CPU 膨胀
+（PAREVAL-ARCH-BUILD-COST-0001 承接）。
+
+**TypeFactory 争用注记（TFSINGLE step1 待并）**：生产驱动沿用 bin_sweep 形态
+`shared_default()` 进程单例（与串行驱动同工厂域——串并比较同口径的前提）。PoC 实测该
+形态（step1）8 路并行争用 +7-12% 墙钟；PAREVAL-TF-SINGLETON-WIRING-0001 落地 per-Arch
+工厂所有权后争用面变化，加速比预期改善——用本驱动曲线（1/2/4/8/16）复测即量化，且
+确定性门禁对工厂域不敏感（同构建内串并自比对），该票落地后门禁复跑三面即其并行侧验收。
 
 **落地期发现 1——typedef 前导是进程级 artifact，不是并行缺陷**：`printc.rs` 的
 `TYPEDEFS_EMITTED` 是进程级 AtomicBool（"once per decompiled file"，多函数单进程运行中
