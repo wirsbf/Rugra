@@ -3901,11 +3901,16 @@ impl Heritage {
 
     // Ghidra: heritage.cc:1570 Heritage::guardLoads
     /// Guard LOAD ops for a specific range. Faithful to `guardLoads`
-    /// (heritage.cc:1570-1601) up to the recorded residuals: the fl/addrtied
-    /// gate and invalid-guard pruning are exact; the per-LOAD COPY boundary
-    /// insertion (cc:1590-1599) is still a registered TODO because the
-    /// LoadGuard range refinement (analyzeNewLoadGuards ValueSetSolver) is
-    /// a stub.
+    /// (heritage.cc:1570-1601): the fl/addrtied gate (cc:1576), the
+    /// invalid-guard pruning during iteration (cc:1577-1586), the
+    /// range-start window test (cc:1587-1589) and the per-LOAD COPY
+    /// boundary insertion (cc:1590-1599, landed 2026-09-23 by
+    /// SB-MATCHURL-ORD55-0001; the guard-window refinement feeding
+    /// `handle_new_load_copies` is `analyze_new_load_guards`' real
+    /// ValueSetSolver, GETPARAM-OPPOOL-COUNT-0001/RANGEUTIL-VSEMPTY-0001).
+    /// The full placement/rename/propagate-away/addrforce chain is
+    /// fixture-verified byte-identical against the locked oracle by
+    /// tests/oracle/heritage_storeload_fwd_1204 (KUNABUGS-STORELOAD-FWD-0001).
     pub fn guard_loads_range(
         &mut self,
         fd: &mut Funcdata,
