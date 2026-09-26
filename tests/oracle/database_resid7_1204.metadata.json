@@ -1,0 +1,140 @@
+{
+ "schema_version": 1,
+ "fixture_id": "DATABASE-RESID7-FIXTURE-0001",
+ "todo_ids": [
+  "MIGW1-DATABASE-0005"
+ ],
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/database.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/rangemap.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/space.cc"
+  ]
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "oracle_side": "production BfdArchitecture over the pinned curl blob; the production symboltab resolvemap stays empty (no namespace scopes) so queryFunction's mapScope returns the query scope itself (database.cc:3187-3188); scopes are standalone FixtureScopes (ScopeInternal subclass exposing addSymbolInternal/addDynamicMapInternal/removeSymbolMappings); observations are id/name/size/flag-level plus verbatim printEntry/printEntries strings; entry types are base types whose printRaw is the plain name on both sides",
+  "rugra_side": "production Scope/Database value model; TypeFactory::new_flavor(8, CoreTypeFlavor::Standalone) mirrors the oracle's SLEIGH core-type table; children attach through Database::find_create_scope (the Database::attachScope production path mirror); no fixture-side reimplementation",
+  "pipeline": "none; direct function calls only"
+ },
+ "input": {
+  "scopes": {
+   "dyn": 130,
+   "order": 131,
+   "cats": 132,
+   "refs": 133,
+   "multi": 134,
+   "onlyrom": 135,
+   "children_root": 200,
+   "arch": "BfdArchitecture x86:LE:64:default:gcc (oracle) / value model (rugra)"
+  },
+  "type_factory_flavor": "standalone SLEIGH core table (sleigh_arch.cc:229-232)",
+  "spaces": [
+   {
+    "name": "ram",
+    "addrsize": 4,
+    "wordsize": 1,
+    "index": 3,
+    "shortcut": " "
+   },
+   {
+    "name": "rom",
+    "addrsize": 4,
+    "wordsize": 1,
+    "index": 4,
+    "shortcut": " "
+   }
+  ],
+  "dynamic_entry_hashes": [
+   4884,
+   4885,
+   4886,
+   4887,
+   4888
+  ],
+  "cases": 19,
+  "binary": "examples/curl (pinned blob 34a3febf:examples/curl, architecture bootstrap only)"
+ },
+ "observation": {
+  "functions": [
+   "ScopeInternal::addDynamicMapInternal whole-count (database.cc:1874-1887)",
+   "Symbol::isMultiEntry whole-count state (database.hh:238)",
+   "ScopeInternal::removeSymbolMappings reset (database.cc:2117-2136)",
+   "SymbolEntry::printEntry dynamic forms (database.cc:166)",
+   "ScopeInternal multiEntrySet iteration order (database.hh:813/865-866, SymbolNameTree)",
+   "SymbolCompareName name+nameDedup order (database.hh:358-373)",
+   "ScopeInternal::insertNameTree auto-dedup (database.cc:2712-2727)",
+   "ScopeInternal::categorySanity NULL-hole condemnation (database.cc:1992-2018)",
+   "ScopeInternal::setCategory / removeSymbol slot semantics (database.cc:2824/2138)",
+   "ScopeInternal::resolveExternalRefFunction -> queryFunction (database.cc:2362-2366, 1287-1295)",
+   "ScopeInternal::findFunction (database.cc:2321-2337)",
+   "FunctionSymbol::getFunction lazy Funcdata (database.cc:557-563)",
+   "Scope::childrenBegin/childrenEnd unique-id order (database.hh:765-766, 439)",
+   "Database::attachScope production registration (database.cc:2946-2975)",
+   "ScopeInternal::printEntries maptable walk (database.cc:2791-2804)",
+   "rangemap record-list splice order (rangemap.hh:223-249, 88-91)",
+   "SymbolEntry::getSubsort key (database.cc:97-109)"
+  ],
+  "overall_status": "MATCH"
+ },
+ "expected_stdout_sha256": "2e6d2b56dbee3670837c410adb9dfad5ded2681995a1d8c524e234ca57565409",
+ "comparand": {
+  "rugra_base_commit": "f3499354f1faa6b7a2e5ea29cb7a01530d7fdc33",
+  "rugra_base_tree": "62c98ed1d5dbc134b8c4215e40038b77b65247de",
+  "cpp_fixture_sha256": "5e1e026bf859a679f82367f5766edb90035657d1695c4045ff7a68adcecbfa12",
+  "rust_fixture_sha256": "4c2cf4a484ed1f48b6edf349360000094d949191c8e7ab54f81fc4c0c1599ec2",
+  "runner_sha256": "64723b4a2c991da06d03aaa640e9c4f2cb5acdab0572fac96ded42571f560187",
+  "database_rs_sha256": "a2c66b7a0b08048c450982dfbaf28405a0ff14fc28c01b1dcdf1757950f55e9e",
+  "database_doc_sha256": "2483ed1f240aeee723ac22ede715c89d3da359948ef3e1658a3b28e4e079f4f8",
+  "cargo_toml_sha256": "ad6ce58ea4e3b78e59e8cba78dc731913e8619136b36c19d6f718bb1f28f9f6d",
+  "cargo_lock_sha256": "860cece84b06fe0452b02196c14f71d0ddc29d748c105b5c578785be74cb162a",
+  "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
+  "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
+  "ghidra_rangemap_hh_blob": "ba29f9886ffae0e59977b55be9ffd86369171c90",
+  "ghidra_space_cc_blob": "dbaa2e775f32e63abb60c1c0b31457967ee52db7",
+  "ghidra_sleigh_arch_cc_blob": "cb0848a4de0dc9dc78f6fe8598a4745cb0c97545",
+  "ghidra_type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
+  "ghidra_ghidra_arch_cc_blob": "34226889c3688b8b331b9854553d86b574310583"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544,
+   "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree file"
+  },
+  "bfd": {
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "input_fingerprint": "sha256:0f3f6b987dfe42f2fbf54243ec992e34316711ba6b7a4018064e6e6c201d7333"
+}

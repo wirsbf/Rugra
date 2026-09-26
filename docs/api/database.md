@@ -689,3 +689,49 @@ fixture 设计时亲读 type.cc 发现 `src/type_system/datatype.rs:1804 print_r
 
 本票 fixture 刻意用基类型（printRaw=纯名）避开该偏差面；修复属 datatype.rs
 租约，建议 root 开票。
+
+## 2026-09-26（MIGW1-DATABASE-0005 phase 3，wt/database7）：残余七项收尾
+
+MIGW-DATABASE 终报第五节登记的七项 UNTESTED 残余逐项处置。三处顺序语义修正 +
+一个双侧 fixture（19 case 字节恒等）+ 两项免修裁决 + 一项跨域移交。
+
+### 残余七项逐项判定
+
+| # | 残余项 | oracle 锚 | 判定 | 处置 |
+|---|---|---|---|---|
+| 1 | addDynamicMapInternal whole-count | database.cc:1874-1887 | 实现已忠实，缺双侧证据 | fixture 覆盖（whole×3/partial/reset/重加） |
+| 2 | categorySanity | database.cc:1992-2018 | 实现已忠实（NULL 槽由 removeSymbol cc:2143-2145 留下） | fixture 覆盖（洞+整类清空+邻类不动） |
+| 3 | multi_entry_symbols（multiEntrySet 面） | hh:813/865-866 + hh:366 | **真偏差已修**：`multiEntrySet` 是 `SymbolNameTree`（`(name, nameDedup)` 序），非指针序——原实现按 symbol-id 排序且注释错误归因"指针序噪声" | 改为 `(name, name_dedup)` 序；fixture 钉死（乱序插入+重名 dedup tie-break） |
+| 4 | resolveExternalRefFunction | database.cc:2362-2366 | 实现已忠实（`queryFunction`→`mapScope` 空 resolvemap 时返回查询域自身 cc:3187-3188→`stackFunction` cc:1009→`findFunction` cc:2321 = 值模型的 `find_function` 委托） | fixture 覆盖（hit/miss；生产 BfdArchitecture + 空 resolvemap 双侧同构） |
+| 5 | decodeWrappingAttributes | database.hh:714-719 | **免修裁决 R5**：数据库层基类体逐字 `{}`（无读、无状态突变），Rust 侧同为空体——无可分歧的观察面，fixture 无判别力 | 不修不测；唯一覆写 `ScopeLocal::decodeWrappingAttributes`（varmap.cc:479-486，读 ATTRIB_LOCK/ATTRIB_MAIN 置 rangeLocked/space）在 varmap.rs 无对应物——**移交 varmap 域**（TODO_BOARD 登记） |
+| 6 | children 迭代器端点 | database.hh:765-766 + hh:439 | **真偏差已修**：`ScopeMap = map<uint8, Scope*>`，childrenBegin/End 迭代=uniqueId 升序；原实现保插入序（attach_scope_by_id 注释甚至自称"unique-id order"但实现不符） | `attach_child` 改排序插入（binary_search upsert：已知 id 位次不变=map 节点位次，新 id 落排序位）；fixture 钉死（105/101/103 乱序挂载→101,103,105；经 Database::attachScope 生产路径） |
+| 7 | printEntries 聚合面（多空间序） | database.cc:2791-2804 + rangemap.hh:223-249 | **真偏差已修**（且比票面更深）：C++ 走 maptable（空间索引升序）×每空间 rangemap record 列表——**组内序是 splice 序非插入序**（`AddrRange` 按 `(last, subsort)` 比较 hh:88-91，新 record 接到首个 ≥ 键子范围所属 record 之前；oracle 实测 rom 组内 0x1000 条目先于 0x2000 条目）。原实现单 vector 插入序全错 | `print_entries` 重写：空间索引升序分组 + 组内 rangemap splice 重放（键=(full-range last, subsort)，等键取最早插入者=multiset lower_bound 语义）；**裁决 R4**：嵌套重叠（同空间内某 record 区间完全含于另一 record 内部）时 oracle 树键用分区子范围边界，可能与全 record 键重放差一位——此形状外（相离/等键/部分重叠）逐位重放一致；fixture 钉死相离+等键形状 |
+
+### DATABASE-RESID7-FIXTURE-0001（tests/oracle/database_resid7_1204.{cc,rs}）
+
+19 case 全量 stdout 逐字节 **MATCH**（runner `tools/run_database_resid7_oracle.sh`，
+registry `database_resid7_1204`）。oracle 侧=生产 BfdArchitecture（x86:LE:64:default:gcc）
++ FixtureScope（ScopeInternal 子类暴露 addSymbolInternal/addDynamicMapInternal/
+removeSymbolMappings）；Rust 侧=生产 Scope/Database 值模型，TypeFactory
+Standalone 风味。空间=显式 index 3（ram）/4（rom）自定义 AddrSpace，双侧同构。
+
+关键 case：
+- `multientry_order|alpha#0,alpha#1,mid#0,zeta#0` — 乱序插入（zeta,alpha,mid,alpha2）
+  + insertNameTree 自动 dedup（cc:2712-2727）→ 名字序见证；
+- `printentries_multi` — ram/rom 交错插入，oracle 输出 m1,m3（ram 组）后 m4,m2
+  （rom 组内 0x1000 先于 0x2000）——**组内 splice 序的直接见证**（插入序会得
+  m2,m4）；
+- `children_ids|101,103,105` — 乱序挂载经 Database::attachScope（cc:2946）；
+- `resolve_hit|name=fn|addr=1000` — FunctionSymbol+ExternRefSymbol 链
+  （FunctionSymbol::getFunction cc:557 惰性 Funcdata）；
+- `dyn_readd|multi=0` — removeSymbolMappings 置 wholeCount=0（cc:2134）后重加
+  仅回 1。
+
+### 裁决（R4/R5，随 fixture 注释记录）
+
+- **R4 printEntries 嵌套重叠窄化**：见上表 #7。原实现多空间全错；修后仅嵌套
+  重叠形状存一位差（oracle 分区子范围键 vs 全 record 键），条件与方向已在
+  `print_entries` doc 注释逐字记录。canon 双语料无此形状（curl/httpd 符号表
+  无同空间嵌套区间静态 entry）。
+- **R5 decodeWrappingAttributes 基类免修**：见上表 #5。ScopeLocal 覆写归
+  varmap.rs 租约（VARMAP-DECODEWRAP-0001 登记）。

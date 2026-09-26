@@ -3253,13 +3253,18 @@ impl Scope {
     /// id-keyed `children` ScopeMap; the value model realizes the
     /// back-pointer as the child's `parent_id` (written by
     /// `Database::attach_scope`, the other half of this split) and the
-    /// child list as the insertion-ordered `children` vector
-    /// (deduplicated, preserving first-insertion position where Ghidra's
-    /// `children[child->uniqueId] = child` is an upsert on an id-keyed
-    /// map).
+    /// child list as the `children` vector kept in ascending unique-id
+    /// order — the exact iteration order of Ghidra's
+    /// `children[child->uniqueId] = child` upsert on the id-keyed
+    /// `ScopeMap` (`map<uint8, Scope *>`, database.hh:439): a re-attach
+    /// of a known id replaces the value in place (order unchanged), a new
+    /// id lands at its sorted position.
     pub fn attach_child(&mut self, child_id: u64) {
-        if !self.children.contains(&child_id) {
-            self.children.push(child_id);
+        match self.children.binary_search(&child_id) {
+            // Upsert on an existing key: the map node keeps its position.
+            Ok(_) => {}
+            // New key: insert at the sorted position.
+            Err(pos) => self.children.insert(pos, child_id),
         }
     }
 
@@ -3509,36 +3514,148 @@ impl Scope {
     /// Faithful to `ScopeInternal::printEntries`
     /// (database.cc:2791-2804): `Scope <name>\n` then one
     /// `SymbolEntry::printEntry` line per entry, walking the per-space
-    /// maptable in ascending space-index order and each rangemap in list
-    /// order. The value model keeps static entries in a single
-    /// insertion-ordered vector (no per-space split), so the walk is
-    /// insertion order — identical to the C++ projection for entries in
-    /// one address space, diverging only when entries span multiple
-    /// spaces.
+    /// maptable in ascending space-index order (cc:2795-2797) and each
+    /// space's `EntryMap` record list in list order (cc:2799-2802).
+    ///
+    /// Within a space the C++ record-list order is produced by the
+    /// rangemap splice on every `addMapInternal` (rangemap.hh:223-249):
+    /// the new record is spliced immediately before the record owning
+    /// the first sub-range whose `AddrRange` key — `(last, subsort)`
+    /// (rangemap.hh:88-91), where `last` is the record's full-range end
+    /// `addr+offset+size-1` (database.hh:147) and the subsort is
+    /// `(useindex, useoffset)` from `SymbolEntry::getSubsort`
+    /// (database.cc:97-109: minimal `(0,0)` for an addrtied symbol,
+    /// else the first uselimit range's `(space index, first offset)`)
+    /// — is greater than or equal to the new record's key; equal keys
+    /// resolve to the earliest-inserted record (multiset lower_bound
+    /// over an insertion-ordered equal run). This method replays that
+    /// splice simulation over the insertion-ordered entry vector.
+    /// Known narrowing: for records whose ranges NEST inside another
+    /// record's range in the same space, the oracle's tree keys use
+    /// partitioned sub-range boundaries and can place the spliced
+    /// record one slot differently than this full-record-key replay;
+    /// every other shape (disjoint ranges, equal keys, partial
+    /// overlaps) replays identically. Legacy spaceless addresses
+    /// (impossible for a C++ static entry) group last.
     pub fn print_entries(&self) -> String {
         let mut out = format!("Scope {}\n", self.name);
-        for entry in &self.entries {
-            out.push_str(&entry.print_entry());
+        // (space index, insertion seq) grouping; `i32::MAX` holds the
+        // spaceless legacy tail.
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(|&i| {
+            self.entries[i]
+                .addr
+                .get_space()
+                .map_or(i32::MAX, |spc| spc.get_index())
+        });
+        let mut rendered = 0usize;
+        while rendered < order.len() {
+            // One space group: the longest run sharing the sort key
+            // (stable sort kept it in insertion order).
+            let space_key = self.space_sort_key(order[rendered]);
+            let mut group_end = rendered + 1;
+            while group_end < order.len()
+                && self.space_sort_key(order[group_end]) == space_key
+            {
+                group_end += 1;
+            }
+            // Replay the rangemap record-list splice order
+            // (rangemap.hh:246-248) for this group.
+            let group = &order[rendered..group_end];
+            let mut list: Vec<usize> = Vec::with_capacity(group.len());
+            for &idx in group {
+                let key = self.entry_range_key(idx);
+                // Splice target: the member with the minimal key >= the
+                // new key; equal keys resolve to the earliest-inserted
+                // member (smallest original index).
+                let mut target: Option<((u64, (i32, u64)), usize)> = None; // (key, position in list)
+                for pos in 0..list.len() {
+                    let member = list[pos];
+                    let mkey = self.entry_range_key(member);
+                    if mkey < key {
+                        continue;
+                    }
+                    match target {
+                        None => target = Some((mkey, pos)),
+                        Some((bkey, _)) => {
+                            if mkey < bkey || (mkey == bkey && member < list[target.unwrap().1]) {
+                                target = Some((mkey, pos));
+                            }
+                        }
+                    }
+                }
+                match target {
+                    Some((_, pos)) => list.insert(pos, idx),
+                    None => list.push(idx),
+                }
+            }
+            for idx in list {
+                out.push_str(&self.entries[idx].print_entry());
+            }
+            rendered = group_end;
         }
         out
     }
 
+    // RUGRA-GLUE: space grouping key for print_entries (the C++
+    // maptable is indexed directly by AddrSpace::getIndex, database.hh
+    // 877-878; the flat entry vector re-derives the same grouping).
+    fn space_sort_key(&self, entry_idx: usize) -> i32 {
+        self.entries[entry_idx]
+            .addr
+            .get_space()
+            .map_or(i32::MAX, |spc| spc.get_index())
+    }
+
+    // RUGRA-GLUE: the AddrRange `(last, subsort)` list key for the
+    // print_entries splice replay (rangemap.hh:88-91 +
+    /// database.cc:97-109).
+    fn entry_range_key(&self, entry_idx: usize) -> (u64, (i32, u64)) {
+        let entry = &self.entries[entry_idx];
+        let last = entry.addr.as_u64().wrapping_add(entry.size as u64).wrapping_sub(1);
+        let subsort = {
+            let symbol = entry.symbol.read().unwrap();
+            if symbol.flags & symbol_flags::ADDRTIED == 0 {
+                match entry.uselimit.ranges().first() {
+                    Some(range) => match range.get_first().get_space() {
+                        Some(spc) => (spc.get_index(), range.get_first().as_u64()),
+                        None => (0, range.get_first().as_u64()),
+                    },
+                    // Unreachable through production paths: addMap
+                    // forces either the addrtied flag or a non-empty
+                    // uselimit (database.cc:1149-1153); the C++ form
+                    // throws here (database.cc:104).
+                    None => (0, 0),
+                }
+            } else {
+                (0, 0)
+            }
+        };
+        (last, subsort)
+    }
+
     // Ghidra: database.hh:865 ScopeInternal::beginMultiEntry
-    /// The ids of the symbols with more than one entry, in ascending id
-    /// order — the realization of the `multiEntrySet` iteration surface
-    /// (`beginMultiEntry`/`endMultiEntry`, database.hh:865-866). The C++
-    /// `set<Symbol *>` iterates in POINTER order, which is allocation
-    /// noise; both comparands of a B2 observation normalize to symbol-id
-    /// order, so this iterator fixes that normalized order.
+    /// The ids of the symbols with more than one entry, in
+    /// `SymbolCompareName` order — the realization of the `multiEntrySet`
+    /// iteration surface (`beginMultiEntry`/`endMultiEntry`,
+    /// database.hh:865-866). `multiEntrySet` is a `SymbolNameTree`
+    /// (database.hh:813), a `set<Symbol *, SymbolCompareName>` sorted by
+    /// byte-wise name comparison with `nameDedup` as the tie-break
+    /// (database.hh:366-371) — NOT pointer order. The Rust projection
+    /// sorts `(name, name_dedup)` ascending; ids are returned for
+    /// observation, never used as the sort key.
     pub fn multi_entry_symbols(&self) -> Vec<u64> {
-        let mut ids: Vec<u64> = self
+        let mut keyed: Vec<(String, u32, u64)> = self
             .symbols
             .values()
             .filter(|s| s.read().unwrap().whole_count > 1)
-            .map(|s| s.read().unwrap().symbol_id)
+            .map(|s| {
+                let sym = s.read().unwrap();
+                (sym.name.clone(), sym.name_dedup, sym.symbol_id)
+            })
             .collect();
-        ids.sort_unstable();
-        ids
+        keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        keyed.into_iter().map(|(_, _, id)| id).collect()
     }
 
     // Ghidra: database.hh:34 Scope::numSymbols
@@ -8113,6 +8230,108 @@ mod tests {
             Some(1)
         );
         assert_eq!(scope2.multi_entry_symbols(), vec![d]);
+    }
+
+    #[test]
+    fn test_residual7_orderings() {
+        // database.hh:813/865-866 — the multi-entry surface iterates the
+        // SymbolNameTree: (name, nameDedup) order, NOT symbol-id order.
+        {
+            let mut scope = Scope::new(10, "order", 1);
+            // Insertion order zeta, alpha, mid, alpha(dedup 1).
+            let zeta = scope.add_symbol("zeta", "int");
+            let alpha = scope.add_symbol("alpha", "int");
+            let mid = scope.add_symbol("mid", "int");
+            let alpha2 = scope.add_symbol("alpha", "int");
+            scope.symbols[&alpha2].write().unwrap().name_dedup = 1;
+            let ram = crate::space::AddrSpace::new_space(
+                crate::space::SpaceType::Processor,
+                "ram",
+                false,
+                4,
+                1,
+                3,
+                crate::space::space_flags::HASPHYSICAL,
+                -1,
+                -1,
+            );
+            let mut base = 0x1000u64;
+            for &id in &[zeta, alpha, mid, alpha2] {
+                for j in 0..2u64 {
+                    scope.add_map_point(
+                        id,
+                        Address::with_space(&ram, base + 0x10 * j),
+                        Address::new(0),
+                        4,
+                        None,
+                    );
+                }
+                base += 0x100;
+            }
+            assert_eq!(
+                scope.multi_entry_symbols(),
+                vec![alpha, alpha2, mid, zeta],
+                "multi-entry surface must be in (name, nameDedup) order"
+            );
+        }
+
+        // database.hh:439/765-766 — the child list iterates in
+        // unique-id ascending order (ScopeMap), regardless of attach
+        // order; a re-attach keeps the sorted position (upsert).
+        {
+            let mut root = Scope::new(200, "root", 0);
+            root.attach_child(105);
+            root.attach_child(101);
+            root.attach_child(103);
+            root.attach_child(105);
+            let ids: Vec<u64> = root.children_begin().cloned().collect();
+            assert_eq!(ids, vec![101, 103, 105]);
+        }
+
+        // database.cc:2791-2804 — printEntries groups by ascending space
+        // index (maptable walk); within a space the rangemap record list
+        // is in (last, subsort) splice order, not insertion order.
+        {
+            let mut scope = Scope::new(11, "multi", 1);
+            let ram = crate::space::AddrSpace::new_space(
+                crate::space::SpaceType::Processor,
+                "ram",
+                false,
+                4,
+                1,
+                3,
+                crate::space::space_flags::HASPHYSICAL,
+                -1,
+                -1,
+            );
+            let rom = crate::space::AddrSpace::new_space(
+                crate::space::SpaceType::Processor,
+                "rom",
+                false,
+                4,
+                1,
+                4,
+                crate::space::space_flags::HASPHYSICAL,
+                -1,
+                -1,
+            );
+            let m: Vec<u64> = ["m1", "m2", "m3", "m4"]
+                .iter()
+                .map(|nm| scope.add_symbol(nm, "int"))
+                .collect();
+            // Interleaved ram/rom; rom group gets 0x1000 AFTER 0x2000.
+            scope.add_map_point(m[0], Address::with_space(&ram, 0x1000), Address::new(0), 4, None);
+            scope.add_map_point(m[1], Address::with_space(&rom, 0x2000), Address::new(0), 4, None);
+            scope.add_map_point(m[2], Address::with_space(&ram, 0x3000), Address::new(0), 4, None);
+            scope.add_map_point(m[3], Address::with_space(&rom, 0x1000), Address::new(0), 4, None);
+            let out = scope.print_entries();
+            let names: Vec<&str> = out
+                .lines()
+                .skip(1)
+                .map(|l| l.split(" : ").next().unwrap_or(""))
+                .collect();
+            assert_eq!(names, vec!["m1", "m3", "m4", "m2"]);
+        }
     }
 
     #[test]
