@@ -20,11 +20,13 @@
 //!     inserted nor constant.
 //!   - `PcodeOp::printDebug` (op.cc:376-385): `<seqnum>: ` then `**` for
 //!     dead/unattached ops, else `printRaw`.
+//!   - Null Varnode slots render `<null>` via the static wrapper
+//!     `Varnode::printRaw(ostream&,const Varnode*)` (varnode.cc:1207-1214).
 //!   - `TypeOp*::printRaw` structural forms (typeop.cc:335-343 binary,
-//!     357-363 unary, 377-388 func, 390-397 copy, 462-475 load/store,
-//!     583-601 branch, 602-629 cbranch, 875-883 return, 667-682
-//!     multiequal, 1985-2005 indirect, 2224-2240 ptradd, 2296+ ptrsub,
-//!     655-681 call/callind) with operator names from the Ghidra
+//!     357-363 unary, 377-389 func, 425-431 copy, 502-509 load, 572-580
+//!     store, 590-601 branch, 621-636 cbranch, 882-900 return, 1967-1983
+//!     multiequal, 2022-2033 indirect, 2283+ ptradd, 2380+ ptrsub,
+//!     668-684 call, 791+ callind) with operator names from the Ghidra
 //!     constructors and `getOperatorName` overrides (typeop.cc; the same
 //!     names are registered in Rugra's src/typeop.rs).
 //!
@@ -42,20 +44,27 @@ use std::sync::RwLock;
 /// used as the "expected" size for non-register varnodes.
 const DEFAULT_SIZE: usize = 8;
 
-// RUGRA-GLUE: space shortcut table (Ghidra assigns these per .sla; Rugra
-// keeps shortcut chars unassigned, so the drill hardcodes the x86-64
-// values observed in the oracle drill: `#0x..`, `u0x..`, `s0x..`,
-// `r0x..`). The ram shortcut is unobserved in the next_url corpus and is
-/// recorded as a formatting gap (SB-DRILL-RAM-SHORTCUT).
+// Ghidra: translate.cc:517 AddrSpaceManager::assignShortcut
+// Shortcut characters per the oracle's assignShortcut switch, keyed on
+// Rugra's canonical space names (space.rs name(): "const", "register",
+// "unique", "stack", "join", "iop", "ram"): IPTR_CONSTANT '#' (cc:524-526),
+// IPTR_PROCESSOR named "register" '%' else name[0] (cc:527-533, so
+// "ram" -> 'r'), IPTR_SPACEBASE 's' (cc:535-537), IPTR_INTERNAL 'u'
+// (cc:538-540), IPTR_JOIN 'j' (cc:543-545), IPTR_IOP 'i' (cc:546-548),
+// default 'x' (cc:550-552). Uppercase name[0] lowercases (cc:558-559);
+// "ram"/"register" are already lowercase. Real-oracle cross-check: the x86-64
+// symbol dumps (regsym-evidence raw_pcode.err) show code symbols in RAM as
+// `r0x00000000:1` and register-space storages as `%0x00000000:4`.
 fn space_shortcut(space: AddressSpace) -> char {
     match space {
         AddressSpace::Const => '#',
         AddressSpace::Unique => 'u',
         AddressSpace::Stack => 's',
-        AddressSpace::Register => 'r',
-        AddressSpace::Ram => '0',
+        AddressSpace::Register => '%',
+        AddressSpace::Ram => 'r',
         AddressSpace::Iop => 'i',
-        _ => '?',
+        AddressSpace::Join => 'j',
+        _ => 'x',
     }
 }
 
@@ -239,38 +248,56 @@ impl DrillFmt {
         })
     }
 
-    /// The structural `printRaw` forms (typeop.cc; see module docs).
+    /// The structural `printRaw` forms (typeop.cc; see module docs). Every
+    /// Varnode slot render goes through the null-safe static wrapper
+    /// `Varnode::printRaw(ostream&, const Varnode*)` (varnode.cc:1207-1214):
+    /// a null slot prints `<null>`. Ghidra ops reserve null input slots at
+    /// creation (`PcodeOp::PcodeOp(int4,s)` op.cc:71-84 sizes `inrefs(s)`
+    /// with nulls), while Rugra's `inrefs` only holds SET inputs, so absent
+    /// slots render as `<null>` here.
     // Ghidra: op.cc:385 PcodeOp::printRaw (TypeOp dispatch)
     pub fn op_raw(&self, op: &PcodeOp) -> String {
         let out = op.get_out().map(|v| self.vn_of(v));
         let inputs: Vec<String> = op.inrefs.iter().map(|v| self.vn_of(v)).collect();
+        // varnode.cc:1207-1214: null slot -> "<null>"
+        let null_raw = || "<null>".to_string();
+        let slot = |v: Option<&String>| -> String {
+            v.cloned().unwrap_or_else(null_raw)
+        };
         let name_of = |opc: OpCode| -> &'static str { operator_name(opc) };
         match op.opcode {
             OpCode::CPUI_COPY => {
-                format!("{} = {}", out.unwrap_or_default(), inputs.first().map(String::as_str).unwrap_or(""))
+                // typeop.cc:425-431: out = in0 (both null-safe)
+                format!("{} = {}", out.unwrap_or_else(null_raw), slot(inputs.first()))
             }
             OpCode::CPUI_LOAD => format!(
                 "{} = *({},{})",
-                out.unwrap_or_default(),
+                out.unwrap_or_else(null_raw),
                 load_store_space_name(op, &inputs),
-                inputs.get(1).map(String::as_str).unwrap_or("")
+                slot(inputs.get(1))
             ),
             OpCode::CPUI_STORE => format!(
                 "*({},{}) = {}",
                 load_store_space_name(op, &inputs),
-                inputs.first().map(String::as_str).unwrap_or(""),
-                inputs.get(2).map(String::as_str).unwrap_or("")
+                slot(inputs.first()),
+                slot(inputs.get(2))
             ),
             OpCode::CPUI_RETURN => {
+                // typeop.cc:882-900: `return` + `(in0)` when numInput()>=1;
+                // when >1: ' ' + in1, then ',' + each further input.
                 let mut s = String::from("return");
                 if !inputs.is_empty() {
                     s.push('(');
                     s.push_str(&inputs[0]);
                     s.push(')');
                 }
-                for input in inputs.iter().skip(1) {
+                if inputs.len() > 1 {
                     s.push(' ');
-                    s.push_str(input);
+                    s.push_str(&inputs[1]);
+                    for input in inputs.iter().skip(2) {
+                        s.push(',');
+                        s.push_str(input);
+                    }
                 }
                 s
             }
@@ -290,13 +317,15 @@ impl DrillFmt {
                 s
             }
             OpCode::CPUI_CALLIND => {
+                // typeop.cc:791-807: out prefix is conditional; `s << name`
+                // is NOT followed by a space (unlike CALL's `name << ' '`).
                 let mut s = String::new();
                 if let Some(out) = &out {
                     s.push_str(out);
                     s.push_str(" = ");
                 }
-                s.push_str("callind ");
-                s.push_str(inputs.first().map(String::as_str).unwrap_or(""));
+                s.push_str("callind");
+                s.push_str(&slot(inputs.first()));
                 if inputs.len() > 1 {
                     s.push('(');
                     s.push_str(&inputs[1..].join(","));
@@ -311,15 +340,15 @@ impl DrillFmt {
             OpCode::CPUI_CBRANCH => {
                 let mut s = format!("goto {}", branch_dest_raw(op, &inputs));
                 s.push_str(" if (");
-                s.push_str(inputs.get(1).map(String::as_str).unwrap_or(""));
+                s.push_str(&slot(inputs.get(1)));
                 s.push_str(if op.is_boolean_flip() { " == 0)" } else { " != 0)" });
                 s
             }
             OpCode::CPUI_MULTIEQUAL => {
                 let mut s = format!(
                     "{} = {}",
-                    out.unwrap_or_default(),
-                    inputs.first().map(String::as_str).unwrap_or("")
+                    out.unwrap_or_else(null_raw),
+                    slot(inputs.first())
                 );
                 for input in inputs.iter().skip(1) {
                     s.push_str(" ? ");
@@ -328,35 +357,35 @@ impl DrillFmt {
                 s
             }
             OpCode::CPUI_INDIRECT => {
-                // typeop.cc:1985-2005: `[create]` replaces the input-0 leg
+                // typeop.cc:2022-2033: `[create]` replaces the input-0 leg
                 // when the op is an indirect creation.
                 if op.is_indirect_creation() {
                     format!(
                         "{} = [create] {}",
-                        out.unwrap_or_default(),
-                        inputs.get(1).map(String::as_str).unwrap_or("")
+                        out.unwrap_or_else(null_raw),
+                        slot(inputs.get(1))
                     )
                 } else {
                     format!(
                         "{} = {} [] {}",
-                        out.unwrap_or_default(),
-                        inputs.first().map(String::as_str).unwrap_or(""),
-                        inputs.get(1).map(String::as_str).unwrap_or("")
+                        out.unwrap_or_else(null_raw),
+                        slot(inputs.first()),
+                        slot(inputs.get(1))
                     )
                 }
             }
             OpCode::CPUI_PTRADD => format!(
                 "{} = {} + {}(*{})",
-                out.unwrap_or_default(),
-                inputs.first().map(String::as_str).unwrap_or(""),
-                inputs.get(1).map(String::as_str).unwrap_or(""),
-                inputs.get(2).map(String::as_str).unwrap_or("")
+                out.unwrap_or_else(null_raw),
+                slot(inputs.first()),
+                slot(inputs.get(1)),
+                slot(inputs.get(2))
             ),
             OpCode::CPUI_PTRSUB => format!(
                 "{} = {} -> {}",
-                out.unwrap_or_default(),
-                inputs.first().map(String::as_str).unwrap_or(""),
-                inputs.get(1).map(String::as_str).unwrap_or("")
+                out.unwrap_or_else(null_raw),
+                slot(inputs.first()),
+                slot(inputs.get(1))
             ),
             OpCode::CPUI_SUBPIECE => {
                 // typeop.cc:2127-2135: getOperatorName is dynamic —
@@ -369,26 +398,26 @@ impl DrillFmt {
                 let out_size = op.get_out().map(|v| v.read().unwrap().size).unwrap_or(0);
                 format!(
                     "{} = SUB{in0_size}{out_size}({})",
-                    out.unwrap_or_default(),
+                    out.unwrap_or_else(null_raw),
                     inputs.join(",")
                 )
             }
             opc if is_binary(opc) => format!(
                 "{} = {} {} {}",
-                out.unwrap_or_default(),
-                inputs.first().map(String::as_str).unwrap_or(""),
+                out.unwrap_or_else(null_raw),
+                slot(inputs.first()),
                 name_of(opc),
-                inputs.get(1).map(String::as_str).unwrap_or("")
+                slot(inputs.get(1))
             ),
             opc if is_unary(opc) => format!(
                 "{} = {} {}",
-                out.unwrap_or_default(),
+                out.unwrap_or_else(null_raw),
                 name_of(opc),
-                inputs.first().map(String::as_str).unwrap_or("")
+                slot(inputs.first())
             ),
             opc => format!(
                 "{} = {}({})",
-                out.unwrap_or_default(),
+                out.unwrap_or_else(null_raw),
                 name_of(opc),
                 inputs.join(",")
             ),

@@ -423,6 +423,45 @@ pub struct Funcdata {
     /// Bit-set of Funcdata flags (mirrors Ghidra's `flags` field).
     pub flags: u32,
 
+    /// `Funcdata::clean_up_index` (funcdata.hh:187): the VarnodeBank
+    /// creation index recorded when the clean-up phase starts
+    /// (`startCleanUp`, funcdata.hh:186). Previously absent in Rugra (the
+    /// coreaction marker was a no-op); restored as real storage.
+    pub clean_up_index: u32,
+
+    // --- OPACTION_DEBUG observation state (funcdata.hh:580-592). ---
+    // Ghidra compiles these members only under `#ifdef OPACTION_DEBUG`
+    // (funcdata.hh:580); Rugra always compiles them, with all behavior
+    // gated on `opactdbg_on` exactly like the debug build. The hook
+    // entries (`debugModCheck`/`debugModPrint`) live in drillobserve.rs.
+
+    /// Jump-table simplification debug hook (`jtcallback`,
+    /// funcdata.hh:581). Stored as a plain fn pointer like Ghidra.
+    pub jtcallback: Option<fn(&mut Funcdata, &mut Funcdata)>,
+    /// List of modified ops (`modify_list`, funcdata.hh:582).
+    pub modify_list: Vec<crate::op::PcodeOpRef>,
+    /// List of "before" strings for modified ops (`modify_before`,
+    /// funcdata.hh:583).
+    pub modify_before: Vec<String>,
+    /// Number of debug statements printed (`opactdbg_count`, funcdata.hh:584).
+    pub opactdbg_count: i32,
+    /// Which debug to break on (`opactdbg_breakcount`, funcdata.hh:585).
+    pub opactdbg_breakcount: i32,
+    /// Are we currently doing op action debugs (`opactdbg_on`, funcdata.hh:586).
+    pub opactdbg_on: bool,
+    /// True if current op mods should be recorded (`opactdbg_active`, funcdata.hh:587).
+    pub opactdbg_active: bool,
+    /// Has a breakpoint been hit (`opactdbg_breakon`, funcdata.hh:588).
+    pub opactdbg_breakon: bool,
+    /// Lower bounds on the PC register (`opactdbg_pclow`, funcdata.hh:589).
+    pub opactdbg_pclow: Vec<Address>,
+    /// Upper bounds on the PC register (`opactdbg_pchigh`, funcdata.hh:590).
+    pub opactdbg_pchigh: Vec<Address>,
+    /// Lower bounds on the unique register (`opactdbg_uqlow`, funcdata.hh:591).
+    pub opactdbg_uqlow: Vec<u32>,
+    /// Upper bounds on the unique register (`opactdbg_uqhigh`, funcdata.hh:592).
+    pub opactdbg_uqhigh: Vec<u32>,
+
     /// Creation index of the first Varnode created after HighVariables were
     /// assigned (Ghidra `high_level_index`, funcdata.hh:76). Recorded by
     /// `set_high_level` (funcdata_varnode.cc:600) as `vbank.getCreateIndex()`.
@@ -629,6 +668,64 @@ fn canonical_arch() -> Arc<crate::arch::Architecture> {
         .clone()
 }
 
+/// Membership in the oracle `beginLoc(s,addr,pc,uniq)..endLoc` span,
+/// mirroring the inconsistent-but-deterministic std::set bound semantics
+/// of VarnodeCompareLocDef over SeqNum (uniq-only `!=` at
+/// address.hh:150-151, pc-first `<` at address.hh:153-157).
+// Ghidra: varnode.cc:1732 VarnodeBank::beginLoc(int4,const Address&,const Address&,uintm)
+fn loc_pc_in_span(
+    def_pc: Address, def_uniq: u32, key_pc: Address, low_uniq: u32, high_uniq: u32,
+) -> bool {
+    let lt = |x_pc: Address, x_u: u32, y_pc: Address, y_u: u32| -> bool {
+        if x_u == y_u {
+            false // SeqNum::operator!= (uniq-only) says equivalent
+        } else if x_pc == y_pc {
+            x_u < y_u
+        } else {
+            x_pc < y_pc
+        }
+    };
+    // In span iff NOT(elem < low) AND NOT(high < elem).
+    !lt(def_pc, def_uniq, key_pc, low_uniq) && !lt(key_pc, high_uniq, def_pc, def_uniq)
+}
+
+// Ghidra: address.cc:32 operator<<(ostream&, const SeqNum&)
+/// Stream form of a SeqNum: `pc.printRaw() ':' uniq` — the uniq counter
+/// prints in DECIMAL (no hex manipulator is active on a fresh stream).
+/// Faithful to `operator<<(ostream &s,const SeqNum &sq)`
+/// (address.cc:32-38); the pc text is `AddrSpace::printRaw`
+/// (space.cc:206-219): `0x` + zero-padded hex with the shrinking-width
+/// rule (offset<2^32 → 8 digits, <2^48 → 12, else 16) and no `+cut`
+/// suffix at wordsize 1. Rust returns a String instead of writing to
+/// ostream.
+fn seqnum_text(sq: &crate::address::SeqNum) -> String {
+    let offset = sq.addr.as_u64();
+    let digits = if (offset >> 32) == 0 {
+        8
+    } else if (offset >> 48) == 0 {
+        12
+    } else {
+        16
+    };
+    let mut s = format!("0x{:0width$x}", offset, width = digits);
+    s.push(':');
+    s.push_str(&sq.time.to_string());
+    s
+}
+
+// Ghidra: funcdata_op.cc:1404 compareCseHash
+/// Comparator for (hash,PcodeOp) pairs: compare by hash. Faithful to the
+/// static `compareCseHash` (funcdata_op.cc:1404-1408)
+/// `{ return (a.first < b.first); }` — a strict-weak ordering on the hash
+/// value only, with no tie-break (equal hashes keep their insertion
+/// relative order under a stable sort).
+pub fn compare_cse_hash(
+    a: &(u32, crate::op::PcodeOpRef),
+    b: &(u32, crate::op::PcodeOpRef),
+) -> bool {
+    a.0 < b.0
+}
+
 impl Funcdata {
     // Ghidra: funcdata.cc:34 Funcdata::Funcdata
     /// Create a new Funcdata instance. Faithful to the constructor
@@ -644,6 +741,21 @@ impl Funcdata {
             baseaddr: addr,
             size,
             flags: 0,
+            clean_up_index: 0,
+            // funcdata.cc:74-81 (#ifdef OPACTION_DEBUG ctor init): jtcallback
+            // null, counters zero, breakcount -1, all debug bools false.
+            jtcallback: None,
+            modify_list: Vec::new(),
+            modify_before: Vec::new(),
+            opactdbg_count: 0,
+            opactdbg_breakcount: -1,
+            opactdbg_on: false,
+            opactdbg_active: false,
+            opactdbg_breakon: false,
+            opactdbg_pclow: Vec::new(),
+            opactdbg_pchigh: Vec::new(),
+            opactdbg_uqlow: Vec::new(),
+            opactdbg_uqhigh: Vec::new(),
             high_level_index: 0,
             cast_phase_index: 0,
             display_image_base: 0,
@@ -4948,6 +5060,996 @@ impl Funcdata {
         op.0.write().unwrap().flags &= !crate::op::pcodeop_flags::SPACEBASE_PTR;
     }
 
+    // Ghidra: funcdata.hh:186 Funcdata::startCleanUp
+    /// Start the clean-up phase: record the VarnodeBank creation index at
+    /// phase entry. Faithful to `Funcdata::startCleanUp`
+    /// (funcdata.hh:186) `{ clean_up_index = vbank.getCreateIndex(); }`.
+    /// Rugra previously had no `clean_up_index` storage (the coreaction
+    /// marker was a no-op); the field now mirrors funcdata.hh:187 exactly.
+    pub fn start_clean_up(&mut self) {
+        self.clean_up_index = self.vbank.get_create_index();
+    }
+
+    // Ghidra: funcdata.hh:187 Funcdata::getCleanUpIndex
+    /// Get the creation index recorded at the start of the clean-up phase.
+    /// Faithful to `Funcdata::getCleanUpIndex` (funcdata.hh:187).
+    pub fn get_clean_up_index(&self) -> u32 {
+        self.clean_up_index
+    }
+
+    // Ghidra: funcdata.hh:242 Funcdata::seenDeadcode
+    /// Mark that dead Varnodes have been seen in a specific address space.
+    /// Faithful to `Funcdata::seenDeadcode` (funcdata.hh:242)
+    /// `{ heritage.seenDeadCode(spc); }` — a pure forwarder onto Heritage.
+    pub fn seen_deadcode(&mut self, space: crate::space::AddressSpace) {
+        self.heritage.seen_dead_code(space);
+    }
+
+    // Ghidra: funcdata.hh:254 Funcdata::deadRemovalAllowed
+    /// Check if dead code removal is allowed for a specific address space.
+    /// Faithful to `Funcdata::deadRemovalAllowed` (funcdata.hh:254)
+    /// `{ return heritage.deadRemovalAllowed(spc); }`.
+    pub fn dead_removal_allowed(&self, space: crate::space::AddressSpace) -> bool {
+        self.heritage.dead_removal_allowed(space)
+    }
+
+    // Ghidra: funcdata.hh:260 Funcdata::deadRemovalAllowedSeen
+    /// Check if dead Varnodes have been removed for a specific address
+    /// space. Faithful to `Funcdata::deadRemovalAllowedSeen`
+    /// (funcdata.hh:260) `{ return heritage.deadRemovalAllowedSeen(spc); }`.
+    pub fn dead_removal_allowed_seen(&mut self, space: crate::space::AddressSpace) -> bool {
+        self.heritage.dead_removal_allowed_seen(space)
+    }
+
+    // Ghidra: funcdata.hh:303 Funcdata::findCoveredInput
+    /// Find the first input Varnode covered by the given range. Faithful to
+    /// `Funcdata::findCoveredInput` (funcdata.hh:303)
+    /// `{ return vbank.findCoveredInput(s,loc); }`.
+    pub fn find_covered_input(
+        &self, size: usize, loc: Address,
+    ) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        self.vbank.find_covered_input(size, loc)
+    }
+
+    // Ghidra: funcdata.hh:310 Funcdata::findCoveringInput
+    /// Find the input Varnode that contains the given range. Faithful to
+    /// `Funcdata::findCoveringInput` (funcdata.hh:310)
+    /// `{ return vbank.findCoveringInput(s,loc); }`.
+    pub fn find_covering_input(
+        &self, size: usize, loc: Address,
+    ) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        self.vbank.find_covering_input(size, loc)
+    }
+
+    // Ghidra: funcdata.hh:333 Funcdata::findVarnodeWritten
+    /// Find a defined Varnode via its storage address and its definition
+    /// address. Faithful to `Funcdata::findVarnodeWritten` (funcdata.hh:333-334)
+    /// `{ return vbank.find(s,loc,pc,uniq); }`; the default `uniq=~0`
+    /// becomes the explicit `u32::MAX` sentinel.
+    pub fn find_varnode_written(
+        &self, size: usize, loc: Address, pc: Address, uniq: u32,
+    ) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        self.vbank.find_vn(size, loc, pc, uniq)
+    }
+
+    // Ghidra: funcdata.hh:337 Funcdata::beginLoc
+    // Ghidra: funcdata.hh:340 Funcdata::endLoc
+    /// Start/end of all Varnodes sorted by storage. Faithful to the
+    /// parameterless `beginLoc`/`endLoc` pair (funcdata.hh:337/340), which
+    /// forward to `vbank.beginLoc()`/`vbank.endLoc()`. In Rust the two
+    /// Ghidra half-open iterator endpoints collapse into one owned
+    /// iterator; `end_loc` exists for API parity and returns the same
+    /// full-range tail.
+    pub fn begin_loc(&self) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc()
+    }
+
+    // Ghidra: funcdata.hh:340 Funcdata::endLoc
+    pub fn end_loc(&self) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc()
+    }
+
+    // Ghidra: funcdata.hh:343 Funcdata::beginLoc(AddrSpace*)
+    // Ghidra: funcdata.hh:346 Funcdata::endLoc(AddrSpace*)
+    /// Start/end of Varnodes stored in a given address space. Faithful to
+    /// `beginLoc(AddrSpace*)`/`endLoc(AddrSpace*)` (funcdata.hh:343/346),
+    /// forwarding onto `VarnodeBank::beginLoc(spaceid)` with the bank's
+    /// space-filtered iterator.
+    pub fn begin_loc_space(
+        &self, space: crate::space::AddressSpace,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc_space(space)
+    }
+
+    // Ghidra: funcdata.hh:346 Funcdata::endLoc(AddrSpace*)
+    pub fn end_loc_space(
+        &self, space: crate::space::AddressSpace,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc_space(space)
+    }
+
+    // Ghidra: funcdata.hh:349 Funcdata::beginLoc(const Address&)
+    // Ghidra: funcdata.hh:352 Funcdata::endLoc(const Address&)
+    /// Start/end of Varnodes at a storage address. Faithful to
+    /// `beginLoc(const Address&)`/`endLoc(const Address&)`
+    /// (funcdata.hh:349/352) forwarding onto the bank's address-filtered
+    /// iterator.
+    pub fn begin_loc_addr(
+        &self, addr: Address,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc_addr(addr)
+    }
+
+    // Ghidra: funcdata.hh:352 Funcdata::endLoc(const Address&)
+    pub fn end_loc_addr(
+        &self, addr: Address,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc_addr(addr)
+    }
+
+    // Ghidra: funcdata.hh:355 Funcdata::beginLoc(int4,const Address&)
+    // Ghidra: funcdata.hh:358 Funcdata::endLoc(int4,const Address&)
+    /// Start/end of Varnodes with given storage (size + address). The Ghidra
+    /// pair (funcdata.hh:355/358) forwards to the bank's size-bounded
+    /// lower_bounds (varnode.cc:1610-1633): the half-open span covers
+    /// exactly the varnodes whose loc==addr AND size==s, in creation order.
+    /// The Rust bank has no size-bounded endpoint yet, so the span is
+    /// expressed here as a predicate-filtered iteration of the same
+    /// loc_tree ordering (FUNCDATA-LOCSIZE-BOUND-0001).
+    pub fn begin_loc_size(
+        &self, size: usize, addr: Address,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            vn.loc == addr && vn.size == size
+        })
+    }
+
+    // Ghidra: funcdata.hh:358 Funcdata::endLoc(int4,const Address&)
+    pub fn end_loc_size(
+        &self, _size: usize, _addr: Address,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc()
+    }
+
+    // Ghidra: funcdata.hh:361 Funcdata::beginLoc(int4,const Address&,uint4)
+    // Ghidra: funcdata.hh:364 Funcdata::endLoc(int4,const Address&,uint4)
+    /// Start/end of Varnodes matching storage and properties. The Ghidra
+    /// pair (funcdata.hh:361/364) forwards to the bank's flag-restricted
+    /// bounds (varnode.cc:1645-1700): fl==Varnode::input restricts to
+    /// inputs, fl==Varnode::written to written, fl==0 to free. The span is
+    /// expressed as the same predicate over the loc_tree ordering
+    /// (FUNCDATA-LOCSIZE-BOUND-0001).
+    pub fn begin_loc_size_fl(
+        &self, size: usize, addr: Address, fl: u32,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if vn.loc != addr || vn.size != size {
+                return false;
+            }
+            match fl {
+                x if x == crate::varnode::varnode_flags::INPUT => vn.is_input(),
+                x if x == crate::varnode::varnode_flags::WRITTEN => vn.is_written(),
+                0 => !vn.is_input() && !vn.is_written(),
+                _ => true,
+            }
+        })
+    }
+
+    // Ghidra: funcdata.hh:364 Funcdata::endLoc(int4,const Address&,uint4)
+    pub fn end_loc_size_fl(
+        &self, _size: usize, _addr: Address, _fl: u32,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc()
+    }
+
+    // Ghidra: funcdata.hh:367 Funcdata::beginLoc(int4,const Address&,const Address&,uintm)
+    // Ghidra: funcdata.hh:371 Funcdata::endLoc(int4,const Address&,const Address&,uintm)
+    /// Start/end of Varnodes matching storage and definition address. The
+    /// Ghidra pair (funcdata.hh:367/371) forwards to the bank's
+    /// definition-bounded bounds (varnode.cc:1732-1780). CRITICAL oracle
+    /// semantics: the loc-tree comparator (VarnodeCompareLocDef,
+    /// varnode.cc:37) decides "different" via `SeqNum::operator!=` which
+    /// compares ONLY the uniq counter (address.hh:150-151), while the
+    /// ordering `SeqNum::operator<` is pc-first (address.hh:153-157) — so
+    /// two written varnodes whose def seqnums share the uniq value are
+    /// COMPARATOR-EQUIVALENT regardless of pc, and the span
+    /// [lower_bound(SeqNum(pc,uniq==~0?0:uniq)),
+    /// upper_bound(SeqNum(pc,uniq)))] admits any def seqnum that is not
+    /// strictly-less than the low key and not strictly-greater-or-equal
+    /// under the high key, with lt(x,y) := (x.uniq==y.uniq) ? false :
+    /// (x.pc,x.uniq) < (y.pc,y.uniq). Expressed as the same predicate over
+    /// the loc_tree ordering (FUNCDATA-LOCSIZE-BOUND-0001).
+    pub fn begin_loc_pc(
+        &self, size: usize, addr: Address, pc: Address, uniq: u32,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeLocRef> {
+        let low_uniq = if uniq == u32::MAX { 0 } else { uniq };
+        self.vbank.begin_loc().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if vn.loc != addr || vn.size != size || !vn.is_written() {
+                return false;
+            }
+            let Some(def_op) = vn.def.as_ref().and_then(|w| w.upgrade()) else {
+                return false;
+            };
+            let d = def_op.read().unwrap();
+            loc_pc_in_span(d.get_addr(), d.start.get_time(), pc, low_uniq, uniq)
+        })
+    }
+
+    // Ghidra: funcdata.hh:371 Funcdata::endLoc(int4,const Address&,const Address&,uintm)
+    pub fn end_loc_pc(
+        &self, _size: usize, _addr: Address, _pc: Address, _uniq: u32,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeLocRef> {
+        self.vbank.begin_loc()
+    }
+
+    // Ghidra: funcdata.hh:375 Funcdata::overlapLoc
+    /// Given a storage start, return the maximal range of overlapping
+    /// Varnodes. Faithful in intent to `Funcdata::overlapLoc`
+    /// (funcdata.hh:375-376), which forwards to
+    /// `vbank.overlapLoc(iter,bounds)`; Rugra's bank counterpart takes the
+    /// (address,size) of the starting Varnode directly instead of a C++
+    /// set iterator plus out-vector, so the forwarder uses the adapted
+    /// bank signature (same overlap decision: `vn_start < target_end &&
+    /// target_start < vn_end`).
+    pub fn overlap_loc(
+        &self, addr: Address, size: usize,
+    ) -> Vec<Arc<RwLock<crate::varnode::Varnode>>> {
+        self.vbank.overlap_loc(addr, size)
+    }
+
+    // Ghidra: funcdata.hh:379 Funcdata::beginDef
+    // Ghidra: funcdata.hh:382 Funcdata::endDef
+    /// Start/end of all Varnodes sorted by definition address. Faithful to
+    /// the parameterless `beginDef`/`endDef` (funcdata.hh:379/382).
+    pub fn begin_def(&self) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
+        self.vbank.begin_def()
+    }
+
+    // Ghidra: funcdata.hh:382 Funcdata::endDef
+    pub fn end_def(&self) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
+        self.vbank.begin_def()
+    }
+
+    // Ghidra: funcdata.hh:385 Funcdata::beginDef(uint4)
+    // Ghidra: funcdata.hh:388 Funcdata::endDef(uint4)
+    /// Start/end of Varnodes with a given definition property. Faithful to
+    /// `beginDef(uint4 fl)`/`endDef(uint4 fl)` (funcdata.hh:385/388).
+    pub fn begin_def_fl(
+        &self, fl: u32,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeDefRef> {
+        // cc:1831-1881 (varnode.cc): inputs head the def tree, written
+        // occupy the middle (def-seqnum order), frees the tail. Rugra's
+        // bank begin_def_fl interprets fl as a 0/1 selector (divergence);
+        // this forwarder restores the oracle Varnode::input(8) /
+        // Varnode::written(16) / 0-free semantics locally
+        // (FUNCDATA-DEF-FL-0001).
+        self.vbank.begin_def().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if fl == crate::varnode::varnode_flags::INPUT {
+                vn.is_input()
+            } else if fl == crate::varnode::varnode_flags::WRITTEN {
+                vn.is_written()
+            } else {
+                !vn.is_input() && !vn.is_written()
+            }
+        })
+    }
+
+    // Ghidra: funcdata.hh:388 Funcdata::endDef(uint4)
+    pub fn end_def_fl(
+        &self, _fl: u32,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
+        self.vbank.begin_def()
+    }
+
+    // Ghidra: funcdata.hh:391 Funcdata::beginDef(uint4,const Address&)
+    // Ghidra: funcdata.hh:394 Funcdata::endDef(uint4,const Address&)
+    /// Start/end of (input or free) Varnodes at a given storage address.
+    /// The Ghidra pair (funcdata.hh:391/394) forwards to the bank's
+    /// address-restricted def bounds (varnode.cc:1908-1961). CRITICAL:
+    /// `fl == Varnode::written` is an ILLEGAL combination — the oracle
+    /// throws `LowlevelError("Cannot get contiguous written AND
+    /// addressed")` (varnode.cc:1913-1914); Rugra mirrors the throw as a
+    /// panic with the same message. The span covers inputs (fl==input) or
+    /// frees (anything else) whose storage starts at the address.
+    pub fn begin_def_addr(
+        &self, fl: u32, addr: Address,
+    ) -> impl Iterator<Item = &crate::varnode::VarnodeDefRef> {
+        if fl == crate::varnode::varnode_flags::WRITTEN {
+            // varnode.cc:1913-1914: the written+addressed combination is
+            // rejected before any bound is formed.
+            panic!("Cannot get contiguous written AND addressed");
+        }
+        self.vbank.begin_def().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            if vn.loc.as_u64() != addr.as_u64() {
+                return false;
+            }
+            if fl == crate::varnode::varnode_flags::INPUT {
+                vn.is_input()
+            } else {
+                !vn.is_input() && !vn.is_written()
+            }
+        })
+    }
+
+    // Ghidra: funcdata.hh:394 Funcdata::endDef(uint4,const Address&)
+    pub fn end_def_addr(
+        &self, fl: u32, _addr: Address,
+    ) -> std::collections::btree_set::Iter<'_, crate::varnode::VarnodeDefRef> {
+        if fl == crate::varnode::varnode_flags::WRITTEN {
+            panic!("Cannot get contiguous written AND addressed");
+        }
+        self.vbank.begin_def()
+    }
+
+    // Ghidra: funcdata.hh:398 Funcdata::endLaneAccess
+    /// Ending iterator over laned accesses: faithful to
+    /// `Funcdata::endLaneAccess` (funcdata.hh:398)
+    /// `{ return lanedMap.end(); }` (the begin counterpart is
+    /// `lane_accesses`, funcdata.hh:397). Rugra exposes the BTreeMap tail
+    /// range as the parity endpoint.
+    pub fn end_lane_access(
+        &self,
+    ) -> std::collections::btree_map::Iter<
+        '_,
+        LanedStorage,
+        std::sync::Arc<crate::transform::LanedRegister>,
+    > {
+        self.laned_map.iter()
+    }
+
+    // Ghidra: funcdata.hh:420 Funcdata::clearActiveOutput
+    /// Clear any analysis of the function's return prototype. Faithful to
+    /// `Funcdata::clearActiveOutput` (funcdata.hh:420-423): delete the
+    /// ParamActive object (Rust drop) and null the slot.
+    pub fn clear_active_output(&mut self) {
+        self.active_output = None;
+    }
+
+    // Ghidra: funcdata.hh:428 Funcdata::clearDeadOps
+    /// Delete any dead PcodeOps. Faithful to `Funcdata::clearDeadOps`
+    /// (funcdata.hh:428) `{ obank.destroyDead(); }`.
+    pub fn clear_dead_ops(&mut self) {
+        self.obank.destroy_dead();
+    }
+
+    // Ghidra: funcdata.hh:452 Funcdata::markReturnCopy
+    /// Mark COPY as returning a global value. Faithful to
+    /// `Funcdata::markReturnCopy` (funcdata.hh:452)
+    /// `{ op->flags |= PcodeOp::return_copy; }`.
+    pub fn mark_return_copy(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::RETURN_COPY;
+    }
+
+    // Ghidra: funcdata.hh:453 Funcdata::findOp
+    /// Find PcodeOp with given sequence number. Faithful to
+    /// `Funcdata::findOp` (funcdata.hh:453)
+    /// `{ return obank.findOp(sq); }`.
+    pub fn find_op(&self, sq: &crate::address::SeqNum) -> Option<crate::op::PcodeOpRef> {
+        self.obank.find_op(sq)
+    }
+
+    // Ghidra: funcdata.hh:460 Funcdata::opDeadInsertAfter
+    /// Move given PcodeOp to specified point in the dead list. Faithful to
+    /// `Funcdata::opDeadInsertAfter` (funcdata.hh:460)
+    /// `{ obank.insertAfterDead(op,prev); }`.
+    pub fn op_dead_insert_after(
+        &mut self, op: &crate::op::PcodeOpRef, prev: &crate::op::PcodeOpRef,
+    ) {
+        self.obank.insert_after_dead(op, prev);
+    }
+
+    // Ghidra: funcdata.hh:476 Funcdata::opDeadAndGone
+    /// Free resources for the given dead PcodeOp. Faithful to
+    /// `Funcdata::opDeadAndGone` (funcdata.hh:476)
+    /// `{ obank.destroy(op); }` — the op stays in `deadandgone` retention
+    /// (op.cc:984-999) until the whole bank clears.
+    pub fn op_dead_and_gone(&mut self, op: crate::op::PcodeOpRef) {
+        self.obank.destroy(op);
+    }
+
+    // Ghidra: funcdata.hh:480 Funcdata::opMarkStartBasic
+    /// Mark PcodeOp as starting a basic block. Faithful to
+    /// `Funcdata::opMarkStartBasic` (funcdata.hh:480)
+    /// `{ op->setFlag(PcodeOp::startbasic); }`.
+    pub fn op_mark_start_basic(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::STARTBASIC;
+    }
+
+    // Ghidra: funcdata.hh:481 Funcdata::opMarkStartInstruction
+    /// Mark PcodeOp as starting its instruction. Faithful to
+    /// `Funcdata::opMarkStartInstruction` (funcdata.hh:481)
+    /// `{ op->setFlag(PcodeOp::startmark); }`.
+    pub fn op_mark_start_instruction(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::STARTMARK;
+    }
+
+    // Ghidra: funcdata.hh:490 Funcdata::target
+    /// Look up a PcodeOp by an instruction Address. Faithful to
+    /// `Funcdata::target` (funcdata.hh:490)
+    /// `{ return obank.target(addr); }`.
+    pub fn target_op(&self, addr: Address) -> Option<crate::op::PcodeOpRef> {
+        self.obank.target(addr)
+    }
+
+    // Ghidra: funcdata.hh:500 Funcdata::beginOp(OpCode)
+    // Ghidra: funcdata.hh:503 Funcdata::endOp(OpCode)
+    /// Start/end of PcodeOp objects with the given op-code. Faithful to
+    /// `beginOp(OpCode)`/`endOp(OpCode)` (funcdata.hh:500/503) forwarding to
+    /// `obank.begin(opc)`/`obank.end(opc)` (op.cc:1158-1185): only
+    /// STORE/LOAD/RETURN/CALLOTHER have per-opcode lists; every other
+    /// opcode yields an EMPTY range (the C++ default arm returns
+    /// `alivelist.end()` for both endpoints). NOTE: Rugra's
+    /// `PcodeOpBank::begin_op` default arm currently returns the full
+    /// alivelist (op.rs divergence); this forwarder restores the oracle
+    /// empty-range default locally (FUNCDATA-OPBEGIN-DEFAULT-0001).
+    pub fn begin_op_code(
+        &self, opc: crate::opcodes::OpCode,
+    ) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        use crate::opcodes::OpCode;
+        match opc {
+            OpCode::CPUI_STORE => self.obank.storelist.iter(),
+            OpCode::CPUI_LOAD => self.obank.loadlist.iter(),
+            OpCode::CPUI_RETURN => self.obank.returnlist.iter(),
+            OpCode::CPUI_CALLOTHER => self.obank.useroplist.iter(),
+            _ => [].iter(),
+        }
+    }
+
+    // Ghidra: funcdata.hh:503 Funcdata::endOp(OpCode)
+    pub fn end_op_code(
+        &self, _opc: crate::opcodes::OpCode,
+    ) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        [].iter()
+    }
+
+    // Ghidra: funcdata.hh:506 Funcdata::beginOpAlive
+    // Ghidra: funcdata.hh:509 Funcdata::endOpAlive
+    /// Start/end of PcodeOp objects in the alive list. Faithful to
+    /// `beginOpAlive`/`endOpAlive` (funcdata.hh:506/509) forwarding to
+    /// `obank.beginAlive()`/`obank.endAlive()`.
+    pub fn begin_op_alive(&self) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.alivelist.iter()
+    }
+
+    // Ghidra: funcdata.hh:509 Funcdata::endOpAlive
+    pub fn end_op_alive(&self) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.alivelist.iter()
+    }
+
+    // Ghidra: funcdata.hh:512 Funcdata::beginOpDead
+    // Ghidra: funcdata.hh:515 Funcdata::endOpDead
+    /// Start/end of PcodeOp objects in the dead list. Faithful to
+    /// `beginOpDead`/`endOpDead` (funcdata.hh:512/515) forwarding to
+    /// `obank.beginDead()`/`obank.endDead()`.
+    pub fn begin_op_dead(&self) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.deadlist.iter()
+    }
+
+    // Ghidra: funcdata.hh:515 Funcdata::endOpDead
+    pub fn end_op_dead(&self) -> std::slice::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.deadlist.iter()
+    }
+
+    // Ghidra: funcdata.hh:518 Funcdata::beginOpAll
+    // Ghidra: funcdata.hh:521 Funcdata::endOpAll
+    /// Start/end of all (alive) PcodeOp objects sorted by sequence number.
+    /// Faithful to `beginOpAll`/`endOpAll` (funcdata.hh:518/521) forwarding
+    /// to the bank's optree iteration.
+    pub fn begin_op_all(&self) -> std::collections::btree_set::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.optree.iter()
+    }
+
+    // Ghidra: funcdata.hh:521 Funcdata::endOpAll
+    pub fn end_op_all(&self) -> std::collections::btree_set::Iter<'_, crate::op::PcodeOpRef> {
+        self.obank.optree.iter()
+    }
+
+    // Ghidra: funcdata.hh:524 Funcdata::beginOp(const Address&)
+    // Ghidra: funcdata.hh:527 Funcdata::endOp(const Address&)
+    /// Start/end of all (alive) PcodeOp objects attached to a specific
+    /// Address. Faithful to `beginOp(const Address&)`/`endOp`
+    /// (funcdata.hh:524/527) forwarding to `obank.begin(addr)`/`end(addr)`.
+    pub fn begin_op_addr(
+        &self, addr: Address,
+    ) -> impl Iterator<Item = &crate::op::PcodeOpRef> {
+        self.obank.begin_addr(addr)
+    }
+
+    // Ghidra: funcdata.hh:527 Funcdata::endOp(const Address&)
+    pub fn end_op_addr(
+        &self, addr: Address,
+    ) -> impl Iterator<Item = &crate::op::PcodeOpRef> {
+        self.obank.end_addr(addr)
+    }
+
+    // ====================================================================
+    // OPACTION_DEBUG observation family (funcdata.hh:580-612 inline +
+    // funcdata.cc:1007-1118). Ghidra compiles these only with
+    // -DOPACTION_DEBUG; Rugra always compiles and gates behavior on
+    // `opactdbg_on`, which the ctor initializes false (funcdata.cc:74-81)
+    // so the production pipeline is untouched.
+    // ====================================================================
+
+    // Ghidra: funcdata.hh:593 Funcdata::enableJTCallback
+    /// Enable a debug callback for the jump-table simplification process.
+    /// Faithful to `Funcdata::enableJTCallback` (funcdata.hh:593)
+    /// `{ jtcallback = jtcb; }`.
+    pub fn enable_jt_callback(&mut self, jtcb: fn(&mut Funcdata, &mut Funcdata)) {
+        self.jtcallback = Some(jtcb);
+    }
+
+    // Ghidra: funcdata.hh:594 Funcdata::disableJTCallback
+    /// Disable the debug callback. Faithful to
+    /// `Funcdata::disableJTCallback` (funcdata.hh:594)
+    /// `{ jtcallback = 0; }`.
+    pub fn disable_jt_callback(&mut self) {
+        self.jtcallback = None;
+    }
+
+    // Ghidra: funcdata.hh:595 Funcdata::debugActivate
+    /// Turn on recording. Faithful to `Funcdata::debugActivate`
+    /// (funcdata.hh:595) `{ if (opactdbg_on) opactdbg_active=true; }` —
+    /// activation only happens when debugging was enabled first.
+    pub fn debug_activate(&mut self) {
+        if self.opactdbg_on {
+            self.opactdbg_active = true;
+        }
+    }
+
+    // Ghidra: funcdata.hh:596 Funcdata::debugDeactivate
+    /// Turn off recording. Faithful to `Funcdata::debugDeactivate`
+    /// (funcdata.hh:596) `{ opactdbg_active = false; }` — unconditional.
+    pub fn debug_deactivate(&mut self) {
+        self.opactdbg_active = false;
+    }
+
+    // Ghidra: funcdata.hh:601 Funcdata::debugSize
+    /// Number of code ranges being debug traced. Faithful to
+    /// `Funcdata::debugSize` (funcdata.hh:601)
+    /// `{ return opactdbg_pclow.size(); }`.
+    pub fn debug_size(&self) -> usize {
+        self.opactdbg_pclow.len()
+    }
+
+    // Ghidra: funcdata.hh:602 Funcdata::debugEnable
+    /// Turn on debugging. Faithful to `Funcdata::debugEnable`
+    /// (funcdata.hh:602) `{ opactdbg_on = true; opactdbg_count = 0; }`.
+    pub fn debug_enable(&mut self) {
+        self.opactdbg_on = true;
+        self.opactdbg_count = 0;
+    }
+
+    // Ghidra: funcdata.hh:603 Funcdata::debugDisable
+    /// Turn off debugging. Faithful to `Funcdata::debugDisable`
+    /// (funcdata.hh:603) `{ opactdbg_on = false; }`.
+    pub fn debug_disable(&mut self) {
+        self.opactdbg_on = false;
+    }
+
+    // Ghidra: funcdata.hh:604 Funcdata::debugClear
+    /// Clear debugging ranges. Faithful to `Funcdata::debugClear`
+    /// (funcdata.hh:604-605): all four range vectors clear, in the
+    /// declaration order pclow, pchigh, uqlow, uqhigh.
+    pub fn debug_clear(&mut self) {
+        self.opactdbg_pclow.clear();
+        self.opactdbg_pchigh.clear();
+        self.opactdbg_uqlow.clear();
+        self.opactdbg_uqhigh.clear();
+    }
+
+    // Ghidra: funcdata.hh:609 Funcdata::debugHandleBreak
+    /// Mark a breakpoint as handled. Faithful to
+    /// `Funcdata::debugHandleBreak` (funcdata.hh:609)
+    /// `{ opactdbg_breakon = false; }`.
+    pub fn debug_handle_break(&mut self) {
+        self.opactdbg_breakon = false;
+    }
+
+    // Ghidra: funcdata.hh:610 Funcdata::debugSetBreak
+    /// Break on a specific trace hit count. Faithful to
+    /// `Funcdata::debugSetBreak` (funcdata.hh:610)
+    /// `{ opactdbg_breakcount = count; }`.
+    pub fn debug_set_break(&mut self, count: i32) {
+        self.opactdbg_breakcount = count;
+    }
+
+    // Ghidra: funcdata.cc:1024 Funcdata::debugModClear
+    /// Abandon printing debug for the current action. Faithful to
+    /// `Funcdata::debugModClear` (funcdata.cc:1024-1032): every op in
+    /// modify_list drops its `modified` addl-flag, both scratch lists
+    /// clear, and recording turns off (`opactdbg_active = false`).
+    pub fn debug_mod_clear(&mut self) {
+        for op in &self.modify_list {
+            op.0.write().unwrap().addlflags &= !crate::op::op_addl_flags::MODIFIED;
+        }
+        self.modify_list.clear();
+        self.modify_before.clear();
+        self.opactdbg_active = false;
+    }
+
+    // Ghidra: funcdata.cc:1063 Funcdata::debugSetRange
+    /// Add a new memory range to the debug trace. Faithful to
+    /// `Funcdata::debugSetRange` (funcdata.cc:1063-1072): turning tracing
+    /// on unconditionally (`opactdbg_on = true`) and pushing all four
+    /// bounds in order.
+    pub fn debug_set_range(
+        &mut self, pclow: Address, pchigh: Address, uqlow: u32, uqhigh: u32,
+    ) {
+        self.opactdbg_on = true;
+        self.opactdbg_pclow.push(pclow);
+        self.opactdbg_pchigh.push(pchigh);
+        self.opactdbg_uqlow.push(uqlow);
+        self.opactdbg_uqhigh.push(uqhigh);
+    }
+
+    // Ghidra: funcdata.cc:1076 Funcdata::debugCheckRange
+    /// Check if the given PcodeOp is being debug traced. Faithful to
+    /// `Funcdata::debugCheckRange` (funcdata.cc:1076-1098): walk ranges in
+    /// insertion order; a range accepts the op when (the PC bounds are
+    /// valid AND pclow <= op.addr <= pchigh) OR skipped as a whole when
+    /// invalid, and (the uniq bounds are set AND uqlow <= op.time <=
+    /// uqhigh) OR skipped as a whole when unset (`uqlow == ~0`).
+    pub fn debug_check_range(&self, op: &crate::op::PcodeOpRef) -> bool {
+        let size = self.opactdbg_pclow.len();
+        let op_addr = { op.0.read().unwrap().get_addr() };
+        let op_time = { op.0.read().unwrap().start.get_time() };
+        for i in 0..size {
+            if !self.opactdbg_pclow[i].is_invalid() {
+                if op_addr < self.opactdbg_pclow[i] {
+                    continue;
+                }
+                if self.opactdbg_pchigh[i] < op_addr {
+                    continue;
+                }
+            }
+            if self.opactdbg_uqlow[i] != u32::MAX {
+                if self.opactdbg_uqlow[i] > op_time {
+                    continue;
+                }
+                if self.opactdbg_uqhigh[i] < op_time {
+                    continue;
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: funcdata.cc:1100 Funcdata::debugPrintRange
+    /// Print the i-th debug trace range. Faithful to
+    /// `Funcdata::debugPrintRange` (funcdata.cc:1100-1118): the PC bounds
+    /// print only when valid (`"PC = (low,high)  "` with raw address text,
+    /// else `"entire function "`), then the unique bounds print only when
+    /// set (`"unique = (low,high)"` in hex, no separator). Ghidra emits
+    /// through `glb->printDebug` which appends `endl`; Rugra returns the
+    /// message string so the caller owns the sink.
+    pub fn debug_print_range(&self, i: usize) -> String {
+        let mut s = String::new();
+        if !self.opactdbg_pclow[i].is_invalid() {
+            s.push_str("PC = (");
+            // Address::printRaw (address.hh:305) — the Display form is the
+            // same space printRaw text (address.cc:47).
+            s.push_str(&format!("{}", self.opactdbg_pclow[i]));
+            s.push(',');
+            s.push_str(&format!("{}", self.opactdbg_pchigh[i]));
+            s.push_str(")  ");
+        } else {
+            s.push_str("entire function ");
+        }
+        if self.opactdbg_uqlow[i] != u32::MAX {
+            s.push_str(&format!("unique = ({:x},", self.opactdbg_uqlow[i]));
+            s.push_str(&format!("{:x})", self.opactdbg_uqhigh[i]));
+        }
+        s
+    }
+
+    // ====================================================================
+    // Raw console/debug printing (funcdata.cc:203-225, 575-608)
+    // ====================================================================
+
+    // Ghidra: funcdata.cc:209 Funcdata::printRaw
+    /// Print raw p-code op descriptions. Faithful to `Funcdata::printRaw`
+    /// (funcdata.cc:209-225): with no basic blocks (raw pre-block state)
+    /// every op prints from the SeqNum-ordered optree as
+    /// `<seqnum>:\t<op raw>\n` after the `"Raw operations: \n"` header, and
+    /// an empty bank throws `RecovError("No operations to print")`; with
+    /// blocks present the basic-block container prints instead
+    /// (`BlockGraph::printRaw`, block.cc:1300-1316: graph header line then
+    /// each block's raw listing with implied-goto separators). The per-op
+    /// raw line is the `PcodeOp::printRaw` TypeOp dispatch, provided here
+    /// by the drill formatter (`DrillFmt::op_raw`); the SeqNum text is
+    /// `operator<<(ostream,const SeqNum&)` (address.cc:32-38):
+    /// `pc.printRaw() ':' uniq` with the uniq counter in DECIMAL.
+    /// Rugra returns a String instead of writing to ostream and maps
+    /// RecovError onto `Error::Lowlevel`.
+    pub fn print_raw(&self) -> crate::error::Result<String> {
+        if self.bblocks.get_size() == 0 {
+            // cc:213-214: obank.empty() (op.hh:318: optree.empty()).
+            if self.obank.optree.is_empty() {
+                return Err(crate::error::Error::Lowlevel(
+                    "No operations to print".to_string(),
+                ));
+            }
+            let fmt = crate::drillfmt::DrillFmt {
+                arch: self
+                    .arch
+                    .clone()
+                    .unwrap_or_else(canonical_arch),
+            };
+            let mut s = String::from("Raw operations: \n");
+            // cc:217-221: for(iter=obank.beginAll(); ...) — SeqNum order.
+            for op_ref in self.obank.optree.iter() {
+                let op = op_ref.0.read().unwrap();
+                // cc:218: s << (*iter).second->getSeqNum() << ":\t";
+                s.push_str(&format!("{}:\t", seqnum_text(&op.start)));
+                // cc:219: (*iter).second->printRaw(s);
+                s.push_str(&fmt.op_raw(&op));
+                s.push('\n');
+            }
+            Ok(s)
+        } else {
+            // cc:224: bblocks.printRaw(s) — block.cc:1300-1316 composition
+            // (graph header, then per-block raw listings with implied-goto
+            // separators between consecutive blocks). The container graph's
+            // printHeader (block.cc:604-611) prints only its index: the
+            // basic-block container carries no address cover of its own.
+            let mut s = format!("{}\n", self.bblocks.index);
+            if self.bblocks.blocks.is_empty() {
+                return Ok(s);
+            }
+            let mut iter = self.bblocks.blocks.iter();
+            let mut last_bl = iter.next().unwrap().clone();
+            s.push_str(&last_bl.read().unwrap().print_raw_trait());
+            for cur in iter {
+                s.push_str(
+                    &last_bl.read().unwrap().print_raw_implied_goto_trait(cur),
+                );
+                s.push_str(&cur.read().unwrap().print_raw_trait());
+                last_bl = cur.clone();
+            }
+            Ok(s)
+        }
+    }
+
+    // Ghidra: funcdata.cc:579 Funcdata::printVarnodeTree
+    /// Print a description of all Varnodes to a stream. Faithful to
+    /// `Funcdata::printVarnodeTree` (funcdata.cc:579-591): every Varnode in
+    /// def-tree order prints via `Varnode::printInfo` (varnode.cc:255-281;
+    /// each line is terminated by the endl inside printInfo).
+    pub fn print_varnode_tree(&self) -> String {
+        let mut s = String::new();
+        for def_ref in self.vbank.begin_def() {
+            let vn = def_ref.0.read().unwrap();
+            s.push_str(&vn.print_info());
+        }
+        s
+    }
+
+    // Ghidra: funcdata.cc:597 Funcdata::printLocalRange
+    /// Print description of memory ranges associated with local scopes.
+    /// Faithful to `Funcdata::printLocalRange` (funcdata.cc:597-608): the
+    /// local scope's own bounds print first
+    /// (`Scope::printBounds` database.hh:789 → `RangeList::printBounds`
+    /// address.cc:588-600: `"all\n"` when empty, else one
+    /// `"<spcname>: <first>-<last>\n"` line per Range in hex), then every
+    /// child scope's bounds in map order. Rugra's `ScopeLocal` keeps the
+    /// union range tree as offset tuples in the stack space with no
+    /// child-scope map; the child loop is therefore structurally absent
+    /// (FUNCDATA-LOCALRANGE-CHILDREN-0001) and the space name comes from
+    /// the scope's own space field.
+    pub fn print_local_range(&self) -> String {
+        let mut s = String::new();
+        if let Some(scope) = &self.scope {
+            if scope.local_range.is_empty() {
+                s.push_str("all\n");
+            } else {
+                for (first, last) in &scope.local_range {
+                    s.push_str(&format!(
+                        "{}: {:x}-{:x}\n",
+                        scope.space.name(),
+                        first,
+                        last
+                    ));
+                }
+            }
+        }
+        s
+    }
+
+    // ====================================================================
+    // Live injection (funcdata.cc:840-876)
+    // ====================================================================
+
+    // Ghidra: funcdata.cc:848 Funcdata::doLiveInject
+    /// Inject p-code from a payload into this live function. Faithful to
+    /// `Funcdata::doLiveInject` (funcdata.cc:848-876): the inject context
+    /// is cleared with both `baseaddr` and `nextaddr` set to the injection
+    /// address (cc:855-857), the payload emits through the
+    /// `PcodeEmitFd` dump path onto the dead list tail (cc:859-868 — the
+    /// pre-inject dead tail is captured first so exactly the newly emitted
+    /// ops are walked), and each new op is rejected with
+    /// `LowlevelError("Illegal branching injection")` when it calls or
+    /// branches (cc:872-873), else inserted into the block at the given
+    /// position (cc:874). Rugra threads the payload through
+    /// `InjectPayload::inject` returning raw ops that
+    /// `inject_raw_ops_single` (the `PcodeEmitFd::dump` port) materializes
+    /// on the dead list; the C++ list-iterator insertion point is the
+    /// `Option<usize>` op-index used by `op_insert`.
+    pub fn do_live_inject(
+        &mut self,
+        payload: &crate::pcodeinject::InjectPayload,
+        addr: Address,
+        bl: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        iter_index: Option<usize>,
+    ) -> crate::error::Result<()> {
+        // cc:852-857: cached context cleared, baseaddr=nextaddr=addr.
+        let mut context = crate::pcodeinject::InjectContext::new();
+        context.base_addr = addr.as_u64();
+        context.next_addr = addr.as_u64();
+        // cc:859-862: capture the dead-list tail position.
+        let dead_tail = self.obank.deadlist.len();
+        // cc:863: payload->inject(context,emitter) — PcodeEmitFd::dump
+        // materializes each emitted op on the dead list.
+        let raw_ops = payload
+            .inject(&context)
+            .map_err(|e| crate::error::Error::Lowlevel(e))?;
+        self.inject_raw_ops_single(&raw_ops, addr);
+        // cc:865-875: walk from the first injected op to the dead end.
+        for index in dead_tail..self.obank.deadlist.len() {
+            let op = self.obank.deadlist[index].clone();
+            let is_call_or_branch = {
+                let o = op.0.read().unwrap();
+                o.is_call() || o.is_branch()
+            };
+            if is_call_or_branch {
+                return Err(crate::error::Error::Lowlevel(
+                    "Illegal branching injection".to_string(),
+                ));
+            }
+            self.op_insert(&op, bl, iter_index);
+        }
+        Ok(())
+    }
+
+    // ====================================================================
+    // Inlining (funcdata_op.cc:842-916)
+    // ====================================================================
+
+    // Ghidra: funcdata_op.cc:853 Funcdata::inlineFlow
+    /// Generate the p-code ops to be inlined from another function.
+    /// Faithful to `Funcdata::inlineFlow` (funcdata_op.cc:853-916): the
+    /// callee's analysis state is cleared, a fresh `FlowInfo` over the
+    /// callee walks the full address space with the inline error flags
+    /// (cc:856-867), and the EZ model path clones the straight-line body
+    /// after the call site (cc:870-891: `inlineEZClone`, move the cloned
+    /// sequence after the callop, transfer the startbasic flag, destroy
+    /// the raw callop), while the hard model path enforces restrictions,
+    /// clones the callee's jumptables and converts the CALL to a BRANCH
+    /// (cc:892-911). Uniq ids swap across the boundary at both ends
+    /// (cc:858, cc:913). Returns 0 (EZ), 1 (hard), -1 (not successful).
+    /// RUGRA-GLUE: the SLEIGH lifter threads through as an explicit
+    /// parameter (Ghidra reaches it through the Architecture), and the
+    /// `FlowInfo::inlineEZClone` clone core is currently a structural
+    /// placeholder in flow.rs (FUNCDATA-INFLOW-DEP-0001), so the EZ path
+    /// performs no op cloning until that dependency lands.
+    pub fn inline_flow(
+        &mut self,
+        inlinefd: &mut Funcdata,
+        flow: &mut crate::flow::FlowInfo<'_>,
+        lifter: &mut crate::disasm::sleigh_lift::SleighLifter,
+        callop: &crate::op::PcodeOpRef,
+    ) -> crate::error::Result<i32> {
+        // cc:893-894: flow.testHardInlineRestrictions(inlinefd,callop,
+        // retaddr) — evaluated BEFORE the inline-flow generation (Rust
+        // borrow structure; behavior-neutral: the test reads only the
+        // callee's funcp noreturn bit and CALLER-flow state
+        // (fallthru/warnings), neither of which the callee-side
+        // forwardRecursion/generateOps phases touch).
+        let mut retaddr: Option<Address> = None;
+        let hard_ok =
+            flow.test_hard_inline_restrictions(inlinefd, callop, &mut retaddr);
+        // cc:856: inlinefd->getArch()->clearAnalysis(inlinefd).
+        if let Some(arch) = inlinefd.arch.clone() {
+            arch.clear_analysis();
+        }
+        // cc:858: inlinefd->obank.setUniqId(obank.getUniqId()) — before the
+        // FlowInfo construction (the flow reads the bank only after this
+        // point, same as the C++ sequence).
+        let uniq = self.obank.get_uniqid();
+        inlinefd.obank.set_uniqid(uniq);
+        // cc:857: FlowInfo inlineflow(*inlinefd, obank, bblocks, qlst).
+        // cc:861-863: full-space range; cc:864-865: inline error flags.
+        let mut inlineflow =
+            crate::flow::FlowInfo::new(inlinefd, lifter, 0, u64::MAX);
+        inlineflow.set_flags(
+            crate::flow::flow_flags::ERROR_OUTOFBOUNDS
+                | crate::flow::flow_flags::ERROR_UNIMPLEMENTED
+                | crate::flow::flow_flags::ERROR_REINTERPRETED
+                | crate::flow::flow_flags::FLOW_FORINLINE,
+        );
+        // cc:866-867: forwardRecursion(flow); generateOps().
+        inlineflow.forward_recursion(flow);
+        let callop_addr = { callop.0.read().unwrap().get_addr() };
+        inlineflow.generate_ops(callop_addr)?;
+
+        let res: i32;
+        if inlineflow.check_ez_model() {
+            // cc:870-891: EZ clone — no jumptables to clone.
+            res = 0;
+            let dead_before = self.obank.deadlist.len();
+            flow.inline_ezclone(&inlineflow, callop_addr);
+            // cc:877-889: if at least one op was cloned, move the cloned
+            // sequence to right after the callop.
+            if self.obank.deadlist.len() > dead_before {
+                let firstop = self.obank.deadlist[dead_before].clone();
+                let lastop = self.obank.deadlist[self.obank.deadlist.len() - 1].clone();
+                self.obank.move_sequence_dead(&firstop, &lastop, callop);
+                // cc:883: if (callop->isBlockStart()) — op.hh startbasic bit.
+                let callop_startbasic = {
+                    (callop.0.read().unwrap().flags
+                        & crate::op::pcodeop_flags::STARTBASIC)
+                        != 0
+                };
+                if callop_startbasic {
+                    firstop.0.write().unwrap().flags |=
+                        crate::op::pcodeop_flags::STARTBASIC;
+                    flow.update_target(callop, &firstop);
+                } else {
+                    firstop.0.write().unwrap().flags &=
+                        !crate::op::pcodeop_flags::STARTBASIC;
+                }
+            }
+            // cc:890: opDestroyRaw(callop).
+            self.op_destroy_raw(callop);
+            // cc:913: obank.setUniqId(inlinefd->obank.getUniqId()).
+            self.obank.set_uniqid(inlinefd.obank.get_uniqid());
+        } else {
+            // cc:894-895: restrictions failed -> -1 (uniq still swaps back).
+            if !hard_ok {
+                self.obank.set_uniqid(inlinefd.obank.get_uniqid());
+                return Ok(-1);
+            }
+            res = 1;
+            // cc:902: flow.inlineClone(inlineflow,retaddr) — runs BEFORE the
+            // callee reads below (Rust borrow structure; behavior-neutral
+            // reorder of cc:897-901: inlineClone reads the callee dead list
+            // and flow tables only, never the callee jump-table vector, and
+            // the caller-side jumpvec receives the same tables in the same
+            // relative order).
+            let retaddr_final = retaddr.unwrap_or(callop_addr);
+            flow.inline_clone(&inlineflow, retaddr_final);
+            // cc:897-901: clone any jumptables from the inline piece
+            // (`new JumpTable(*jiter)` deep copy). RUGRA-GAP: Rugra's
+            // JumpTable has no copy constructor (jumptable.rs), so the
+            // table Arc is shared instead of deep-copied — divergent only
+            // when the inlined copy is later mutated independently
+            // (FUNCDATA-INFLOW-DEP-0001).
+            for jt in &inlinefd.jump_tables {
+                self.jump_tables.push(jt.clone());
+            }
+            // cc:904-906: convert the CALL op to a jump.
+            let num_input = { callop.0.read().unwrap().num_input() };
+            for slot in (1..num_input).rev() {
+                self.op_remove_input(callop, slot);
+            }
+            self.op_set_opcode(callop, crate::opcodes::OpCode::CPUI_BRANCH);
+            // cc:909-910: newCodeRef input at slot 0.
+            let inline_addr = { inlinefd.baseaddr };
+            let code_ref = self.new_code_ref(inline_addr);
+            self.op_set_input(callop, code_ref, 0);
+            // cc:913: obank.setUniqId(inlinefd->obank.getUniqId()).
+            self.obank.set_uniqid(inlinefd.obank.get_uniqid());
+        }
+        Ok(res)
+    }
+
     // Ghidra: funcdata.hh:477 Funcdata::opSetAllInput
     /// Set all input Varnodes for the given PcodeOp simultaneously.
     /// Faithful to `Funcdata::opSetAllInput` (funcdata_op.cc:267-284).
@@ -8045,9 +9147,9 @@ impl Funcdata {
         // (funcdata.hh:216 hasRestartPending accessor counterpart), so the
         // same masked bit must clear both projections.
         self.restart_pending = false;
-        // cc:90-92: counter resets. clean_up_index has no Rugra storage
-        // (coreaction.rs no-op marker), so high_level_index and
-        // cast_phase_index are the two resets here.
+        // cc:90-92: counter resets. clean_up_index now has real Rugra
+        // storage (funcdata.hh:187), so all three counters reset here.
+        self.clean_up_index = 0;
         self.high_level_index = 0;
         self.cast_phase_index = 0;
         // cc:93: minLanedSize = glb->getMinimumLanedRegisterSize()
@@ -8110,6 +9212,9 @@ impl Funcdata {
         self.heritage.clear();
         // cc:108: covermerge.clear() (merge.cc:1580-1587)
         self.merge_state.clear();
+        // cc:110 (#ifdef OPACTION_DEBUG): opactdbg_count = 0. The debug
+        // counter resets with everything else; the traced ranges survive.
+        self.opactdbg_count = 0;
     }
 
     // =========================================================================
@@ -16778,6 +17883,35 @@ mod ar_command {
 }
 
 impl ArState {
+    // Ghidra: funcdata.hh:673 AncestorRealistic::State::State(PcodeOp*,int4)
+    /// Constructor given a Varnode read: `op=o; slot=s; flags=0; offset=0`.
+    /// Faithful to `State(PcodeOp *o,int4 s)` (funcdata.hh:673-680).
+    // RUGRA-GLUE: named constructor — Ghidra inlines this member init at
+    // each State construction site; Rust uses a named ctor for the same
+    // four-field initialization.
+    fn new(op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, slot: i32) -> Self {
+        ArState { op, slot, flags: 0, offset: 0 }
+    }
+
+    // Ghidra: funcdata.hh:685 AncestorRealistic::State::State(PcodeOp*,const State&)
+    /// Constructor from an old state pulled back through a CPUI_SUBPIECE:
+    /// `op=o; slot=0; flags=0; offset = oldState.offset +
+    /// op->getIn(1)->getOffset()` (the SUBPIECE constant offset
+    /// accumulates). Faithful to `State(PcodeOp *o,const State &oldState)`
+    /// (funcdata.hh:685-690).
+    fn pull_back_subpiece(
+        op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+        old_state: &ArState,
+    ) -> Self {
+        let trunc_offset = {
+            let o = op.read().unwrap();
+            o.get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i32)
+                .unwrap_or(0)
+        };
+        ArState { op, slot: 0, flags: 0, offset: old_state.offset + trunc_offset }
+    }
+
     // Ghidra: funcdata.hh:692 State::markSolid
     /// Mark the given slot as having solid movement. Faithful to
     /// `State::markSolid` (funcdata.hh:692).
@@ -16808,6 +17942,16 @@ impl ArState {
 }
 
 impl AncestorRealistic {
+    // Ghidra: funcdata.hh:714 AncestorRealistic::mark
+    /// Mark the given Varnode as visited by the traversal. Faithful to
+    /// `AncestorRealistic::mark` (funcdata.hh:714-717)
+    /// `{ markedVn.push_back(vn); vn->setMark(); }` — the push precedes the
+    /// flag set, so a mid-throw state still records the Varnode for the
+    /// clearing pass.
+    fn mark(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        self.marked_vn.push(vn.clone());
+        vn.write().unwrap().set_mark();
+    }
     // RUGRA-GLUE: AncestorRealistic::new constructor (no Ghidra counterpart — Ghidra uses stack allocation)
     /// Construct an empty ancestor-realistic checker.
     pub fn new() -> Self {
@@ -16864,6 +18008,16 @@ impl AncestorRealistic {
             let op_rg = op_arc.read().unwrap();
             op_rg.get_in(slot as usize).cloned()
         };
+        // The pull-back constructor view of the current state (funcdata.hh:685).
+        let state_snapshot = {
+            let state = self.state_stack.last().unwrap();
+            ArState {
+                op: state.op.clone(),
+                slot: state.slot,
+                flags: state.flags,
+                offset: state.offset,
+            }
+        };
         let state_vn = match state_vn {
             Some(v) => v,
             None => return ar_command::POP_FAIL,
@@ -16888,12 +18042,8 @@ impl AncestorRealistic {
             }
             return ar_command::POP_SUCCESS;
         }
-        // Mark the varnode as visited.
-        {
-            let mut vn = state_vn.write().unwrap();
-            vn.set_mark();
-        }
-        self.marked_vn.push(state_vn.clone());
+        // Mark the varnode as visited (funcdata.hh:714-717 AncestorRealistic::mark).
+        self.mark(&state_vn);
         // Follow the defining op.
         let def_arc = {
             let vn = state_vn.read().unwrap();
@@ -16968,12 +18118,11 @@ impl AncestorRealistic {
                     )
                 };
                 if out_space_is_internal || is_incidental || in0_incidental || out_overlap_in0_eq_in1 {
-                    self.state_stack.push(ArState {
-                        op: op_def.clone(),
-                        slot: 0,
-                        flags: 0,
-                        offset: new_offset,
-                    });
+                    self.state_stack.push(
+                        // funcdata.hh:685-690 State ctor pulled back through
+                        // SUBPIECE: offset = old.offset + in(1) offset.
+                        ArState::pull_back_subpiece(op_def.clone(), &state_snapshot),
+                    );
                     return ar_command::ENTER_NODE;
                 }
                 // Ghidra: funcdata_varnode.cc:2069-2077 minimal traversal to
@@ -17851,6 +19000,51 @@ impl CloneBlockOps {
             }
         }
         self.patch_inputs(fd, inedge);
+    }
+
+    // Ghidra: funcdata_block.cc:1024 CloneBlockOps::cloneExpression
+    /// Clone p-code ops in an expression right before the given followOp.
+    /// Faithful to `CloneBlockOps::cloneExpression`
+    /// (funcdata_block.cc:1024-1040): each op in the list is skeleton-cloned
+    /// (`buildOpClone`, cc:1029-1031 — branch ops are skipped and reported
+    /// inside that helper), the output Varnode is cloned onto each skeleton
+    /// (`buildVarnodeOutput`, cc:1032), and the clone inserts immediately
+    /// before followOp (cc:1033). An empty clone list throws
+    /// `LowlevelError("No expression to clone")` (cc:1035-1036), then the
+    /// inputs are patched with inedge=0 (cc:1037) and the output Varnode of
+    /// the LAST cloned op returns (cc:1038-1039).
+    /// RUGRA-GLUE: Ghidra's ClonePair helper (funcdata.hh:632-635) is
+    /// absorbed by the `(clone_op, orig_op)` tuple in `clone_list` — the
+    /// tuple IS the pair, built at the same push site as the C++ ctor.
+    fn clone_expression(
+        &mut self,
+        fd: &mut Funcdata,
+        ops: &[crate::op::PcodeOpRef],
+        follow_op: &crate::op::PcodeOpRef,
+    ) -> crate::error::Result<
+        Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    > {
+        for orig_ref in ops {
+            // cc:1029-1031: cloneOp = buildOpClone(origOp); skip if null.
+            if let Some(clone_ref) = self.build_op_clone(fd, orig_ref) {
+                // cc:1032: buildVarnodeOutput(origOp,cloneOp).
+                self.build_varnode_output(fd, orig_ref, &clone_ref);
+                // cc:1033: data.opInsertBefore(cloneOp,followOp).
+                fd.op_insert_before(&clone_ref, follow_op);
+            }
+        }
+        if self.clone_list.is_empty() {
+            // cc:1035-1036: throw LowlevelError("No expression to clone").
+            return Err(crate::error::Error::Lowlevel(
+                "No expression to clone".to_string(),
+            ));
+        }
+        // cc:1037: patchInputs(0).
+        self.patch_inputs(fd, 0);
+        // cc:1038-1039: return cloneList.back().cloneOp->getOut().
+        let last_clone = &self.clone_list.last().unwrap().0;
+        let out = last_clone.0.read().unwrap().output.clone();
+        Ok(out)
     }
 
     // Ghidra: funcdata_block.cc:1047 CloneBlockOps::patchInputs

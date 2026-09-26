@@ -1,0 +1,113 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FUNCDATA-FWD-QUERY-0001",
+ "overall_status": "MATCH",
+ "status_note": "Query/iterator face: beginLoc/endLoc 6 overload pairs (loc/pc/uniq/addr forms), overlapLoc, beginDef/endDef 3 pairs (all/input/addr), findCoveredInput/findCoveringInput/findVarnodeWritten, startCleanUp/getCleanUpIndex, findOp/target, beginOp family (all/alive/dead/opcode/addr) + endLaneAccess, written+addr illegal-combination throw. 12 cases, ~30 defs. Bilateral byte-identical stdout against the locked oracle (runner: tools/run_funcdata_family_oracle.sh).",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "funcdata.hh:186-527",
+   "funcdata.cc:1158",
+   "address.hh:150-157",
+   "address.cc:32-38",
+   "space.cc:206-219"
+  ]
+ },
+ "architecture": {
+  "kind": "synthetic Translate/Architecture",
+  "endianness": "little",
+  "address_size_bytes": 8,
+  "code_space": "ram",
+  "spaces": [
+   "const",
+   "other",
+   "unique",
+   "ram",
+   "register",
+   "stack",
+   "join",
+   "iop"
+  ]
+ },
+ "compiler_spec": {
+  "prototype_model": "fixture",
+  "extrapop": 0,
+  "input_model": "empty",
+  "output_model": "empty"
+ },
+ "analysis_options": {
+  "OPACTION_DEBUG": false
+ },
+ "input_manifest": {
+  "inputs": {
+   "fixtures": "funcdata_fwd_query_1204",
+   "harness": "tools/run_funcdata_family_oracle.sh"
+  },
+  "sha256": "c7833b396374cd54d458de7e0451c7c44a5154d1eb28b36f830c47cc405c9f08"
+ },
+ "rugra_source": {
+  "base_commit": "3892a73e1faaf817010b726ce94f72a41ac1cbaf",
+  "base_tree": "283f497c8d9e55f3665bb6e17d078a8c82c29ca6",
+  "base_src_tree": "51f326fe4cf033338929472f6a080a60fe98af0a",
+  "base_funcdata_blob": "a688f99c83e4322249815aa3d0886ae6f04a86c3",
+  "base_drillfmt_blob": "b92a40de5f9b6d77f71e42032d29c40fb6563e3a",
+  "cargo_toml_blob": "990a23789c5cebc24b6d453a6832e5c8dbee117a",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "c7833b396374cd54d458de7e0451c7c44a5154d1eb28b36f830c47cc405c9f08",
+  "rust_fixture_sha256": "12d211b52aa9125eb6eb8ec3d498868b554fe20e5209ad2094e532c5c1ec1755",
+  "runner_sha256": "e0517bcd12e1fdd4bbb80751f001638aa1fc84f3f3187115f6a2e08137c08f3c"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "All query methods return iterators/references into the shared vbank/obank trees; no copies.",
+  "loop_bounds_traversal_order": "Loc iterators walk the loc tree (space,offset,size,flags) order; def iterators walk the def tree (flags,def-order); op iterators walk optree SeqNum order then deadlist.",
+  "counter_accumulator_lifecycle": "uniq counters are per-bank monotonic; clean_up_index is a single Funcdata field (cc:90 reset).",
+  "sorting_comparison_keys": "VarnodeLocSet/VarnodeDefSet comparators (varnode.cc:41-66): loc by space/offset/size then flags; def by input|written flags then create-index; SeqNum by addr then uniq (address.hh:150-157)."
+ },
+ "coverage": {
+  "loc_iterators": {
+   "status": "MATCH",
+   "covers": "beginLoc/endLoc 6 overload pairs + overlap_loc uniq-equivalence (address.hh:150-157 SeqNum comparator)",
+   "residual_todo_ids": []
+  },
+  "def_iterators": {
+   "status": "MATCH",
+   "covers": "beginDef/endDef 3 pairs: all, input-flagged, written+addr; vbank loc/def tree order",
+   "residual_todo_ids": []
+  },
+  "find_family": {
+   "status": "MATCH",
+   "covers": "findCoveredInput (hh:303), findCoveringInput (hh:310), findVarnodeWritten (hh:333-334)",
+   "residual_todo_ids": []
+  },
+  "cleanup_index": {
+   "status": "MATCH",
+   "covers": "startCleanUp (hh:186) + getCleanUpIndex clean_up_index field restore",
+   "residual_todo_ids": []
+  },
+  "op_iterators": {
+   "status": "MATCH",
+   "covers": "beginOp..endOp 10 defs (hh:500-527) incl. begin_op_code empty-range default arm (op.cc:1158, FUNCDATA-OPBEGIN-DEFAULT-0001) + endLaneAccess (hh:398)",
+   "residual_todo_ids": []
+  },
+  "illegal_combo": {
+   "status": "MATCH",
+   "covers": "written+addr beginDef combination same-text panic",
+   "residual_todo_ids": []
+  }
+ },
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "stdout_cmp_exit_code": 0,
+  "stderr_cmp_exit_code": 0,
+  "ghidra_stdout_sha256": "df030401732692e1538a2973a03f6d89fc5451ab5f4289190f223fa939e0f6d5",
+  "rugra_stdout_sha256": "df030401732692e1538a2973a03f6d89fc5451ab5f4289190f223fa939e0f6d5"
+ },
+ "residual_todo_ids": []
+}
