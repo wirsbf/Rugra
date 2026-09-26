@@ -492,6 +492,42 @@ impl CastStrategy for CastStrategyC {
     }
 }
 
+// Mirror of the oracle's TypeFactory::findAdd interning invariant for the
+// cast.cc identity short-circuits (cast.cc:304 `curtype == reqtype` /
+// :329 `curbase == reqbase`). Ghidra compares interned Datatype pointers,
+// and findAdd guarantees that compare is structural: a name+id hit whose
+// `compareDependency` is equal returns the EXISTING factory object
+// (type.cc:3423-3427), so two distinct Datatype objects with the same
+// (name, size, sub-metatype) can never meet inside the decompiler.
+// compareDependency for base scalars is exactly (submeta, size)
+// (type.cc:227-233), and id is hashName(name) on both sides of a name hit,
+// so the findAdd-equal key reduces to (name, size, sub-metatype) —
+// base_submeta folds the chartype/enum/UTF flags the same way. Rugra's
+// import/seed layers can mint structurally equal base scalars outside the
+// factory (observed: non-core "bool"/"byte" clones), so the cast decision
+// must compare that key for Base variants instead of bare Arc identity;
+// every other variant keeps Arc identity, matching the oracle's pointer
+// compare for composites.
+//
+// Locked-oracle witnesses (ghidra_curl_1204.c vs the pre-fix canon):
+// `if (aliases[iVar15].extraparam != false)` / `*usedarg == false` /
+// `pbVar1 = buffer;` — the golden's bare forms require this equality at
+// the LOAD-address / comparison / COPY cast decisions, where the pre-fix
+// run inserted `*(bool *)&…` / `*(bool *)…` / `(bool *)…` casts because a
+// mint bool and the factory core bool are distinct Arcs.
+// Ghidra: type.cc:3412 TypeFactory::findAdd
+fn findadd_equal(a: &Arc<Datatype>, b: &Arc<Datatype>) -> bool {
+    if Arc::ptr_eq(a, b) {
+        return true;
+    }
+    match (a.as_ref(), b.as_ref()) {
+        (Datatype::Base(x), Datatype::Base(y)) => {
+            x.name == y.name && x.size == y.size && a.get_submeta() == b.get_submeta()
+        }
+        _ => false,
+    }
+}
+
 impl CastStrategyC {
     // RUGRA-GLUE: cast_standard_full (no Ghidra counterpart found)
     /// Faithful 1:1 port of Ghidra `CastStrategyC::castStandard`
@@ -526,9 +562,23 @@ impl CastStrategyC {
         care_ptr_uint: bool,
     ) -> Option<Arc<Datatype>> {
         // Types equal → no cast. Ghidra compares the interned Datatype
-        // pointers (cast.cc:302 `curtype == reqtype`); Rugra's Arc identity
-        // is the mirror for factory-interned types.
-        if Arc::ptr_eq(reqtype, curtype) {
+        // pointers (cast.cc:302 `curtype == reqtype`); that pointer compare
+        // rides the TypeFactory::findAdd interning invariant — a name+id
+        // hit whose compareDependency is equal returns the EXISTING
+        // factory object (type.cc:3423-3427), so two distinct Datatype
+        // objects with the same (name, size, sub-metatype) can never meet
+        // inside the decompiler. Rugra's import/seed layers can mint
+        // structurally equal base scalars outside the factory (observed:
+        // non-core "bool" clones meeting the factory core bool at
+        // ActionSetCasts, printing `*(bool *)&aliases[V].extraparam` /
+        // `*(bool *)usedarg` in getparameter where the locked golden
+        // prints the bare field/deref form), so an Arc::ptr_eq-only
+        // mirror would insert casts the oracle never produces.
+        // `findadd_equal` restores the oracle-equivalent decision: the
+        // findAdd-equal key (name, size, sub-metatype — compareDependency,
+        // type.cc:227-233) for Base variants, Arc identity for everything
+        // else (composites keep the oracle's pointer compare).
+        if findadd_equal(reqtype, curtype) {
             return None;
         }
         // From void → always cast. Returned Arc preserves reqtype identity
@@ -559,9 +609,14 @@ impl CastStrategyC {
             isptr = true;
         }
         // No typedef chains in Rugra (getTypedef loop is a no-op); the
-        // peeled bases are compared by Arc identity, mirroring the interned
-        // `curbase == reqbase` (cast.cc:329).
-        if Arc::ptr_eq(reqbase, curbase) {
+        // peeled bases are compared with the same findAdd-equal key that
+        // backs the oracle's interned `curbase == reqbase` (cast.cc:329):
+        // (name, size, sub-metatype) for Base variants, Arc identity
+        // otherwise. This is the arm that resolves pointer-layer splits —
+        // e.g. ptr(factory-bool) vs ptr(mint-bool) peels to equal bases —
+        // keeping the locked golden's bare `V = buffer;` COPY form free
+        // of a spurious `(bool *)` cast.
+        if findadd_equal(reqbase, curbase) {
             return None;
         }
         // Ghidra's TypeEnum stores TYPE_INT/TYPE_UINT as its metatype —
@@ -890,3 +945,103 @@ mod tests {
         assert!(s.cast_standard_full(&int4, &pu4, true, true).is_some());
     }
 }
+
+    #[test]
+    fn test_findadd_equal_base_key() {
+        // type.cc:3423-3427 findAdd: a name+id hit whose compareDependency
+        // (submeta, size — type.cc:227-233) is equal returns the EXISTING
+        // object, so (name, size, sub-metatype) is the oracle-equivalent of
+        // the cast.cc:304/:329 pointer identity for base scalars.
+        let core_bool = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".to_string(),
+            1,
+            TypeMetatype::Bool,
+        )));
+        let mint_bool = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".to_string(),
+            1,
+            TypeMetatype::Bool,
+        )));
+        assert!(!Arc::ptr_eq(&core_bool, &mint_bool));
+        assert!(findadd_equal(&core_bool, &mint_bool));
+        // Different name → distinct findAdd entries → not equal.
+        let char1 = Arc::new(Datatype::Base(TypeBase::new(
+            "char".to_string(),
+            1,
+            TypeMetatype::Int,
+        )));
+        assert!(!findadd_equal(&core_bool, &char1));
+        // Same name/size but a different sub-metatype (TypeChar's IntChar
+        // vs plain Int) is a compareDependency mismatch — findAdd keeps
+        // them distinct, so the cast identity must too.
+        let char_typed = Arc::new(Datatype::Base(TypeBase::new_char(
+            "char".to_string(),
+            TypeMetatype::Int,
+        )));
+        assert_ne!(char_typed.get_submeta(), char1.get_submeta());
+        assert!(!findadd_equal(&char_typed, &char1));
+        // Size is part of compareDependency.
+        let int4 = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let int8 = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(),
+            8,
+            TypeMetatype::Int,
+        )));
+        assert!(!findadd_equal(&int4, &int8));
+    }
+
+    #[test]
+    fn test_cast_standard_structurally_equal_base_no_cast() {
+        // cast.cc:304 `curtype == reqtype` → NULL: in the oracle the two
+        // bools would be the ONE interned factory object, so a structurally
+        // equal non-factory clone must not take a cast either — the
+        // locked-oracle witnesses are the bare `aliases[V].extraparam` /
+        // `*usedarg` / `V = buffer` forms (ghidra_curl_1204.c:1755/2115,
+        // the pre-fix canon printed `*(bool *)&…`/`*(bool *)…`/`(bool *)…`).
+        let strategy = CastStrategyC::new(8);
+        let core_bool = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".to_string(),
+            1,
+            TypeMetatype::Bool,
+        )));
+        let mint_bool = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".to_string(),
+            1,
+            TypeMetatype::Bool,
+        )));
+        assert!(strategy
+            .cast_standard_full(&core_bool, &mint_bool, false, true)
+            .is_none());
+        assert!(strategy
+            .cast_standard_full(&mint_bool, &core_bool, false, true)
+            .is_none());
+        // Pointer layers peel to the equal bases (cast.cc:310-329): the
+        // COPY-shape `V = buffer` decision sees ptr(bool) on both sides.
+        let ptr_core = Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8,
+            core_bool.clone(),
+            1,
+        )));
+        let ptr_mint = Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8,
+            mint_bool.clone(),
+            1,
+        )));
+        assert!(strategy
+            .cast_standard_full(&ptr_core, &ptr_mint, false, true)
+            .is_none());
+        // bool vs char (same size, different findAdd entries) still casts —
+        // the Bool request falls through cast.cc's switch default.
+        let char1 = Arc::new(Datatype::Base(TypeBase::new(
+            "char".to_string(),
+            1,
+            TypeMetatype::Int,
+        )));
+        assert!(strategy
+            .cast_standard_full(&core_bool, &char1, false, true)
+            .is_some());
+    }
