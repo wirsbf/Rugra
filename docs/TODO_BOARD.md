@@ -4,6 +4,33 @@
 
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
+> ### 派发：MIGW-FSPEC（2026-09-26 root，Rust 化迁移 wave: fspec 真缺失函数）
+> **票 W-2026-09-26-MIGW1-FSPEC-0001（P0）**：按分解底稿
+> （UNMAPPED_DECOMPOSITION_2026-09-26.md fspec 节，136 条真缺失）逐函数
+> Rust 化到 src/fspec.rs，clone/ctor 工厂形态等价裁决不硬移植。
+> 车道 wt/migfspec（owner=migfspec-agent，基=master 1c99ebad）。
+> **write-set**：src/fspec.rs + tests/oracle/ 新 fixture + docs/api/fspec.md +
+> TODO_BOARD。**进度（2026-09-26 车道交付）**：136 条全部处置——
+> ✅ 实移植 ~101 条（ParameterBasic 旗标面 10 / ParameterSymbol 13 /
+> ProtoStoreSymbol 10+encode / ProtoStoreInternal encode 1 / ParamEntryRange
+> 家族 11 / ParamListMerged 4+拒绝形 / ScoreProtoModel 5 / ProtoModelMerged 7 /
+> UnknownProtoModel 3 / ProtoModel 查询转发 12 / FuncProto 残项 12 /
+> FuncCallSpecs 调用点 10 / ParameterPieces.assignAddressFromPieces 1 /
+> EffectRecord==/!= + ProtoParameter==/!= + ParamUnassignedError 5）；
+> ⚖️ 等价裁决 ~35 条（derive(Clone) 吸收拷贝 ctor、Rust 所有权吸收 dtor 族、
+> 既有切片访问器吸收 begin/end 迭代器对、闭包倒置吸收 buildParam、
+> ParamListRegister 空 ctor、possible_output_param 已存在链接即可——
+> 裁决依据逐条记 docs/api/fspec.md 2026-09-26 MIGW-FSPEC 节）。
+> **B2**：双侧 fixture fspec_score_merged_1204（oracle 直跑 vs Rust 25 行字节
+> 全等；抓到并修正 foldIn/modellist 移植缺陷）+ Rust 回归测试 10 项；
+> 门禁数字见 /dev/shm/rugra-reports/LANE_MIGWFSPEC_2026-09-26.md。
+> **遗留 OPEN**：①MIGW-FSPEC-0001 store 族双侧 fixture（ProtoStoreSymbol/
+> ParameterSymbol/encode_internal_store——代码已移植+Rust 单测，oracle 侧需
+> Scope/TypeFactory 构型，未做）；②MIGW-FSPEC-0002 调用点族双侧 fixture
+> （FuncCallSpecs 10 方法，需 Funcdata/op 构型，未做）；③MIGW-FSPEC-0003
+> resolver 查询面接入（populate_resolver 已建数据面，find_entry 线性扫描
+> 未切 resolver——切换需 characterize/findEntry 全绿证明后另行票决）。
+
 > ### 派发：STAGE-BISECT-E2E（2026-09-21 root，deepwork 最高并发指令）
 > **目标**：双侧 stage 投影生产端 + curl top 函数差异归因（3718 skeleton → 根因清单）。
 > **车道**：Lane A `wt/sb-oracle`（oracle 投影 harness，owner=sb-oracle-agent）；

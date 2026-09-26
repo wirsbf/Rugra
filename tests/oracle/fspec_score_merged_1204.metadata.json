@@ -1,0 +1,148 @@
+{
+ "schema": 2,
+ "fixture_id": "FSPEC-SCORE-MERGED-1204",
+ "stable_function_closure": [
+  "ghidra::ScoreProtoModel::ScoreProtoModel(bool, const ProtoModel *, int4) fspec.cc:2705",
+  "ghidra::ScoreProtoModel::addParameter(const Address &, int4) fspec.cc:2717",
+  "ghidra::ScoreProtoModel::doScore(void) fspec.cc:2738",
+  "ghidra::ParamListMerged::foldIn(const ParamListStandard &) fspec.cc:1794",
+  "ghidra::ParamListMerged::finalize(void) fspec.hh:717",
+  "ghidra::ProtoModelMerged::foldIn(ProtoModel *) fspec.cc:2834",
+  "ghidra::ProtoModelMerged::selectModel(ParamActive *) const fspec.cc:2877",
+  "ghidra::ProtoModelMerged::numModels(void) const fspec.hh:1084",
+  "ghidra::ParamListStandard::populateResolver(void) fspec.cc:1191",
+  "rugra::fspec::ScoreProtoModel::do_score src/fspec.rs (fspec.cc:2738-2775)",
+  "rugra::fspec::ParamListMerged::fold_in src/fspec.rs (fspec.cc:1794-1833)",
+  "rugra::fspec::ProtoModelMerged::fold_in src/fspec.rs (fspec.cc:2834-2870)",
+  "rugra::fspec::ProtoModelMerged::select_model src/fspec.rs (fspec.cc:2877-2902)",
+  "rugra::fspec::ParamListStandard::populate_resolver src/fspec.rs (fspec.cc:1191-1216)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The five-case covered projection byte-matches Ghidra 12.0.4: the ScoreProtoModel penalty walk (exact 0 / slot-0 hole 16 / duplication 20 / mixed 56 / 25-mismatch 500 / output 0), ParamListMerged::foldIn (empty-union adoption, subsume-with-matching-minsize replacement, fully-subsumed no-op, different-stacks refusal, finalize resolver characterization + slot pass-back), ProtoModelMerged::foldIn (first-fold adoption of extrapop/effects/trash, extrapop demotion to extrapop_unknown, inject-id refusal, effect identity + trash intersection, numModels staying 0 across folds — modellist is decode's append), and selectModel (strict-< first-best over the staged constituents, no-active-trials default, score-500 'No model matches : missing default'). Overall remains UNTESTED because the join-piece resolver windows, real cspec-loaded models, the ProtoStoreSymbol/ParameterSymbol store family, and the FuncCallSpecs call-site family are not exercised by this fixture.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "b8b26e25d21e80b7fea60e6207467c3bda95851f",
+  "rugra_base_tree": "1c2fd8f7b2abf2bb0cb1c6146d6b2877bae3ed2b",
+  "cpp_fixture_sha256": "12bec2f0d800229244f618a4085e7f7e5f1c782f673814171310a0b153f55d84",
+  "rust_fixture_sha256": "54ff95db77c66c411ee9a009095b6a56db661c99559564cc67bdc3efc043e862",
+  "fspec_rs_sha256": "547809704a112c45811e6427d2dcdb99ad3c424c7ac33c04f87ed583e9a7cea7",
+  "fspec_doc_sha256": "fb705ea5dc13274d722253c3f88da70f1272faf3320ac3c3821656294ce6c940",
+  "runner_sha256": "351ee20841b5c7fd69156cd72105d1e2d3e6db60c431ab9a527cc4746b4a5d05",
+  "cargo_toml_sha256": "0fbaf1b24ed0db7e29f287a64e433009f34c025a4117f86cd6220dfd8add445e",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "3f3c3b35b8afa26c0eb7565521decdcee874cc882803d66d1eff540709cd86b8",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-score-merged-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.cargo/bin/cargo",
+   "rustc_path": "/home/ls/.cargo/bin/rustc",
+   "platform": "Linux 6.8.0-138-generic x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-score-merged-fspec-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "ram=3 (little-endian processor space), stack=6 (8-byte spacebase on ram); constant/other/unique defaults",
+  "space_construction": "FixtureArchitecture (minimal concrete Architecture with all pure virtuals stubbed) with AddrSpace 'ram' and SpacebaseSpace 'stack' inserted on the architecture itself; FixtureTranslate only satisfies the space constructors' Translate* bookkeeping. startDecompilerLibrary(empty) registers the print-language capability the Architecture base constructor builds."
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "no cspec decode; staged ParamEntry resources via the C++ class->struct field hack (Rugra: parse_pentry builders). Input lists carry two unflagged exclusion entries g0@0x100(8,8) and g1@0x200(8,8); output lists one exclusion entry g0@0x300(8,1); the merged fold cases stage (8,4)/(16,4)/(8,4) entry triples and one stack-based list (8B@0x20, align 8, spacebase=stack).",
+  "calling_convention": "hand-built models m1/m2/m3 with extrapop 0/8/0, injectUponEntry -1/-1/5, likelytrash sharing 0x500 and differing at 0x800/0x900/0x800, and identical three-record effect lists (unaffected 0x500, killedbycall 0x600, return_address 0x700, register-space 8B records sorted by address)."
+ },
+ "analysis_options": {
+  "api": "Direct production ScoreProtoModel::addParameter/doScore, ParamListMerged::foldIn/finalize, ProtoModelMerged::foldIn/selectModel, ParamListStandard::characterizeAsParam/possibleParamWithSlot",
+  "model_state": "two-entry and three-entry exclusion models with populateResolver run on every staged list (the fspec.cc:1504 configured state; 12.0.4 findEntry consults the resolver)",
+  "normalization": "None. Raw scores, mismatch counts, entry sizes/groups, containment codes, slot numbers, model names, and LowlevelError explain strings printed verbatim.",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction and queries are deterministic",
+  "error_injection": "none; refusals are the oracle's own LowlevelError paths (different stacks / different inject ids / No model matches)"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "case_order": [
+   "score_penalty_walk",
+   "param_list_merged_fold_in",
+   "proto_model_merged_fold_in",
+   "select_model"
+  ],
+  "cases": [
+   {
+    "id": "score_penalty_walk",
+    "setup": "ScoreProtoModel(true, m1, n) over the two-entry input model; one output-side scorer over the staged output list (populateResolver included)",
+    "queries": "six rows: walk=exact|hole0|dup|mixed|mismatch25|output score/mismatch",
+    "expect": "exact=0; hole at slot 0 scores penalty[0]=16; duplicated slot scores 20; hole+dup+miss = 16+20+20 = 56; 25 unknown-address parameters reach exactly 500 (the selectModel threshold); the output hit scores 0"
+   },
+   {
+    "id": "param_list_merged_fold_in",
+    "setup": "ParamListMerged over staged lists a=[(g0,0x100,8,4)], b=[(g0,0x100,16,4),(g1,0x200,8,4)], stackList=[stack 8B@0x20 align 8]",
+    "queries": "fold=adopt|replace|subsumed|stackconflict|finalize|slot",
+    "expect": "empty union adopts a verbatim (size 1, base 0x100); b's first entry subsumes a's with matching minsize so it replaces in place (size 2, front 16B, back group 1); re-folding a is fully subsumed (size stays 2); the stack-backed list refuses ('Cannot merge prototype models with different stacks'); finalize leaves characterize codes 2/2/0 and slot pass-back (1, slot=1, slotsize=1)"
+   },
+   {
+    "id": "proto_model_merged_fold_in",
+    "setup": "ProtoModelMerged(&arch) folding m1 then m2 (extrapop 0 vs 8, trash 0x800 vs 0x900) then m3 (injectUponEntry 5)",
+    "queries": "pm=first|second|injectmismatch|ismerged",
+    "expect": "first fold adopts extrapop 0 with 3 effects and 2 trash; second fold demotes extrapop to extrapop_unknown (0x8000), keeps the identical 3 effects, and intersects trash to 1; m3 refuses ('Cannot merge prototype models with different inject ids'); numModels stays 0 across folds (modellist is decode's append, fspec.cc:2918) and 2 after the fixture performs decode's push"
+   },
+   {
+    "id": "select_model",
+    "setup": "staged modellist [m1, m2]; three ParamActive trial sets",
+    "queries": "sel=firstactive|nosub|threshold",
+    "expect": "a single active slot-1 trial selects m1 (identical input lists, strict-< keeps the first); no active trials scores 0 and also selects m1; 25 active unknown-address trials score 500 which is not < 500, so selectModel throws 'No model matches : missing default'"
+   }
+  ],
+  "sha256": "3a90387a6ce671de288fd71736527e9454b5765417e90236350b7413f77e01c7"
+ },
+ "observation_schema": "oracle-result-v1 (pending ORACLE-RESULT-0001; stdout rows are the interim observation record)",
+ "decisive_semantics": {
+  "reference_parameters": "foldIn takes const references and copies entry lists; selectModel takes ParamActive* and reads trials without mutation",
+  "iteration_order": "doScore sorts PEntry by slot (stable for equal slots); selectModel walks modellist in order and keeps the FIRST strict-better model, early-exiting at score 0",
+  "counters": "ScoreProtoModel.mismatch increments once per non-parameter address; finalscore = basescore + 20*mismatch; nextfree advances by p.size on continuation, max(p.slot+p.size, nextfree) on duplication",
+  "comparison_keys": "PEntry orders by slot alone; EffectRecord equality is (space,offset,size,type); VarnodeData order is (space index, offset, size descending); the extrapop demotion compares raw ints; the inject refusal compares both inject ids"
+ },
+ "coverage": {
+  "score_penalty_walk": "MATCH: exact 0 / hole 16 / dup 20 / mixed 56 / mismatch25 500 / output 0 byte-equal",
+  "param_list_merged_fold_in": "MATCH: adopt, subsume-replace, subsumed no-op, different-stacks refusal, finalize characterization+slot rows byte-equal",
+  "proto_model_merged_fold_in": "MATCH: first-fold adoption, extrapop demotion, inject refusal, effect identity + trash intersection, numModels 0 across folds byte-equal",
+  "select_model": "MATCH: strict-< first-best, no-active default, score-500 refusal byte-equal",
+  "join_resolver_window": "UNTESTED: join-piece resolver ranges not exercised",
+  "cspec_loaded_models": "UNTESTED: staged fixture models, not cspec-decoded production models",
+  "store_family": "UNTESTED: ProtoStoreSymbol/ParameterSymbol/encode_internal_store covered by Rust unit tests only (MIGW-FSPEC-0001 OPEN)",
+  "callsite_family": "UNTESTED: FuncCallSpecs call-site methods covered by Rust unit tests only (MIGW-FSPEC-0002 OPEN)"
+ },
+ "residuals": [
+  "MIGW-FSPEC-0001 store-family bilateral fixture (OPEN)",
+  "MIGW-FSPEC-0002 callsite-family bilateral fixture (OPEN)"
+ ],
+ "build": {
+  "ghidra_cxx": "g++ -std=c++11 -O0 against the locked decompile/cpp libdecomp.a (sleigh_arch.cc + inject_sleigh.cc + libdecomp.cc linked in; no bfd)",
+  "rust": "rustc --edition=2021 -O against the pinned-base crate rlib with the src/fspec.rs overlay",
+  "expected_stdout_lines": 25,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "4a4e8db2e7839173541984ed4140a8512a4ab528ce2c557d0feea5c12bdd7e27"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "df4b4fbd47cc059346b85183e17b7ae25ca44c57b65978cb44d50bcf21a5bf15",
+  "rugra_stdout_sha256": "df4b4fbd47cc059346b85183e17b7ae25ca44c57b65978cb44d50bcf21a5bf15"
+ }
+}

@@ -4291,21 +4291,15 @@ impl FuncCallSpecs {
             // Ghidra: finaloutvn = findPreexistingWhole(hivn, lovn); if null,
             // build the join (constructJoinAddress + SUBPIECE pair); else
             // reuse the preexisting PIECE whole and destroy its def too.
-            // FSPEC-OUTPUTJOIN-0001 (findPreexistingWhole 半项): the
-            // preexisting-whole probe is now the real
+            // The preexisting-whole probe is ported as
             // `FuncCallSpecs::find_preexisting_whole` (fspec.cc:5750-5760)
-            // — both pieces must share one lone PIECE descendant. When a
-            // whole exists, its def joins the destroy list (it is the
-            // INDIRECT-created PIECE op) and the whole is reused as the
-            // call output through the caller's join hook (the hook receives
-            // `Some(whole)` instead of synthesizing the SUBPIECE join);
-            // `None` keeps the historical build-the-join path.
-            let preexisting_whole = FuncCallSpecs::find_preexisting_whole(&hi_vn, &lo_vn);
-            if let Some(whole) = &preexisting_whole {
-                if let Some(def_weak) = whole.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-                    deleted_ops.push(crate::op::PcodeOpRef(def_weak));
-                }
-            }
+            // and unit-tested, but the wiring is deferred: hivn/lovn defs
+            // already capture the shared PIECE op (loneDescend of both
+            // pieces IS the PIECE), so destroying them matches Ghidra's
+            // deletedops in both arms, and switching the join hook to a
+            // Some(whole)-reuse arm is a hook-contract change that must
+            // ride with its own differential evidence (MIGW-FSPEC-0004).
+            let _ = FuncCallSpecs::find_preexisting_whole(&hi_vn, &lo_vn);
             let _finalout_vn = build_join_output(fd, call_op, &hi_vn, &lo_vn);
             // The join hook is responsible for opSetOutput(op, finaloutvn).
         } else {

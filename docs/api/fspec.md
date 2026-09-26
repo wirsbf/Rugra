@@ -1366,10 +1366,11 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   地址重钉）、`check_output_trial_use`（cc:5661-5677：checked 拒绝/
   active-inactive 二分）、`find_preexisting_whole`（cc:5750-5760：双 lone
   descendant 同一 PIECE→其 out）。
-- **FSPEC-OUTPUTJOIN-0001 半项接线**：`build_output_from_trials` 的
-  preexisting-whole 探测改为真实 `find_preexisting_whole`；命中时 whole 的
-  def 加入销毁列表（whole 经 join 钩子 `Some(whole)` 复用），未命中保持
-  既有 join 构建路径。
+- **FSPEC-OUTPUTJOIN-0001 半项**：`find_preexisting_whole` 移植完成
+  （静态方法本体 + 双 loneDescend/同一 PIECE/取 out 语义）。管线接线
+  **暂缓**（MIGW-FSPEC-0004）：hi/lo 的 def 本就是同一 PIECE op（两 piece
+  的 loneDescend 即 PIECE），销毁语义两臂同形；join 钩子增加 Some(whole)
+  复用臂属钩子契约变更，须随自身差分证据另行票决。
 - **FuncProto error_outputparam**（hh:1352/1464/1471）：`has_output_errors`/
   `set_output_errors` + 旗标字段（forceSet 依赖）。
 - **ParameterPieces::assign_address_from_pieces**（cc:2191-2207）：
