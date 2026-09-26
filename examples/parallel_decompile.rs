@@ -50,13 +50,10 @@
 //!   cargo run --profile fast-release --example parallel_decompile -- \
 //!       /tmp/sqlite3 --jobs 8 --max-funcs all
 //!
-//! Env: RUGRA_PAR_TIMEOUT_SECS  optional per-function soft timeout hint
-//!      (0/unset = unlimited). The timeout is cooperative: it is checked
-//!      between jobs, and a job that exceeds it is recorded as
-//!      "timeout-hint" but still allowed to finish (this driver has no
-//!      cross-thread kill; use bin_sweep's per-function child processes
-//!      for hard timeouts on corpora with known non-terminating
-//!      functions — PATHOSLOW-DIVCHAIN-0001 residual slow tail).
+//! No cross-thread timeout: a pathological function (PATHOSLOW-
+//!      DIVCHAIN-0001 residual slow tail) holds its worker until it
+//!      finishes. Hard per-function timeouts on such corpora remain the
+//!      bin_sweep per-child-process form's job.
 
 use goblin::Object;
 use serde::Serialize;
