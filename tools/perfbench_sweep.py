@@ -251,7 +251,11 @@ def sweep_time_v(argv: list[str], label: dict, timeout: float) -> dict:
         pass
 
     def seconds(name: str) -> float:
-        text = fields.get(name, "")
+        text = ""
+        for key, value in fields.items():
+            if key.startswith(name):
+                text = value
+                break
         pieces = text.replace("h", ":").replace("m", ":").replace("s", "")
         try:
             if ":" in pieces:
