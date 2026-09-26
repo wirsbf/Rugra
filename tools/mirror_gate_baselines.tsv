@@ -28,6 +28,10 @@
 # 首次全绿——官方 gate PASS: skeleton 7029/7500 · defects 0 · numbering 0 · matched 810/810 · health ok。
 # 本波只更新头注释, 表内数字不动: ceiling 7500（实测 7029, 余量 471 合理保持——收紧须先登记
 # TODO 再改本行, 留下一波）; floor 810 = matched 现值保持。
+# 2026-09-26 MERGEBATCH15 注记（subcommute 并入态）: sq 面 SEXT16 除法成语折叠命中 11/810 函数
+# （queue_put/queue_get 族 SUB164(SEXT816%SEXT816,0) 位移除等, 方向全向 golden, 逐函数归因见
+# merge 81a47f45 ## Differential 块）——skeleton 6818→6778（−40 改善）。ceiling 7500 不动
+# （收紧须先登记 TODO）; floor 810 保持; 现态 6778 记账于此, curl/httpd/vsh 三面数字不变未重钉。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
 curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 httpd	150	29	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
