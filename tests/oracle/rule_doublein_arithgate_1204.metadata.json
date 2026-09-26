@@ -1,0 +1,143 @@
+{
+ "schema_version": 2,
+ "fixture_id": "RULE-DOUBLEIN-ARITHGATE-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "The eleven-line covered projection matches RuleDoubleIn::getOpList and all ten attemptMarking whole-def shapes (three marked arithmetic wholes, six rejected logical/shift/no-flag wholes, one offset-precondition reject). Byte-identical between the locked Ghidra 12.0.4 oracle and Rugra at the GEN4-SQ-BYTELANE-STRUCT-0001 fix commit.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "instrumentation_policy": "Unpatched locked oracle: the fixture drives the production RuleDoubleIn::getOpList/applyOp directly through public APIs; no oracle source is modified."
+ },
+ "rugra_base_commit": "9ac04ade0e6ef5665295e71022388597ca96b33f",
+ "architecture": {
+  "id": "synthetic-le64-rule-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte addressed",
+  "type_factory": "one architecture-owned factory shared by all cases; canonical xunknown1/2/4/8 (no case reads a datatype beyond the rule's own guards)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no effects, symbols, or injections"
+ },
+ "analysis_options": {
+  "api": "Direct production RuleDoubleIn::getOpList once and RuleDoubleIn::applyOp once per case; no ActionPool, no restart, no heritage",
+  "funcdata": "Fresh synthetic Funcdata and BlockBasic per case; high-level mode disabled",
+  "ir": "A=register:0x40 and B=register:0x50 two-byte inputs (ZEXT case adds A1=register:0x60 one-byte input); the whole-defining op at ram:0x2000 with a two-byte unique output W; SUBPIECE(W,1) -> one-byte hi at ram:0x2010; SUBPIECE(W,0) -> one-byte lo at ram:0x2020",
+  "normalization": "None. The emitted projection uses semantic scalar values and exact flag reads; no addresses, ids, or orderings are normalized.",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction and rule execution are deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "int_add_whole",
+    "shape": "int_add_whole",
+    "ir": "A,B register inputs; INT_ADD(A,B) at ram:0x2000 with 2-byte unique output W; SUBPIECE(W,1)->1B hi at 0x2010; SUBPIECE(W,0)->1B lo at 0x2020",
+    "expect": "MARK: res=1, hi precisHi, lo precisLo (arithmetic_op, typeop.cc:1171)"
+   },
+   {
+    "id": "int_mult_whole",
+    "shape": "int_mult_whole",
+    "ir": "INT_MULT(A,B) whole; same SUBPIECE pair",
+    "expect": "MARK: res=1 (arithmetic_op, typeop.cc:1621)"
+   },
+   {
+    "id": "int_2comp_whole",
+    "shape": "int_2comp_whole",
+    "ir": "INT_2COMP(A) whole; same SUBPIECE pair",
+    "expect": "MARK: res=1 (arithmetic_op, typeop.cc:1384)"
+   },
+   {
+    "id": "int_or_whole",
+    "shape": "int_or_whole",
+    "ir": "INT_OR(A,B) whole; same SUBPIECE pair",
+    "expect": "REJECT: res=0, no flags (logical_op, typeop.cc:1478) — the read_inode_1 0x156998 byte-lane shape"
+   },
+   {
+    "id": "int_xor_whole",
+    "shape": "int_xor_whole",
+    "ir": "INT_XOR(A,B) whole; same SUBPIECE pair",
+    "expect": "REJECT: res=0 (logical_op, typeop.cc:1445)"
+   },
+   {
+    "id": "int_and_whole",
+    "shape": "int_and_whole",
+    "ir": "INT_AND(A,B) whole; same SUBPIECE pair",
+    "expect": "REJECT: res=0 (logical_op, typeop.cc:1412)"
+   },
+   {
+    "id": "int_negate_whole",
+    "shape": "int_negate_whole",
+    "ir": "INT_NEGATE(A) whole; same SUBPIECE pair",
+    "expect": "REJECT: res=0 (logical_op, typeop.cc:1398)"
+   },
+   {
+    "id": "int_left_whole",
+    "shape": "int_left_whole",
+    "ir": "INT_LEFT(A,1) whole; same SUBPIECE pair",
+    "expect": "REJECT: res=0 (shift_op only, typeop.cc:1506)"
+   },
+   {
+    "id": "int_zext_whole",
+    "shape": "int_zext_whole",
+    "ir": "INT_ZEXT(A1) whole (1-byte input); same SUBPIECE pair",
+    "expect": "REJECT: res=0 (TypeOpIntZext carries no arithmetic flag, typeop.cc:1115-1119)"
+   },
+   {
+    "id": "offset_mismatch",
+    "shape": "int_add_whole",
+    "ir": "INT_ADD whole; rule aimed at the lo SUBPIECE (offset 0 != out size 1)",
+    "expect": "REJECT: res=0 (double.cc:3227 offset==vn->getSize() precondition)"
+   }
+  ],
+  "sha256": "cbf11599ff20c06660173b3e094fa6dc71fbfc3fa129fdd0aadd3feeaf5a21c0"
+ },
+ "observation_schema": {
+  "format": "Eleven fixed-order UTF-8 lines with final newline: one getOpList record followed by ten case records",
+  "rule_result_and_opcode": "Exact getOpList count/opcode (SUBPIECE=63) and applyOp return per case",
+  "marking_flags": "target_precis_hi and sibling_precis_lo read from the production Varnode flag accessors after the single applyOp",
+  "op_counts": "alive op count per case pins that attemptMarking only sets flags (no restructuring, no op churn)"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for all ten cases: the rule target is the hi SUBPIECE's op pointer (lo SUBPIECE for offset_mismatch); flags are read from the target/sibling output varnodes; no varnode is freed by a firing (attemptMarking only sets precisLo/precisHi).",
+  "loop_bounds_and_order": "MATCH for getOpList's single push and attemptMarking's guard order: typelock check, offset==vn size, offset*2==whole size, whole input/written classification, whole-def arithmetic-or-floating categorization, then the vnLo descendant scan (double.cc:3218-3257).",
+  "counters_and_accumulators": "MATCH for alive counts: every case keeps exactly three alive ops (whole def + two SUBPIECEs); no case changes op counts.",
+  "sort_and_comparison_keys": "MATCH for the vnLo scan's per-descendant comparisons (CPUI_SUBPIECE, in(1) offset==0, out size==vn size) and the whole-def TypeOp flag test (isArithmeticOp || isFloatingPointOp)."
+ },
+ "coverage": {
+  "getoplist_subpiece_only": "MATCH",
+  "int_add_whole_mark": "MATCH",
+  "int_mult_whole_mark": "MATCH",
+  "int_2comp_whole_mark": "MATCH",
+  "int_or_whole_reject": "MATCH",
+  "int_xor_whole_reject": "MATCH",
+  "int_and_whole_reject": "MATCH",
+  "int_negate_whole_reject": "MATCH",
+  "int_left_whole_reject": "MATCH",
+  "int_zext_whole_reject": "MATCH",
+  "offset_mismatch_reject": "MATCH",
+  "pool_applyrulein_path": {
+   "scope": "direct one-shot attemptMarking path only; the isPrecisLo applyRuleIn restructuring path (double.cc:3267-3278) is not exercised by this fixture",
+   "status": "UNTESTED"
+  }
+ },
+ "residual_todo_ids": [],
+ "comparand": {
+  "cpp_fixture_sha256": "c39519e060be884af5caea31cdaa90a7b7fe047a5f7857e6e9cf79bc95a003fb",
+  "rust_fixture_sha256": "804e30556fc1790c9c38ee89512c34205a2c0f68892ce70b4f4f959ed3cefa73",
+  "double_precis_rs_sha256": "ea87c102947951ded8b8dee612bdd1bb3e6ad02dec514931bfd6e521121649e8",
+  "expected_ghidra_stdout_sha256": "b59d7a3add459f9d767fdbc33cb373115e870351a1dfcc9fbf71ce1dac3bcf45",
+  "expected_rugra_stdout_sha256": "b59d7a3add459f9d767fdbc33cb373115e870351a1dfcc9fbf71ce1dac3bcf45"
+ },
+ "build": {
+  "expected_stdout_lines": 11
+ }
+}

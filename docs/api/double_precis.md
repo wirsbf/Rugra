@@ -1,5 +1,29 @@
 # `double_precis.rs` API Reference
 
+## 2026-09-26：`is_arithmetic_op` 对齐 oracle TypeOp 旗标表（BYTELANE）
+
+`is_arithmetic_op`（RuleDoubleIn/RuleDoubleOut attemptMarking 的 whole-def
+分类门，double.cc:3239 `typeop->isArithmeticOp()` 的 opcode 枚举镜像）此前
+错误地把 INT_ZEXT/INT_SEXT/INT_NEGATE/INT_XOR/INT_AND/INT_OR/INT_LEFT/
+INT_RIGHT/INT_SRIGHT/PIECE/SUBPIECE 全部列为 arithmetic。逐构造器核对锁定
+oracle typeop.cc 的 `addlflags` 权威表后修正为恰好 13 个
+arithmetic_op 旗标持有者：INT_ADD(:1171)/INT_SUB(:1322)/INT_CARRY(:1336)/
+INT_SCARRY(:1352)/INT_SBORROW(:1368)/INT_2COMP(:1384)/INT_MULT(:1621)/
+INT_DIV(:1635)/INT_SDIV(:1655)/INT_REM(:1675)/INT_SREM(:1695)/PTRADD(:2228)/
+PTRSUB(:2304)；logical_op（INT_AND/INT_OR/INT_XOR/INT_NEGATE，:1398/1412/
+1445/1478）、shift_op（INT_LEFT/INT_RIGHT/INT_SRIGHT，:1506/1531/1571）与
+无旗标构造器（INT_ZEXT/INT_SEXT/PIECE/SUBPIECE）全部拒绝。
+
+**行为效应（GEN4-SQ-BYTELANE-STRUCT-0001）**：sq 语料 read_inode_1 的
+0x156998 字节车道里，refineWrite 拆出的 2B whole 由 INT_OR 定义；旧清单把
+INT_OR 误判为 arithmetic，RuleDoubleIn 在 SUBPIECE(W,1) 上错误标记
+double-precision half 对并触发 1433 次 SplitVarnode::applyRuleIn 重构级联，
+摧毁 heritage 已建立的 1B MULTIEQUAL/INDIRECT 结构（oracle 同点
+`REJECT consume`/`def-notarith` 拒绝）。修复后 sq 镜面 4481→4323（−158），
+read_inode_1 骨架 178→80，canon curl/httpd 与 master 档案字节恒等。B2 双侧
+fixture `tests/oracle/rule_doublein_arithgate_1204.*`（11 行投影 sha
+b59d7a3a…双侧恒等）钉死该门。
+
 ## 2026-08-24：RuleDoubleIn reset 接入 pool virtual-reset seam
 
 `RuleDoubleIn` 的派生 reset（double.cc:3198-3202，

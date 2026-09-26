@@ -7162,29 +7162,38 @@ impl Rule for RuleDoubleStore {
 /// `TypeOp::isArithmeticOp()` — opcodes whose result is an arithmetic function
 /// of integer operands. (typeop.hh / typeop.cc) Enumerated explicitly against
 /// Rugra's `OpCode` variants.
+///
+/// The set mirrors the locked oracle's `addlflags = arithmetic_op` table in
+/// typeop.cc exactly (verified per-constructor, 2026-09-26 BYTELANE):
+/// TypeOpIntAdd (typeop.cc:1171), TypeOpIntSub (:1322), TypeOpIntCarry
+/// (:1336), TypeOpIntScarry (:1352), TypeOpIntSborrow (:1368), TypeOpInt2Comp
+/// (:1384), TypeOpIntMult (:1621), TypeOpIntDiv (:1635), TypeOpIntSdiv
+/// (:1655), TypeOpIntRem (:1675), TypeOpIntSrem (:1695), TypeOpPtradd
+/// (:2228), TypeOpPtrsub (:2304). Everything else is NOT arithmetic:
+/// INT_ZEXT/INT_SEXT/PIECE/SUBPIECE constructors carry no `arithmetic_op`
+/// flag; INT_AND/INT_OR/INT_XOR/INT_NEGATE are `logical_op` (typeop.cc:1398,
+/// 1412, 1445, 1478); INT_LEFT/INT_RIGHT/INT_SRIGHT are `shift_op` only
+/// (typeop.cc:1506/1531/1571). The former list wrongly included the logical,
+/// shift, extension and concatenation opcodes, which let RuleDoubleIn mark
+/// INT_OR-defined byte-lane wholes as double-precision halves where the
+/// oracle rejects (GEN4-SQ-BYTELANE-STRUCT-0001).
 fn is_arithmetic_op(opc: OpCode) -> bool {
     use OpCode::*;
     matches!(
         opc,
-        CPUI_INT_ZEXT
-            | CPUI_INT_SEXT
-            | CPUI_INT_NEGATE
-            | CPUI_INT_2COMP
-            | CPUI_INT_ADD
+        CPUI_INT_ADD
             | CPUI_INT_SUB
+            | CPUI_INT_CARRY
+            | CPUI_INT_SCARRY
+            | CPUI_INT_SBORROW
+            | CPUI_INT_2COMP
             | CPUI_INT_MULT
             | CPUI_INT_DIV
             | CPUI_INT_SDIV
             | CPUI_INT_REM
             | CPUI_INT_SREM
-            | CPUI_INT_XOR
-            | CPUI_INT_AND
-            | CPUI_INT_OR
-            | CPUI_INT_LEFT
-            | CPUI_INT_RIGHT
-            | CPUI_INT_SRIGHT
-            | CPUI_PIECE
-            | CPUI_SUBPIECE
+            | CPUI_PTRADD
+            | CPUI_PTRSUB
     )
 }
 
