@@ -522,3 +522,31 @@ wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
   层；他人发布不动。
 - 详见 `docs/api/type_system/typefactory.md` 同日条目与
   `docs/alignment_docs/TYPEFACTORY_PERARCH_2026-09-26.md`。
+
+## 2026-09-26（Lane F4WEBTYPE）— `add_to_global_scope` 寄存器空间过滤（architecture.cc:680）
+
+`add_to_global_scope` 不再把 REGISTER 空间范围追加进 `infer_ptr_spaces`：
+x86-64-gcc.cspec 的 `<global>` 携带 `<register name="MXCSR"/>`（寄存器空间范
+围），oracle 的 `Architecture::cacheAddrSpaceProperties`
+（architecture.cc:680-683）以 `if (spc->getDelay() == 0) continue; // Don't
+put in a register space` 把寄存器空间从 inferPtrSpaces 过滤——范围仍进全局
+作用域（`global_scope_ranges` 不变），仅推理列表排除。Rugra 侧曾把 Register
+（addr_size=4）推入列表，使 4 字节字符串地址常量通过
+`select_infer_space` 的精确尺寸门（4==4）被 `ActionConstantPtr`→
+`spacebase_constant` 改写成 4 字节 `PTRSUB(spacebase,#addr)`，再被
+`RulePtrsubCharConstant` 折叠成 char\* 常量——httpd main 的
+`apr_app_initialize` 返回值 int 网被整体误定型 char\*
+（`pcVar4 = "ptemp"` vs oracle `int iVar3 = 0x17a422`，
+HTTPDMAIN-F4-WEBTYPE-0001）。修后 oracle 尺寸门照抄：Ram(8) 拒绝 4 字节常
+量 → 裸常量保持 → int 网保真。双侧 fixture：
+`tests/oracle/coreaction_constptr_registerspace_1204`
+（inferPtrSpaces 名单 + sz8 容器命中转 PTRSUB/charPrint 指针 +
+sz4 flag-web 同址保持裸常量 + sz8 无容器 miss 四例 MATCH）。
+
+### 2026-09-26 — CSPEC-GLOBAL-APPLY-0001 合并注记（MERGEBATCH17 语义 union）
+
+`add_to_global_scope`/`add_other_space` 自本批起为**双通道**：寄存器空间
+过滤（上节）+ 解析期 DB 直写（`symboltab->addRange` architecture.cc:833/852
+write-through——范围无条件落全局 scope 的 space-keyed ScopeRangeTree，含
+register 窗口；仅 `infer_ptr_spaces` 列表排除寄存器空间）。两通道均为
+oracle 语义，互不冲突。

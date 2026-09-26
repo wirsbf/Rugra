@@ -1,0 +1,137 @@
+{
+ "schema_version": 1,
+ "fixture_id": "HTTPDMAIN-F4-WEBTYPE-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "instrumentation_policy": "No instrumentation: the fixture drives the public RuleStoreVarnode/RuleLoadVarnode::applyOp and Funcdata::spacebase entry points of the locked oracle; observations read only public state (Varnode space/offset/size, isStackStore, PcodeOp opcode/inputs)."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "entry": "Direct ActionConstantPtr::apply calls over hand-built Funcdata IR (one COPY(Const,addr) + INT_EQUAL web per case), on a BfdArchitecture whose global scope carries a char[6] container symbol at 0x4e000; inferPtrSpaces read directly from the Architecture after full spec init",
+  "container_symbol": "global scope char[6] 'ptemp_sim' at ram:0x4e000 (Scope::addSymbol database.cc:1530) + miss address 0x4f001",
+  "normalization": "Stable case names only. Unique-space offsets and raw space-id constant values are not observed on either side (allocation-only temporaries / process-local space-id encodings). No flags, input order, opcode, output size, type metatype, or charPrint-pointee state is normalized."
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "2a12c22629c55ec57b0600c78c644d887f847fd7",
+   "source_ref": "2a12c22629c55ec57b0600c78c644d887f847fd7:sleigh_specs/x86-64.sla",
+   "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+   "size": 484937
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "2a12c22629c55ec57b0600c78c644d887f847fd7",
+   "source_ref": "2a12c22629c55ec57b0600c78c644d887f847fd7:sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "2a12c22629c55ec57b0600c78c644d887f847fd7",
+   "source_ref": "2a12c22629c55ec57b0600c78c644d887f847fd7:sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "2a12c22629c55ec57b0600c78c644d887f847fd7",
+   "source_ref": "2a12c22629c55ec57b0600c78c644d887f847fd7:sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
+  },
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "2a12c22629c55ec57b0600c78c644d887f847fd7",
+   "source_ref": "2a12c22629c55ec57b0600c78c644d887f847fd7:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
+  },
+  "bfd": {
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "platform": "Linux 6.8.0-124-generic x86_64"
+ },
+ "known_dependencies": {
+  "ARCH-0001": {
+   "status": "MISMATCH",
+   "detail": "Rugra's enum-space Architecture stands in for Ghidra's AddrSpace* registry: getSpaceBySpacebase/getContain are keyed by the AddressSpace enum + flattened stack_* config rather than per-space record stores. This fixture proves the observable spacebase-resolution behavior (9/9 records byte-identical) but not full AddrSpace object identity."
+  },
+  "CALLSPECS-0001": {
+   "status": "UNTESTED",
+   "detail": "RuleLoadVarnode::applyOp spacebase-placeholder tail (ruleaction.cc:4294-4303, resolveSpacebaseRelative via FuncCallSpecs) is not modeled in Rugra; the fixture's LOAD case has no spacebase-placeholder output so the tail is unreached on both sides."
+  },
+  "SCOPELOCAL-0001": {
+   "status": "UNTESTED",
+   "detail": "RuleStoreVarnode::applyOp isStoreUnmapped/markNotMapped tail (ruleaction.cc:4337-4339) needs ScopeLocal::markNotMapped, not modeled in Rugra; the fixture's STORE is not store-unmapped so the tail is unreached on both sides."
+  }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "9666b04bb424718e41b5bb5cd7b196a0ed3e4dd8",
+   "source_ref": "9666b04bb424718e41b5bb5cd7b196a0ed3e4dd8:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
+  },
+  "function": "GetStr (host scope only; cases run on cleared IR)",
+  "cases": [
+   {
+    "name": "inferptr_spaces",
+    "form": "Architecture::inferPtrSpaces name list after full cspec init (register-space filter, architecture.cc:680)"
+   },
+   {
+    "name": "constptr_sz8_container",
+    "form": "COPY(Const8 0x4e000) -> INT_EQUAL web; container symbol hit converts to PTRSUB with charPrint-pointer output"
+   },
+   {
+    "name": "constptr_sz4_container",
+    "form": "COPY(Const4 0x4e000) -> INT_EQUAL web (httpd flag-web form); NO inferPtrSpaces member passes the size gate, constant stays bare"
+   },
+   {
+    "name": "constptr_sz8_nocontainer",
+    "form": "COPY(Const8 0x4f001) -> INT_EQUAL web; queryContainer miss leaves the COPY alone"
+   }
+  ],
+  "sha256": "889535a2b3705c63383ff729840168e9242116763086e463abaa941815a2f684"
+ },
+ "comparand": {
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-coreaction-constptr-registerspace-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+  "cpp_fixture_sha256": "f79d033436c3492d3b4c2028e491e0593923f34364e7ca2330202540fe598eaa",
+  "rust_fixture_sha256": "23234a81df92775f7be1d15ac710475a5488b86be6ad7bc5135bc3b2d63c0e0c",
+  "runner_sha256": "6e9fb8c2cdafe41d1574829339bd44dd339b24d9a0f9479d2c6baad673723fca",
+  "rust_crate_tree_sha256": "727d1bc01f18f351a60f4242874c41aeb51d9699acc7d254841fdd9f88fc5985"
+ },
+ "expected_exit_code": 0,
+ "expected_stdout_sha256": "42810918fa2026ada8c0ff36c8bcc683bd5150d0b5a2e6ce43168854cc8ccf4e",
+ "overall_status": "MATCH: inferPtrSpaces registry (register-space filter) + 3 ActionConstantPtr cases (sz8 container hit converts to PTRSUB charPrint-pointer, sz4 flag-web constant stays bare at the same address, sz8 no-container miss) are byte-identical under the locked oracle; ARCH-0001 enum-space stand-in remains a known MISMATCH at the full-state level and CALLSPECS-0001/SCOPELOCAL-0001 tails remain UNTESTED",
+ "coverage": {
+  "registry_inferptr_spaces": "MATCH",
+  "constptr_sz8_container": "MATCH",
+  "constptr_sz4_container": "MATCH",
+  "constptr_sz8_nocontainer": "MATCH"
+ }
+}

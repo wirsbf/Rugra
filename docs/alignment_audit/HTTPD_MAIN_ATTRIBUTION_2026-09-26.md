@@ -57,3 +57,5 @@ F3 (双重占用) —— fixture 先行, 修复等车道
 **验证口径**：F1 修复后必须重跑 `compare_ghidra.py --func main`（预期 499→~180±30：剩 F2 ~140 + F4 ~16 + F3 ~5 + F6 3 + F8 5 + F5 残余）；F1/F8 各自独立可验证（F1：exit(1) 后无死代码+无假环；F8：`for (ppuVar14 = &ap_prelinked_modules; …)` 出现）。所有差分非零可提交进度，但每处残余按铁律 3 绑 TODO ID。
 
 **归档说明**：本报告为只读归因，未改任何文件；fixture/中间产物在 `/dev/shm/rugra-tests/httpdmain/`（rugra_main.c/golden_main.c/归一化 diff 阶梯：789→647→473→461），重启即丢，root 需要可自行复现（提取区间：Rugra L14-552，golden L3486-4019）。
+
+**后续裁定（2026-09-26 Lane F4WEBTYPE 收口）**：F4 行的"写域=src/printc.rs+类型传播层"预判部分失效——printc 侧 PTRSTAMP 是渲染非戳型；真根因=arch.rs `add_to_global_scope` 把 cspec `<global>` 的 `<register name="MXCSR"/>` 范围推入 `infer_ptr_spaces`（oracle architecture.cc:680 delay-0 过滤恒排除寄存器空间），4 字节字符串地址常量因此过 Register 4==4 尺寸门被 ActionConstantPtr→RulePtrsubCharConstant 折成 char\* 常量污染 int 网。修复后 main F4 主体族全消（39→13，残余=F6/F8/RETADDR/命名 web 已登记族）。详见 TODO_BOARD HTTPDMAIN-F4-WEBTYPE-0001 DONE 行。

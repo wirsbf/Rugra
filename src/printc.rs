@@ -8297,6 +8297,80 @@ impl PrintC {
     /// - else -> `pushMismatchSymbol` (printc.cc:2067-2083): `_name`
     ///   when off==0, else `pushUnnamedLocation` of the VN's own address
     ///   (printc.cc:2082).
+    // Ghidra: printc.cc:1698 PrintC::pushPtrCharConstant
+    /// Oracle string-render eligibility gate for a constant varnode
+    /// (HTTPDMAIN-F4-WEBTYPE-0001).
+    ///
+    /// Ghidra prints a quoted string for an address constant through exactly
+    /// one channel: `PrintC::pushConstant`'s TYPE_PTR arm
+    /// (printc.cc:1779-1790) first checks
+    /// `subtype = ((TypePointer *)ct)->getPtrTo(); if
+    /// (subtype->isCharPrint())` (printc.cc:1781-1782) and only then calls
+    /// `pushPtrCharConstant` (printc.cc:1698-1725: val!=0, resolveConstant,
+    /// global-scope isReadOnly, printCharacterConstant). There is NO
+    /// address-keyed string lookup anywhere in the oracle print path — a
+    /// string renders iff the varnode CARRIES a char-print pointer type.
+    ///
+    /// The char* type itself reaches the varnode only through the typing
+    /// layer: `ActionInferTypes::buildLocaltypes` (coreaction.cc:5008-5042)
+    /// seeds a CALL/CALLIND input's local type from the callspec's
+    /// TYPE-LOCKED parameter (`TypeOpCall::getInputLocal`, typeop.cc:687-716,
+    /// `param->isTypeLocked()` + non-void + size <= varnode) or from program
+    /// data types, then `writeBack` (coreaction.cc:5043-5066) materializes
+    /// it; `RulePtrsubCharConstant` (ruleaction.cc:7354) re-types the
+    /// collapsed lea constant only when the PTRSUB output is ALREADY char*
+    /// (ruleaction.cc:7366-7369). Rugra's former Priority 0 emitted string
+    /// literals by bare `string_table` address membership — a channel the
+    /// oracle does not have — which typed-or-not rendered "ptemp" for the
+    /// int web `iVar3 = 0x17a422` (httpd main F4 family).
+    ///
+    /// This gate admits exactly the two oracle-shaped paths:
+    ///  - **Gate A** (pushConstant's own condition, printc.cc:1782): the
+    ///    varnode's type is a pointer whose pointee `is_char_print()`.
+    ///  - **Gate B** (the TypeOpCall::getInputLocal channel above): the
+    ///    varnode is input slot >= 1 of a CPUI_CALL whose slot-0 fspec
+    ///    annotation carries a callspec whose prototype locks that slot as
+    ///    a char-print pointer — the type the oracle's buildLocaltypes
+    ///    seeds for that slot even before propagation materializes it on
+    ///    every varnode. (CALLIND resolves its callspec through the parent
+    ///    Funcdata, typeop.cc:757 — PrintC holds no fd channel, so CALLIND
+    ///    args rely on Gate A only.)
+    fn string_render_eligible(&self, vn: &crate::varnode::Varnode, op: Option<&PcodeOp>) -> bool {
+        use crate::type_system::datatype::Datatype;
+        // Gate A: printc.cc:1781-1782 `subtype->isCharPrint()`.
+        if let Some(Datatype::Pointer(p)) = vn.v_type.as_deref() {
+            if p.ptr_to.is_char_print() {
+                return true;
+            }
+        }
+        // Gate B: typeop.cc:687-716 TypeOpCall::getInputLocal — the
+        // callspec's type-locked parameter type for this input slot.
+        if let Some(op) = op {
+            if op.opcode == crate::opcodes::OpCode::CPUI_CALL {
+                let slot = Self::op_input_slot_of(op, vn);
+                if slot >= 1 {
+                    if let Some(in0) = op.get_in(0) {
+                        let call_spec = in0.read().unwrap().get_call_spec();
+                        if let Some(spec_arc) = call_spec {
+                            let spec = spec_arc.read().unwrap();
+                            if let Some(param) = spec.prototype.get_param((slot - 1) as usize) {
+                                if param.is_type_locked() {
+                                    if let Datatype::Pointer(p) = param.data_type.as_ref() {
+                                        if p.ptr_to.is_char_print() {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
     /// Returns `None` when the varnode has no symbol-bearing high — the
     /// caller then runs its legacy fallback ladder (the oracle's sole
     /// sym==null arm is `pushUnnamedLocation`; Rugra's address proxy is
@@ -13038,7 +13112,15 @@ impl PrintLanguage for PrintC {
                 }
                 return;
             }
-            if !is_bitwise_context {
+            // HTTPDMAIN-F4-WEBTYPE-0001: the string literal renders only
+            // through the oracle's typed channel — pushConstant TYPE_PTR
+            // pointee isCharPrint (printc.cc:1781-1782) or the callspec's
+            // type-locked char* parameter the typing layer seeds from
+            // (TypeOpCall::getInputLocal, typeop.cc:687-716). See
+            // string_render_eligible for the full oracle chain. A bare
+            // string_table address hit with neither type renders as the
+            // plain constant below, like the oracle's `iVar3 = 0x17a422`.
+            if !is_bitwise_context && self.string_render_eligible(vn, op) {
                 if let Some(str_val) = self.string_table.get(&addr) {
                     if !self.discovery_pass {
                         let display = if str_val.len() > 80 {
@@ -13183,13 +13265,27 @@ impl PrintLanguage for PrintC {
                                     }
                                     return;
                                 }
-                                if let Some(str_val) = self.string_table.get(&src_offset) {
-                                    if !self.discovery_pass {
-                                        self.emit.print(&format!(
+                                // HTTPDMAIN-F4-WEBTYPE-0001: same oracle
+                                // gate as Priority 0 (printc.cc:1781-1782
+                                // typed channel only). The COPY source is
+                                // not itself the printed leaf, so the
+                                // eligibility runs on the source varnode's
+                                // own type (Gate A); a locked-prototype
+                                // channel cannot apply through a COPY.
+                                let src_vn = def_op.inrefs[0].clone();
+                                let src_char_print = {
+                                    let sv = src_vn.read().unwrap();
+                                    self.string_render_eligible(&sv, None)
+                                };
+                                if src_char_print {
+                                    if let Some(str_val) = self.string_table.get(&src_offset) {
+                                        if !self.discovery_pass {
+                                            self.emit.print(&format!(
                                                 "\"{}\"", escape_c_string(str_val)
                                             ));
+                                        }
+                                        return;
                                     }
-                                    return;
                                 }
                                 // Substring lookup in Case A
                                 if src_offset >= 256 {
@@ -19999,6 +20095,144 @@ mod tests {
         assert_eq!(
             PrintC::constant_print_flags(&vn.read().unwrap()),
             (false, false)
+        );
+    }
+
+    /// HTTPDMAIN-F4-WEBTYPE-0001: the Priority-0 string literal render is
+    /// gated by the oracle's typed channel — pushConstant's TYPE_PTR arm
+    /// (printc.cc:1781-1782 pointee isCharPrint) or the callspec's
+    /// type-locked char* parameter that TypeOpCall::getInputLocal
+    /// (typeop.cc:687-716) seeds. A bare string_table address hit with
+    /// neither type renders as the plain constant (the oracle's
+    /// `int iVar3 = 0x17a422`, not `pcVar4 = "ptemp"`). Regression-only
+    /// hand expectations (B2 oracle truth: the bilateral fixture
+    /// coreaction_constptr_registerspace_1204 covers the typing channel).
+    #[test]
+    fn test_string_render_eligible_oracle_gates() {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer,
+        };
+
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        printer.string_table.insert(0x1000, "ptemp".to_string());
+
+        // (a) Untyped constant at a string-table address: NOT eligible.
+        let bare = crate::varnode::Varnode::new_constant(0x1000, 8);
+        assert!(
+            !printer.string_render_eligible(&bare, None),
+            "bare string-address constant must render as the plain constant"
+        );
+
+        // (b) char*-typed (charPrint pointee): eligible — Gate A
+        // (printc.cc:1781-1782).
+        let char_print = {
+            let mut b = TypeBase::new("char".to_string(), 1, TypeMetatype::Int);
+            b.flags |= type_flags::CHARTYPE;
+            Arc::new(Datatype::Base(b))
+        };
+        let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: char_print,
+            wordsize: 1,
+        }));
+        let mut typed = crate::varnode::Varnode::new_constant(0x1000, 8);
+        typed.v_type = Some(char_ptr);
+        assert!(
+            printer.string_render_eligible(&typed, None),
+            "char*-typed constant is the oracle's pushPtrCharConstant channel"
+        );
+
+        // (c) A pointer to NON-charPrint pointee (int*): not eligible —
+        // the isCharPrint gate itself.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t,
+            wordsize: 1,
+        }));
+        let mut int_ptr_vn = crate::varnode::Varnode::new_constant(0x1000, 8);
+        int_ptr_vn.v_type = Some(int_ptr);
+        assert!(
+            !printer.string_render_eligible(&int_ptr_vn, None),
+            "int* pointee fails printc.cc:1782 isCharPrint"
+        );
+
+        // (d) Gate B: the callspec's type-locked char* parameter types an
+        // untyped CALL input slot (TypeOpCall::getInputLocal channel).
+        use crate::address::SeqNum;
+        use crate::fspec::protoparam_flags;
+        use crate::fspec::{FuncCallSpecs, FuncProto, ProtoParameter};
+        use crate::op::PcodeOp;
+        use crate::opcodes::OpCode;
+        use crate::varnode::varnode_flags;
+        let char_ptr2 = typed.v_type.clone().unwrap();
+
+        let target = Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x2000, 8),
+        ));
+        target.write().unwrap().flags |= varnode_flags::ANNOTATION;
+        fn mk_arg() -> crate::varnode::Varnode {
+            crate::varnode::Varnode::new_constant(0x1000, 8)
+        }
+
+        let mut param = ProtoParameter::new(
+            "tag".to_string(),
+            char_ptr2.clone(),
+            Address::new(0x10),
+        );
+        param.flags |= protoparam_flags::TYPE_LOCKED;
+        let mut proto = FuncProto::new("apr_pool_tag".to_string(), char_ptr2.clone());
+        proto.parameters.push(param);
+        let spec_arc = Arc::new(std::sync::RwLock::new(FuncCallSpecs::new(
+            Address::new(0x3000),
+            proto,
+        )));
+        // The Iop-space annotation channel carrying the callspec
+        // (TYPEOP-FSPEC-SPACE-0001).
+        let mut anno = crate::varnode::Varnode::new_constant(0, 8);
+        anno.flags |= varnode_flags::ANNOTATION;
+        anno.bind_call_spec(&spec_arc);
+
+        let mut op =
+            PcodeOp::new(SeqNum::new(Address::new(0x3000), 1), OpCode::CPUI_CALL);
+        op.inrefs = vec![
+            Arc::new(std::sync::RwLock::new(anno)),
+            Arc::new(std::sync::RwLock::new(mk_arg())),
+        ];
+        assert!(
+            printer.string_render_eligible(&mk_arg(), Some(&op)),
+            "type-locked char* call slot is the getInputLocal typing channel"
+        );
+
+        // (e) Same op but the slot-1 param is NOT type-locked: no channel.
+        let mut param2 = ProtoParameter::new(
+            "tag".to_string(),
+            char_ptr2,
+            Address::new(0x10),
+        );
+        param2.flags &= !protoparam_flags::TYPE_LOCKED;
+        let mut proto2 = FuncProto::new("apr_pool_tag".to_string(), typed.v_type.clone().unwrap());
+        proto2.parameters.push(param2);
+        let spec2_arc = Arc::new(std::sync::RwLock::new(FuncCallSpecs::new(
+            Address::new(0x3000),
+            proto2,
+        )));
+        let mut anno2 = crate::varnode::Varnode::new_constant(0, 8);
+        anno2.flags |= varnode_flags::ANNOTATION;
+        anno2.bind_call_spec(&spec2_arc);
+        let mut op2 =
+            PcodeOp::new(SeqNum::new(Address::new(0x3000), 2), OpCode::CPUI_CALL);
+        op2.inrefs = vec![
+            Arc::new(std::sync::RwLock::new(anno2)),
+            Arc::new(std::sync::RwLock::new(mk_arg())),
+        ];
+        assert!(
+            !printer.string_render_eligible(&mk_arg(), Some(&op2)),
+            "unlocked prototype param confers no type"
         );
     }
 }

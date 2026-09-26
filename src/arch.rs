@@ -1220,13 +1220,38 @@ impl Architecture {
     /// the `(space, first, last)` triples are additionally recorded in
     /// source order on the Architecture (`global_scope_ranges`) as the
     /// projection the fixtures and drivers observe.
+    ///
+    /// A REGISTER-space range (e.g. x86-64-gcc.cspec's
+    /// `<global><register name="MXCSR"/></global>`) applies to the global
+    /// scope but is NOT appended to `inferPtrSpaces`:
+    /// `Architecture::cacheAddrSpaceProperties`
+    /// (architecture.cc:665-683) filters the infer list with
+    /// `if (spc->getDelay() == 0) continue; // Don't put in a register
+    /// space` (cc:678) — register spaces (delay 0) never infer constant
+    /// pointers. Pushing Register into the list made a 4-byte constant
+    /// (`inferPtrSpaces=[Ram,Register]`, Register addrSize 4) pass the
+    /// exact-size gate where the oracle's [Ram(+code)] list rejects it
+    /// (4 != 8), so ActionConstantPtr converted the httpd main int-web
+    /// constant 0x17a422 ("ptemp") into a 4-byte
+    /// PTRSUB(spacebase,#0x17a422) that RulePtrsubCharConstant then
+    /// collapsed into a char* constant — typing the whole
+    /// apr_app_initialize-return web char* (`pcVar4 = "ptemp"` +
+    /// `(char *)` casts) where the oracle keeps `int iVar3 = 0x17a422`
+    /// (HTTPDMAIN-F4-WEBTYPE-0001).
     pub fn add_to_global_scope(
         &mut self,
         props: &RangeProperties,
         host: &dyn SpecQuery,
     ) -> Result<(), String> {
         let (spc, first, last) = Self::range_from_properties(props, host)?;
-        self.infer_ptr_spaces.push(spc);
+        // architecture.cc:665-683 cacheAddrSpaceProperties: register
+        // spaces (delay 0) stay out of the constant-pointer inference
+        // list (cc:678 `if (spc->getDelay() == 0) continue; // Don't put
+        // in a register space`); the range still applies to the global
+        // scope below (HTTPDMAIN-F4-WEBTYPE-0001).
+        if spc != crate::space::AddressSpace::Register {
+            self.infer_ptr_spaces.push(spc);
+        }
         // database.cc:833 — `symboltab->addRange(scope,spc,...)`: the
         // range lands in the global scope's space-keyed rangetree NOW
         // (the same `Database::addRange` call the C++ makes, live at
