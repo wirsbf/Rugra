@@ -1,8 +1,6 @@
 use std::fmt;
 use std::sync::OnceLock;
 
-const SLEIGH_ABI_VERSION: u32 = 1;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VarnodeC {
     pub space: i32,
@@ -129,56 +127,12 @@ impl fmt::Display for SleighDecodeError {
 impl std::error::Error for SleighDecodeError {}
 
 // ---------------------------------------------------------------------------
-// Engine selection (Phase2 dual chain, ticket SLEIGH-RUSTIFY-PHASE2-0001)
+// Engine facade (post-retirement: the vendored kuna-sleigh runtime, Phase2
+// of SLEIGH-RUSTIFY — the C++ FFI chain was retired after the gates in
+// SLEIGH_PHASE2_SWAP_2026-09-26.md passed: op-for-op zero-diff over 698,605
+// decodes / 5,550,599 ops, five-corpus E2E byte identity, cargo test --lib
+// 1777P/0F, bank 391/391, perf same order with an -11% E2E wall win.)
 // ---------------------------------------------------------------------------
-
-/// Which SLEIGH decode backend a `SleighCtx` drives.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SleighEngineKind {
-    /// The locked Ghidra C++ runtime compiled by build.rs and crossed via
-    /// the `sleigh_shim` C ABI (Phase1 state; kept behind `has_sleigh`).
-    Cpp,
-    /// The vendored `kuna-sleigh` runtime (Phase2 state; pure Rust).
-    Rust,
-}
-
-// RUGRA-GLUE: dual-chain engine selection for the Phase2 swap. The
-// `RUGRA_SLEIGH_ENGINE` env var ("cpp" | "rust") overrides the default;
-// the default keeps the Phase1 C++ chain until the Phase2 gates pass and
-// the retirement commit flips it (SLEIGH-RUSTIFY-PHASE2-0001 discipline:
-// the C++ chain may not be removed before the gates pass).
-fn select_engine_kind() -> Option<SleighEngineKind> {
-    let default_kind = default_engine_kind();
-    let selected = match std::env::var("RUGRA_SLEIGH_ENGINE") {
-        Ok(value) => match value.as_str() {
-            "cpp" => Some(SleighEngineKind::Cpp),
-            "rust" => Some(SleighEngineKind::Rust),
-            other => {
-                eprintln!(
-                    "[SLEIGH] ignoring unknown RUGRA_SLEIGH_ENGINE={other:?} (expected cpp|rust)"
-                );
-                None
-            }
-        },
-        Err(_) => None,
-    }
-    .unwrap_or(default_kind);
-    match selected {
-        // An explicit cpp request on a build without the C++ runtime is a
-        // misconfiguration: surface it as a failed construction, not a
-        // silent engine swap.
-        SleighEngineKind::Cpp if !cfg!(has_sleigh) => None,
-        kind => Some(kind),
-    }
-}
-
-// RUGRA-GLUE: default engine. Flipped to Rust after the Phase2 gates passed
-// (op-for-op zero-diff over 698,605 decodes + five-corpus E2E byte identity,
-// SLEIGH_PHASE2_SWAP_2026-09-26.md); the C++ chain stays compiled-in and
-// selectable via RUGRA_SLEIGH_ENGINE=cpp until the retirement commit.
-fn default_engine_kind() -> SleighEngineKind {
-    SleighEngineKind::Rust
-}
 
 // RUGRA-GLUE: process-wide Rust configuration for the default SLEIGH asset path
 static SLA_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -188,80 +142,39 @@ pub fn set_sla_path(path: &str) {
     let _ = SLA_PATH.set(std::path::PathBuf::from(path));
 }
 
-// RUGRA-GLUE: resolve the configured `.sla` path the same way for both engines
+// RUGRA-GLUE: resolve the configured `.sla` path for the engine constructor
 fn resolve_sla_path() -> Option<std::path::PathBuf> {
     let default_path = std::path::PathBuf::from("sleigh_specs/x86-64.sla");
     let path = SLA_PATH.get().unwrap_or(&default_path);
     std::fs::canonicalize(path).ok()
 }
 
-/// Public engine handle. Phase2 dual-chain: the same API drives either the
-/// C++ FFI runtime (`has_sleigh`) or the vendored `kuna-sleigh` runtime.
+/// Public SLEIGH decode-engine handle (the vendored `kuna-sleigh` runtime).
 pub struct SleighCtx {
-    backend: SleighBackend,
-}
-
-enum SleighBackend {
-    #[cfg(has_sleigh)]
-    Cpp(cpp_backend::CppSleighEngine),
-    Rust(rust_backend::RustSleighEngine),
+    backend: rust_backend::RustSleighEngine,
 }
 
 unsafe impl Send for SleighCtx {
-    // RUGRA-GLUE: same single-thread lifecycle contract the C++ handle had:
-    // a context is created, used, and dropped on one thread (the C++ SLEIGH
-    // object graph was never thread-safe either). The kuna engine holds `Rc`
-    // state with the identical constraint; no rugra caller moves a lifter
-    // across threads (verified: rugra.rs/httpd_decompile create lifters
+    // RUGRA-GLUE: single-thread lifecycle contract inherited from the retired
+    // C++ handle: a context is created, used, and dropped on one thread (the
+    // C++ SLEIGH object graph was never thread-safe either). The kuna engine
+    // holds `Rc` state with the identical constraint; no rugra caller moves a
+    // lifter across threads (verified: rugra.rs/httpd_decompile create lifters
     // inside the thread that uses them).
 }
 
 impl SleighCtx {
-    // RUGRA-GLUE: create a decoder per the dual-chain engine selection
+    // RUGRA-GLUE: create the Rust SLEIGH engine from the configured .sla
     pub fn new() -> Option<Self> {
-        Self::with_engine(select_engine_kind()?)
-    }
-
-    // RUGRA-GLUE: create a decoder pinned to one engine (Phase2 op-for-op
-    // gate instrument: both engines live in one process for A/B decode)
-    pub fn with_engine(kind: SleighEngineKind) -> Option<Self> {
         let sla_path = resolve_sla_path()?;
-        let backend = match kind {
-            SleighEngineKind::Cpp => {
-                #[cfg(has_sleigh)]
-                {
-                    SleighBackend::Cpp(cpp_backend::CppSleighEngine::new(&sla_path)?)
-                }
-                #[cfg(not(has_sleigh))]
-                {
-                    // select_engine_kind already rejects Cpp when the C++
-                    // runtime is not compiled; this arm is unreachable.
-                    unreachable!("cpp engine requested without the C++ runtime")
-                }
-            }
-            SleighEngineKind::Rust => {
-                SleighBackend::Rust(rust_backend::RustSleighEngine::new(&sla_path)?)
-            }
-        };
-        Some(Self { backend })
-    }
-
-    // RUGRA-GLUE: report which engine this context drives (gate instrument)
-    pub fn engine_kind(&self) -> SleighEngineKind {
-        match &self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(_) => SleighEngineKind::Cpp,
-            SleighBackend::Rust(_) => SleighEngineKind::Rust,
-        }
+        Some(Self {
+            backend: rust_backend::RustSleighEngine::new(&sla_path)?,
+        })
     }
 
     // RUGRA-GLUE: deep-copy an image into the engine before decoding starts
     pub fn try_set_image(&mut self, bytes: &[u8], base_addr: u64) -> Result<(), SleighDecodeError> {
-        match &mut self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.try_set_image(bytes, base_addr),
-            SleighBackend::Rust(engine) => engine.try_set_image(bytes, base_addr),
-        }
+        self.backend.try_set_image(bytes, base_addr)
     }
 
     // RUGRA-GLUE: compatibility wrapper retained for existing lifter callers until SLEIGH-0002D
@@ -271,11 +184,7 @@ impl SleighCtx {
 
     // RUGRA-GLUE: set a context default before decoding starts, preserving typed failures
     pub fn try_set_context(&mut self, name: &str, value: i32) -> Result<(), SleighDecodeError> {
-        match &mut self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.try_set_context(name, value),
-            SleighBackend::Rust(engine) => engine.try_set_context(name, value),
-        }
+        self.backend.try_set_context(name, value)
     }
 
     // RUGRA-GLUE: compatibility wrapper retained for the temporary pspec scanner
@@ -285,7 +194,6 @@ impl SleighCtx {
 
     // RUGRA-GLUE: temporary SLEIGH-0002C/MISMATCH pspec scanner; it does not model
     // ContextInternal ranges, masks, tracked registers, or child ordering.
-    // Dispatches through `set_context` so both engines receive the defaults.
     pub fn load_pspec(&mut self, pspec_path: &str) {
         let xml = match std::fs::read_to_string(pspec_path) {
             Ok(contents) => contents,
@@ -306,11 +214,7 @@ impl SleighCtx {
         &mut self,
         offset: u64,
     ) -> Result<DecodedInstruction, SleighDecodeError> {
-        match &mut self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.one_instruction(offset),
-            SleighBackend::Rust(engine) => engine.one_instruction(offset),
-        }
+        self.backend.one_instruction(offset)
     }
 
     // RUGRA-GLUE: compatibility bridge that still folds typed errors to an empty
@@ -322,429 +226,31 @@ impl SleighCtx {
     }
 
     // RUGRA-GLUE: legacy length-only wrapper retained until callers consume the
-    // atomic `one_instruction` result in SLEIGH-0002D; &mut because the C++
-    // shim freezes image/context here (decode_started, rugra_sleigh.cpp:500)
+    // atomic `one_instruction` result in SLEIGH-0002D; &mut because the engine
+    // freezes image/context here (decode_started, mirroring the retired
+    // rugra_sleigh.cpp:500 behavior)
     pub fn instruction_length(&mut self, offset: u64) -> Option<usize> {
-        match &mut self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.instruction_length(offset),
-            SleighBackend::Rust(engine) => engine.instruction_length(offset),
-        }
+        self.backend.instruction_length(offset)
     }
 
     // RUGRA-GLUE: query the number of address spaces exposed by the translator
     pub fn num_spaces(&self) -> usize {
-        match &self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.num_spaces(),
-            SleighBackend::Rust(engine) => engine.num_spaces(),
-        }
+        self.backend.num_spaces()
     }
 
     // RUGRA-GLUE: copy one space catalog entry from the translator
     pub fn space_info(&self, index: usize) -> Option<(i32, String)> {
-        match &self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.space_info(index),
-            SleighBackend::Rust(engine) => engine.space_info(index),
-        }
+        self.backend.space_info(index)
     }
 
     // RUGRA-GLUE: query the number of registers exposed by the translator
     pub fn num_registers(&self) -> usize {
-        match &self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.num_registers(),
-            SleighBackend::Rust(engine) => engine.num_registers(),
-        }
+        self.backend.num_registers()
     }
 
     // RUGRA-GLUE: copy one register catalog entry from the translator
     pub fn register_info(&self, index: usize) -> Option<(String, i32, u64, i32)> {
-        match &self.backend {
-            #[cfg(has_sleigh)]
-            SleighBackend::Cpp(engine) => engine.register_info(index),
-            SleighBackend::Rust(engine) => engine.register_info(index),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// C++ backend: locked Ghidra runtime over the sleigh_shim C ABI
-// ---------------------------------------------------------------------------
-
-#[cfg(has_sleigh)]
-mod cpp_backend {
-    use super::{
-        copy_varnode_wire, cstr_to_string, DecodedInstruction, PcodeOpC, RugraPcodeOpWire,
-        RugraVarnodeWire, SleighDecodeError, SleighErrorKind, VarnodeC, SLEIGH_ABI_VERSION,
-    };
-    use std::ffi::{c_char, c_void, CString};
-
-    unsafe extern "C" {
-        // RUGRA-GLUE: C ABI constructor for Ghidra's in-process C++ Sleigh object graph
-        fn rugra_sleigh_create(sla_path: *const c_char) -> *mut c_void;
-        // RUGRA-GLUE: owned-image C ABI adapter; the returned result is C++ owned
-        fn rugra_sleigh_set_image(
-            handle: *mut c_void,
-            bytes: *const u8,
-            len: u64,
-            base_addr: u64,
-        ) -> *mut c_void;
-        // RUGRA-GLUE: context-default C ABI adapter used before decoding begins
-        fn rugra_sleigh_set_context(
-            handle: *mut c_void,
-            name: *const c_char,
-            value: i32,
-        ) -> *mut c_void;
-        // RUGRA-GLUE: atomic oneInstruction adapter returning an owned opaque result
-        fn rugra_sleigh_decode(handle: *mut c_void, offset: u64) -> *mut c_void;
-        // RUGRA-GLUE: fixed-width result accessors avoid exposing C++ containers
-        fn rugra_sleigh_result_abi_version(result: *const c_void) -> u32;
-        // RUGRA-GLUE: fixed-width result accessors avoid exposing C++ containers
-        fn rugra_sleigh_result_error_kind(result: *const c_void) -> u32;
-        // RUGRA-GLUE: fixed-width result accessors avoid exposing C++ containers
-        fn rugra_sleigh_result_step(result: *const c_void) -> i32;
-        // RUGRA-GLUE: fixed-width result accessors avoid exposing C++ containers
-        fn rugra_sleigh_result_has_instruction_length(result: *const c_void) -> u32;
-        // RUGRA-GLUE: fixed-width result accessors avoid exposing C++ containers
-        fn rugra_sleigh_result_instruction_length(result: *const c_void) -> i32;
-        // RUGRA-GLUE: borrowed result message bytes remain owned by the opaque result
-        fn rugra_sleigh_result_message_data(result: *const c_void) -> *const u8;
-        // RUGRA-GLUE: borrowed result message length excludes any terminator
-        fn rugra_sleigh_result_message_len(result: *const c_void) -> u64;
-        // RUGRA-GLUE: query the complete, dynamically sized emitted-op count
-        fn rugra_sleigh_result_num_ops(result: *const c_void) -> u64;
-        // RUGRA-GLUE: copy one fixed-width op header from the C++ owned result
-        fn rugra_sleigh_result_op(
-            result: *const c_void,
-            index: u64,
-            output: *mut RugraPcodeOpWire,
-        ) -> i32;
-        // RUGRA-GLUE: copy one ordered input from the C++ owned result
-        fn rugra_sleigh_result_input(
-            result: *const c_void,
-            op_index: u64,
-            input_index: u64,
-            output: *mut RugraVarnodeWire,
-        ) -> i32;
-        // RUGRA-GLUE: destroy an opaque result with the same C++ allocator
-        fn rugra_sleigh_result_destroy(result: *mut c_void);
-        // RUGRA-GLUE: legacy length-only C ABI retained until SLEIGH-0002D
-        fn rugra_sleigh_instruction_length(handle: *mut c_void, offset: u64) -> i32;
-        // RUGRA-GLUE: C ABI metadata accessor
-        fn rugra_sleigh_num_spaces(handle: *mut c_void) -> i32;
-        // RUGRA-GLUE: C ABI metadata accessor
-        fn rugra_sleigh_space_info(
-            handle: *mut c_void,
-            index: i32,
-            out_type: *mut i32,
-            out_name: *mut c_char,
-            name_max: i32,
-        ) -> i32;
-        // RUGRA-GLUE: C ABI metadata accessor
-        fn rugra_sleigh_num_registers(handle: *mut c_void) -> i32;
-        // RUGRA-GLUE: C ABI metadata accessor
-        fn rugra_sleigh_register_info(
-            handle: *mut c_void,
-            index: i32,
-            out_name: *mut c_char,
-            name_max: i32,
-            out_space: *mut i32,
-            out_offset: *mut u64,
-            out_size: *mut i32,
-        ) -> i32;
-        // RUGRA-GLUE: C ABI destructor for the Ghidra C++ object graph
-        fn rugra_sleigh_destroy(handle: *mut c_void);
-    }
-
-    struct SleighResultGuard(*mut c_void);
-
-    impl Drop for SleighResultGuard {
-        // RUGRA-GLUE: RAII guard ensuring every C++ owned result uses its C++ destructor
-        fn drop(&mut self) {
-            unsafe { rugra_sleigh_result_destroy(self.0) }
-        }
-    }
-
-    pub(crate) struct CppSleighEngine {
-        handle: *mut c_void,
-    }
-
-    impl CppSleighEngine {
-        // RUGRA-GLUE: create the Rust owner for a Ghidra C++ SLEIGH engine
-        pub(crate) fn new(sla_path: &std::path::Path) -> Option<Self> {
-            let c_path = CString::new(sla_path.to_str()?).ok()?;
-            let handle = unsafe { rugra_sleigh_create(c_path.as_ptr()) };
-            ( !handle.is_null() ).then(|| Self { handle })
-        }
-
-        // RUGRA-GLUE: deep-copy a Rust image into the C++ owner before decoding starts
-        pub(crate) fn try_set_image(
-            &mut self,
-            bytes: &[u8],
-            base_addr: u64,
-        ) -> Result<(), SleighDecodeError> {
-            let length = u64::try_from(bytes.len())
-                .map_err(|_| SleighDecodeError::bridge(b"image length exceeds u64".to_vec()))?;
-            let result =
-                unsafe { rugra_sleigh_set_image(self.handle, bytes.as_ptr(), length, base_addr) };
-            check_operation_result(result)
-        }
-
-        // RUGRA-GLUE: set a context default before decoding starts, preserving typed failures
-        pub(crate) fn try_set_context(
-            &mut self,
-            name: &str,
-            value: i32,
-        ) -> Result<(), SleighDecodeError> {
-            let c_name = CString::new(name)
-                .map_err(|_| SleighDecodeError::bridge(b"context name contains NUL".to_vec()))?;
-            let result = unsafe { rugra_sleigh_set_context(self.handle, c_name.as_ptr(), value) };
-            check_operation_result(result)
-        }
-
-        // RUGRA-GLUE: safe oneInstruction boundary preserving step, zero-op success,
-        // ordered dynamic operands, aliases, and typed Ghidra exceptions
-        pub(crate) fn one_instruction(
-            &mut self,
-            offset: u64,
-        ) -> Result<DecodedInstruction, SleighDecodeError> {
-            let result = unsafe { rugra_sleigh_decode(self.handle, offset) };
-            if result.is_null() {
-                return Err(SleighDecodeError {
-                    kind: SleighErrorKind::OutOfMemory,
-                    message: b"C++ failed to allocate a SLEIGH result".to_vec(),
-                    instruction_length: None,
-                });
-            }
-            let _guard = SleighResultGuard(result);
-            check_result_abi(result)?;
-
-            let raw_kind = unsafe { rugra_sleigh_result_error_kind(result) };
-            if raw_kind != 0 {
-                return Err(error_from_result(result, raw_kind));
-            }
-
-            let op_count = usize::try_from(unsafe { rugra_sleigh_result_num_ops(result) })
-                .map_err(|_| SleighDecodeError::bridge(b"op count exceeds usize".to_vec()))?;
-            let mut ops = Vec::with_capacity(op_count);
-            for op_index in 0..op_count {
-                let mut wire = RugraPcodeOpWire::default();
-                let copied = unsafe { rugra_sleigh_result_op(result, op_index as u64, &mut wire) };
-                if copied == 0 {
-                    return Err(SleighDecodeError::bridge(
-                        format!("C++ omitted op {op_index}").into_bytes(),
-                    ));
-                }
-                if wire.num_inputs < 0 {
-                    return Err(SleighDecodeError::bridge(
-                        format!("op {op_index} has a negative input count").into_bytes(),
-                    ));
-                }
-                if wire.has_output > 1 {
-                    return Err(SleighDecodeError::bridge(
-                        format!("op {op_index} has an invalid output flag").into_bytes(),
-                    ));
-                }
-
-                let input_count = usize::try_from(wire.num_inputs).map_err(|_| {
-                    SleighDecodeError::bridge(b"input count exceeds usize".to_vec())
-                })?;
-                let mut inputs = Vec::with_capacity(input_count);
-                for input_index in 0..input_count {
-                    let mut input = RugraVarnodeWire::default();
-                    let copied = unsafe {
-                        rugra_sleigh_result_input(
-                            result,
-                            op_index as u64,
-                            input_index as u64,
-                            &mut input,
-                        )
-                    };
-                    if copied == 0 {
-                        return Err(SleighDecodeError::bridge(
-                            format!("C++ omitted op {op_index} input {input_index}").into_bytes(),
-                        ));
-                    }
-                    inputs.push(copy_varnode_wire(input)?);
-                }
-
-                ops.push(PcodeOpC {
-                    address_space: wire.address_space,
-                    address_offset: wire.address_offset,
-                    opcode: wire.opcode,
-                    num_inputs: wire.num_inputs,
-                    has_output: wire.has_output as i32,
-                    output: if wire.has_output == 0 {
-                        VarnodeC::default()
-                    } else {
-                        copy_varnode_wire(wire.output)?
-                    },
-                    inputs,
-                });
-            }
-
-            Ok(DecodedInstruction {
-                step: unsafe { rugra_sleigh_result_step(result) },
-                ops,
-            })
-        }
-
-        // RUGRA-GLUE: legacy length-only wrapper retained until callers consume the
-        // atomic `one_instruction` result in SLEIGH-0002D
-        pub(crate) fn instruction_length(&self, offset: u64) -> Option<usize> {
-            let length = unsafe { rugra_sleigh_instruction_length(self.handle, offset) };
-            (length > 0).then_some(length as usize)
-        }
-
-        // RUGRA-GLUE: query the number of address spaces exposed by the C++ translator
-        pub(crate) fn num_spaces(&self) -> usize {
-            let count = unsafe { rugra_sleigh_num_spaces(self.handle) };
-            usize::try_from(count).unwrap_or(0)
-        }
-
-        // RUGRA-GLUE: copy one space catalog entry across the fixed-width C ABI
-        pub(crate) fn space_info(&self, index: usize) -> Option<(i32, String)> {
-            let index = i32::try_from(index).ok()?;
-            let mut space_type = 0;
-            let mut name_buffer = [0 as c_char; 64];
-            let valid = unsafe {
-                rugra_sleigh_space_info(
-                    self.handle,
-                    index,
-                    &mut space_type,
-                    name_buffer.as_mut_ptr(),
-                    name_buffer.len() as i32,
-                )
-            };
-            if valid == 0 {
-                return None;
-            }
-            Some((space_type, cstr_to_string(&name_buffer)?))
-        }
-
-        // RUGRA-GLUE: query the number of registers exposed by the C++ translator
-        pub(crate) fn num_registers(&self) -> usize {
-            let count = unsafe { rugra_sleigh_num_registers(self.handle) };
-            usize::try_from(count).unwrap_or(0)
-        }
-
-        // RUGRA-GLUE: copy one register catalog entry across the fixed-width C ABI
-        pub(crate) fn register_info(&self, index: usize) -> Option<(String, i32, u64, i32)> {
-            let index = i32::try_from(index).ok()?;
-            let mut name_buffer = [0 as c_char; 64];
-            let mut space = 0;
-            let mut offset = 0;
-            let mut size = 0;
-            let valid = unsafe {
-                rugra_sleigh_register_info(
-                    self.handle,
-                    index,
-                    name_buffer.as_mut_ptr(),
-                    name_buffer.len() as i32,
-                    &mut space,
-                    &mut offset,
-                    &mut size,
-                )
-            };
-            if valid == 0 {
-                return None;
-            }
-            Some((cstr_to_string(&name_buffer)?, space, offset, size))
-        }
-    }
-
-    impl Drop for CppSleighEngine {
-        // RUGRA-GLUE: release the C++ engine through its own allocator
-        fn drop(&mut self) {
-            unsafe { rugra_sleigh_destroy(self.handle) }
-        }
-    }
-
-    // RUGRA-GLUE: verify the versioned opaque result contract before reading fields
-    fn check_result_abi(result: *const c_void) -> Result<(), SleighDecodeError> {
-        let version = unsafe { rugra_sleigh_result_abi_version(result) };
-        if version != SLEIGH_ABI_VERSION {
-            return Err(SleighDecodeError::bridge(
-                format!("SLEIGH ABI version {version}, expected {SLEIGH_ABI_VERSION}").into_bytes(),
-            ));
-        }
-        Ok(())
-    }
-
-    // RUGRA-GLUE: consume a C++ owned status-only result with RAII cleanup
-    fn check_operation_result(result: *mut c_void) -> Result<(), SleighDecodeError> {
-        if result.is_null() {
-            return Err(SleighDecodeError {
-                kind: SleighErrorKind::OutOfMemory,
-                message: b"C++ failed to allocate a SLEIGH operation result".to_vec(),
-                instruction_length: None,
-            });
-        }
-        let _guard = SleighResultGuard(result);
-        check_result_abi(result)?;
-        let raw_kind = unsafe { rugra_sleigh_result_error_kind(result) };
-        if raw_kind == 0 {
-            Ok(())
-        } else {
-            Err(error_from_result(result, raw_kind))
-        }
-    }
-
-    // RUGRA-GLUE: copy exact error bytes and the optional Unimpl length from C++
-    fn error_from_result(result: *const c_void, raw_kind: u32) -> SleighDecodeError {
-        let kind = SleighErrorKind::from_raw(raw_kind).unwrap_or(SleighErrorKind::Bridge);
-        let op_count = unsafe { rugra_sleigh_result_num_ops(result) };
-        let step = unsafe { rugra_sleigh_result_step(result) };
-        let has_instruction_length =
-            unsafe { rugra_sleigh_result_has_instruction_length(result) };
-        if op_count != 0 || step != 0 {
-            return SleighDecodeError::bridge(
-                format!("C++ error result leaked step {step} or {op_count} operations").into_bytes(),
-            );
-        }
-        if has_instruction_length > 1
-            || (has_instruction_length != 0 && kind != SleighErrorKind::Unimplemented)
-        {
-            return SleighDecodeError::bridge(
-                format!(
-                    "C++ error result has invalid instruction-length flag {has_instruction_length}"
-                )
-                .into_bytes(),
-            );
-        }
-        let message = match copy_result_message(result) {
-            Ok(message) => message,
-            Err(error) => return error,
-        };
-        SleighDecodeError {
-            kind,
-            message,
-            instruction_length: (has_instruction_length != 0)
-                .then(|| unsafe { rugra_sleigh_result_instruction_length(result) }),
-        }
-    }
-
-    // RUGRA-GLUE: copy a borrowed C++ string as bytes without assuming UTF-8
-    fn copy_result_message(result: *const c_void) -> Result<Vec<u8>, SleighDecodeError> {
-        let length = usize::try_from(unsafe { rugra_sleigh_result_message_len(result) })
-            .map_err(|_| SleighDecodeError::bridge(b"error message exceeds usize".to_vec()))?;
-        if length == 0 {
-            return Ok(Vec::new());
-        }
-        if length > isize::MAX as usize {
-            return Err(SleighDecodeError::bridge(
-                b"C++ error message exceeds Rust slice limits".to_vec(),
-            ));
-        }
-        let data = unsafe { rugra_sleigh_result_message_data(result) };
-        if data.is_null() {
-            return Err(SleighDecodeError::bridge(
-                b"non-empty C++ error message has a null pointer".to_vec(),
-            ));
-        }
-        Ok(unsafe { std::slice::from_raw_parts(data, length) }.to_vec())
+        self.backend.register_info(index)
     }
 }
 
@@ -1173,58 +679,6 @@ mod rust_backend {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared wire helpers
-// ---------------------------------------------------------------------------
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct RugraVarnodeWire {
-    space: i32,
-    size: u32,
-    offset: u64,
-    space_ref: i32,
-    flags: u32,
-    identity: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct RugraPcodeOpWire {
-    address_space: i32,
-    has_output: u32,
-    address_offset: u64,
-    opcode: i32,
-    num_inputs: i32,
-    output: RugraVarnodeWire,
-}
-
-// RUGRA-GLUE: convert the fixed-width wire record to an owned Rust DTO
-// (C++ backend only; the wire flags field must stay zero)
-fn copy_varnode_wire(wire: RugraVarnodeWire) -> Result<VarnodeC, SleighDecodeError> {
-    if wire.flags != 0 {
-        return Err(SleighDecodeError::bridge(
-            format!("unknown varnode wire flags 0x{:x}", wire.flags).into_bytes(),
-        ));
-    }
-    Ok(VarnodeC {
-        space: wire.space,
-        offset: wire.offset,
-        size: wire.size,
-        space_ref: wire.space_ref,
-        identity: wire.identity,
-    })
-}
-
-// RUGRA-GLUE: copy a fixed-size, NUL-terminated metadata buffer into Rust
-fn cstr_to_string(buffer: &[std::ffi::c_char]) -> Option<String> {
-    let bytes: Vec<u8> = buffer
-        .iter()
-        .take_while(|&&character| character != 0)
-        .map(|&character| character as u8)
-        .collect();
-    (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned())
-}
 
 // RUGRA-GLUE: temporary SLEIGH-0002C/MISMATCH string scanner. Ghidra uses
 // Document/Element plus ContextInternal::decodeFromSpec and preserves ranges,
@@ -1257,20 +711,10 @@ fn get_attr(tag: &str, attribute: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn wire_layout_matches_cpp_static_asserts() {
-        assert_eq!(std::mem::size_of::<super::RugraVarnodeWire>(), 32);
-        assert_eq!(std::mem::offset_of!(super::RugraVarnodeWire, offset), 8);
-        assert_eq!(std::mem::offset_of!(super::RugraVarnodeWire, identity), 24);
-        assert_eq!(std::mem::size_of::<super::RugraPcodeOpWire>(), 56);
-        assert_eq!(std::mem::offset_of!(super::RugraPcodeOpWire, output), 24);
-    }
-
-    #[test]
     fn constructors_serialize_engine_init() {
-        // The C++ face of this test exercised the XML parser's process
-        // globals (sleigh_shim create mutex); the dual-chain face checks
-        // concurrent construction through whichever engine is selected,
-        // both of which must be independently constructible in parallel.
+        // Concurrent engine construction must be independently safe (the
+        // retired C++ face exercised the XML parser's process globals; the
+        // kuna engine has no shared global state).
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let constructors: Vec<_> = (0..2)
             .map(|_| {

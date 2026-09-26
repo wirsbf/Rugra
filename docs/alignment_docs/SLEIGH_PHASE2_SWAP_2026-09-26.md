@@ -127,13 +127,57 @@ CARGO_TARGET_DIR=/dev/shm/rugra-targets/sleighp2 \
 中位数 C++ 1.13× 快 / E2E 墙钟 Rust 1.12× 快——同量级，无病理性回退，
 端到端稳定受益于 FFI 边界消除）。
 
-## 5. 残差与登记
+## 5. C++ 退役（门禁全过后执行）
 
-- 见 TODO_BOARD `SLEIGH-RUSTIFY-PHASE2-0001` 行（证据随门禁完成回填）。
-- `tests/oracle/sleigh_decode_1204` fixture 族：runner 为 immutable
-  env-scrubbed 仪器（跑默认引擎=cpp vs 锁定 oracle C++ 重建）；Rust 引擎
-  对 oracle 真值的直接覆盖由 ①的恒等结论传递（Rust ≡ C++ shim ≡ oracle
-  12 case MATCH），E2E ②为端到端独立面。
+退役面（本车道最终 commit）：
+
+- `build.rs` 删除（21 文件 C++ 运行时编译、`has_sleigh` cfg、DEP_Z zlib 接线、
+  ffi-test link-search 一并消失；`[build-dependencies] cc` 移除——capstone-sys
+  自带构建,`libz-sys` 保留因 src/compression.rs 直用 zlib）。
+- `sleigh_shim/` 删除（C ABI shim 源）。
+- `src/sleigh_ffi.rs` 的 `cpp_backend` 模块、wire DTO（RugraVarnodeWire/
+  RugraPcodeOpWire）、双链选择机（`SleighEngineKind`/`with_engine`/
+  `RUGRA_SLEIGH_ENGINE`）全部删除;公开面收敛为 kuna 引擎直驱
+  （`SleighLifter` 面不变）。
+- `examples/sleigh_engine_diff.rs` 随 C++ 链退役（双引擎仪器无第二引擎可比;
+  存档于退役前 commit `cfeb30c6` 供复现）。
+- **保留**：`tools/sweep_sleigh_specs.py` 的 sleigh_opt（oracle 参照仪器,
+  自建自用,不经 build.rs）;锁定 oracle C++ 重建侧（各 B2 runner 内嵌）。
+
+### 5.1 fixture 舰队影响审计（重钉纪律）
+
+- **160 个 pinned-commit runner**（`base_file`/`pinned_tree_files` 自
+  `rugra_base_commit` 物化快照）:build.rs/sleigh_shim/Cargo.lock 均取自
+  git 历史固定 commit,**结构上不受退役影响**。抽查亲证:
+  run_action_merge_order_oracle 基线与退役 tip 同判（rc=1 同消息=预存
+  GLOBREPIN 族失败,非本 lane 波及）。
+- **13 个 live-tree runner**（`snapshot_file` 读现行树）逐个基线亲测:
+  - 12 个在基线 d4347cd **本就红**（pin 内部不一致:5 个 sla blob
+    `input_commit:path` 解析≠pin 值、6 个 cargo_toml STALE、1 个 doc_varmap
+    sha——全为 GLOBREPIN 族预存,亲测 rc=1 记录在案）:退役使其失败点前移
+    （快照 build.rs 缺失）,红→红,零回归。
+  - 1 个绿（run_debugproto_unknown_model_oracle.sh）在退役树 tip **复跑
+    MATCH**（rc=0,纯 Rust 构建,B2 直证）。
+- 结论:**基线绿且 tip 红的面=零**,本 lane 重钉欠账=零。12 红面 runner 的
+  复活需 pin 修复+C++ 胶水手术双管,登记族票 `SLEIGH-RETIREE-FLEET-REPIN-0001`
+  （与 GLOBREPIN 族波次合并调度）。
+
+### 5.2 退役树验证（纯 Rust 构建,无 build.rs）
+
+- `cargo check/test --lib`:编译零错;测试 1776P/0F/5I（−1=随 wire DTO 删除
+  的布局单测）。
+- `cargo build --release --example {curl,httpd,gen}_decompile` 正常
+  （无 stdc++/z 链接需求,C ABI 符号全消）。
+- canon curl/httpd 与退役前 cpp 基线字节恒等（§3 方法,cmp 零差）。
+- bank 391/391 + 三门禁绿。
+- `tools/run_debugproto_unknown_model_oracle.sh` MATCH（§5.1）。
+
+## 6. 残差与登记
+
+- 见 TODO_BOARD `SLEIGH-RUSTIFY-PHASE2-0001` 行（证据全量）与
+  `SLEIGH-RETIREE-FLEET-REPIN-0001` 族票。
 - Phase0 §7.1 去重决策项（kuna-sleigh 与 rugra 既有 marshal/space/pcoderaw
   类型统一）：**维持 Phase1 决策**——vendored crate 保持 byte-identical
-  供审计，类型统一推迟（独立票，非本票写域）。
+  供审计，类型统一推迟（独立票,非本票写域）。
+- PHASE3（iced 退役切换门）按 roadmap §5/§6 排队（A/G 残差族 P-1 可检验
+  预测:换源后行数只能改善或不变）。

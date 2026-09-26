@@ -13,19 +13,23 @@ the attribution chain (kuna/Noelo-Lab → Ghidra/NSA).
 | `kuna-sleigh` | .sla reader, decode runtime types, symbol/pattern/template/FormatEncode layers used by the compiler | (kuna-base, kuna-num) |
 | `kuna-slacomp` | **the `.slaspec` → `.sla` compiler** (`slacomp` bin, the `sleigh_opt` replacement) | (kuna-base, kuna-num, kuna-sleigh) |
 
-## Why they are standalone workspace members
+## Why they are workspace members
 
-Nothing in the `rugra` build graph depends on these crates. They exist to
-compile the locked SLEIGH processor specifications (`.slaspec` → `.sla`)
-without the C++ compiler: `tools/build_locked_x86_64_sla.sh` builds
-`-p kuna-slacomp --bin slacomp` and uses it as the production compiler. The
-`.sla` gate criterion is the decompressed element stream (FORMAT_VERSION +
-inflated sha256 + size band), because the zlib C and flate2/miniz_oxide
-deflate backends produce different (but content-equivalent) compressed bytes.
+`kuna-sleigh` (plus `kuna-base`/`kuna-num`, which its public API names
+directly) **is in the rugra build graph**: `src/sleigh_ffi.rs` drives it as
+the production SLEIGH decode engine (Phase2 of SLEIGH-RUSTIFY — the C++
+FFI runtime was retired 2026-09-26 after the dual-engine gates passed, see
+`docs/alignment_docs/SLEIGH_PHASE2_SWAP_2026-09-26.md`). `kuna-slacomp`
+stays standalone: `tools/build_locked_x86_64_sla.sh` builds
+`-p kuna-slacomp --bin slacomp` and uses it as the production `.slaspec` →
+`.sla` compiler. The `.sla` gate criterion is the decompressed element
+stream (FORMAT_VERSION + inflated sha256 + size band), because the zlib C
+and flate2/miniz_oxide deflate backends produce different (but
+content-equivalent) compressed bytes.
 
 Runtime dedup with Rugra's own `marshal/space/pcoderaw/translate/...`
-modules is deliberately deferred (Phase 2 decision item); the sources are
-kept byte-identical to the pinned upstream commit for auditability.
+modules is deliberately deferred (Phase 0 §7.1 decision item); the sources
+are kept byte-identical to the pinned upstream commit for auditability.
 
 ## What is NOT vendored
 
