@@ -145,6 +145,42 @@ cf. `get_submeta` 的 IntEnum 映射）若不规范化会落进 default 臂恒�
 (URLPatternType)…` 过cast 与 `(int)::config.httpreq & …` 前缀均源于
 此（golden 两处均无 cast）。
 
+## 2026-09-26：恒等短路改 findAdd 等价键（CURLCANON-BOOLCAST-IDENTITY-0001）
+
+`cast_standard_full` 开头的 `curtype == reqtype`（cast.cc:304）与剥层后
+的 `curbase == reqbase`（cast.cc:329）两个恒等短路，从裸 `Arc::ptr_eq`
+改为 `findadd_equal`：Base 变体按 **(name, size, sub-metatype)** 比较，
+其余变体保持 Arc 身份。
+
+Oracle 依据（机制 E 亲读）：Ghidra 的指针恒等比较骑在
+`TypeFactory::findAdd` 的驻留不变量上——name+id 命中且
+`compareDependency` 相等（base 标量即 (submeta, size)，type.cc:227-233）
+时 findAdd **返回既有工厂对象**（type.cc:3423-3427），所以反编译器内
+两个 (name, size, sub-metatype) 全同的 Datatype 对象不可能相遇；
+cast.cc:304/:329 的指针比较因此 ⟺ 结构等价。Rugra 的导入/种子层会在
+工厂外铸造结构等价的 base 标量（实测：非核心 "bool"/"byte" 克隆经
+ActionInferTypes 传播，`Varnode::update_type` 亲证 6277 处附着全部
+`core=false`），裸 ptr_eq 镜像在两实例相遇时误插 oracle 不会产生的
+cast。锁定 golden 见证（ghidra_curl_1204.c:1755/2115 vs 修复前 canon）：
+`if (aliases[iVar15].extraparam != false)` / `*usedarg == false` /
+`pbVar1 = buffer;` 的裸形态要求 LOAD 地址臂/比较臂/COPY 臂在
+bool-克隆 vs 工厂-bool 相遇时判等；修复前印
+`*(bool *)&aliases[V].extraparam` / `*(bool *)usedarg` / `(bool *)buffer`。
+
+`findadd_equal` 的键即 findAdd 等价键：name 相等 ⟹ id（hashName）相等，
+compareDependency=(submeta, size)；`base_submeta` 折叠 chartype/enum/UTF
+flag，故 TypeChar("char") 与普通 Int("char") 的 submeta 不同、判不等
+（findAdd 会拒绝改定义，type.cc:3428-3429），非 Base 变体保持 Arc 身份
+（复合体的 oracle 指针比较）。新增
+`test_findadd_equal_base_key`（键四臂：等价/异名/异 submeta/异尺寸）与
+`test_cast_standard_structurally_equal_base_no_cast`（bool-克隆双向免
+cast + 指针剥层免 cast + bool vs char 仍插 cast）。
+
+铸造源头本身（ActionInferTypes 传播非正典 bool 克隆）登记
+`COREACTION-BOOLMINT-FACTORY-UNIFY-0001`（coreaction 域，待并分支
+释放后统一到工厂对象；本修复使 cast 决策对实例分裂不敏感，与 oracle
+对每个可产生输入的行为等价）。
+
 
 <!-- annotation-pass: 2026-07-04 -->
 
