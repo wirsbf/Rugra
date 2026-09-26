@@ -30,6 +30,25 @@
 
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
+> ### 派发：FRONTEND-MINIMAL-0001 基础阶段（2026-09-26 root 批准；纯增量前端件）
+> **票 FRONTEND-MINIMAL-0001-BASIC（P1）**：ELF 符号导入 + 函数发现（非
+> stripped）+ PT_LOAD 自动推导 + demangle 四件，新模块 `src/frontend.rs`，
+> 零驱动改动。车道 wt/frontend（owner=frontend-agent，基=master 895f69d0）。
+> **write-set**：src/frontend.rs + src/lib.rs + Cargo.toml（cpp_demangle 0.5）+
+> docs/api/{frontend,lib}.md + TODO_BOARD。**验收（数据级差分，不依赖核心
+> 稳定）**：自动派生种子数据 ≡ 手工播种数据，逐项归因分级——curl 31 seeds
+> 全入 124-entry ledger（名字 27/31、尺寸 11/31 全等；残差 93=45 PLT+48
+> EXTERNAL=驱动通道；4 名字差=DWARF 通道；20 尺寸差=oracle 流导 body）；
+> httpd 473 dynsym seeds ≡ 驱动手工循环形态 473/473 地址+名+尺寸全等，
+> ledger 残差 1537=STRIPPED-DISCOVERY 工作包；sqlite3 1339 ≡ provenance
+> defined_dynsym_func，残差 46=jump slots；PT_LOAD ≡ 驱动 add_range 循环。
+> **门禁**：cargo test --lib 1796/0（基线 1783+13 新测，真实 canon 二进制
+> 做输入）；annotations/refs/corpus-markers 三门禁 PASS（新文件全
+> RUGRA-GLUE+System V ABI 依据）；curl/httpd E2E 字节恒等（零驱动改动）。
+> **状态：DELIVERED（2026-09-26）**，证据 commit 见下；范围边界（PLT/
+> EXTERNAL/调用图通道、stripped 发现、流导尺寸、GNU version tag）如实
+> 记 docs/api/frontend.md「范围边界」节。
+
 > ### 派发：MIGW-FSPEC（2026-09-26 root，Rust 化迁移 wave: fspec 真缺失函数）
 > **票 W-2026-09-26-MIGW1-FSPEC-0001（P0）**：按分解底稿
 > （UNMAPPED_DECOMPOSITION_2026-09-26.md fspec 节，136 条真缺失）逐函数
