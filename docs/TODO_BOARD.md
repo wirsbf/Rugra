@@ -21,7 +21,7 @@
 | `MIGW1-TYPEOP-0002` | typeop per-op 打印语义 | 160 | P0 | `src/typeop.rs` + `src/printlanguage.rs` + `src/printc.rs` 钩子 + `docs/api/` 同步 | 52 条 per-op `push`（printc `op_binary` 为泛型分发，需补 per-op 语义）+ 56 整类 TypeOp 子类；机制 B 门禁（printc 域）；XL（~1500） |
 | `MIGW1-BLOCK-0003` | block/blockaction 结构化输出面 | 138 | P1 | `src/block.rs` + `src/blockaction.rs` + `docs/api/` | BlockGraph::emit/createVirtualRoot + 结构化残项；机制 B + **机制 C 强制**（白名单）；XL（~2110） |
 | `MIGW1-FUNCDATA-0004` | funcdata 核心维护面 | ~53 | P1 | `src/funcdata.rs` + `docs/api/funcdata.md` | 先核验 ~24 条迭代器改名族（beginLoc/endLoc→Rust 迭代器）是否已存在对应物（存在→补注解边转 REGEN，不存在→移植）；M-L（~590） |
-| `MIGW1-DATABASE-0005` | database Scope/Symbol 查询 | ~63 | P2 | `src/database.rs` + `docs/api/database.md` | UnionFacetSymbol/ExternRefSymbol 符号子类 + Scope 查询残项；MapIterator/NullSubsort ~13 条按结构吸收裁决不逐行移植；L（~750） |
+| `MIGW1-DATABASE-0005` | database Scope/Symbol 查询 | ~63 | P2 | `src/database.rs` + `docs/api/database.md` | UnionFacetSymbol/ExternRefSymbol 符号子类 + Scope 查询残项；MapIterator/NullSubsort ~13 条按结构吸收裁决不逐行移植；L（~750）。**进展（2026-09-26 lane MIGW-DATABASE）**: phase 1 已交付（63 定义 Rust 化+锚，commit `29879a79`）；phase 2 首个 B2 双侧 fixture `DATABASE-SCOPE-TREE-FIXTURE-0001`（`database_scope_tree_1204`，14 函数/50 case 全量 MATCH，runner+registry+metadata 齐套）+ getBase 工厂参数化裁决 R1（build_type/reset_size_lock_type 经 `TypeFactory::get_base` 解析，环境名 xunknownN/undefinedN 跟随工厂）+ 双侧字节可表达性裁决 R2；Symbol 子类 ctor 链/entry 打印面等残余维持 UNTESTED（见 docs/api/database.md phase 2 节），后续 wave 或本 lane 续派 |
 
 > wave-2 候选（未开票）: printc 68 单例族 / coreaction 39（含 protectSwitchPathIndirects 53 行算法）/
 > type 73 / marshal+xml encode-decode / architecture / jumptable / userop / sleigh_arch 48。

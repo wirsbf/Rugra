@@ -583,3 +583,64 @@ fixture 见 tests/oracle/ 四件套（`database_symface_1204` / `database_scope_
   `Scope::queryProperties` 的 finalscope fold + 全局作用域 DB 写入。本票 63 条
   清单**不含** queryProperties——零重叠；本票不实现该写入路径。
 - **VARMREKEY**：varmap.rs SymbolStore 稳定槽位；本票未触碰 varmap.rs。
+
+## 2026-09-26（MIGW1-DATABASE-0005 phase 2）：Scope 查询面 B2 双侧 fixture + 工厂参数化裁决
+
+### DATABASE-SCOPE-TREE-FIXTURE-0001（tests/oracle/database_scope_tree_1204.{cc,rs}）
+
+双侧 fixture 覆盖 14 个清单函数（oracle 侧 = BfdArchitecture 生产环境 + 显式 id
+scope 树；Rust 侧 = 生产 `Database`/`Scope`/`TypeFactory` 值模型，零 fixture 侧重复
+实现）。50 case 全量 stdout 逐字节 **MATCH**（runner
+`tools/run_database_scope_tree_oracle.sh`，registry
+`database_scope_tree_1204`）：
+
+| 函数 | Ghidra 锚 | fixture 覆盖面 |
+|---|---|---|
+| `Scope::hashScopeName` | database.cc:880 | crc 级联 4 输入（含 ≥0x80 字节有符号 char 符号扩展——双侧同字节序列 `\xc3\xbf`，见下裁决） |
+| `Scope::resolveScope` | database.cc:1315 | 三分支：hash+名验证 / 十进制直名（istringstream 前缀解析）/ id 序线性扫 |
+| `Scope::isSubScope` | database.cc:1432 | self/parent/global/reverse/反身 5 边界 |
+| `Scope::getFullName` | database.cc:1443 | 嵌套名/全局空串 |
+| `Scope::getScopePath` | database.cc:1458 | 含 global+self 的路径 |
+| `Scope::findDistinguishingScope` | database.cc:1481 | 四快查 + 双 path 对比 8 边界 |
+| `Symbol::getResolutionDepth` | database.cc:323 | same/null/ancestor/memo/collision/sibling 6 case |
+| `ScopeInternal::isNameUsed` | database.cc:2417 | 终止域 + 永不进全局域（经 resdepth 碰撞/兄弟 case） |
+| `Scope::overrideSizeLockType` | database.cc:1387 | 同尺寸成功/异尺寸/未锁三条 LowlevelError 文本 |
+| `Scope::resetSizeLockType` | database.cc:1402 | 恢复同尺寸 unknown 基类型 + 幂等 no-op |
+| `Scope::attachScope`/`detachScope` | database.cc:857/866 | 生产注册路径（Database::attachScope/deleteScope 复合）子数+父别名 |
+| `Database::clearReferences` | database.cc:2893 | 子树递归 idmap+resolvemap 清除（deleteScope 投影） |
+| `Database::adjustCaches` | database.cc:2975 | 全 idmap 扫描 no-throw + 成员不变 |
+
+### 裁决 R1：`getBase(size,TYPE_UNKNOWN)` 工厂参数化（前次遗留脏改的收敛）
+
+phase 1 提交时 `LabSymbol::build_type`/`Scope::reset_size_lock_type` 内联构造
+`"undefined"` 命名的 unknown 基类型。fixture 对拍发现这是**环境依赖语义**：
+Ghidra 的 `glb->types->getBase(size,TYPE_UNKNOWN)` 经 TypeFactory 核心类型表解析
+——standalone SLEIGH 表（sleigh_arch.cc:229-232）产出 `xunknownN`，
+ArchitectureGhidra 回退表（ghidra_arch.cc:349-352）产出 `undefinedN`，未注册尺寸
+产出**无名** TypeBase（type.cc:3631 findAdd 规范化路径）。硬编码任一名字都在另一
+环境错误。收敛为**工厂参数形态**：两函数签名增加
+`types: &crate::type_system::typefactory::TypeFactory`（RUGRA-GLUE：C++ 经
+`scope->getArch()->types` 取工厂，Rust 值模型 Scope 无 arch 句柄），调用生产
+`TypeFactory::get_base`（type.cc:3631 的既有移植）。fixture 侧
+`TypeFactory::new_flavor(8, CoreTypeFlavor::Standalone)` 镜像 oracle 的
+BfdArchitecture 环境，双侧 `reset_sizelock|name=xunknown4` 一致。canon 管线零
+影响：两函数无生产调用方（仅单测+fixture），canon 的 `undefinedN` 命名由
+`CoreTypeFlavor::DataOrg` 工厂承载。
+
+### 裁决 R2：有符号字节 case 的双侧可表达性
+
+C++ `hashViaProduction(db, global, "\xff")` 喂单字节 0xFF；Rust 名字通道是 UTF-8
+`&str`，孤立 0xFF 字节不可表达。双侧 fixture 统一改喂 `"\xc3\xbf"`（Rust
+`"\u{ff}"` 的 UTF-8 编码，两个高位字节均触发符号扩展）——语义覆盖不减（两个符号
+扩展字节强于一个），双侧字节序列恒等是 B2 对拍的先决条件。fixture 注释记录该约束。
+
+### 残余 UNTESTED（诚实记账，不升 MATCH）
+
+63 条清单中 fixture 未覆盖者维持 UNTESTED：Symbol 子类 ctor 链的 buildType/
+buildNameType 输出面（FunctionSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol）、
+`getBytesConsumed`/`getMapEntryPosition`、`SymbolEntry::getFirstUseAddress`/
+`printEntry`、EntrySubsort 排序面、`SymbolCompareName`、`DuplicateFunctionError`、
+`printBounds`/`printEntries`、`addDynamicMapInternal` whole-count、`categorySanity`、
+`multi_entry_symbols`、`resolveExternalRefFunction`、`decodeWrappingAttributes`、
+children 迭代器端点。结构吸收裁决（MapIterator/NullSubsort 等 13 条）不在此列
+（裁决即交付物）。

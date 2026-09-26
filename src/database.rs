@@ -1518,44 +1518,64 @@ impl LabSymbol {
     // Ghidra: database.cc:728 LabSymbol::buildType
     /// Label symbols don't really have a data-type, so we just put a size 1
     /// placeholder. Faithful to `LabSymbol::buildType` (database.cc:728-732):
-    /// `type = scope->getArch()->types->getBase(1,TYPE_UNKNOWN)` — the base
-    /// `undefined` type of size 1. The value model keeps the `"label"`
-    /// type-name tag (the subclass discriminator used by
+    /// `type = scope->getArch()->types->getBase(1,TYPE_UNKNOWN)` — resolved
+    /// through the architecture's TypeFactory, so the placeholder's identity
+    /// (and core-type name: `xunknown1` under the standalone SLEIGH table,
+    /// sleigh_arch.cc:229; `undefined` under the ArchitectureGhidra fallback
+    /// table, ghidra_arch.cc:349) follows the caller's factory exactly as
+    /// the C++ follows `scope->getArch()->types`. The value model has no
+    /// architecture handle, so the factory enters as a parameter
+    /// (RUGRA-GLUE signature adaptation). The value model keeps the
+    /// `"label"` type-name tag (the subclass discriminator used by
     /// `Scope::find_code_label`) alongside the resolved placeholder dtype.
-    pub fn build_type(&mut self) {
-        self.symbol.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
-            crate::type_system::datatype::TypeBase::new(
-                "undefined".to_string(),
-                1,
-                crate::type_system::datatype::TypeMetatype::Unknown,
-            ),
-        )));
+    pub fn build_type(&mut self, types: &crate::type_system::typefactory::TypeFactory) {
+        // database.cc:730 — getBase(1,TYPE_UNKNOWN) always resolves (the
+        // size-1 unknown is a core-table cache hit in both registration
+        // flavors); the C++ getBase never returns null, so the None arm
+        // leaves the placeholder unset rather than inventing a name.
+        if let Some(dt) =
+            types.get_base(1, crate::type_system::datatype::TypeMetatype::Unknown)
+        {
+            self.symbol.dtype = Some(dt);
+        }
     }
 
     // Ghidra: database.cc:736 LabSymbol::new
     /// Construct given the name and address. Faithful to the constructor
     /// (database.cc:736-742): `buildType()` then the name/display-name
-    /// assignment (the Rust form additionally records the labelled address
-    /// in the value model).
-    pub fn new(scope_id: u64, nm: &str, addr: Address) -> Self {
+    /// assignment, in that order. The factory parameter feeds
+    /// `buildType`'s `getBase(1,TYPE_UNKNOWN)` (RUGRA-GLUE: the C++ pulls
+    /// it from `scope->getArch()->types`).
+    pub fn new(
+        scope_id: u64,
+        nm: &str,
+        addr: Address,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) -> Self {
         let mut out = Self {
             symbol: Symbol::new(scope_id, nm, "label"),
             addr,
         };
-        out.build_type();
+        out.build_type(types);
         out
     }
 
     // Ghidra: database.cc:745 LabSymbol::LabSymbol(Scope *)
     /// Constructor for use with decode (no name/type yet). Faithful to
     /// `LabSymbol(Scope *sc)` (database.cc:745-749): `buildType()` only.
-    pub fn new_decode(scope_id: u64, addr: Address) -> Self {
+    /// The factory parameter feeds `buildType` (RUGRA-GLUE: the C++ pulls
+    /// it from `scope->getArch()->types`).
+    pub fn new_decode(
+        scope_id: u64,
+        addr: Address,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) -> Self {
         let mut out = Self {
             symbol: Symbol::new_unnamed(scope_id),
             addr,
         };
         out.symbol.type_name = "label".to_string();
-        out.build_type();
+        out.build_type(types);
         out
     }
 
@@ -3030,9 +3050,20 @@ impl Scope {
     /// correct size. Faithful to `resetSizeLockType` (database.cc:1402-1408):
     /// nothing to do when the current data-type is already `TYPE_UNKNOWN`
     /// (cc:1405); otherwise the size is preserved and the type replaced by
-    /// the base `undefined` of that size (`glb->types->getBase(size,
-    /// TYPE_UNKNOWN)`, cc:1407).
-    pub fn reset_size_lock_type(&mut self, symbol_id: u64) {
+    /// `glb->types->getBase(size, TYPE_UNKNOWN)` (cc:1407) — resolved through
+    /// the caller's TypeFactory exactly as the C++ resolves through the
+    /// architecture's, so the replacement's core-type name follows the
+    /// factory's registration flavor (`xunknownN` standalone SLEIGH,
+    /// sleigh_arch.cc:229-232; `undefinedN` ArchitectureGhidra fallback,
+    /// ghidra_arch.cc:349-352; nameless for sizes no table registers — the
+    /// C++ getBase canonicalizes an unnamed TypeBase there). The value model
+    /// has no `glb` handle, so the factory enters as a parameter
+    /// (RUGRA-GLUE signature adaptation).
+    pub fn reset_size_lock_type(
+        &mut self,
+        symbol_id: u64,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) {
         let sym = match self.symbols.get(&symbol_id) {
             Some(s) => s.clone(),
             None => return,
@@ -3045,13 +3076,15 @@ impl Scope {
         if metatype == crate::type_system::datatype::TypeMetatype::Unknown {
             return; // Nothing to do
         }
-        sym_w.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
-            crate::type_system::datatype::TypeBase::new(
-                "undefined".to_string(),
-                size,
-                crate::type_system::datatype::TypeMetatype::Unknown,
-            ),
-        )));
+        // database.cc:1407 — sym->type = glb->types->getBase(size,
+        // TYPE_UNKNOWN). getBase never returns null (it canonicalizes
+        // through findAdd), so the None arm leaves the override in place
+        // rather than inventing a name.
+        if let Some(dt) =
+            types.get_base(size, crate::type_system::datatype::TypeMetatype::Unknown)
+        {
+            sym_w.dtype = Some(dt);
+        }
     }
 
     // Ghidra: database.cc:1874 ScopeInternal::addDynamicMapInternal
@@ -3809,12 +3842,15 @@ impl Scope {
         &mut self,
         addr: Address,
         nm: &str,
+        types: &crate::type_system::typefactory::TypeFactory,
     ) -> (LabSymbol, Option<u64>) {
         // database.cc:1669 — queryContainer(addr, 1, addr).
         let overlap = self
             .find_container(addr, 1, addr)
             .map(|idx| self.entries[idx].symbol.read().unwrap().symbol_id);
-        // database.cc:1675 — new LabSymbol(owner, nm).
+        // database.cc:1675 — new LabSymbol(owner, nm). The factory feeds the
+        // ctor's buildType getBase(1,TYPE_UNKNOWN) (RUGRA-GLUE: the C++
+        // LabSymbol pulls it from scope->getArch()->types).
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "label");
         sym.symbol_id = id;
@@ -3827,7 +3863,7 @@ impl Scope {
         // (database.cc:114-120 isAddrTied leg).
         self.add_map_point(id, addr, Address::new(0), 1, None);
         // The LabSymbol view for the caller (database.cc:1678 return).
-        (LabSymbol::new(self.unique_id, nm, addr), overlap)
+        (LabSymbol::new(self.unique_id, nm, addr, types), overlap)
     }
 
     // Ghidra: database.cc:1690 Scope::addDynamicSymbol
@@ -6688,9 +6724,15 @@ mod tests {
 
     #[test]
     fn test_scope_add_code_label() {
-        // database.cc:1664 — addCodeLabel creates a label symbol.
+        // database.cc:1664 — addCodeLabel creates a label symbol. The
+        // factory feeds LabSymbol::buildType's getBase(1,TYPE_UNKNOWN);
+        // Standalone flavor = the SLEIGH core table (sleigh_arch.cc:229).
+        let types = crate::type_system::typefactory::TypeFactory::new_flavor(
+            8,
+            crate::type_system::typefactory::CoreTypeFlavor::Standalone,
+        );
         let mut scope = Scope::new(1, "func", 0);
-        let (lab, overlap) = scope.add_code_label(Address::new(0x6000), "L1");
+        let (lab, overlap) = scope.add_code_label(Address::new(0x6000), "L1", &types);
         assert_eq!(lab.addr.as_u64(), 0x6000);
         assert!(overlap.is_none());
         // The label is discoverable via find_code_label.
@@ -7176,11 +7218,18 @@ mod tests {
         assert_eq!(dt.get_size(), 1); // TypeCode base size 1
         assert_eq!(f.get_bytes_consumed(), 2); // FunctionSymbol override
 
-        // database.cc:728-732 — LabSymbol::buildType sets base(1, unknown).
-        let l = LabSymbol::new(1, "loop", Address::new(0x4010));
+        // database.cc:728-732 — LabSymbol::buildType sets base(1, unknown)
+        // resolved through the factory (Standalone flavor: the SLEIGH core
+        // table names the size-1 unknown `xunknown1`, sleigh_arch.cc:229).
+        let types = crate::type_system::typefactory::TypeFactory::new_flavor(
+            8,
+            crate::type_system::typefactory::CoreTypeFlavor::Standalone,
+        );
+        let l = LabSymbol::new(1, "loop", Address::new(0x4010), &types);
         let dt = l.symbol.dtype.as_ref().unwrap();
         assert_eq!(dt.get_metatype(), crate::type_system::datatype::TypeMetatype::Unknown);
         assert_eq!(dt.get_size(), 1);
+        assert_eq!(dt.get_name(), "xunknown1");
 
         // database.cc:768-784 — ExternRefSymbol::buildNameType: generated
         // name, externref|typelock flags, pointer-to-code type.
@@ -7426,14 +7475,21 @@ mod tests {
             scope.override_size_lock_type(id, dt8),
             Err("Overriding symbol with different type size")
         );
-        // reset restores the unknown base of the same size (cc:1407).
-        scope.reset_size_lock_type(id);
+        // reset restores the unknown base of the same size (cc:1407),
+        // resolved through the factory (Standalone flavor: `xunknown4`,
+        // sleigh_arch.cc:231).
+        let types = crate::type_system::typefactory::TypeFactory::new_flavor(
+            8,
+            crate::type_system::typefactory::CoreTypeFlavor::Standalone,
+        );
+        scope.reset_size_lock_type(id, &types);
         let w = sym.read().unwrap();
         assert_eq!(
             w.dtype.as_ref().unwrap().get_metatype(),
             crate::type_system::datatype::TypeMetatype::Unknown
         );
         assert_eq!(w.dtype.as_ref().unwrap().get_size(), 4);
+        assert_eq!(w.dtype.as_ref().unwrap().get_name(), "xunknown4");
     }
 
     #[test]
