@@ -1530,17 +1530,40 @@ fn resolve_type_inner(
         }
         gimli::DW_TAG_structure_type => {
             let fields = read_composite_fields(dwarf, unit, offset, depth, visiting)?;
-            let type_name = name.unwrap_or_else(|| format!("struct_{:x}", offset.0));
+            // Ghidra: DWARFProgram.java:658-675 — unnamed structure types take
+            // the importer's synthesized "anon_<container>_<layout
+            // fingerprint>_for_<fields>" name (after the single-inbound-
+            // typedef steal, :650-656). The former struct_<offset> spelling
+            // was a RUGRA-GLUE placeholder (DWARF-ANON-TYPENAME-0001);
+            // golden witness `(anon_union_16_3_e2f18bb4_for_content)` casts.
+            let type_name = match name {
+                Some(name) => name,
+                None => composite_type_name(dwarf, unit, offset)?,
+            };
             Ok(struct_type(type_name, size.unwrap_or(0), fields))
         }
         gimli::DW_TAG_union_type => {
             let fields = read_composite_fields(dwarf, unit, offset, depth, visiting)?;
-            let type_name = name.unwrap_or_else(|| format!("union_{:x}", offset.0));
+            // Ghidra: DWARFProgram.java:658-675 — same anonymous naming chain
+            // as the structure arm (union is a structure type,
+            // DWARFTag.java:200-210; container word "union", :229-250).
+            let type_name = match name {
+                Some(name) => name,
+                None => composite_type_name(dwarf, unit, offset)?,
+            };
             Ok(union_type(type_name, size.unwrap_or(0), fields))
         }
         gimli::DW_TAG_enumeration_type => {
             let values = read_enumerators(dwarf, unit, offset)?;
-            let type_name = name.unwrap_or_else(|| format!("enum_{:x}", offset.0));
+            // Anonymous enums keep the offset spelling — NOT the Java
+            // "anon_enum_<bits>" (:684-686 -> :771-774): in Java the final
+            // name comes from the :650-656 typedef steal, which is not
+            // carried (see dwarf_type_leaf_name); the shared spelling would
+            // merge distinct enums' value tables in the name-keyed factory
+            // (observed HTTPREQ_*/TIMECOND_* corruption). Zero corpus
+            // surface; restore with the steal when TypeTypedef lands.
+            let type_name =
+                name.unwrap_or_else(|| format!("enum_{:x}", offset.0));
             Ok(enum_type(type_name, size.unwrap_or(4), values))
         }
         gimli::DW_TAG_array_type => {
@@ -1593,17 +1616,43 @@ fn shallow_type(
             size.unwrap_or(4),
             entry,
         ),
-        gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => Ok(base_type(
-            format!("struct_{:x}", offset.0),
-            size.unwrap_or(0),
-            TypeMetatype::Struct,
-        )),
-        gimli::DW_TAG_union_type => Ok(base_type(
-            format!("union_{:x}", offset.0),
-            size.unwrap_or(0),
-            TypeMetatype::Union,
-        )),
+        gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
+            // Ghidra: DWARFProgram.java:658-675 — the two-phase importer
+            // exposes the anonymous type's synthesized name even on the
+            // unfinished back-edge projection, so unnamed DIEs route through
+            // the same naming chain as the fully resolved type. Named
+            // back-edges keep the historical placeholder spelling — every
+            // corpus witness is renamed by the typedef materialization layer
+            // above this projection.
+            let name = entry_string(dwarf, unit, entry, gimli::DW_AT_name)?;
+            match name {
+                Some(_) => Ok(base_type(
+                    format!("struct_{:x}", offset.0),
+                    size.unwrap_or(0),
+                    TypeMetatype::Struct,
+                )),
+                None => Ok(base_type(
+                    composite_type_name(dwarf, unit, offset)?,
+                    size.unwrap_or(0),
+                    TypeMetatype::Struct,
+                )),
+            }
+        }
+        gimli::DW_TAG_union_type => Ok({
+            // Ghidra: DWARFProgram.java:658-675 — union back-edge takes the
+            // same anonymous naming chain as the structure arm above.
+            let name = entry_string(dwarf, unit, entry, gimli::DW_AT_name)?;
+            let type_name = match name {
+                Some(_) => format!("union_{:x}", offset.0),
+                None => composite_type_name(dwarf, unit, offset)?,
+            };
+            base_type(type_name, size.unwrap_or(0), TypeMetatype::Union)
+        }),
         gimli::DW_TAG_enumeration_type => Ok(base_type(
+            // Anonymous enums keep the offset spelling (see the
+            // resolve_type_inner enum arm: the Java anon_enum naming and
+            // its :650-656 typedef steal are not carried without a
+            // TypeTypedef separation).
             format!("enum_{:x}", offset.0),
             size.unwrap_or(4),
             TypeMetatype::Enum,
@@ -1920,6 +1969,525 @@ fn member_location(
         }
         _ => bail!("unsupported DW_AT_data_member_location form"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// DWARF anonymous type naming — Java 12.0.4 build-tree oracle.
+//
+// The canon/mirror goldens are produced by Ghidra's *Java* DWARF importer
+// (12.0.4 build tree /data/ls/DiffClip/tools/ghidra-12.0.4-build/src,
+// application.version=12.0.4 verified), not by the cpp decompiler: anonymous
+// composite/enum type names are synthesized at Program-import time in
+// DWARFProgram/DWARFUtil (Java). Every citation in this section anchors to
+// that Java tree; the basis is recorded on the DWARF-ANON-TYPENAME-0001
+// ticket row. Golden witness: `(anon_union_16_3_e2f18bb4_for_content)` casts
+// (ghidra_curl_1204.c:767-788), reproduced from the DIE facts
+// union@0xa49: byte_size=0x10, members Set/CharRange/NumRange with no
+// DW_AT_data_member_location (offset default 0, DWARFUtil.java:283-289).
+// ---------------------------------------------------------------------------
+
+/// Global DIE identity across the whole .debug_info section:
+/// (unit-header section offset, unit-relative DIE offset). This is the
+/// identity Java's section-wide `typeReferers` map is keyed by
+/// (DWARFProgram.java:381), modulo the DW_AT_abstract_origin /
+/// DW_AT_specification fragment merging into DIEAggregates
+/// (DWARFProgram.java:65-66 REF_ATTRS, DIEAggregate.java:80-103
+/// createFromHead) — C producers never emit those references for types
+/// (curl/httpd corpora: zero hits), so every DIE is its own aggregate head
+/// and getHeadFragment() (DIEAggregate.java:247-249) is the DIE itself.
+type GlobalDieId = (u64, usize);
+
+/// One .debug_info DIE projected for the anonymous-name chain: entry name
+/// (DWARFProgram.java:590-602 getEntryName chain), raw DW_AT_name
+/// (DIEAggregate.java:397-399 getName — no linkage fallback), DW_AT_type
+/// target (DIEAggregate.java:456-458 getTypeRef), parent / all-tag child
+/// position (DWARFProgram.java:1472-1490 getPositionInParent), byte size
+/// (DIEAggregate.java:414-417 getUnsignedLong over DWARFNumericAttribute),
+/// DW_AT_external presence (DWARFUtil.java:277) and the
+/// DW_AT_data_member_location value parseDataMemberOffset yields
+/// (DIEAggregate.java:613-637: numeric in [0, i32::MAX] via
+/// assertValidUInt :596-600, expression evaluated, every failure caught at
+/// DWARFUtil.java:287 back to 0).
+#[derive(Debug, Clone)]
+struct DwarfDieRecord {
+    id: GlobalDieId,
+    tag: gimli::DwTag,
+    /// getEntryName (DWARFProgram.java:590-602): DW_AT_name, then
+    /// DW_AT_linkage_name, then DW_AT_MIPS_linkage_name.
+    entry_name: Option<String>,
+    /// DW_AT_name only — what DIEAggregate.getName (:397-399) returns; the
+    /// fingerprint (:282) and referring-member names (:804) use this, not
+    /// the linkage fallback.
+    name_attr: Option<String>,
+    type_target: Option<GlobalDieId>,
+    parent: Option<GlobalDieId>,
+    /// 0-based position among ALL direct children of the parent — the
+    /// getPositionInParent(head, x -> true) result (DWARFProgram.java:807).
+    child_position: usize,
+    byte_size: Option<u64>,
+    external: bool,
+    member_offset: u32,
+}
+
+/// The section-wide DIE table plus the inbound DW_AT_type reference index
+/// (DWARFProgram.java:199 typeReferers, a ListValuedMap whose value lists
+/// keep insertion order = .debug_info walk order per :375-385
+/// indexDIEATypeRefs iterating allAggregates() in section order).
+#[derive(Debug, Default)]
+struct DwarfDieTable {
+    records: Vec<DwarfDieRecord>,
+    by_id: std::collections::HashMap<GlobalDieId, usize>,
+    type_refs: std::collections::HashMap<GlobalDieId, Vec<usize>>,
+}
+
+impl DwarfDieTable {
+    /// Direct children in .debug_info order — for C producers identical to
+    /// iterating the head fragment's children (DWARFUtil.java:271).
+    // Ghidra: DWARFUtil.java:271 getStructLayoutFingerprint — headFragment().getChildren() iteration order
+    fn children(&self, id: GlobalDieId) -> impl Iterator<Item = &DwarfDieRecord> {
+        self.records.iter().filter(move |record| record.parent == Some(id))
+    }
+
+    /// getTypeReferers(target, tag) (DWARFProgram.java:1393-1402): the
+    /// ordered referrer list filtered by tag, .debug_info order preserved
+    /// from the put() loop (:381).
+    // Ghidra: DWARFProgram.java:1393 getTypeReferers — tag-filtered referrer list in typeReferers insertion order
+    fn type_referers(&self, id: GlobalDieId, tag: gimli::DwTag) -> Vec<&DwarfDieRecord> {
+        self.type_refs
+            .get(&id)
+            .map(|refs| {
+                refs.iter()
+                    .map(|&index| &self.records[index])
+                    .filter(|record| record.tag == tag)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// DW_AT_data_member_location as parseDataMemberOffset returns it for the
+/// fingerprint: the single supported producer expression form
+/// (DW_OP_plus_uconst, the same form `member_location` above decodes for
+/// field layout) maps to its constant; every other expression or a constant
+/// outside [0, i32::MAX] throws inside Java and is caught back to 0
+/// (DIEAggregate.java:624-632 + assertValidUInt :596-600, catch at
+/// DWARFUtil.java:284-289).
+// Ghidra: DIEAggregate.java:613 parseDataMemberOffset — blob-attribute DWARF expression evaluation with assertValidUInt range gate
+fn soft_member_location(
+    unit: &Unit<DwarfReader>,
+    expression: &gimli::Expression<gimli::EndianReader<gimli::RunTimeEndian, std::rc::Rc<[u8]>>>,
+) -> Option<u32> {
+    let mut operations = expression.clone().operations(unit.encoding());
+    let resolved = match operations.next().ok()? {
+        Some(gimli::Operation::PlusConstant { value }) => u64::try_from(value).ok(),
+        _ => None,
+    };
+    let complete = resolved.is_some() && operations.next().ok()?.is_none();
+    match resolved {
+        Some(value) if complete && value <= i32::MAX as u64 => Some(value as u32),
+        _ => None,
+    }
+}
+
+// Ghidra: DWARFProgram.java:375 indexDIEATypeRefs — one ordered .debug_info walk recording
+// every DIE's DW_AT_type inbound reference; the parent/child-position facts the
+// anonymous-name chain needs ride along so the naming pass never re-reads entries
+fn build_dwarf_die_table(dwarf: &Dwarf<DwarfReader>) -> Result<DwarfDieTable> {
+    let mut table = DwarfDieTable::default();
+    let mut by_section: std::collections::HashMap<u64, GlobalDieId> =
+        std::collections::HashMap::new();
+    // DW_FORM_ref_addr targets (section-absolute) may point forward; resolve
+    // them after the walk the way diesByOffset (:460) serves every offset.
+    let mut pending_section_refs: Vec<(usize, u64)> = Vec::new();
+    let mut headers = dwarf.units();
+    while let Some(header) = headers.next().context("iterating DWARF units for the type-reference index")? {
+        let unit = dwarf
+            .unit(header)
+            .context("loading DWARF unit for the type-reference index")?;
+        let unit_base = unit
+            .header
+            .offset()
+            .as_debug_info_offset()
+            .map(|offset| offset.0 as u64)
+            .unwrap_or(0);
+        let mut entries = unit.entries();
+        // Depth accumulation mirrors the parse_elf scope walk above (same
+        // gimli next_dfs delta semantics): stack frames carry
+        // (id, children-seen-so-far) so child_position is the all-tag
+        // 0-based sibling index getPositionInParent computes.
+        let mut parent_stack: Vec<(GlobalDieId, usize)> = Vec::new();
+        let mut absolute_depth: isize = 0;
+        while let Some((delta, entry)) = entries
+            .next_dfs()
+            .context("walking DWARF DIEs for the type-reference index")?
+        {
+            absolute_depth += delta;
+            let depth = usize::try_from(absolute_depth).unwrap_or(0);
+            // Strict-ancestor pop (parse_elf's scope walk keeps sloppier
+            // equal-depth frames; this walk needs the exact parent for
+            // child_position). The emptiness guard terminates the depth-0
+            // / negative-delta edge (root-level and malformed streams)
+            // instead of popping an empty Vec forever.
+            while parent_stack.len() >= depth && !parent_stack.is_empty() {
+                parent_stack.pop();
+            }
+            let id = (unit_base, entry.offset().0);
+            let (parent, child_position) = match parent_stack.last_mut() {
+                Some(frame) => {
+                    let position = frame.1;
+                    frame.1 += 1;
+                    (Some(frame.0), position)
+                }
+                None => (None, 0),
+            };
+            let name_attr = entry_string(dwarf, &unit, entry, gimli::DW_AT_name)?;
+            let entry_name =
+                name_arg_linkage_chain(dwarf, &unit, entry, name_attr.as_ref())?;
+            let byte_size = match entry.attr_value(gimli::DW_AT_byte_size)? {
+                Some(gimli::AttributeValue::Udata(value)) => Some(value),
+                Some(gimli::AttributeValue::Sdata(value)) => Some(value as u64),
+                _ => None,
+            };
+            let member_offset = match entry.attr_value(gimli::DW_AT_data_member_location)? {
+                Some(gimli::AttributeValue::Udata(value)) => {
+                    if value <= i32::MAX as u64 {
+                        value as u32
+                    } else {
+                        0
+                    }
+                }
+                Some(gimli::AttributeValue::Sdata(value)) => {
+                    if (0..=i32::MAX as i64).contains(&value) {
+                        value as u32
+                    } else {
+                        0
+                    }
+                }
+                Some(gimli::AttributeValue::Exprloc(ref expression)) => {
+                    soft_member_location(&unit, expression).unwrap_or(0)
+                }
+                _ => 0,
+            };
+            let external = entry.attr_value(gimli::DW_AT_external)?.is_some();
+            let mut pending_section_target = None;
+            let type_target = match entry.attr_value(gimli::DW_AT_type)? {
+                Some(gimli::AttributeValue::UnitRef(offset)) => Some((unit_base, offset.0)),
+                Some(gimli::AttributeValue::DebugInfoRef(offset)) => {
+                    pending_section_target = Some(offset.0 as u64);
+                    None
+                }
+                _ => None,
+            };
+            let record_index = table.records.len();
+            let record_type_target = type_target;
+            table.records.push(DwarfDieRecord {
+                id,
+                tag: entry.tag(),
+                entry_name,
+                name_attr,
+                type_target: record_type_target,
+                parent,
+                child_position,
+                byte_size,
+                external,
+                member_offset,
+            });
+            if let Some(target) = record_type_target {
+                table.type_refs.entry(target).or_default().push(record_index);
+            }
+            if let Some(section_offset) = pending_section_target {
+                pending_section_refs.push((record_index, section_offset));
+            }
+            table.by_id.insert(id, record_index);
+            by_section.insert(unit_base + entry.offset().0 as u64, id);
+            parent_stack.push((id, 0));
+        }
+    }
+    for (record_index, section_offset) in pending_section_refs {
+        if let Some(&target) = by_section.get(&section_offset) {
+            table.type_refs.entry(target).or_default().push(record_index);
+        }
+    }
+    Ok(table)
+}
+
+// RUGRA-GLUE: the getEntryName fallback chain (DWARFProgram.java:590-602) — DW_AT_name,
+// then DW_AT_linkage_name, then DW_AT_MIPS_linkage_name — as a pure helper over the
+// already-read DW_AT_name value
+fn name_arg_linkage_chain(
+    dwarf: &Dwarf<DwarfReader>,
+    unit: &Unit<DwarfReader>,
+    entry: &DebuggingInformationEntry<DwarfReader>,
+    name_attr: Option<&String>,
+) -> Result<Option<String>> {
+    if let Some(name) = name_attr {
+        return Ok(Some(name.clone()));
+    }
+    let linkage = match entry_string(dwarf, unit, entry, gimli::DW_AT_linkage_name)? {
+        Some(name) => Some(name),
+        None => entry_string(dwarf, unit, entry, gimli::DW_AT_MIPS_linkage_name)?,
+    };
+    Ok(linkage)
+}
+
+// Ghidra: DWARFTag.java:200 isStructureType — class/interface/struct/union
+fn dwarf_tag_is_structure_type(tag: gimli::DwTag) -> bool {
+    matches!(
+        tag,
+        gimli::DW_TAG_class_type
+            | gimli::DW_TAG_interface_type
+            | gimli::DW_TAG_structure_type
+            | gimli::DW_TAG_union_type
+    )
+}
+
+// Ghidra: DWARFTag.java:229 getContainerTypeName — the container word in anon names
+// (interface has no case and falls to the "unknown" default)
+fn dwarf_container_type_name(tag: gimli::DwTag) -> &'static str {
+    match tag {
+        gimli::DW_TAG_structure_type => "struct",
+        gimli::DW_TAG_class_type => "class",
+        gimli::DW_TAG_enumeration_type => "enum",
+        gimli::DW_TAG_union_type => "union",
+        gimli::DW_TAG_lexical_block => "lexical_block",
+        gimli::DW_TAG_subprogram => "subprogram",
+        gimli::DW_TAG_subroutine_type => "subr",
+        gimli::DW_TAG_variable => "var",
+        _ => "unknown",
+    }
+}
+
+// Ghidra: DWARFUtil.java:267 getStructLayoutFingerprint — "%d_%d_%08x" of struct size,
+// member count and the Java List hashCode of the sorted "%04x_%s" member strings
+fn struct_layout_fingerprint(table: &DwarfDieTable, id: GlobalDieId) -> String {
+    // :268 structSize = getUnsignedLong(DW_AT_byte_size, 0) — numeric forms
+    // only; a consistent table always carries the DIE being named.
+    let struct_size = match table.by_id.get(&id) {
+        Some(&index) => table.records[index].byte_size.unwrap_or(0),
+        None => 0,
+    };
+    let mut member_names: Vec<String> = Vec::new();
+    let mut member_count: usize = 0;
+    for child in table.children(id) {
+        // :272-275 only DW_TAG_member / DW_TAG_inheritance children enter.
+        if !matches!(
+            child.tag,
+            gimli::DW_TAG_member | gimli::DW_TAG_inheritance
+        ) {
+            continue;
+        }
+        // :277-279 children carrying DW_AT_external are skipped (and do not
+        // increment the count).
+        if child.external {
+            continue;
+        }
+        // :280 count increments after the external skip.
+        member_count += 1;
+        // :282,:290-292 DIEAggregate.getName = DW_AT_name only; unnamed
+        // members become UNNAMED_MEMBER_<count-after-increment>.
+        let member_name = child
+            .name_attr
+            .clone()
+            .unwrap_or_else(|| format!("UNNAMED_MEMBER_{member_count}"));
+        // :293 "%04x_%s" of the member offset (missing/erroring location
+        // attributes already folded to 0 in the table).
+        member_names.push(format!("{:04x}_{}", child.member_offset, member_name));
+    }
+    // :296 Collections.sort — lexicographic over the formatted strings
+    // (UTF-16 unit order for Java; identical to Rust byte order for the
+    // ASCII member names C producers emit).
+    member_names.sort();
+    // :297 "%d_%d_%08x" — size as decimal long, count as decimal, hash as
+    // 8-digit lowercase hex of the 32-bit List hashCode.
+    format!(
+        "{}_{}_{:08x}",
+        struct_size,
+        member_count,
+        java_list_hashcode(&member_names)
+    )
+}
+
+// Ghidra: java.lang.String hashCode — 31-polynomial over UTF-16 code units with 32-bit wraparound
+fn java_string_hashcode(text: &str) -> u32 {
+    text.encode_utf16()
+        .fold(0u32, |hash, unit| {
+            hash.wrapping_mul(31).wrapping_add(u32::from(unit))
+        })
+}
+
+// Ghidra: java.util.AbstractList hashCode — fold 1 = 31*fold + element.hashCode with wraparound
+fn java_list_hashcode(texts: &[String]) -> u32 {
+    texts.iter().fold(1u32, |hash, text| {
+        hash.wrapping_mul(31)
+            .wrapping_add(java_string_hashcode(text))
+    })
+}
+
+// Ghidra: DWARFProgram.java:792 getReferringMemberFieldNames — "_for_" field names of the
+// member DIEs whose DW_AT_type references the anon type; aborted to "" when the referring
+// members do not share one parent
+fn referring_member_field_names(table: &DwarfDieTable, id: GlobalDieId) -> String {
+    // :663-664 + :1393-1402 getTypeReferers(target, DW_TAG_member).
+    let referring_members = table.type_referers(id, gimli::DW_TAG_member);
+    if referring_members.is_empty() {
+        // :793-795
+        return String::new();
+    }
+    // :796 common parent of the first referring member.
+    let common_parent = referring_members[0].parent;
+    let mut result = String::new();
+    for member in &referring_members {
+        // :799-802 any referring member from a different parent aborts the
+        // whole suffix (diea.getParent identity: same head offset = same
+        // aggregate object for C producers).
+        if member.parent != common_parent {
+            return String::new();
+        }
+        // :804 member name via DIEAggregate.getName (DW_AT_name only).
+        let member_name = match &member.name_attr {
+            Some(name) => name.clone(),
+            None => {
+                // :805-813 unnamed referring member -> "<parentName>_<position>"
+                // with the position among ALL siblings (x -> true filter,
+                // getPositionInParent :1472-1490). The -1 corrupt-index skip
+                // (:808-810) cannot arise — records always carry their
+                // child position; a root-level member has no parent and is
+                // skipped the same way.
+                let Some(parent) = common_parent else {
+                    continue;
+                };
+                let parent_name = dwarf_type_leaf_name(table, parent, 0);
+                format!("{parent_name}_{}", member.child_position)
+            }
+        };
+        // :814-817 join with "_".
+        if !result.is_empty() {
+            result.push('_');
+        }
+        result.push_str(&member_name);
+    }
+    // :819
+    result
+}
+
+// Ghidra: DWARFProgram.java:845 ensureSafeNameLength — 2000-char clamp (SymbolUtilities.java:35)
+// with the "..."$<hash>$" tail for over-long names; applied on the generic getDWARFName
+// exit (:728), i.e. to entry names and typedef-steal results, not to the anon fingerprint
+// spelling which returns early at :674
+fn ensure_safe_name_length(name: String) -> String {
+    // Java String.length counts UTF-16 units.
+    if name.encode_utf16().count() <= 2000 {
+        return name;
+    }
+    // :849 abbrevTemplateName (C++ '<...>' sugar, :834-843) never triggers
+    // for the C names this importer serves — skipped.
+    // :853-855 keep 2000-3-12=1985 leading units, "..." and "$<hex>$" of the
+    // full-name String hashCode.
+    let prefix_keep = 2000 - "...".len() - (8 + 2 + 2);
+    let hash = java_string_hashcode(&name);
+    let prefix: String = String::from_utf16_lossy(
+        &name.encode_utf16().take(prefix_keep).collect::<Vec<u16>>(),
+    );
+    format!("{prefix}...${hash:x}$")
+}
+
+// Ghidra: DWARFProgram.java:658 getDWARFName anonymous-structure branch —
+// "anon_<container>_<layout-fingerprint>_for_<fields>" for an unnamed structure type
+fn anon_composite_type_name(table: &DwarfDieTable, id: GlobalDieId) -> String {
+    let container = table
+        .by_id
+        .get(&id)
+        .map(|&index| dwarf_container_type_name(table.records[index].tag))
+        .unwrap_or("unknown");
+    // :659 layout fingerprint.
+    let fingerprint = struct_layout_fingerprint(table, id);
+    // :663-666 referring member field names.
+    let referring_member_names = referring_member_field_names(table, id);
+    // :667-672 non-empty names gain the "_for_" prefix (and the type is
+    // re-homed into the referring struct's namespace at :670 — a category
+    // path change only; the decompiler prints the unqualified leaf name,
+    // golden witness `(anon_union_16_3_e2f18bb4_for_content)`).
+    let suffix = if referring_member_names.is_empty() {
+        String::new()
+    } else {
+        format!("_for_{referring_member_names}")
+    };
+    // :673-674 leaf name returned without the length clamp (early return
+    // ahead of the :728 ensureSafeNameLength pass).
+    format!("anon_{container}_{fingerprint}{suffix}")
+}
+
+// Ghidra: DWARFProgram.java:610 getDWARFName — leaf-name spelling for a type DIE the way
+// the importer records it (DWARFName.getName, DWARFName.java:144-146); C-corpus walk:
+// entry name (:590-602), single-inbound-typedef steal (:650-656), anonymous structure
+// fingerprint naming (:658-675), anonymous enum size naming (:684-686 -> :771-774)
+fn dwarf_type_leaf_name(table: &DwarfDieTable, id: GlobalDieId, depth: usize) -> String {
+    let Some(&index) = table.by_id.get(&id) else {
+        // Unreachable for tables built over the same section the id came
+        // from; keep the fingerprint spelling as the defensive exit.
+        return anon_composite_type_name(table, id);
+    };
+    let record = &table.records[index];
+    // :626 getEntryName (:590-602 DW_AT_name -> linkage chain).
+    // :629-638 mangled "_Z" nesting demangle and :642-648 child linkage-name
+    // namespace recovery are C++-producer paths (no "_Z" names in the C
+    // corpora) — not carried.
+    let name = record.entry_name.clone();
+    // :650-656 exactly one inbound DW_TAG_typedef referer steals the
+    // typedef's own DWARFName — NOT CARRIED (conservative degradation,
+    // 铁律 1.5): Rugra materializes typedefs as renamed clones of the
+    // underlying type (materialized_alias/alias_type) instead of Ghidra's
+    // separate TypedefDataType, so the steal's only end-to-end effect here
+    // is interning the underlying DIE under the typedef name, colliding
+    // with the alias layer in the name-keyed TypeFactory (observed: PARAMID
+    // round-2 decompile stall on the curl corpus). The typedef-referred
+    // name is already carried by the alias layer; restore when a
+    // TypeTypedef variant lands (type.hh:431 TypeTypedef).
+    let _ = depth;
+    if name.is_none() && dwarf_tag_is_structure_type(record.tag) {
+        // :658-675 anonymous structure naming (fingerprint + "_for_" fields).
+        return anon_composite_type_name(table, id);
+    }
+    // :684-686 -> getAnonEnumName (:771-774) "anon_enum_<bits>" — NOT
+    // CARRIED (conservative degradation, 铁律 1.5): in Java the anonymous
+    // enum's final name comes from the :650-656 typedef steal (every
+    // corpus anon enum is single-typedef'd), and the two are inseparable;
+    // carrying "anon_enum_32" without the steal makes every 4-byte anon
+    // enum share one name, and the name-keyed factory's same-shape merge
+    // then collapses distinct enums' value tables (observed: curl
+    // HTTPREQ_* constants rendering as TIMECOND_* from the merged table,
+    // +40 canon lines). The offset spelling keeps tables distinct; restore
+    // with the steal when TypeTypedef lands. The spelling itself has zero
+    // corpus surface (no anon enum name is printed).
+    match name {
+        Some(name) => ensure_safe_name_length(name),
+        None => {
+            // :680-717 anonymous base/subroutine/lexical spellings never
+            // arise for the composite/typedef DIEs this walk serves (member
+            // parents and typedef targets are composites in every C
+            // witness); keep the historical offset spelling as the
+            // defensive exit.
+            format!("{}_{:x}", dwarf_container_type_name(record.tag), record.id.1)
+        }
+    }
+}
+
+// Ghidra: DWARFProgram.java:626 getEntryName + :650-675 — anonymous composite DIE naming
+// driver used by resolve_type_inner/shallow_type: full entry-name chain, single inbound
+// typedef steal, then the layout-fingerprint anonymous name
+fn composite_type_name(
+    dwarf: &Dwarf<DwarfReader>,
+    unit: &Unit<DwarfReader>,
+    offset: UnitOffset<usize>,
+) -> Result<String> {
+    let table = build_dwarf_die_table(dwarf)?;
+    let unit_base = unit
+        .header
+        .offset()
+        .as_debug_info_offset()
+        .map(|offset| offset.0 as u64)
+        .unwrap_or(0);
+    Ok(dwarf_type_leaf_name(&table, (unit_base, offset.0), 0))
 }
 
 // RUGRA-GLUE: reads direct DW_TAG_enumerator children into the value→name table Ghidra keeps on its enum data types for constant-name rendering

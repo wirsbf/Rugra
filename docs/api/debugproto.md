@@ -1,5 +1,56 @@
 # `debugproto.rs` API Reference
 
+## 2026-09-26：DWARF 匿名类型命名指纹（DWARF-ANON-TYPENAME-0001）
+
+**根因（cast 名残差族 −44 票面）**：Rugra 对无名 `DW_TAG_structure_type`/
+`union_type`（及 `shallow_type` 回边投影）一律落 `struct_<offset>`/`union_<offset>`
+占位拼写；Ghidra 的匿名复合体名由 **Java 侧 DWARF importer** 在 Program 导入期
+合成（非 cpp 反编译器）：`DWARFProgram.getDWARFName`（DWARFProgram.java:608-675）
+对无名结构类走
+`anon_<container>_<layout fingerprint>_for_<referring member fields>`，指纹 =
+`DWARFUtil.getStructLayoutFingerprint`（DWARFUtil.java:267-298）：
+`String.format("%d_%d_%08x", byte_size, memberCount, memberNames.hashCode())`，
+`memberNames` = 排序后的 `"%04x_%s" % (memberOffset, memberName)` 列表
+（Java `List.hashCode` = 31 折叠，初值 1；`String.hashCode` = UTF-16 31 多项式
+32 位回绕）。锁定见证：curl golden `(anon_union_16_3_e2f18bb4_for_content)`
+（ghidra_curl_1204.c:767-788）= union@0xa49（byte_size=16，成员 Set/CharRange/
+NumRange 全部无 `DW_AT_data_member_location` → 偏移 0，count=3），`_for_content`
+来自唯一引用成员 `content`（struct@0xa77 字段 0xa8d，
+`getReferringMemberFieldNames` DWARFProgram.java:792-819）。Java 12.0.4 build 树
+`/data/ls/DiffClip/tools/ghidra-12.0.4-build/src`（application.version=12.0.4 亲核），
+basis 记录于 TODO 票行。
+
+**承载（`composite_type_name` 驱动链）**：`build_dwarf_die_table` 一次
+`.debug_info` 全量走查建节（DIE 身份 = `(unit 基偏移, unit 相对偏移)`，等价
+Java 节全局 `DebugInfoEntry.getOffset()`，DebugInfoEntry.java:162；`type_refs`
+保 `indexDIEATypeRefs`（DWARFProgram.java:375-385）的插入序 = 走查序）；
+`struct_layout_fingerprint` 逐字承载指纹（成员过滤 `DW_TAG_member|DW_TAG_inheritance`、
+`DW_AT_external` 跳过、`UNNAMED_MEMBER_<count>`、`parseDataMemberOffset` 语义
+（DIEAggregate.java:613-637，数值/表达式形态、越界回 0））；
+`referring_member_field_names` 承载 `_for_` 后缀（异父中止回 ""、未名成员
+`<parentName>_<positionInParent(x->true)>`，DWARFProgram.java:1472-1490）；
+`ensure_safe_name_length` 承载 2000 字符钳（SymbolUtilities.java:35 +
+`NAME_HASH_REPLACEMENT_SIZE=8+2+2`，DWARFProgram.java:63-64）——指纹拼写本身
+在 :674 提前返回不过钳，与 Java 一致。`resolve_type_inner`/`shallow_type`
+无名臂改走该链；**有名**回边投影保持历史占位拼写（语料见证均由 typedef
+物化层重命名，不动）。
+
+**保守降级两处（铁律 1.5，恢复路径已注明）**：①`:650-656` 单入边 typedef
+偷名不承载——Rugra 以 `materialized_alias` 把 typedef 物化为改名克隆（无
+`TypeTypedef` 变体，type.hh:431），偷名的端到端效果已由别名层承载；指纹名
+对该路径不可见（curl 4 例 0xa77/0xaa7/0x4952/0x4982 唯一入边即 typedef，
+全 DAG 无回边投影）。②匿名 enum 保持 `enum_<offset>` 拼写，不承载
+`anon_enum_<bits>`（:684-686→:771-774）——Java 里匿名 enum 终名同样来自
+typedef 偷名，二者不可分；无偷名时共享 `anon_enum_32` 会在名键工厂里合并
+不同 enum 的值表（实测 HTTPREQ_* 渲染成 TIMECOND_*，+40 canon 行）。
+零语料面（无匿名 enum 名进输出）；随 `TypeTypedef` 落地一并恢复。
+
+**语料事实（readelf 亲测）**：curl 12 个匿名复合体（8 指纹路径 + 4 typedef
+路径），`DW_AT_data_member_location` 全常数形态（196 处零 exprloc）、类型引用
+全 `DW_FORM_ref4`（零跨 CU）；httpd/vsh stripped 零 DWARF；sq 40 个匿名复合体
+（多数 typedef 路径）。CU1/CU2 同源 union 指纹相同（布局键名，Java 语义）→
+名键工厂合一，与 Ghidra 类型管理器去重一致。
+
 ## 2026-09-25：OUTSTRUCT-ID0 命名类型注册修复（C4 STRUCT-SEED 通道前置）
 
 **根因（`find_by_name` 对直接命名复合体恒 None）**：`intern_named` 对 id=0 候选
