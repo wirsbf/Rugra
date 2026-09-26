@@ -4020,9 +4020,11 @@ impl BlockGraph {
     // cc:3548-3553; the BLOCKCONSISTENT_DEBUG build even asserts that
     // ownership at collapse time, cc:945-948). Rugra's dispatch keeps
     // the same per-node-once property structurally: the Switch arm walks
-    // control + gototype==0 cases only, so the one sanctioned aliasing
-    // (goto-arm case targets, which stay top-level roots AND sit in
-    // `cases` with gototype != 0) is excluded from this walk — see
+    // control + gototype==0 cases + the gototype==0 default arm, so the
+    // one sanctioned aliasing (goto-arm case targets — and a
+    // gototype!=0 default — which stay top-level roots AND sit in the
+    // switch's `cases`/`default_case` slots with gototype != 0) is
+    // excluded from this walk — see
     // `final_transform_block` for the sweep that DOES need its visited
     // guard against that aliasing. A silent visited guard here would
     // only ever MASK an invariant break — turning a loud shape bug into
@@ -5397,9 +5399,10 @@ impl BlockGraph {
 /// block.cc:1364 graph recursion; block.cc:3556 switch override).
 ///
 /// `BlockSwitch` (cc:3556-3592) recurses FIRST into its component list —
-/// the dispatch block plus the structured (non-goto) case components,
-/// exactly the members Ghidra's `newBlockSwitch` consumed via
-/// `identifyInternal` (block.cc:1913); the goto-arm case targets stay in
+/// the dispatch block, the structured (non-goto) case components, and the
+/// structured (gototype==0) default arm, exactly the members Ghidra's
+/// `newBlockSwitch` consumed via `identifyInternal` (block.cc:1913); the
+/// goto-arm case targets (and a gototype!=0 default) stay in
 /// the surrounding graph (block.cc:3548-3553) and are finalized by the
 /// parent graph's own recursion — then runs the label/depth passes and
 /// the stable sort. Every other composite inherits the plain recursion
@@ -5425,6 +5428,20 @@ pub fn finalize_printing_block(
             for (case, &gt) in sw.cases.iter().zip(sw.case_gototypes.iter()) {
                 if gt == 0 {
                     v.push(case.clone());
+                }
+            }
+            // Ghidra: block.cc:3556 BlockSwitch::finalizePrinting — the
+            // default arm body with gototype==0 is a structure member
+            // (ruleSwitch blockaction.cc:1714-1720 pushes every non-exit
+            // out edge into cases, newBlockSwitch block.cc:1913
+            // identifyInternal consumes them), so the graph recursion must
+            // reach it; a gototype!=0 default stays in the surrounding
+            // graph (cc:3548-3553 goto-arm mirror) and is excluded here.
+            // Identical shape to the checker arm
+            // (debug_assert_component_tree_unique).
+            if sw.default_gototype == 0 {
+                if let Some(dc) = &sw.default_case {
+                    v.push(dc.clone());
                 }
             }
             v
@@ -7581,8 +7598,9 @@ pub fn final_transform_block(
         // oracle's per-node-once semantics (a revisit would re-detect
         // idempotently but re-move ops against moved positions). The
         // finalizePrinting twin needs NO guard: its Switch dispatch
-        // walks control + gototype==0 cases only, so the aliased members
-        // are structurally excluded. Debug builds machine-check the
+        // walks control + gototype==0 cases + the gototype==0 default
+        // arm, so the aliased members are structurally excluded. Debug
+        // builds machine-check the
         // ownership invariant at both sweep entries — see
         // BlockGraph::debug_assert_structure_tree_unique.
         return;
@@ -9549,5 +9567,227 @@ mod finalize_visited_tests {
         let roots: Vec<BlockArc> = graph.blocks.clone();
         assert!(!roots.is_empty());
         BlockGraph::debug_assert_structure_tree_unique(&roots);
+    }
+
+    /// BLOCK-FINALIZE-DEFAULT-RECURSE-0001 unit lock (the bilateral oracle
+    /// fixture is tests/oracle/blockstruct_switch_default_whiledo_1204):
+    /// a switch whose DEFAULT arm (default_gototype==0) is a while-do with
+    /// a canonical for shape must run BlockWhileDo::finalizePrinting
+    /// THROUGH the switch's finalize recursion — the oracle's plain
+    /// component-list walk (block.cc:3559) always reaches the default arm
+    /// member. The observable: the iterate statement (INT_ADD) is flagged
+    /// non-printing (block.cc:3422 opMarkNonPrinting). The dispatch used
+    /// to skip the default_case slot, leaving INT_ADD printable (the
+    /// for->while degradation this lane fixed).
+    ///
+    /// CFG (mirror of the fixture): b0 BRANCHIND head (out0 case RETURN,
+    /// out1 DEFAULT), b1 case RETURN, b2 loop head (MULTIEQUAL/INT_LESS/
+    /// CBRANCH), b3 loop body (INT_ADD), b4 exit RETURN. The tree is
+    /// installed through the production factories in the order the
+    /// collapse rules produce when W forms first (identify_internal over a
+    /// BlockWhileDo, then try_rule_switch), because a single collapse run
+    /// consumes the raw default target before the loop can form under it.
+    #[test]
+    fn finalize_recurses_into_structured_default_whiledo_for_extraction() {
+        use crate::block::BlockCopy;
+        use crate::block::BlockWhileDo;
+        use crate::blockaction::CollapseStructure;
+        use crate::funcdata::Funcdata;
+        use crate::jumptable::JumpTable;
+        use crate::op::pcodeop_flags;
+        use crate::opcodes::OpCode;
+
+        let mut fd = Funcdata::new("f", Address::new(0x60000), 0x100);
+        fd.set_arch(Arc::new(crate::arch::Architecture::new()));
+
+        let mut bb: Vec<BlockArc> = Vec::new();
+        for (i, a) in [0x60000u64, 0x60010, 0x60020, 0x60040, 0x60060].iter().enumerate() {
+            let bl: BlockArc =
+                Arc::new(RwLock::new(BlockBasic::new(i as i32, Address::new(*a))));
+            fd.bblocks.add_block(bl.clone());
+            bb.push(bl);
+        }
+
+        // b0: i0 = COPY 0; BRANCHIND x. b2: MULTIEQUAL/INT_LESS/CBRANCH.
+        // b3: INT_ADD. b1/b4: RETURN.
+        let init_op = fd.new_op(1, Address::new(0x60000));
+        fd.op_set_opcode(&init_op, OpCode::CPUI_COPY);
+        let i0 = fd.new_unique_out(4, &init_op);
+        let zero = fd.new_constant(4, 0);
+        fd.op_set_input(&init_op, zero, 0);
+        fd.op_insert_end(&init_op, &bb[0]);
+        let ind_op = fd.new_op(1, Address::new(0x60004));
+        fd.op_set_opcode(&ind_op, OpCode::CPUI_BRANCHIND);
+        let x = fd.new_varnode(4, Address::new(0));
+        fd.op_set_input(&ind_op, x, 0);
+        fd.op_insert_end(&ind_op, &bb[0]);
+        let ret = |fd: &mut Funcdata, addr: u64, val: u64, blk: &BlockArc| {
+            let r = fd.new_op(1, Address::new(addr));
+            fd.op_set_opcode(&r, OpCode::CPUI_RETURN);
+            let rv = fd.new_constant(1, val);
+            fd.op_set_input(&r, rv, 0);
+            fd.op_insert_end(&r, blk);
+        };
+        ret(&mut fd, 0x60012, 0, &bb[1]);
+        let me_op = fd.new_op(2, Address::new(0x60020));
+        fd.op_set_opcode(&me_op, OpCode::CPUI_MULTIEQUAL);
+        let i = fd.new_unique_out(4, &me_op);
+        let add_op = fd.new_op(2, Address::new(0x60040));
+        fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+        let i_next = fd.new_unique_out(4, &add_op);
+        fd.op_set_input(&me_op, i0.clone(), 0);
+        fd.op_set_input(&me_op, i_next.clone(), 1);
+        fd.op_insert_end(&me_op, &bb[2]);
+        let lt_op = fd.new_op(2, Address::new(0x60024));
+        fd.op_set_opcode(&lt_op, OpCode::CPUI_INT_LESS);
+        let c = fd.new_unique_out(1, &lt_op);
+        fd.op_set_input(&lt_op, i.clone(), 0);
+        let ten = fd.new_constant(4, 10);
+        fd.op_set_input(&lt_op, ten, 1);
+        fd.op_insert_end(&lt_op, &bb[2]);
+        let cb_op = fd.new_op(2, Address::new(0x60028));
+        fd.op_set_opcode(&cb_op, OpCode::CPUI_CBRANCH);
+        let tgt = fd.new_constant(8, 0x60080);
+        fd.op_set_input(&cb_op, tgt, 0);
+        fd.op_set_input(&cb_op, c, 1);
+        fd.op_insert_end(&cb_op, &bb[2]);
+        fd.op_set_input(&add_op, i, 0);
+        let one = fd.new_constant(4, 1);
+        fd.op_set_input(&add_op, one, 1);
+        fd.op_insert_end(&add_op, &bb[3]);
+        ret(&mut fd, 0x60062, 1, &bb[4]);
+
+        // Highs + explicitness: the production finalize gates stood in for.
+        fd.set_high_level();
+        i0.write().unwrap().set_explicit();
+        i_next.write().unwrap().set_explicit();
+
+        // Edges: b0 out0 case, out1 DEFAULT; b2 out0 exit, out1 body; back.
+        fd.bblocks.add_edge(bb[0].clone(), bb[1].clone());
+        fd.bblocks.add_edge(bb[0].clone(), bb[2].clone());
+        fd.bblocks.add_edge(bb[2].clone(), bb[4].clone());
+        fd.bblocks.add_edge(bb[2].clone(), bb[3].clone());
+        fd.bblocks.add_edge(bb[3].clone(), bb[2].clone());
+
+        let jt = Arc::new(RwLock::new(JumpTable::new(Address::new(0x60004))));
+        jt.write().unwrap().set_indirect_op(ind_op.0.clone());
+        jt.write().unwrap().default_block = 1; // out-edge 1 of b0 is the default
+        fd.jump_tables.push(jt);
+
+        // Production pipeline: structureReset BEFORE install (find_spanning_
+        // tree clears edge flags), then buildCopy, W install, switch rule.
+        fd.structure_reset();
+        fd.install_switch_defaults();
+        fd.sblocks.build_copy(&fd.bblocks);
+
+        let copy_of = |orig: &BlockArc| -> BlockArc {
+            fd.sblocks
+                .blocks
+                .iter()
+                .find(|b| {
+                    let r = b.read().unwrap();
+                    r.get_type() == crate::block::BlockType::Copy
+                        && r.as_any()
+                            .downcast_ref::<BlockCopy>()
+                            .map(|cblk| Arc::ptr_eq(&cblk.original, orig))
+                            .unwrap_or(false)
+                })
+                .cloned()
+                .expect("copy")
+        };
+        let cond_copy = copy_of(&bb[2]);
+        let body_copy = copy_of(&bb[3]);
+        let head_copy = copy_of(&bb[0]);
+        let w: BlockArc = Arc::new(RwLock::new(BlockWhileDo {
+            index: cond_copy.read().unwrap().get_index(),
+            condition: cond_copy.clone(),
+            body: body_copy.clone(),
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+            for_init: None,
+            for_iter: None,
+            initialize_op: None,
+            iterate_op: None,
+            loop_def: None,
+            overflow_syntax: false,
+        }));
+        let head_idx = fd
+            .sblocks
+            .blocks
+            .iter()
+            .position(|b| Arc::ptr_eq(b, &head_copy))
+            .expect("head slot");
+        {
+            let (cond_idx, body_idx) = fd
+                .sblocks
+                .blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(pos, b)| {
+                    if Arc::ptr_eq(b, &cond_copy) {
+                        Some((pos as i32, -1))
+                    } else if Arc::ptr_eq(b, &body_copy) {
+                        Some((-1, pos as i32))
+                    } else {
+                        None
+                    }
+                })
+                .fold((-1i32, -1i32), |acc, x| {
+                    (if x.0 >= 0 { x.0 } else { acc.0 }, if x.1 >= 0 { x.1 } else { acc.1 })
+                });
+            let mut collapse = CollapseStructure::new(&mut fd.sblocks, "test")
+                .with_jump_tables(fd.jump_tables.clone());
+            collapse.identify_internal(&w, &[cond_idx, body_idx], cond_idx as usize);
+        }
+        {
+            let mut collapse = CollapseStructure::new(&mut fd.sblocks, "test")
+                .with_jump_tables(fd.jump_tables.clone());
+            assert!(
+                collapse.try_rule_switch(head_idx),
+                "production switch rule must install the switch"
+            );
+        }
+        // The switch's default arm must be the structured W (gt==0).
+        {
+            let head_sw = fd.sblocks.blocks[head_idx].clone();
+            let r = head_sw.read().unwrap();
+            let sw = r.as_any().downcast_ref::<BlockSwitch>().unwrap();
+            assert_eq!(sw.default_gototype, 0);
+            assert!(sw.default_case.is_some());
+            assert!(Arc::ptr_eq(sw.default_case.as_ref().unwrap(), &w));
+        }
+        // collapseAll's final sweep mirror (drop absorbed, re-index).
+        {
+            let consumed: std::collections::HashSet<i32> =
+                fd.sblocks.absorbed_into.keys().copied().collect();
+            fd.sblocks
+                .blocks
+                .retain(|b| !consumed.contains(&b.read().unwrap().get_index()));
+            for (i2, b) in fd.sblocks.blocks.iter().enumerate() {
+                b.write().unwrap().set_index(i2 as i32);
+            }
+        }
+
+        // Sweeps: ActionStructureTransform + ActionFinalStructure head.
+        crate::block::for_loop_final_transform(&mut fd);
+        fd.sblocks.order_blocks();
+        super::BlockGraph::finalize_printing_graph(&mut fd);
+
+        // THE lock: the default arm's WhileDo ran its finalize — the
+        // iterate statement is non-printing (block.cc:3422) and the
+        // WhileDo's iterateOp survived testTerminal (cc:3410).
+        let notprinted = add_op.0.read().unwrap().flags & pcodeop_flags::NONPRINTING != 0;
+        assert!(
+            notprinted,
+            "default-arm WhileDo iterate statement (INT_ADD) must be flagged non-printing"
+        );
+        {
+            let wr = w.read().unwrap();
+            let wd = wr.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(wd.iterate_op.is_some(), "iterateOp must survive finalizePrinting");
+            assert!(wd.loop_def.is_some());
+        }
     }
 }

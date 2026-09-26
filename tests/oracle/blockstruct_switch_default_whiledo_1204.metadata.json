@@ -1,0 +1,31 @@
+{
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "bc7f57ff4df58eb8b20f35a56eb546abd1fe0a2989d91f880b26c381524dc656",
+  "rust_fixture_sha256": "aa3f2b26bdafdffe9ef5658b2eb238c72c4c9a8d0413e02592aaac56c4c1c9af",
+  "rugra_block_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f"
+ },
+ "fixture_id": "BLOCK-FINALIZE-DEFAULT-RECURSE-0001",
+ "normalizations": [
+  "observation lines sorted before printing (Rugra installs composites at the consumed slot while the oracle appends; tree ORDER is order-free for this single-switch tree)",
+  "identity reduced to node TYPES + WhileDo for-op facts + block-ordinal op lines (fresh BlockCopy indices and seqnum addresses differ between tree builders; the block ordinals are the post-structureReset reverse-post-order positions, identical on both sides by mirrored structureLoops)",
+  "MULTIEQUAL rendered BUILD on the Rugra side (Ghidra 12 renamed the op, typeop.cc:1945; Rugra's opcode table keeps the P-code spelling)",
+  "switch caseblocks/defaultcases counts map Rugra's separate default_case slot onto the oracle's CaseOrder entries (the oracle keeps the default as an ordinary caseblocks member tagged isdefault, block.cc:3515)",
+  "direct-construction install (same family as printc_switch_emit_1204): the corpus has no switch whose default arm carries a loop and a single CollapseStructure run consumes the raw default target before a loop can form under it (ruleSwitch's obvious-exit scan, blockaction.cc:1671-1676, takes any 2-in successor), so the tree is installed through the production factories in the order the collapse rules produce when W forms first (newBlockWhileDo then newBlockSwitch / try_rule_switch); finalizePrinting and the transform sweeps run unmodified"
+ ],
+ "observed": {
+  "structure_roots": "2 (BlockSwitch + exit copy)",
+  "switch_members": "copy,copy,whiledo — the default arm is the structured WhileDo (defaultcases=1, caseblocks=2)",
+  "whiledo_facts": "iterate=INT_ADD initialize=- loopdef=BUILD — the transform found the loop variable and iterate statement; initialize stays unset by the oracle's own findInitializer gate (block.cc:3336: the initializer COPY lives in the 2-out-edge switch head, which is not a flows-only-into-loop block)",
+  "decisive": "op blk2#0 INT_ADD notprinted=1 — BlockWhileDo::finalizePrinting ran through the switch's finalize recursion (block.cc:3559 -> 3403-3424, opMarkNonPrinting cc:3422). Pre-fix Rugra printed notprinted=0 (finalize_printing_block's Switch arm skipped the default_case slot): A/B verified on this lane (fix stashed -> MISMATCH on exactly this line; fix restored -> MATCH)",
+  "marker_side_observations": "op blk1#0 BUILD notprinted=1 is the natural PcodeOp::marker bit of MULTIEQUAL (op.hh:182 notPrinted = marker|nonprinting|noreturn), not a finalize mark; symmetric on both sides"
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "(git worktree at ghidra/, verified by runner)",
+  "project": "Ghidra",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.hh:365-380,694-696,block.cc:1364-1371,1856-1868,1904-1919,2394-2396,3145-3430,3483-3553,3556-3592,blockaction.cc:1518-1546,1655-1721,2109-2115,2170-2197,funcdata_block.cc:687-700,704-727,funcdata_varnode.cc:48-76,jumptable.hh:599}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "overall_status": "MATCH",
+ "status_note": "finalizePrinting default-arm recursion locked bilaterally on the production sweeps (ActionBlockStructure install through production factories -> ActionStructureTransform -> ActionFinalStructure head: orderBlocks + finalizePrinting). The fixture is the latent-shape lock for BLOCK-FINALIZE-DEFAULT-RECURSE-0001: finalize_printing_block's Switch arm pushed only control + gototype==0 cases, so the default arm's WhileDo never ran its for-extraction finalize (for->while degradation); the fix pushes default_case when default_gototype==0, identical to the checker arm (debug_assert_component_tree_unique) and to the oracle's plain component-list walk (block.cc:3559). Companion unit lock: block.rs finalize_visited_tests::finalize_recurses_into_structured_default_whiledo_for_extraction."
+}
