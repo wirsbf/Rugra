@@ -263,6 +263,22 @@ PoC 本身即裁决实验，两条后路的成本都被它收窄。
   capstone 从 Cargo.toml 移除（或仅 probe feature 保留）；③五语料 + bank + 镜面棘轮全绿。
 - **前置**：Phase2 完成。
 
+> **2026-09-26 DONE（Lane SLEIGHP3 @ wt/sleighp3，基 master f3499354）**。
+> 实际写域扩展：canon 双驱动 + CLI 预扫描 + funcdata 22 测试站点 + 7 个管线调试器 +
+> `src/disasm/{x86_64,x86_lift,mod}.rs`/`src/binary/mod.rs`/`src/error.rs` 死面删除 +
+> Cargo 去 iced-x86/capstone（含 capstone feature）+ 9 个 x86 探针与 disassemble_demo
+> 退役。**①P-1 实测=证伪**：prototype_worker 全链换 SLEIGH 后 canon curl **字节恒等**
+> （md5 c33052a3==基线，num_params A/B 30 函数 0 差）——A/G 残差非解码数据源贡献，
+> 修法收敛到"改仲裁"（CURLCANON 两票已注记）；httpd 换装经两轮真实缺陷修复
+> （CASED 判别器 const size、多字节 NOP 引擎操作数 pcode 需按 oracle printAssembly
+> 分类过滤）后 311/0/0，残差 +82 全部归因持有域管线分歧（blockaction F5 族 +103、
+> varmap 域），真实收敛 −45（oracle 形 IR）。**②完成**：Cargo.lock 双依赖出清。
+> **③门禁**：canon curl 200/0/0 恒等 + canon httpd 311/0/0 + bank 391/391 + .sla 三元 +
+> cargo test --lib 1786P/0F（−19=被删模块测试 9+6+4 精确对账）+ 镜面五面（见车道终报）。
+> 附带发现：stackfold B2 fixture 驱动在基线即 panic（f6dcbed0 预存断裂，
+> STACKFOLD-FIXTURE-F6DC-BREAK-0001）；fold 可观察量经生产路径验证保持
+> （canon httpd in_RSP=0 双侧）。
+
 ### Phase 4 — 多架构解锁（ARM/MIPS/…）
 
 - **写域**：`src/arch.rs`（Architecture 扩展）、`src/disasm/`（按 .ldefs 语言发现）、
@@ -283,9 +299,9 @@ canon 残差（@master 合成态 curl 246/0/0、httpd 255/0/0）与后续 Rust S
 
 | 预测 | 依据 | 检验锚点（可执行） | 判定意义 |
 |---|---|---|---|
-| **P-1 原型预探测是 A/G/F 族的贡献源之一**：curl `prototype_worker` 用 iced 提升 + 简化 `ActionInferParams` 产 `num_params`，与 Ghidra（decompiler 全管线+分析器）不同源。A 族（原型驱动 cast，45 行）、G 族（\_\_stream 名推荐，12 行）、F 族（gp 局部类型仲裁，24 行）都消费原型/参数信息 | A/G/F 族的 CURLCANON 归因（docs/alignment_audit/CURL_CANON_ATTRIBUTION_2026-09-26.md §2）均落在"原型/参数→cast/命名"链上；该链上游数据=iced 预探测产物 | Phase3 的 A/B 实验：仅替换 prototype_worker 的 lifter（X86Lifter→SleighLifter），其余零改动，跑 canon curl 差分。**可检验预测：A/G 三族行数变化集中出现在多被调函数（main/parseconfig），且方向只能改善或不变——若出现新缺陷族则预测证伪** | 若 P-1 成立，A/G 部分行数归因上移到"预探测数据源"，CURLCANON-PROTOCAST/NAMEREC 票的修法可选"换源"而非"改仲裁" |
-| **P-2 B 族（helpf varargs 保存链 29 行）不是 iced 残差**：helpf 主提升走 SLEIGH，B 族根因在 condexe/fspec 参数试验/保存链（票面归因），与 lifter 无关 | §1.1 主路径事实 + HELPF-VARARGS-SAVECHAIN-0001 归因 | Phase2 验收的字节恒等实验顺带证伪/证实：Rust SLEIGH 后 B 族行数应**逐字节不变** | 把"换 SLEIGH 能不能治病"这类预期从 B/D/C 等主 IR 族上摘掉，避免误投工期 |
-| **P-3 funcdata 测试面（iced IR）与主管线（SLEIGH IR）存在系统性形态差**：24 处 X86Lifter 单测喂的 IR 与生产 IR 不同源，测试通过≠生产行为 | x86_lift.rs 自述以 .sla dump 校正（仍非恒等）；fspec.rs:9322 注释"iced builds"与 sleigh 路径分叉在案 | 抽样：同一函数同地址，X86Lifter::lift 与 SleighLifter::lift_instruction 的 PcodeOpRaw 序列 diff 计数（探针 examples/x86gap_probe.rs 既有同类仪器） | 若非零差，funcdata 单测的"绿"对生产行为的证明力打折，测试迁移（Phase3 ③）有实质工作量 |
+| **P-1 原型预探测是 A/G/F 族的贡献源之一**：curl `prototype_worker` 用 iced 提升 + 简化 `ActionInferParams` 产 `num_params`，与 Ghidra（decompiler 全管线+分析器）不同源。A 族（原型驱动 cast，45 行）、G 族（\_\_stream 名推荐，12 行）、F 族（gp 局部类型仲裁，24 行）都消费原型/参数信息 | A/G/F 族的 CURLCANON 归因（docs/alignment_audit/CURL_CANON_ATTRIBUTION_2026-09-26.md §2）均落在"原型/参数→cast/命名"链上；该链上游数据=iced 预探测产物 | Phase3 的 A/B 实验：仅替换 prototype_worker 的 lifter（X86Lifter→SleighLifter），其余零改动，跑 canon curl 差分。**可检验预测：A/G 三族行数变化集中出现在多被调函数（main/parseconfig），且方向只能改善或不变——若出现新缺陷族则预测证伪** | 若 P-1 成立，A/G 部分行数归因上移到"预探测数据源"，CURLCANON-PROTOCAST/NAMEREC 票的修法可选"换源"而非"改仲裁"。**实测（2026-09-26 SLEIGHP3）：证伪**——换装后 canon curl 字节恒等（md5 c33052a3），A/G 行数原样保留且 num_params A/B 30 函数 0 差 ⇒ 残差根因在简化原型管线的仲裁本身，"换源"修法关闭，两票修法定向"改仲裁" |
+| **P-2 B 族（helpf varargs 保存链 29 行）不是 iced 残差**：helpf 主提升走 SLEIGH，B 族根因在 condexe/fspec 参数试验/保存链（票面归因），与 lifter 无关 | §1.1 主路径事实 + HELPF-VARARGS-SAVECHAIN-0001 归因 | Phase2 验收的字节恒等实验顺带证伪/证实：Rust SLEIGH 后 B 族行数应**逐字节不变** | 把"换 SLEIGH 能不能治病"这类预期从 B/D/C 等主 IR 族上摘掉，避免误投工期。**实测（2026-09-26 SLEIGHP3）：证实**——canon curl 字节恒等下 helpf 29 行原样保留 |
+| **P-3 funcdata 测试面（iced IR）与主管线（SLEIGH IR）存在系统性形态差**：24 处 X86Lifter 单测喂的 IR 与生产 IR 不同源，测试通过≠生产行为 | x86_lift.rs 自述以 .sla dump 校正（仍非恒等）；fspec.rs:9322 注释"iced builds"与 sleigh 路径分叉在案 | 抽样：同一函数同地址，X86Lifter::lift 与 SleighLifter::lift_instruction 的 PcodeOpRaw 序列 diff 计数（探针 examples/x86gap_probe.rs 既有同类仪器） | 若非零差，funcdata 单测的"绿"对生产行为的证明力打折，测试迁移（Phase3 ③）有实质工作量。**实测（2026-09-26 SLEIGHP3）：证实**——op-for-op 仪器钉死形态差族（cmp 链 9→10 op、mov 零扩展折叠、COPY tmp 前导、call-to-next CALL→BRANCH、常量地址 LOAD 折叠、SIMD 缺失、push 臂 STORE 形）；22 测试站点迁移 + 3 形态断言族按 SLEIGH 实测重写（cmp=10/store=2/seq_cmp_je=27），x86gap_probe 等校准仪器随 iced 退役删除 |
 | **P-4 多架构解锁后的新语料将暴露 x86 特化假设**：flow/fspec/varmap 中按 x86-64 寄存器约定写的路径（如 segment base、calling convention 硬编码）在 ARM/MIPS 上首跑预期失败 | space.rs/arch.rs 的 x86-64 锁定值注释（sleigh_specs .sla 空间表）；create_disassembler 无 arch 分支 | Phase4 首个 ARM fixture 与 oracle 的首分歧点记录 | 新语料=新差分面，先立票后修，不降级 |
 
 ---
