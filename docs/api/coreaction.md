@@ -3769,3 +3769,30 @@ global_scope_ranges 但从不应用到 Database）；canon 驱动侧手补
 TODO_BOARD 票行）。CR 条件 F-1（证据目录实验残留改名
 `httpd_canon.c→httpd_canon_cc4404-experiment.c`,md5 460367b2 非 canon 锚
 d6fd730a）已在 /dev/shm/rugra-reports/stackspill-evidence/ 执行。
+
+## 2026-09-26：ActionConditionalConst phi 边排序键改 SeqNum time（PAREVAL-DETERM-HERMETICITY-0001，Lane HERMIT）
+
+- **缺陷**：`collect_reachable`/`handle_phi_nodes` 的 `phi_node_edges` 旧表示为
+  `Vec<(usize, usize)>`——元素 0 是 `Arc::as_ptr(op_arc) as usize`（op 的**裸堆地址**），
+  `Vec::sort()` 按元组序=按堆地址排序。`handle_phi_nodes`（cc:4321-4330 主循环）按此
+  序对每条断连 phi 边调 `place_copy`（cc:4200-4222：`newOp`+`newUniqueOut`+分支前
+  `opInsert`），故**影子 COPY 的 unique temp 分配序、块内插入序、最终打印语句序全部
+  由堆地址序决定**——受进程内前置反编译分配历史扰动（非单调剂量响应）+ASLR 影响
+  （跨进程翻转）。sqlite3 `shell_exec` 同函数同输入两字节变体（38491B→38519B 现尺，
+  两相邻零赋值 `pppppbVar20=0`/`param_2=0` 互换）即此机制；oracle 12.0.4 同剂量
+  矩阵（solo×3/dose k5..k0/dose-arch）恒单变体——Rugra 侧对齐缺陷。
+- **oracle 语义（亲读）**：`collectReachable`（cc:4090）`sort(phiNodeEdges…)` 的
+  比较器是 `PcodeOpNode::operator<`（expression.hh:41-48）——**不同 op 按
+  `op->getSeqNum().getTime()` 比较（指针只做相等性检查，永不做排序键）**，同 op 按
+  slot；`binary_search`（cc:4106）成员测试用同一比较器。`handlePhiNodes`
+  （cc:4299-4333）直接以排序后序迭代 `phiNodeEdges[i].op`，无存活过滤。
+- **修复**：`phi_node_edges` 改 `Vec<(PcodeOpRef, usize)>`（Arc+slot）；
+  `sort_by`/`binary_search_by` 按（SeqNum time, slot）——探针 time 提升出
+  binary_search 闭包（外层 `op` 读守卫存活，防同锁再入）；`handle_phi_nodes`
+  直接持 Arc 迭代（去掉旧 alivelist 裸指针 O(n) 线性找回，Ghidra 无存活过滤且
+  push→handle 窗口内无 op 销毁——propagateConstant cc:4413/4424 push 到
+  cc:4459-4464 handle 之间只读）；`place_multiple_constants`（死代码，flowTogether
+  腿缺失=独立缺口 CONDACT-FLOWTOGETHER-LEG-0001）同步新类型签名，行为零变化。
+- **验证**：剂量实验 k=0..5 全部恒等 fnv `4110e793…`（=变体 A=oracle 语句序
+  `pppppuVar18` 先 `param_2` 后），双进程复跑一致；7 剂量 IR 全量转储归一化后
+  单一 md5（完全封闭）。canon/镜面/bank/测试门禁见车道终报。
