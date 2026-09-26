@@ -5818,7 +5818,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "UNTESTED",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/scope_category_1204.metadata.json",
         "inputs": {
