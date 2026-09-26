@@ -54,11 +54,11 @@
 # pinned_commit=c4508bba=集成态测量锚[wave-ledger commit 为 docs-only 不改二进制];
 # 分片协议 27178 仍为 SQLITE3_SCOREBOARD 记分板口径, 两协议各按各的账本记账）。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
-curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
-httpd	98	29	CSPEC-GLOBAL-APPLY-HTTPD-RATCHET-0001	ba6e670e	2026-09-26
+curl	56	74	MERGEBATCH5-RATCHET-REPIN-0001	1a41d6ad	2026-09-26
+httpd	94	29	CSPEC-GLOBAL-APPLY-HTTPD-RATCHET-0001	1a41d6ad	2026-09-26
 vsh	16	71	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 sq	7500	810	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
-sqlite	26833	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	c4508bba	2026-09-26
+sqlite	26665	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	1a41d6ad	2026-09-26
 # 2026-09-26 MERGEBATCH18 波次增益锁定（MB18-RATCHET-REPIN-0001, root 授权重钉,
 # @ba6e670e = MB18 23 支合并+repin 态 fresh 实测）:
 # ① httpd ceiling 156→98（TYPINGPX-MIRROR-FRESH-DB-0001 落地——镜面臂逐函数 fresh
@@ -71,3 +71,16 @@ sqlite	26833	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	c4508bba	2026-09-26
 #    车道树实测 4323==集成态实测 4323,零漂移）。
 # ③ curl 58/vsh 15/sqlite 26833 三面恒等基线零漂移（本批 curl 改动全在 canon 面:
 #    curlfam cast 键+b29 种子面;镜面 curl 面字节恒等亲证）。
+# 2026-09-26 MERGEBATCH19 波次增益锁定（MB19-RATCHET-REPIN-0001, root 授权重钉,
+# @1a41d6ad = MB19 4 支合并+归档态 fresh 实测——pinned 列即该 commit,测量树=d986dc72 的父（ratchet commit 本身只改本表））:
+# ① curl ceiling 65→56（PRINTC0004 F-PLTNAME 落地——bare-load 过滤器排除 .plt.got 槽,
+#    registerPltStubs .rela.plt JUMP_SLOT-only 契约;__do_global_dtors_aux 2→0;floor 74 不动;
+#    旧 ceiling 65 系 MB5 时代冻结值,现态 58→56 连续两波改善后收紧到实测）。
+# ② httpd ceiling 98→94（PRINTC0004 F-STRFOLD 落地——镜面 print_db 补装 readonly 范围
+#    [fillinReadOnlyFromLoader 镜像],ap_parse_vhost_addrs 8→4 两折叠点 golden 逐字同形;
+#    floor 29 不动;残余 xVar 型常量=varmap 上游域在票）。
+# ③ sqlite ceiling 26833→26665（PRINTC0004 15 项中 checkAddressOfCast 全量谓词等
+#    多点语料命中 −168;floor 1385 不动;genwire 口径分片 27178 记分板不变）。
+# ④ sq 现态记账 4321（ceiling 7500 不动,floor 810 保持;−2=checkAddressOfCast 命中）。
+# ⑤ vsh 15/71 恒等未动。canon 双语料字节恒等 MB18 基线（curl 157/httpd 311,md5 双对
+#    相符——本批 4 支对 canon 全中性,15 项休眠或恒等 + typeunion 三修复语料中性亲证）。
