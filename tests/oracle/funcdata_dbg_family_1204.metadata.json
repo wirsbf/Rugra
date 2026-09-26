@@ -1,0 +1,108 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FUNCDATA-DBGFAMILY-0001",
+ "overall_status": "MATCH",
+ "status_note": "OPACTION_DEBUG observation face. Oracle side built with -DOPACTION_DEBUG; Rust debug members always compiled, gated on opactdbg_on (same observable shape as the oracle debug build). debugModCheck first-touch caching is driven through the same observable state steps (the Rust recorder twin lives in drillobserve); the before-strings are unobserved in this fixture. Bilateral byte-identical stdout against the locked oracle (runner: tools/run_funcdata_family_oracle.sh).",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "funcdata.hh:580-612",
+   "funcdata.cc:1007-1118",
+   "architecture.hh:256"
+  ]
+ },
+ "architecture": {
+  "kind": "synthetic Translate/Architecture",
+  "endianness": "little",
+  "address_size_bytes": 8,
+  "code_space": "ram",
+  "spaces": [
+   "const",
+   "other",
+   "unique",
+   "ram",
+   "register",
+   "stack",
+   "join",
+   "iop"
+  ]
+ },
+ "compiler_spec": {
+  "prototype_model": "fixture",
+  "extrapop": 0,
+  "input_model": "empty",
+  "output_model": "empty"
+ },
+ "analysis_options": {
+  "OPACTION_DEBUG": true
+ },
+ "input_manifest": {
+  "inputs": {
+   "fixtures": "funcdata_dbg_family_1204",
+   "harness": "tools/run_funcdata_family_oracle.sh"
+  },
+  "sha256": "adfc36ce354755d6c01fedd8b0a88d8c38d0587e48d778b84c62970490015b16"
+ },
+ "rugra_source": {
+  "base_commit": "3892a73e1faaf817010b726ce94f72a41ac1cbaf",
+  "base_tree": "283f497c8d9e55f3665bb6e17d078a8c82c29ca6",
+  "base_src_tree": "51f326fe4cf033338929472f6a080a60fe98af0a",
+  "base_funcdata_blob": "a688f99c83e4322249815aa3d0886ae6f04a86c3",
+  "base_drillfmt_blob": "b92a40de5f9b6d77f71e42032d29c40fb6563e3a",
+  "cargo_toml_blob": "990a23789c5cebc24b6d453a6832e5c8dbee117a",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "adfc36ce354755d6c01fedd8b0a88d8c38d0587e48d778b84c62970490015b16",
+  "rust_fixture_sha256": "32929750380b123525261f14f9a2fddf4d628a83e1eb07ff4bff218308ed3601",
+  "runner_sha256": "e0517bcd12e1fdd4bbb80751f001638aa1fc84f3f3187115f6a2e08137c08f3c"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "debug ranges are stored by value in four parallel vectors (pclow/pchigh/uqlow/uqhigh); jtcallback is a plain fn pointer.",
+  "loop_bounds_traversal_order": "debugCheckRange walks ranges in insertion order, first accepting range wins.",
+  "counter_accumulator_lifecycle": "opactdbg_count resets on debugEnable (hh:602); debugSize = pclow.size().",
+  "sorting_comparison_keys": "range matching is bounds comparison, not sorting; invalid PC (null-base Address) skips the PC constraint, uqlow==~0 skips the uniq constraint."
+ },
+ "coverage": {
+  "debug_lifecycle": {
+   "status": "MATCH",
+   "covers": "debugEnable/debugSize/debugClear/debugDisable + debugSetBreak/debugHandleBreak (hh:601-610)",
+   "residual_todo_ids": []
+  },
+  "debug_range_matrix": {
+   "status": "MATCH",
+   "covers": "debugSetRange (cc:1063) + debugCheckRange (cc:1076-1098: PC bounds skip-when-invalid, uniq bounds skip-when-unset, per-range continue) + debugPrintRange (cc:1100-1118 via Architecture::printDebug endl)",
+   "residual_todo_ids": []
+  },
+  "debug_mod_clear": {
+   "status": "MATCH",
+   "covers": "debugModClear (cc:1024-1032): modified addl-flag drop + list clear + active=false",
+   "residual_todo_ids": [
+    "FUNCDATA-DBGMODPRINT-BEFORE-0001"
+   ]
+  },
+  "debug_activate": {
+   "status": "MATCH",
+   "covers": "debugActivate gated on opactdbg_on (hh:595); debugDeactivate unconditional (hh:596)",
+   "residual_todo_ids": []
+  },
+  "jt_callback": {
+   "status": "MATCH",
+   "covers": "enableJTCallback/disableJTCallback (hh:593/594) fn pointer store/clear",
+   "residual_todo_ids": []
+  }
+ },
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "stdout_cmp_exit_code": 0,
+  "stderr_cmp_exit_code": 0,
+  "ghidra_stdout_sha256": "024193fd1a052402e6eff757657d9c9db7fbc48869c5e7ca78304f7acfc44e22",
+  "rugra_stdout_sha256": "024193fd1a052402e6eff757657d9c9db7fbc48869c5e7ca78304f7acfc44e22"
+ },
+ "residual_todo_ids": []
+}

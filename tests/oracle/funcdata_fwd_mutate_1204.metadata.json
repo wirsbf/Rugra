@@ -1,0 +1,105 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FUNCDATA-FWD-MUTATE-0001",
+ "overall_status": "MATCH",
+ "status_note": "Mutation forwarder face: markReturnCopy, opMarkStartBasic/opMarkStartInstruction, opDeadInsertAfter (dead-list reorder, restorable), opDeadAndGone (destroy + deadandgone retention), initActiveOutput/clearActiveOutput (ParamActive slot), clearDeadOps (destroyDead). 5 cases. Bilateral byte-identical stdout against the locked oracle (runner: tools/run_funcdata_family_oracle.sh).",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "funcdata.hh:418-481",
+   "funcdata_op.cc:92-140"
+  ]
+ },
+ "architecture": {
+  "kind": "synthetic Translate/Architecture",
+  "endianness": "little",
+  "address_size_bytes": 8,
+  "code_space": "ram",
+  "spaces": [
+   "const",
+   "other",
+   "unique",
+   "ram",
+   "register",
+   "stack",
+   "join",
+   "iop"
+  ]
+ },
+ "compiler_spec": {
+  "prototype_model": "fixture",
+  "extrapop": 0,
+  "input_model": "empty",
+  "output_model": "empty"
+ },
+ "analysis_options": {
+  "OPACTION_DEBUG": false
+ },
+ "input_manifest": {
+  "inputs": {
+   "fixtures": "funcdata_fwd_mutate_1204",
+   "harness": "tools/run_funcdata_family_oracle.sh"
+  },
+  "sha256": "fab5f15df4713bd6321c483caa20929007bee869539664badb96a396a12857de"
+ },
+ "rugra_source": {
+  "base_commit": "3892a73e1faaf817010b726ce94f72a41ac1cbaf",
+  "base_tree": "283f497c8d9e55f3665bb6e17d078a8c82c29ca6",
+  "base_src_tree": "51f326fe4cf033338929472f6a080a60fe98af0a",
+  "base_funcdata_blob": "a688f99c83e4322249815aa3d0886ae6f04a86c3",
+  "base_drillfmt_blob": "b92a40de5f9b6d77f71e42032d29c40fb6563e3a",
+  "cargo_toml_blob": "990a23789c5cebc24b6d453a6832e5c8dbee117a",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "fab5f15df4713bd6321c483caa20929007bee869539664badb96a396a12857de",
+  "rust_fixture_sha256": "f3cca1156b7cb7bd0c066dbaf446c0336ef3142d18e79d898436d3e7263b22e9",
+  "runner_sha256": "e0517bcd12e1fdd4bbb80751f001638aa1fc84f3f3187115f6a2e08137c08f3c"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "Forwarders mutate the shared op/varnode objects in place; opDeadInsertAfter re-links the shared deadlist.",
+  "loop_bounds_traversal_order": "destroyDead walks the dead list front-to-back destroying every op.",
+  "counter_accumulator_lifecycle": "optree/deadlist lengths observed before/after each mutation.",
+  "sorting_comparison_keys": "deadlist order is insertion order (op.cc:941-948 create appends); swap observed via opcode sequence."
+ },
+ "coverage": {
+  "mark_flags": {
+   "status": "MATCH",
+   "covers": "markReturnCopy (hh:452 return_copy), opMarkStartBasic (hh:480), opMarkStartInstruction (hh:481)",
+   "residual_todo_ids": []
+  },
+  "dead_insert": {
+   "status": "MATCH",
+   "covers": "opDeadInsertAfter (hh:460): dead-list neighbor swap, reversible",
+   "residual_todo_ids": []
+  },
+  "dead_and_gone": {
+   "status": "MATCH",
+   "covers": "opDeadAndGone (hh:476): op destroy + deadandgone retention counts",
+   "residual_todo_ids": []
+  },
+  "active_output": {
+   "status": "MATCH",
+   "covers": "initActiveOutput/clearActiveOutput (hh:418-423) ParamActive slot presence",
+   "residual_todo_ids": []
+  },
+  "clear_dead_ops": {
+   "status": "MATCH",
+   "covers": "clearDeadOps (hh:428) destroyDead full clear",
+   "residual_todo_ids": []
+  }
+ },
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "stdout_cmp_exit_code": 0,
+  "stderr_cmp_exit_code": 0,
+  "ghidra_stdout_sha256": "09ea06887076ba6e1743c15b82c19a745d02d40d01c203d06ba5514d2567b555",
+  "rugra_stdout_sha256": "09ea06887076ba6e1743c15b82c19a745d02d40d01c203d06ba5514d2567b555"
+ },
+ "residual_todo_ids": []
+}

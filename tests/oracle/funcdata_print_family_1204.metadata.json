@@ -1,0 +1,116 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FUNCDATA-PRINT-0001",
+ "overall_status": "MATCH: (B2 projection: printVarnodeTree observed as def-order count+class projection, printLocalRange child-scope loop structurally absent)",
+ "status_note": "Print face: printRaw no-blocks branch (full raw text: SeqNum decimal-uniq + AddrSpace::printRaw zero-padded pc + shortcut-prefixed varnode forms + (free)/(def-seqnum) markers + <null> slots), empty-bank RecovError branch, printLocalRange (empty 'all' + installed stack window), printVarnodeTree (def-order projection; full printInfo text is the varnode.rs residual FUNCDATA-VARNODE-PRINTINFO-0001). Bilateral byte-identical stdout against the locked oracle (runner: tools/run_funcdata_family_oracle.sh).",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "funcdata.cc:209-225",
+   "funcdata.cc:579-608",
+   "address.cc:32-38",
+   "space.cc:206-219",
+   "varnode.cc:711-756",
+   "varnode.cc:1207-1214",
+   "translate.cc:517-570",
+   "typeop.cc:335-343",
+   "typeop.cc:425-431",
+   "typeop.cc:882-900"
+  ]
+ },
+ "architecture": {
+  "kind": "synthetic Translate/Architecture",
+  "endianness": "little",
+  "address_size_bytes": 8,
+  "code_space": "ram",
+  "spaces": [
+   "const",
+   "other",
+   "unique",
+   "ram",
+   "register",
+   "stack",
+   "join",
+   "iop"
+  ]
+ },
+ "compiler_spec": {
+  "prototype_model": "fixture",
+  "extrapop": 0,
+  "input_model": "empty",
+  "output_model": "empty"
+ },
+ "analysis_options": {
+  "OPACTION_DEBUG": false
+ },
+ "input_manifest": {
+  "inputs": {
+   "fixtures": "funcdata_print_family_1204",
+   "harness": "tools/run_funcdata_family_oracle.sh"
+  },
+  "sha256": "63521aac7a12415dcc67ff6a930e97479654d77e383ee12480a3df9232d109d0"
+ },
+ "rugra_source": {
+  "base_commit": "3892a73e1faaf817010b726ce94f72a41ac1cbaf",
+  "base_tree": "283f497c8d9e55f3665bb6e17d078a8c82c29ca6",
+  "base_src_tree": "51f326fe4cf033338929472f6a080a60fe98af0a",
+  "base_funcdata_blob": "a688f99c83e4322249815aa3d0886ae6f04a86c3",
+  "base_drillfmt_blob": "b92a40de5f9b6d77f71e42032d29c40fb6563e3a",
+  "cargo_toml_blob": "990a23789c5cebc24b6d453a6832e5c8dbee117a",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "63521aac7a12415dcc67ff6a930e97479654d77e383ee12480a3df9232d109d0",
+  "rust_fixture_sha256": "2eb716ea66f133ebc143c540c1ba50a5eaf1f7402990d35dd1f00680712a90e4",
+  "runner_sha256": "e0517bcd12e1fdd4bbb80751f001638aa1fc84f3f3187115f6a2e08137c08f3c"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "printRaw writes into the caller's ostream (Rugra returns String); RecovError carries the message.",
+  "loop_bounds_traversal_order": "obank.beginAll/endAll walks the SeqNum-ordered optree; vbank.beginDef walks def-tree order.",
+  "counter_accumulator_lifecycle": "SeqNum uniq prints DECIMAL (address.cc:32-38); no per-line counters.",
+  "sorting_comparison_keys": "shortcut chars per translate.cc:517-570 (ram 'r', register '%'); AddrSpace::printRaw width shrinks 16/12/8 digits by offset magnitude (space.cc:206-219)."
+ },
+ "coverage": {
+  "print_raw_ops": {
+   "status": "MATCH",
+   "covers": "no-blocks branch: 'Raw operations: ' header + per-op '<seqnum>:\\t<opRaw>' in SeqNum order; COPY with out+in and dead ADD with all-null slots (<null> = <null> + <null>)",
+   "residual_todo_ids": []
+  },
+  "print_raw_empty": {
+   "status": "MATCH",
+   "covers": "empty obank throws RecovError('No operations to print') -> Error::Lowlevel",
+   "residual_todo_ids": []
+  },
+  "print_local_range": {
+   "status": "MATCH",
+   "covers": "ctor window (empty -> 'all') + installed stack window lines",
+   "residual_todo_ids": [
+    "FUNCDATA-LOCALRANGE-CHILDREN-0001"
+   ]
+  },
+  "print_varnode_tree": {
+   "status": "MATCH",
+   "covers": "def-order iteration projected as count + def-class sequence (i/w/f)",
+   "residual_todo_ids": [
+    "FUNCDATA-VARNODE-PRINTINFO-0001"
+   ]
+  }
+ },
+ "expected_results": {
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "stdout_cmp_exit_code": 0,
+  "stderr_cmp_exit_code": 0,
+  "ghidra_stdout_sha256": "aa6ef423e560f21ac37a772c2c7ce0893a6ff166d7b591bae04dfd94d480b824",
+  "rugra_stdout_sha256": "aa6ef423e560f21ac37a772c2c7ce0893a6ff166d7b591bae04dfd94d480b824"
+ },
+ "residual_todo_ids": [
+  "FUNCDATA-VARNODE-PRINTINFO-0001",
+  "FUNCDATA-BLOCKPRINTRAW-DEP-0001",
+  "FUNCDATA-LOCALRANGE-CHILDREN-0001"
+ ]
+}
