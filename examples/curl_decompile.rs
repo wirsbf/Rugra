@@ -2,7 +2,6 @@
 //! Run with: cargo run --example curl_decompile
 
 use goblin::Object;
-use iced_x86::{Decoder as IcedDecoder, DecoderOptions, FlowControl, OpKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -17,7 +16,6 @@ use rugra::action::{break_flags, Action, ActionDatabase, ActionState};
 use rugra::address::Address;
 use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase};
 use rugra::disasm::sleigh_lift::SleighLifter;
-use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::{CommittedLocal, Funcdata};
 use rugra::override_rs::{FlowOverride, FlowOverrideRecord};
 use rugra::prettyprint::EmitPrettyPrint;
@@ -1311,7 +1309,7 @@ fn worker_target(func: &FuncInfo) -> WorkerTarget {
 ///
 /// Rugra's standalone projection supplies these facts without a Program
 /// database: STT_FUNC symbols define function entries/bodies, PLT relocation
-/// entries extend the function-entry set, and iced-x86 supplies one direct
+/// entries extend the function-entry set, and the SLEIGH decode supplies one direct
 /// memory-flow reference for each direct branch instruction. The analyzer's
 /// separate contiguous-function discovery, ownerless sources, discontiguous
 /// bodies, and Program-added multi-flow references are deliberately not
@@ -1408,6 +1406,18 @@ fn collect_known_entry_shared_return_overrides(
     }
 
     let mut result = BTreeMap::<(u64, u64), FlowOverrideRecord>::new();
+    // SLEIGH-RUSTIFY-PHASE3-0001: the jump-reference walk decodes through
+    // the production SLEIGH engine over the full PT_LOAD image at
+    // ELF-relative base 0 (the bodies are st_value/ledger space). One
+    // lifter serves every body scan. A decode error is the iced walk's
+    // is_invalid → the body is skipped; a BRANCH op's ram-space input(0)
+    // is the direct-jump target (getJumpRefsToFunction: unconditional
+    // direct jumps only — CBRANCH/CALL/BRANCHIND never enter the list).
+    let shared_return_image = worker_memory_image_bytes(elf, binary_image);
+    let mut sleigh = SleighLifter::new();
+    sleigh
+        .configure_x86_64(&shared_return_image, 0)
+        .map_err(|error| format!("shared-return SLEIGH setup failed: {error:?}"))?;
     for (&owner_entry, &owner_end) in &body_ends {
         let owner_size = owner_end - owner_entry;
         let mut containing_sections = Vec::new();
@@ -1454,50 +1464,53 @@ fn collect_known_entry_shared_return_overrides(
             .ok_or_else(|| format!("function file extent overflows at 0x{owner_entry:x}"))?;
         let file_start = usize::try_from(file_start_u64)?;
         let file_end = usize::try_from(file_end_u64)?;
-        let function_bytes = binary_image.get(file_start..file_end).ok_or_else(|| {
-            format!(
+        if binary_image.get(file_start..file_end).is_none() {
+            return Err(format!(
                 "function bytes outside ELF image: 0x{owner_entry:x}..0x{owner_end:x}"
             )
-        })?;
-        let mut decoder =
-            IcedDecoder::with_ip(64, function_bytes, owner_entry, DecoderOptions::NONE);
+            .into());
+        }
         let mut owner_records = Vec::new();
         let mut owner_valid = true;
-        while decoder.can_decode() {
-            let instruction = decoder.decode();
-            if instruction.is_invalid() {
-                eprintln!(
-                    "[PREPASS] Shared Return Calls skipped ELF body 0x{owner_entry:x}..0x{owner_end:x}: invalid instruction at 0x{:x}",
-                    instruction.ip()
-                );
-                owner_valid = false;
-                break;
-            }
-            // getJumpRefsToFunction: direct jump only, with conditional jumps
-            // disabled by the locked analyzer default. Calls and indirect
-            // branches do not enter the incoming jump-reference list.
-            if instruction.flow_control() != FlowControl::UnconditionalBranch {
-                continue;
-            }
-            let target = match instruction.op0_kind() {
-                OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
-                    instruction.near_branch64()
+        let mut scan_addr = owner_entry;
+        while scan_addr < owner_end {
+            let (step, ops) = match sleigh.lift_instruction(scan_addr) {
+                Ok((step, ops)) => (step, ops),
+                Err(_) => {
+                    eprintln!(
+                        "[PREPASS] Shared Return Calls skipped ELF body 0x{owner_entry:x}..0x{owner_end:x}: invalid instruction at 0x{:x}",
+                        scan_addr
+                    );
+                    owner_valid = false;
+                    break;
                 }
-                _ => continue,
             };
-            if !function_entries.contains(&target) {
-                continue;
-            }
-            let source = instruction.ip();
-            let instruction_end = source
-                .checked_add(instruction.len() as u64)
-                .ok_or_else(|| format!("instruction extent overflows at 0x{source:x}"))?;
-            if instruction_end > owner_end {
-                return Err(format!(
-                    "instruction crosses function body at 0x{source:x}: end=0x{instruction_end:x} body_end=0x{owner_end:x}"
-                )
-                .into());
-            }
+            for op in &ops {
+                if rugra::opcodes::OpCode::from_i32(op.get_opcode())
+                    != Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                {
+                    continue;
+                }
+                let Some(target_vn) = op.inputs().first() else {
+                    continue;
+                };
+                if target_vn.space != rugra::space::AddressSpace::Ram {
+                    continue;
+                }
+                let target = target_vn.offset;
+                if !function_entries.contains(&target) {
+                    continue;
+                }
+                let source = scan_addr;
+                let instruction_end = source
+                    .checked_add(step as u64)
+                    .ok_or_else(|| format!("instruction extent overflows at 0x{source:x}"))?;
+                if instruction_end > owner_end {
+                    return Err(format!(
+                        "instruction crosses function body at 0x{source:x}: end=0x{instruction_end:x} body_end=0x{owner_end:x}"
+                    )
+                    .into());
+                }
 
             // getSingleFlowReferenceFrom: this direct iced branch projection
             // has exactly one memory flow reference, namely `target`.
@@ -1533,6 +1546,8 @@ fn collect_known_entry_shared_return_overrides(
                 flow_type: FlowOverride::CallReturn,
             };
             owner_records.push(record);
+            }
+            scan_addr += step as u64;
         }
         if !owner_valid {
             continue;
@@ -2479,19 +2494,35 @@ struct DiscoveredFunction {
 // endbr64 + bnd jmp (11 bytes) — the same extents the canon analyzer
 // bodies record for every PLT entry. None when the slot does not decode
 // to a terminal branch inside 16 bytes (caller falls back to the stride).
-fn plt_slot_extent(buffer: &[u8], file_offset: usize, vaddr: u64) -> Option<u64> {
-    let bytes = buffer.get(file_offset..file_offset + 16)?;
-    let mut decoder = IcedDecoder::with_ip(64, bytes, vaddr, DecoderOptions::NONE);
-    while decoder.can_decode() {
-        let instruction = decoder.decode();
-        if instruction.is_invalid() {
-            return None;
-        }
-        if matches!(
-            instruction.flow_control(),
-            FlowControl::UnconditionalBranch | FlowControl::IndirectBranch
-        ) {
-            return Some(instruction.next_ip() - vaddr);
+// RUGRA-GLUE: PLT slot body extent — decode the slot's instructions and
+// stop at the first unconditional/indirect branch (the thunk's terminal
+// jmp). PLT0 = push + bnd jmp (13 bytes), .plt.sec/.plt.got stubs =
+// endbr64 + bnd jmp (11 bytes) — the same extents the canon analyzer
+// bodies record for every PLT entry. None when the slot does not decode
+// to a terminal branch inside 16 bytes (caller falls back to the stride).
+// SLEIGH-RUSTIFY-PHASE3-0001: the walk rides the shared full-image SLEIGH
+// lifter (ELF-relative base-0 contract); a decode error is the iced
+// walk's is_invalid → None, and BRANCH/BRANCHIND ops are the terminal
+// UnconditionalBranch/IndirectBranch flow classes.
+fn plt_slot_extent(sleigh: &mut SleighLifter, vaddr: u64) -> Option<u64> {
+    let mut addr = vaddr;
+    let limit = vaddr + 16;
+    while addr < limit {
+        match sleigh.lift_instruction(addr) {
+            Ok((step, ops)) => {
+                let terminal = ops.iter().any(|op| {
+                    matches!(
+                        rugra::opcodes::OpCode::from_i32(op.get_opcode()),
+                        Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                            | Some(rugra::opcodes::OpCode::CPUI_BRANCHIND)
+                    )
+                });
+                if terminal {
+                    return Some(addr + step as u64 - vaddr);
+                }
+                addr += step as u64;
+            }
+            Err(_) => return None,
         }
     }
     None
@@ -2507,6 +2538,15 @@ fn discover_function_corpus(
     elf: &goblin::elf::Elf,
 ) -> Result<Vec<DiscoveredFunction>, Box<dyn std::error::Error>> {
     const SHF_EXECINSTR: u64 = 0x4;
+    // SLEIGH-RUSTIFY-PHASE3-0001: the discovery walks (PLT extents, the
+    // call-following sweep) decode through the production SLEIGH engine
+    // over the full PT_LOAD image at ELF-relative base 0 — the same image
+    // contract the mirror load uses. One lifter serves every walk here.
+    let discovery_image = worker_memory_image_bytes(elf, buffer);
+    let mut sleigh = SleighLifter::new();
+    sleigh
+        .configure_x86_64(&discovery_image, 0)
+        .map_err(|error| format!("discovery SLEIGH setup failed: {error:?}"))?;
     let exec_ranges: Vec<(u64, u64)> = elf
         .section_headers
         .iter()
@@ -2559,8 +2599,7 @@ fn discover_function_corpus(
         if name == Some(".plt") && header.sh_size >= 16 {
             entries.entry(header.sh_addr).or_insert(DiscoveredFunction {
                 vaddr: header.sh_addr,
-                size: plt_slot_extent(buffer, header.sh_offset as usize, header.sh_addr)
-                    .unwrap_or(16),
+                size: plt_slot_extent(&mut sleigh, header.sh_addr).unwrap_or(16),
                 kind: DiscoveryKind::PltHeader,
             });
             if !has_plt_sec {
@@ -2568,12 +2607,7 @@ fn discover_function_corpus(
                     let vaddr = header.sh_addr + 16 * slot;
                     entries.entry(vaddr).or_insert(DiscoveredFunction {
                         vaddr,
-                        size: plt_slot_extent(
-                            buffer,
-                            (header.sh_offset + 16 * slot) as usize,
-                            vaddr,
-                        )
-                        .unwrap_or(16),
+                        size: plt_slot_extent(&mut sleigh, vaddr).unwrap_or(16),
                         kind: DiscoveryKind::PltStub,
                     });
                 }
@@ -2583,12 +2617,7 @@ fn discover_function_corpus(
                 let vaddr = header.sh_addr + 16 * slot;
                 entries.entry(vaddr).or_insert(DiscoveredFunction {
                     vaddr,
-                    size: plt_slot_extent(
-                        buffer,
-                        (header.sh_offset + 16 * slot) as usize,
-                        vaddr,
-                    )
-                    .unwrap_or(16),
+                    size: plt_slot_extent(&mut sleigh, vaddr).unwrap_or(16),
                     kind: DiscoveryKind::PltStub,
                 });
             }
@@ -2607,12 +2636,7 @@ fn discover_function_corpus(
                     let vaddr = header.sh_addr + 8 * slot;
                     entries.entry(vaddr).or_insert(DiscoveredFunction {
                         vaddr,
-                        size: plt_slot_extent(
-                            buffer,
-                            (header.sh_offset + 8 * slot) as usize,
-                            vaddr,
-                        )
-                        .unwrap_or(8),
+                        size: plt_slot_extent(&mut sleigh, vaddr).unwrap_or(8),
                         kind: DiscoveryKind::PltStub,
                     });
                 }
@@ -2666,43 +2690,60 @@ fn discover_function_corpus(
             if extent <= entry.vaddr {
                 continue;
             }
-            let (Some(start), Some(end)) = (vaddr_to_file(entry.vaddr), vaddr_to_file(extent))
-            else {
+            if vaddr_to_file(entry.vaddr).is_none() || vaddr_to_file(extent).is_none() {
                 continue;
-            };
-            let Some(bytes) = buffer.get(start..end) else {
-                continue;
-            };
-            let mut decoder = IcedDecoder::with_ip(64, bytes, entry.vaddr, DecoderOptions::NONE);
-            while decoder.can_decode() {
-                let instruction = decoder.decode();
-                if instruction.is_invalid()
-                    || instruction.flow_control() != FlowControl::Call
-                {
-                    continue;
-                }
-                let target = match instruction.op0_kind() {
-                    OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
-                        instruction.near_branch64()
+            }
+            // SLEIGH-RUSTIFY-PHASE3-0001: the call-following sweep decodes
+            // through the shared SLEIGH lifter; a CALL op's ram-space
+            // input(0) is the iced walk's NearBranch target, and a decode
+            // error skips one byte (the iced walk's invalid-instruction
+            // continue).
+            let mut scan_addr = entry.vaddr;
+            while scan_addr < extent {
+                match sleigh.lift_instruction(scan_addr) {
+                    Ok((step, ops)) => {
+                        for op in &ops {
+                            if rugra::opcodes::OpCode::from_i32(op.get_opcode())
+                                != Some(rugra::opcodes::OpCode::CPUI_CALL)
+                            {
+                                continue;
+                            }
+                            let Some(target_vn) = op.inputs().first() else {
+                                continue;
+                            };
+                            if target_vn.space != rugra::space::AddressSpace::Ram {
+                                continue;
+                            }
+                            let target = target_vn.offset;
+                            if !in_exec(target) || entries.contains_key(&target) {
+                                continue;
+                            }
+                            // A target strictly inside another sized body is a
+                            // mid-function call, not a new entry.
+                            let inside_body = entries.values().any(|known| {
+                                known.size > 0
+                                    && target > known.vaddr
+                                    && target < known.vaddr.saturating_add(known.size)
+                            });
+                            if inside_body {
+                                continue;
+                            }
+                            entries.insert(
+                                target,
+                                DiscoveredFunction {
+                                    vaddr: target,
+                                    size: 0,
+                                    kind: DiscoveryKind::CallGraph,
+                                },
+                            );
+                            added += 1;
+                        }
+                        scan_addr += step as u64;
                     }
-                    _ => continue,
-                };
-                if !in_exec(target) || entries.contains_key(&target) {
-                    continue;
+                    Err(_) => {
+                        scan_addr += 1;
+                    }
                 }
-                // A target strictly inside another sized body is a
-                // mid-function call, not a new entry.
-                let inside_body = entries.values().any(|known| {
-                    known.size > 0 && target > known.vaddr && target < known.vaddr.saturating_add(known.size)
-                });
-                if inside_body {
-                    continue;
-                }
-                entries.insert(
-                    target,
-                    DiscoveredFunction { vaddr: target, size: 0, kind: DiscoveryKind::CallGraph },
-                );
-                added += 1;
             }
         }
         if added == 0 {
@@ -4107,21 +4148,39 @@ fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> 
     let end = start
         .saturating_add(target.size.min(4096))
         .min(request.binary_image.len());
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm
-        .disassemble(
-            &request.binary_image[start..end], Address::new(target.vaddr),
+    // SLEIGH-RUSTIFY-PHASE3-0001: the prototype pre-pass decodes through the
+    // production kuna-sleigh engine (locked x86-64.sla) — the same decoder
+    // the main flow path uses — retiring the iced bootstrap lift from this
+    // last decode consumer. The target's byte window maps at its canon
+    // vaddr, so rip-relative constant folds resolve to the same absolute
+    // canon addresses the iced resolver produced. Decode divergences
+    // between the two engines (32-bit mov zero-extension folding, the
+    // cmp flag chain shape, call-to-next decoding as BRANCH, missing SIMD
+    // arms in the iced lift) are exactly the A/G-family prototype source:
+    // the golden's prototypes come from Ghidra's own SLEIGH decode.
+    let mut sleigh = SleighLifter::new();
+    sleigh
+        .configure_x86_64(
+            &request.binary_image[start..end],
+            target.vaddr,
         )
-        .map_err(|error| format!("prototype disassembly failed: {error}"))?;
-
-    let mut lifter = X86Lifter::new();
+        .map_err(|error| format!("prototype SLEIGH setup failed: {error:?}"))?;
     let mut raw_ops = Vec::new();
-    for instruction in &instructions {
-        let mut ops = lifter.lift(instruction);
-        for op in &mut ops {
-            op.set_seq_num(rugra::address::SeqNum::new(instruction.address, 0));
+    let mut addr = target.vaddr;
+    let decode_limit = target.vaddr + (end - start) as u64;
+    while addr < decode_limit {
+        match sleigh.lift_instruction(addr) {
+            Ok((step, ops)) => {
+                raw_ops.extend(ops);
+                addr += step as u64;
+            }
+            Err(_) => {
+                // Undecodable byte: skip one byte with zero ops — the same
+                // walk contract the iced path had (its "Unimplemented"
+                // fallback arm emitted no ops for invalid forms).
+                addr += 1;
+            }
         }
-        raw_ops.extend(ops);
     }
 
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), target.size as i32);
@@ -6413,6 +6472,10 @@ fn decompile_request(
     // actually runs.
     let restart_mirror = mirror_flow_enabled();
     let restart_lifter = Arc::new(std::sync::Mutex::new(sleigh));
+    // SLEIGH-RUSTIFY-PHASE3-0001: the label scan below (post-pipeline, canon
+    // face only) reuses this configured engine read-only; the restart
+    // callback gets its own Arc handle so the binding stays alive here.
+    let restart_lifter_handle = Arc::clone(&restart_lifter);
     let restart_callee_protos = callee_protos.clone();
     let restart_entry = Address::new(target.vaddr);
     db.set_restart_flow(
@@ -6673,31 +6736,61 @@ fn decompile_request(
             .collect();
         {
             // Same slicing contract as the lift input: the target's full
-            // byte range, linearly disassembled from the image.
+            // byte range, linearly decoded from the image.
+            // SLEIGH-RUSTIFY-PHASE3-0001: the label scan decodes through the
+            // same SLEIGH lifter the flow path already configured (the
+            // section image covers this target's bytes) — direct branch
+            // targets are the ram-space input(0) of BRANCH/CBRANCH ops
+            // (funcdata_varnode.cc:222 newCodeRef layout; CBRANCH carries
+            // the destination in slot 0, the condition in slot 1). The
+            // retired iced scanner produced the same set from
+            // FlowControl::UnconditionalBranch/ConditionalBranch targets.
             let start = usize::try_from(target.file_offset)
                 .map_err(|_| "label scan file offset does not fit usize".to_string())?;
             let end = start
                 .saturating_add(target.size)
                 .min(request.binary_image.len());
             if start < request.binary_image.len() {
-                let mut disasm = X86_64Disassembler::new();
-                if let Ok(instructions) =
-                    disasm.disassemble(&request.binary_image[start..end], Address::new(target.vaddr))
-                {
-                    for inst in &instructions {
-                        if !inst.is_branch() {
-                            continue;
+                // The flow lifter now lives in the restart callback handle;
+                // the pipeline has completed by this point, so the lock is
+                // free and the decode is a pure read through the same
+                // configured engine.
+                let mut scan_lifter = restart_lifter_handle
+                    .lock()
+                    .map_err(|_| "label scan SLEIGH lifter lock poisoned".to_string())?;
+                let mut scan_addr = target.vaddr;
+                let scan_limit = target.vaddr + (end - start) as u64;
+                while scan_addr < scan_limit {
+                    match scan_lifter.lift_instruction(scan_addr) {
+                        Ok((step, ops)) => {
+                            for op in &ops {
+                                let is_branch = matches!(
+                                    rugra::opcodes::OpCode::from_i32(op.get_opcode()),
+                                    Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                                        | Some(rugra::opcodes::OpCode::CPUI_CBRANCH)
+                                );
+                                if !is_branch {
+                                    continue;
+                                }
+                                let Some(dest_vn) = op.inputs().first() else {
+                                    continue;
+                                };
+                                if dest_vn.space != rugra::space::AddressSpace::Ram {
+                                    continue;
+                                }
+                                let dest = dest_vn.offset;
+                                if dest == target.vaddr || db_symbol_addrs.contains(&dest) {
+                                    continue;
+                                }
+                                code_labels
+                                    .entry(dest)
+                                    .or_insert_with(|| format!("LAB_{:08x}", dest));
+                            }
+                            scan_addr += step as u64;
                         }
-                        let Some(dest) = inst.branch_target() else {
-                            continue;
-                        };
-                        let dest = dest.as_u64();
-                        if dest == target.vaddr || db_symbol_addrs.contains(&dest) {
-                            continue;
+                        Err(_) => {
+                            scan_addr += 1;
                         }
-                        code_labels
-                            .entry(dest)
-                            .or_insert_with(|| format!("LAB_{:08x}", dest));
                     }
                 }
             }
