@@ -13855,11 +13855,30 @@ impl ActionConditionalConst {
     /// (op_ptr, slot) pairs to excise.
     fn collect_reachable(
         vn: &Arc<RwLock<crate::varnode::Varnode>>,
-        phi_node_edges: &mut Vec<(usize, usize)>,
+        phi_node_edges: &mut Vec<(crate::op::PcodeOpRef, usize)>,
         reachable: &mut Vec<crate::op::PcodeOpRef>,
     ) {
         use crate::opcodes::OpCode;
-        phi_node_edges.sort();
+        // cc:4090: sort(phiNodeEdges.begin(),phiNodeEdges.end()). The
+        // comparator is PcodeOpNode::operator< (expression.hh:41-48):
+        // distinct ops order by SeqNum TIME (a logical, deterministic
+        // key — the op pointer participates only as an equality check),
+        // edges on the same op order by slot. The former port sorted the
+        // (raw Arc address, slot) tuple, ordering edges by HEAP ADDRESS:
+        // handlePhiNodes then placed the per-MULTIEQUAL shadow COPYs in
+        // allocation-history-dependent order, so the final statement
+        // order of those COPYs flipped with the process's predecessor
+        // decompile history (PAREVAL-DETERM-HERMETICITY-0001: sqlite3
+        // shell_exec two byte variants, non-monotonic dose response).
+        phi_node_edges.sort_by(|(a_op, a_slot), (b_op, b_slot)| {
+            if !Arc::ptr_eq(&a_op.0, &b_op.0) {
+                let a_time = a_op.0.read().unwrap().get_seq_num().get_time();
+                let b_time = b_op.0.read().unwrap().get_seq_num().get_time();
+                a_time.cmp(&b_time)
+            } else {
+                a_slot.cmp(b_slot)
+            }
+        });
         let mut count = 0usize;
         // cc:4088-4095: if vn is written by MULTIEQUAL, mark it reachable.
         {
@@ -13889,13 +13908,35 @@ impl ActionConditionalConst {
                 if opc == OpCode::CPUI_MULTIEQUAL {
                     // cc:4104-4110: find incoming slot for current vn, check
                     // if it's an excised edge.
-                    let op_ptr = Arc::as_ptr(op_arc) as usize;
+                    let probe_time = op.get_seq_num().get_time();
                     let mut found_slot = false;
                     for slot in 0..op.num_input() {
                         if let Some(in_vn) = op.get_in(slot) {
                             if Arc::ptr_eq(&in_vn, &cur_vn) {
-                                // Check if this edge is excised.
-                                if phi_node_edges.binary_search(&(op_ptr, slot)).is_ok() {
+                                // Check if this edge is excised. Membership
+                                // uses the same (SeqNum time, slot) order as
+                                // the sort above (cc:4106 binary_search over
+                                // PcodeOpNode::operator<). The probe time is
+                                // hoisted out of the comparator: the outer
+                                // `op` read guard is still live here, and
+                                // re-entering the same op's RwLock from the
+                                // closure could deadlock.
+                                let excised = phi_node_edges
+                                    .binary_search_by(|(e_op, e_slot)| {
+                                        if !Arc::ptr_eq(&e_op.0, op_arc) {
+                                            let e_time = e_op
+                                                .0
+                                                .read()
+                                                .unwrap()
+                                                .get_seq_num()
+                                                .get_time();
+                                            e_time.cmp(&probe_time)
+                                        } else {
+                                            e_slot.cmp(&slot)
+                                        }
+                                    })
+                                    .is_ok();
+                                if excised {
                                     continue; // excised — skip this slot
                                 }
                                 found_slot = true;
@@ -14233,54 +14274,45 @@ impl ActionConditionalConst {
         fd: &mut Funcdata,
         var_vn: &Arc<RwLock<crate::varnode::Varnode>>,
         const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
-        phi_node_edges: &mut Vec<(usize, usize)>,
+        phi_node_edges: &mut Vec<(crate::op::PcodeOpRef, usize)>,
     ) {
         let mut alternate_flow: Vec<crate::op::PcodeOpRef> = Vec::new();
         Self::collect_reachable(var_vn, phi_node_edges, &mut alternate_flow);
         let mut results: Vec<i32> = vec![0; phi_node_edges.len()];
-        for (i, (op_ptr, _)) in phi_node_edges.iter().enumerate() {
-            let op_ref = fd
-                .obank
-                .alivelist
-                .iter()
-                .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
-                .cloned();
-            if let Some(op_ref) = op_ref {
-                if !Self::flow_to_alternate_path(&op_ref) {
-                    results[i] = 1;
-                }
+        for (i, (op_ref, _)) in phi_node_edges.iter().enumerate() {
+            if !Self::flow_to_alternate_path(op_ref) {
+                results[i] = 1;
             }
         }
         Self::clear_marks(&alternate_flow);
-        for (i, (op_ptr, slot)) in phi_node_edges.iter().enumerate() {
+        // cc:4321-4330: each disconnected edge gets its own shadow COPY,
+        // iterating the edges in the (SeqNum time, slot) order established
+        // by the sort in collect_reachable — Ghidra's deterministic order.
+        // place_copy allocates the fresh unique temp, so the temp
+        // allocation order — and with it the placed COPYs' order in the
+        // source block, hence their final printed statement order — is
+        // hermetic w.r.t. process history (PAREVAL-DETERM-HERMETICITY-0001).
+        for (i, (op_ref, slot)) in phi_node_edges.iter().enumerate() {
             if results[i] != 1 { continue; }
-            let op_ref = fd
-                .obank
-                .alivelist
-                .iter()
-                .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
-                .cloned();
-            if let Some(op_ref) = op_ref {
-                let bl_idx = {
-                    let op_r = op_ref.0.read().unwrap();
-                    if let Some(parent_weak) = op_r.parent.as_ref() {
-                        if let Some(parent) = parent_weak.upgrade() {
-                            parent
-                                .read()
-                                .unwrap()
-                                .get_in(*slot)
-                                .map(|e| e.point.read().unwrap().get_index())
-                                .unwrap_or(0)
-                        } else { 0 }
+            let bl_idx = {
+                let op_r = op_ref.0.read().unwrap();
+                if let Some(parent_weak) = op_r.parent.as_ref() {
+                    if let Some(parent) = parent_weak.upgrade() {
+                        parent
+                            .read()
+                            .unwrap()
+                            .get_in(*slot)
+                            .map(|e| e.point.read().unwrap().get_index())
+                            .unwrap_or(0)
                     } else { 0 }
-                };
-                let bl = match fd.bblocks.get_block(bl_idx as usize) {
-                    Some(b) => b, None => continue,
-                };
-                let out_vn = Self::place_copy(fd, &op_ref, &bl, const_vn);
-                fd.op_set_input(&op_ref, out_vn, *slot);
-                self.count += 1;
-            }
+                } else { 0 }
+            };
+            let bl = match fd.bblocks.get_block(bl_idx as usize) {
+                Some(b) => b, None => continue,
+            };
+            let out_vn = Self::place_copy(fd, op_ref, &bl, const_vn);
+            fd.op_set_input(op_ref, out_vn, *slot);
+            self.count += 1;
         }
     }
 
@@ -14310,7 +14342,7 @@ impl ActionConditionalConst {
     ) {
         use crate::block::FlowBlock;
         use crate::opcodes::OpCode;
-        let mut phi_node_edges: Vec<(usize, usize)> = Vec::new();
+        let mut phi_node_edges: Vec<(crate::op::PcodeOpRef, usize)> = Vec::new();
         while !points.is_empty() {
             let point = points.remove(0);
             let var_vn = point.vn.clone();
@@ -14384,8 +14416,10 @@ impl ActionConditionalConst {
                             // handle_phi_nodes.
                             drop(op_r);
                             if Self::test_alternate_path(&var_vn, op_arc, in_slot, 2) { continue; }
-                            let op_ptr = Arc::as_ptr(op_arc) as usize;
-                            phi_node_edges.push((op_ptr, in_slot as usize));
+                            phi_node_edges.push((
+                                crate::op::PcodeOpRef(op_arc.clone()),
+                                in_slot as usize,
+                            ));
                         }
                     } else if block_is_dom {
                         // cc:4417-4425: any edge whose source block is dominated
@@ -14415,8 +14449,8 @@ impl ActionConditionalConst {
                                 }
                             };
                             if in_bl_dominated {
-                                let op_ptr = Arc::as_ptr(op_arc) as usize;
-                                phi_node_edges.push((op_ptr, slot));
+                                phi_node_edges
+                                    .push((crate::op::PcodeOpRef(op_arc.clone()), slot));
                             }
                         }
                     }
@@ -14573,7 +14607,7 @@ impl ActionConditionalConst {
     /// COPY, replace all flowing-together edges. Faithful to cc:4236-4254.
     fn place_multiple_constants(
         fd: &mut Funcdata,
-        phi_node_edges: &[(usize, usize)],
+        phi_node_edges: &[(crate::op::PcodeOpRef, usize)],
         marks: &[i32],
         const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
     ) {
@@ -14582,20 +14616,15 @@ impl ActionConditionalConst {
         let mut first_op: Option<crate::op::PcodeOpRef> = None;
         for (i, _) in phi_node_edges.iter().enumerate() {
             if marks.get(i).copied().unwrap_or(0) != 2 { continue; }
-            let op_ptr = phi_node_edges[i].0;
-            for op_ref in &fd.obank.alivelist {
-                if Arc::as_ptr(&op_ref.0) as usize == op_ptr {
-                    first_op = Some(op_ref.clone());
-                    let op_r = op_ref.0.read().unwrap();
-                    if let Some(parent_weak) = op_r.parent.as_ref() {
-                        if let Some(parent) = parent_weak.upgrade() {
-                            let slot = phi_node_edges[i].1;
-                            if let Some(in_edge) = parent.read().unwrap().get_in(slot) {
-                                blocks.push(in_edge.point.clone());
-                            }
-                        }
+            let op_ref = phi_node_edges[i].0.clone();
+            first_op = Some(op_ref.clone());
+            let op_r = op_ref.0.read().unwrap();
+            if let Some(parent_weak) = op_r.parent.as_ref() {
+                if let Some(parent) = parent_weak.upgrade() {
+                    let slot = phi_node_edges[i].1;
+                    if let Some(in_edge) = parent.read().unwrap().get_in(slot) {
+                        blocks.push(in_edge.point.clone());
                     }
-                    break;
                 }
             }
         }
@@ -14609,17 +14638,10 @@ impl ActionConditionalConst {
         // cc:4249: placeCopy.
         let out_vn = Self::place_copy(fd, &op_ref, &root_block, const_vn);
         // cc:4250-4253: replace each flowing-together edge.
-        let alivelist_snapshot: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
         for (i, _) in phi_node_edges.iter().enumerate() {
             if marks.get(i).copied().unwrap_or(0) != 2 { continue; }
-            let op_ptr = phi_node_edges[i].0;
-            let slot = phi_node_edges[i].1;
-            for op_ref in &alivelist_snapshot {
-                if Arc::as_ptr(&op_ref.0) as usize == op_ptr {
-                    fd.op_set_input(op_ref, out_vn.clone(), slot);
-                    break;
-                }
-            }
+            let (op_ref, slot) = &phi_node_edges[i];
+            fd.op_set_input(op_ref, out_vn.clone(), *slot);
         }
     }
 }
