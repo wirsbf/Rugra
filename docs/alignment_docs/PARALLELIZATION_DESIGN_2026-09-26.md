@@ -193,6 +193,7 @@ PKGG 结论（"单线程无争用非问题"）在并行后**部分翻案**：单
 | curl（examples/curl，31 全量） | 31 | **GREEN**：31/31 字节恒等（jobs=8；jobs=16 复验同 GREEN） |
 | httpd（examples/httpd，34 全量） | 34 | **GREEN**：34/34 字节恒等 |
 | sqlite3（/tmp/sqlite3，48 最大筛 3 病态 = 45） | 45 | **GREEN**：45/45 字节恒等（shell_exec 经 HERMIT 修复后经生产驱动确认封闭） |
+| sqlite3 全量（2799 发现函数，--max-funcs all） | 2799 | **GREEN**：2799/2799 字节恒等，全 Ok 零 err/panic；4.18×@8w（load 107-180 尖峰期极端保守；Amdahl 瓶颈=4 巨函数 2238s 占串行 31%，上界 ~4.8×——巨函数即 DIVCHAIN 残差慢尾） |
 
 **加速比曲线（生产驱动实测，load 95-140 共机——全部显著偏保守；PoC 期 load 45-50 时
 sqlite3 8w 同口径 6.28×）**：
