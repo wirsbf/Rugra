@@ -3626,3 +3626,24 @@ this`）——union 分歧非潜伏（curl golden 含活 union
 - fixture 顺带暴露并修复 prettyprint.rs 补偿层 pass3 缺陷（见
   docs/api/prettyprint.md 同日节）；`rpn_def_inline_reachable` 补 FLOAT_NAN/
   POPCOUNT/LZCOUNT（printc.hh:317/343/344 opFunc 臂可达）。
+
+## 2026-09-26（Lane F4WEBTYPE）— Priority-0 字符串字面量渲染加 oracle 类型门（HTTPDMAIN-F4-WEBTYPE-0001）
+
+`push_varnode` 的 Priority 0 与 Case A（COPY-from-Const）字符串字面量渲染不再
+按裸 `string_table` 地址命中发射：新增 `string_render_eligible`
+（// Ghidra: printc.cc:1698 PrintC::pushPtrCharConstant 锚）只放行 oracle 的
+两条同路径赋型通道——
+- **Gate A**（printc.cc:1781-1782 `subtype->isCharPrint()`）：varnode 自身类型
+  为 charPrint 指针（pushConstant TYPE_PTR 臂的原生条件）；
+- **Gate B**（typeop.cc:687-716 `TypeOpCall::getInputLocal` 经
+  varnode.cc:900-937 `getLocalType` + coreaction.cc:5043-5066 `writeBack` 的
+  ActionInferTypes 通道）：CPUI_CALL 输入槽的 callspec 原型锁定 char\* 参数
+  （CALLIND 的 callspec 需父 Funcdata 解析，PrintC 无 fd 通道，只走 Gate A）。
+
+裸字符串地址常量（int 网中的 lea 常量）回落为普通常量渲染——oracle 的
+`int iVar3 = 0x17a422` 形态（非 `pcVar4 = "ptemp"`）。canon 双语料 A/B 字节恒
+等（类型层已在位时门零观察差；F4 主体修复在 arch.rs 的寄存器空间过滤，见
+docs/api/arch.md 2026-09-26 节 + 双侧 fixture
+coreaction_constptr_registerspace_1204）。单测
+`test_string_render_eligible_oracle_gates`（回归-only 手写期望：B2 oracle 真
+值由双侧 fixture 承担）。

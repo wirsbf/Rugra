@@ -8370,6 +8370,7 @@ impl PrintC {
         false
     }
 
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
     /// Returns `None` when the varnode has no symbol-bearing high — the
     /// caller then runs its legacy fallback ladder (the oracle's sole
     /// sym==null arm is `pushUnnamedLocation`; Rugra's address proxy is
@@ -20094,6 +20095,144 @@ mod tests {
         assert_eq!(
             PrintC::constant_print_flags(&vn.read().unwrap()),
             (false, false)
+        );
+    }
+
+    /// HTTPDMAIN-F4-WEBTYPE-0001: the Priority-0 string literal render is
+    /// gated by the oracle's typed channel — pushConstant's TYPE_PTR arm
+    /// (printc.cc:1781-1782 pointee isCharPrint) or the callspec's
+    /// type-locked char* parameter that TypeOpCall::getInputLocal
+    /// (typeop.cc:687-716) seeds. A bare string_table address hit with
+    /// neither type renders as the plain constant (the oracle's
+    /// `int iVar3 = 0x17a422`, not `pcVar4 = "ptemp"`). Regression-only
+    /// hand expectations (B2 oracle truth: the bilateral fixture
+    /// coreaction_constptr_registerspace_1204 covers the typing channel).
+    #[test]
+    fn test_string_render_eligible_oracle_gates() {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer,
+        };
+
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        printer.string_table.insert(0x1000, "ptemp".to_string());
+
+        // (a) Untyped constant at a string-table address: NOT eligible.
+        let bare = crate::varnode::Varnode::new_constant(0x1000, 8);
+        assert!(
+            !printer.string_render_eligible(&bare, None),
+            "bare string-address constant must render as the plain constant"
+        );
+
+        // (b) char*-typed (charPrint pointee): eligible — Gate A
+        // (printc.cc:1781-1782).
+        let char_print = {
+            let mut b = TypeBase::new("char".to_string(), 1, TypeMetatype::Int);
+            b.flags |= type_flags::CHARTYPE;
+            Arc::new(Datatype::Base(b))
+        };
+        let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: char_print,
+            wordsize: 1,
+        }));
+        let mut typed = crate::varnode::Varnode::new_constant(0x1000, 8);
+        typed.v_type = Some(char_ptr);
+        assert!(
+            printer.string_render_eligible(&typed, None),
+            "char*-typed constant is the oracle's pushPtrCharConstant channel"
+        );
+
+        // (c) A pointer to NON-charPrint pointee (int*): not eligible —
+        // the isCharPrint gate itself.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t,
+            wordsize: 1,
+        }));
+        let mut int_ptr_vn = crate::varnode::Varnode::new_constant(0x1000, 8);
+        int_ptr_vn.v_type = Some(int_ptr);
+        assert!(
+            !printer.string_render_eligible(&int_ptr_vn, None),
+            "int* pointee fails printc.cc:1782 isCharPrint"
+        );
+
+        // (d) Gate B: the callspec's type-locked char* parameter types an
+        // untyped CALL input slot (TypeOpCall::getInputLocal channel).
+        use crate::address::SeqNum;
+        use crate::fspec::protoparam_flags;
+        use crate::fspec::{FuncCallSpecs, FuncProto, ProtoParameter};
+        use crate::op::PcodeOp;
+        use crate::opcodes::OpCode;
+        use crate::varnode::varnode_flags;
+        let char_ptr2 = typed.v_type.clone().unwrap();
+
+        let target = Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x2000, 8),
+        ));
+        target.write().unwrap().flags |= varnode_flags::ANNOTATION;
+        fn mk_arg() -> crate::varnode::Varnode {
+            crate::varnode::Varnode::new_constant(0x1000, 8)
+        }
+
+        let mut param = ProtoParameter::new(
+            "tag".to_string(),
+            char_ptr2.clone(),
+            Address::new(0x10),
+        );
+        param.flags |= protoparam_flags::TYPE_LOCKED;
+        let mut proto = FuncProto::new("apr_pool_tag".to_string(), char_ptr2.clone());
+        proto.parameters.push(param);
+        let spec_arc = Arc::new(std::sync::RwLock::new(FuncCallSpecs::new(
+            Address::new(0x3000),
+            proto,
+        )));
+        // The Iop-space annotation channel carrying the callspec
+        // (TYPEOP-FSPEC-SPACE-0001).
+        let mut anno = crate::varnode::Varnode::new_constant(0, 8);
+        anno.flags |= varnode_flags::ANNOTATION;
+        anno.bind_call_spec(&spec_arc);
+
+        let mut op =
+            PcodeOp::new(SeqNum::new(Address::new(0x3000), 1), OpCode::CPUI_CALL);
+        op.inrefs = vec![
+            Arc::new(std::sync::RwLock::new(anno)),
+            Arc::new(std::sync::RwLock::new(mk_arg())),
+        ];
+        assert!(
+            printer.string_render_eligible(&mk_arg(), Some(&op)),
+            "type-locked char* call slot is the getInputLocal typing channel"
+        );
+
+        // (e) Same op but the slot-1 param is NOT type-locked: no channel.
+        let mut param2 = ProtoParameter::new(
+            "tag".to_string(),
+            char_ptr2,
+            Address::new(0x10),
+        );
+        param2.flags &= !protoparam_flags::TYPE_LOCKED;
+        let mut proto2 = FuncProto::new("apr_pool_tag".to_string(), typed.v_type.clone().unwrap());
+        proto2.parameters.push(param2);
+        let spec2_arc = Arc::new(std::sync::RwLock::new(FuncCallSpecs::new(
+            Address::new(0x3000),
+            proto2,
+        )));
+        let mut anno2 = crate::varnode::Varnode::new_constant(0, 8);
+        anno2.flags |= varnode_flags::ANNOTATION;
+        anno2.bind_call_spec(&spec2_arc);
+        let mut op2 =
+            PcodeOp::new(SeqNum::new(Address::new(0x3000), 2), OpCode::CPUI_CALL);
+        op2.inrefs = vec![
+            Arc::new(std::sync::RwLock::new(anno2)),
+            Arc::new(std::sync::RwLock::new(mk_arg())),
+        ];
+        assert!(
+            !printer.string_render_eligible(&mk_arg(), Some(&op2)),
+            "unlocked prototype param confers no type"
         );
     }
 }
