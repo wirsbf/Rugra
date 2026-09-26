@@ -3164,6 +3164,37 @@ fn decompile_one_function(task: FunctionTask, shared: SharedDecompileCtx) -> Opt
             }
             thread_arch.set_symboltab(db_arc);
         }
+        // TYPINGPX-MIRROR-FRESH-DB-0001: per-function fresh global scope on
+        // the mirror face — the direct-runner golden protocol. The golden
+        // (tests/golden/ghidra_httpd_1204.direct-runner.c) is regenerated
+        // one-function-per-process (regen_ghidra_golden.py `one` mode: a
+        // fresh BfdArchitecture, hence a fresh constructor Database, per
+        // function — PIRAM2 finding (a), same-address-multi-name witnesses
+        // like iRam/uRam/xRam@0xa1060). Since CSPECGLOBAL the Architecture
+        // constructor always owns a Database (architecture.cc:597 parity),
+        // and thread_arch clones SHARE it via the Arc — so in a one-process
+        // mirror run the FIRST function to touch a global address names it
+        // for the whole process (ap_init_vhost_config's xRam@0xa0820
+        // shadowed ap_fini's own pxRam naming; mirror httpd 156, ap_fini
+        // 51). That shared behavior is itself oracle-faithful for a
+        // ONE-ARCH-SEQUENTIAL run (locked-oracle shared-scope drill:
+        // ap_fini sym=xRam@0xa0820), but it diverges from the per-function
+        // golden the gate compares against. This arm gives each mirror
+        // function a fresh constructor-parity Database (cspec <global>
+        // ranges replayed from global_scope_ranges — the same
+        // addRange/write-through the constructor performed at parse time).
+        // Canon is untouched (action DB replaces the handle before this
+        // point and mirror_fn is false), and the print swap below
+        // overrides the handle again for the print face.
+        if mirror_fn {
+            let ranges: Vec<_> = thread_arch.global_scope_ranges.clone();
+            let mut fresh = rugra::database::Database::new(true);
+            for (spc, first, last) in ranges {
+                fresh.add_range_spaced(fresh.global_scope_id, spc, first, last);
+            }
+            thread_arch
+                .set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(fresh)));
+        }
         fd.set_arch(std::sync::Arc::new(thread_arch));
         // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
         // model's EffectRecord surface (see tracked_context_architecture)
