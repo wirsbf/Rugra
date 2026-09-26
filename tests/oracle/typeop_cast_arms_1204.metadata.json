@@ -1,0 +1,80 @@
+{
+ "schema_version": 1,
+ "fixture_id": "WORKPKG-UNMAP-TYPEOP-0001",
+ "title": "getInputCast/getOutputToken virtual-dispatch arms: ordering compares, extensions, shifts, div/rem, FLOAT_INT2FLOAT absorbZext+care_uint_int, PTRADD align-size, never-cast arms, shift/piece/subpiece/segment output tokens, getOperatorName sizes, Cbranch/Indirect/Callother input locals",
+ "overall_status": "MATCH",
+ "status_note": "Lane TYPEOP0001 (wt/typeop0001, base 9ac04ade). The locked Ghidra 12.0.4 oracle (commit e40ed130) and the lane-tree Rugra (WORKPKG-UNMAP-TYPEOP-0001 arms in src/typeop.rs) were each executed once with deterministic stdout. Both sides produced 141 records / identical bytes (SHA-256 2daf410c03b9b526181f8127539b12687af30709ba05d3ba475bb49d07b180d5). Runner: tools/run_typeop_cast_arms_oracle.sh (lane iteration form — root re-pins to the frozen-commit form at integration).",
+ "input_sha256": "2bdd34ccbb51fbefceb8538f5ceb6bd95410d8186d909c67a3aab0eb2feead9c",
+ "oracle_output_sha256": "2daf410c03b9b526181f8127539b12687af30709ba05d3ba475bb49d07b180d5",
+ "rugra_output_sha256": "2daf410c03b9b526181f8127539b12687af30709ba05d3ba475bb49d07b180d5",
+ "covered_projection": {
+  "status": "MATCH",
+  "name": "typeop.cc getInputCast/getOutputToken/getOperatorName/getInputLocal virtual-dispatch arms over 40 constructed cases",
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED",
+   "note": "The unmodified Architecture-owned TypeOp objects are reached through op->getOpcode()->getInputCast/getOutputToken/getOperatorName/getInputLocal with a real CastStrategyC (setTypeFactory)."
+  },
+  "rugra_source_observation": {
+   "status": "MATCH",
+   "note": "src/typeop.rs WORKPKG-UNMAP-TYPEOP-0001 arms: ordering_compare_input_cast (cc:1023/1049/1075/1099), extension_input_cast (cc:1131/1157), shift_input_cast (cc:1543/1585), divrem_input_cast (cc:1639/1659/1679/1699), float_int2float_input_cast + float_int2float_absorb_zext (cc:1847/1872), ptradd_input_cast (cc:2250), base_input_cast_arm (cc:295), never-cast overrides (cc:2057/2136/2420), shift_output_token_in_fd (cc:1518/1558/1608), piece_output_token_in_fd (cc:2063), subpiece_output_token_in_fd (cc:2142), segment token/input cast (cc:2414/2420), get_operator_name overrides (cc:1122/1148/1340/1356/1372/2048/2127), TypeOpCbranch/TypeOpIndirect/TypeOpCallother get_input_local (cc:609/1992/855)."
+  },
+  "rugra_execution": {
+   "status": "EXECUTED",
+   "note": "The lane tree's rugra rlib built the fixture binary (rustc --extern rugra); deterministic stdout, empty stderr, exit 0."
+  },
+  "bilateral_comparison": {
+   "status": "MATCH",
+   "note": "diff exit 0 over 141 records; byte SHA-256 identical on both sides."
+  }
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "typeop_cc_blob": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+  "typeop_hh_blob": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
+  "cast_cc_blob": "2f3590aee76b84d2cf398b60e66e80639111eb4c",
+  "typeop_cc_sha256": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
+  "cast_cc_sha256": "48cb0d500cf66bb22a73460c62ff923aa19fbc146ec1ef528c797a555709cca8",
+  "entrypoints": [
+   "TypeOp::getInputCast (typeop.cc:295-303)",
+   "TypeOpIntSless::getInputCast (typeop.cc:1023-1031)",
+   "TypeOpIntSlessEqual::getInputCast (typeop.cc:1049-1057)",
+   "TypeOpIntLess::getInputCast (typeop.cc:1075-1083)",
+   "TypeOpIntLessEqual::getInputCast (typeop.cc:1099-1107)",
+   "TypeOpIntZext::getInputCast (typeop.cc:1131-1139)",
+   "TypeOpIntSext::getInputCast (typeop.cc:1157-1165)",
+   "TypeOpIntRight::getInputCast (typeop.cc:1543-1556)",
+   "TypeOpIntSright::getInputCast (typeop.cc:1585-1598)",
+   "TypeOpIntDiv::getInputCast (typeop.cc:1639-1649)",
+   "TypeOpIntSdiv::getInputCast (typeop.cc:1659-1669)",
+   "TypeOpIntRem::getInputCast (typeop.cc:1679-1689)",
+   "TypeOpIntSrem::getInputCast (typeop.cc:1699-1709)",
+   "TypeOpFloatInt2Float::getInputCast (typeop.cc:1847-1862)",
+   "TypeOpFloatInt2Float::absorbZext (typeop.cc:1872-1883)",
+   "TypeOpPiece::getInputCast (typeop.cc:2057-2061)",
+   "TypeOpSubpiece::getInputCast (typeop.cc:2136-2140)",
+   "TypeOpPtradd::getInputCast (typeop.cc:2250-2266)",
+   "TypeOpSegment::getInputCast (typeop.cc:2420-2424)",
+   "TypeOpIntLeft::getOutputToken (typeop.cc:1518-1525)",
+   "TypeOpIntRight::getOutputToken (typeop.cc:1558-1565)",
+   "TypeOpIntSright::getOutputToken (typeop.cc:1608-1615)",
+   "TypeOpPiece::getOutputToken (typeop.cc:2063-2072)",
+   "TypeOpSubpiece::getOutputToken (typeop.cc:2142-2159)",
+   "TypeOpSegment::getOutputToken (typeop.cc:2414-2418)",
+   "TypeOpIntZext::getOperatorName (typeop.cc:1122-1129)",
+   "TypeOpIntSext::getOperatorName (typeop.cc:1148-1155)",
+   "TypeOpIntCarry::getOperatorName (typeop.cc:1340-1346)",
+   "TypeOpIntScarry::getOperatorName (typeop.cc:1356-1362)",
+   "TypeOpIntSborrow::getOperatorName (typeop.cc:1372-1378)",
+   "TypeOpPiece::getOperatorName (typeop.cc:2048-2055)",
+   "TypeOpSubpiece::getOperatorName (typeop.cc:2127-2134)",
+   "TypeOpCbranch::getInputLocal (typeop.cc:609-619)",
+   "TypeOpIndirect::getInputLocal (typeop.cc:1992-2003)",
+   "TypeOpCallother::getInputLocal (typeop.cc:855-863)",
+   "TypeOpEqual::propagateAcrossCompare (typeop.cc:963-986; covered by unit tests in src/typeop.rs incl. the spacebase and pointerRel arms)"
+  ]
+ },
+ "known_divergences": [],
+ "reproduction": "tools/run_typeop_cast_arms_oracle.sh"
+}
