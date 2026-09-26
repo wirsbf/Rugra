@@ -234,6 +234,15 @@ PoC 本身即裁决实验，两条后路的成本都被它收窄。
 
 ### Phase 2 — SLEIGH 运行时 Rust 化（.sla 装载 + decode）
 
+> **状态（2026-09-26，Lane SLEIGHP2）**：**DONE**（换装+门禁+退役全链，证据
+> =`docs/alignment_docs/SLEIGH_PHASE2_SWAP_2026-09-26.md` 与
+> `/dev/shm/rugra-reports/LANE_SLEIGHP2_2026-09-26.md`）。实际形态与本节
+> 原案差异：写域收敛为 `src/sleigh_ffi.rs` 引擎枚举（kuna-sleigh 已在
+> Phase1 vendor 为独立 workspace crate,Phase2 直接接线 `rust_backend`
+> 模块,不再新开 `src/sleigh/`）；op-for-op 面比原案更宽（每语料**每字节
+> 位置**为指令起始,36 面 698,605 decodes/5,550,599 ops 零差,超集覆盖
+> "全部函数入口+全部可达指令"）。
+
 - **写域**：`src/sleigh/`（sleighbase/slghsymbol/slghpatexpress/slghpattern/semantics/
   context/slaformat 消费端等）+ `src/sleigh_ffi.rs` 替换为原生引擎门面（保持
   `SleighLifter` 公开面不变，flow.rs 零改动）。

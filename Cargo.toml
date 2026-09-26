@@ -53,6 +53,13 @@ gimli = { version = "0.28.1", default-features = false, features = ["read", "std
 # C++ name demangling (Itanium ABI) on the ELF symbol import path
 cpp_demangle = "0.5"
 
+# SLEIGH decode runtime (Phase2 dual chain, SLEIGH-RUSTIFY-PHASE2-0001):
+# kuna-sleigh is the Rust engine behind src/sleigh_ffi.rs; kuna-base/kuna-num
+# are named directly because the engine's public API exposes their types.
+kuna-base = { workspace = true }
+kuna-num = { workspace = true }
+kuna-sleigh = { workspace = true }
+
 # Disassembly engines
 capstone = "0.12"
 iced-x86 = { version = "1.21", features = ["decoder", "encoder", "instr_info"] }
@@ -88,9 +95,6 @@ lazy_static = "1.4"
 bitvec = "1.0"
 num-traits = "0.2"
 num-derive = "0.4"
-
-[build-dependencies]
-cc = { version = "1.0", features = ["parallel"] }
 
 [dev-dependencies]
 criterion = "0.5"

@@ -1,53 +1,61 @@
 # sleigh_ffi.rs
 
-SLEIGH p-code 引擎的进程内 FFI 边界。`build.rs` 从锁定的 Ghidra
-12.0.4 Decompiler C++ 源码编译 CORE + SLEIGH 运行时和
-`rugra_sleigh.cpp`。Rust 通过版本化 C ABI 创建 `Sleigh`、安装 owned
-内存映像，并把一次 `Sleigh::oneInstruction` 的完整观察结果深拷贝为
-Rust DTO。
+SLEIGH p-code 引擎的进程内门面。Phase2 退役后形态（SLEIGH-RUSTIFY-PHASE2-0001）:
+`SleighCtx` 直接驱动 vendored `kuna-sleigh` 运行时（crates/kuna-sleigh,32,687 行,
+Phase1 vendor）,`RustSleighEngine`/`RustPcodeCollector` 逐条镜像已退役的
+`sleigh_shim` C ABI 语义（loadFill 模减/补零、pool 槽位 identity、LOAD/STORE
+space-id 规范化、decode_started 冻结、错误分型映射）。
+
+历史:C++ 链（build.rs 编 21 .cc + sleigh_shim C ABI + `#[cfg(has_sleigh)]`
+cpp_backend）在 Phase2 双链期并存,门禁全过（op-for-op 698,605 decodes/
+5,550,599 ops 零差 + 五语料 E2E 字节恒等 + `cargo test --lib` 1777P/0F 双引擎
+恒等 + bank 391/391）后于退役 commit 删除。证据 =
+`docs/alignment_docs/SLEIGH_PHASE2_SWAP_2026-09-26.md`;双引擎差分仪器
+（examples/sleigh_engine_diff.rs）随 C++ 链退役,存档于退役前 commit
+（cfeb30c6）供复现。
 
 ## SLEIGH-0002B 动态结果协议
 
 `SleighCtx::one_instruction` 是本层的严格入口：
 
-- 单次 C++ 调用同时返回真实 `step` 与全部 p-code，避免第二次解析改变
+- 单次引擎调用同时返回真实 `step` 与全部 p-code，避免第二次解析改变
   context/缓存状态；
 - op 按 `PcodeCacher::issued` 顺序、input 按 slot 顺序返回，无 64-op 或
   16-input 固定上限；
 - `OK + step > 0 + ops.is_empty()` 保留合法 zero-op 指令，不能与异常混淆；
 - output 可空；公开 DTO 用 `has_output==0` 表示空，此时 `output` 只是必须
   完全忽略的 default sentinel（其 identity 可与真实 ID 重合）。每个
-  `VarnodeData*` 在一次指令内按“逐 op，先 output、再
-  inputs”首次出现顺序获得 identity，保留跨 op 别名关系但不泄漏进程指针；
-- LOAD/STORE 的 space-id input 将内部 `AddrSpace*` 规范化为 address-space
-  index；候选值必须先命中 translator 注册空间的 pointer whitelist，未知值
-  返回 typed error，绝不解引用任意整数。普通 constant（包括相对 p-code
-  branch）不改写；
+  varnode 在一次指令内按"逐 op，先 output、再 inputs"首次出现顺序获得
+  identity（kuna pool 槽位地址,与 C++ `VarnodeData*` 池指针别名语义守恒——
+  发射发生在整指令 build 完成后,sleigh.cc:776 同序），保留跨 op 别名关系
+  但不泄漏进程指针；
+- LOAD/STORE 的 space-id input 规范化为 address-space index（kuna LOSS-015
+  本就存 manager index;C++ 侧曾存空间指针、由 shim 反查 index,退役前
+  双引擎 wire 值恒等亲证）；候选值非法时返回 typed error，绝不解引用任意
+  整数。普通 constant（包括相对 p-code branch）不改写；
 - `UnimplError`、`BadDataError`、`DataUnavailError`、`SleighError`、
-  `LowlevelError`、`DecoderError`、标准与未知异常保持分型。message 先按原始
-  bytes 保存，只有展示时才做 lossy UTF-8；只有 `UnimplError` 携带
-  `instruction_length`，数值 0 仍表示字段存在。
+  `LowlevelError`、`DecoderError` 保持分型。kuna 的 Recov/Parse/Evaluation/
+  ParamUnassigned/JumptableThunk/Java 变体按上游继承关系（全部 derive 自
+  `LowlevelError`）折叠为 Lowlevel,与退役 shim 的 C++ catch 序一致。message
+  先按原始 bytes 保存，只有展示时才做 lossy UTF-8；只有 `UnimplError`
+  携带 `instruction_length`，数值 0 仍表示字段存在。
 
-C++ opaque result 始终由 `rugra_sleigh_result_destroy` 使用同一 allocator
-释放。Rust 的 RAII guard 先验证 ABI version，再逐项拷贝固定宽度 wire
-record；不会用 `Vec::set_len` 制造未初始化值，也不会用
-`Vec::from_raw_parts` 接管 C++ 容器。
-
-`RugraLoadImage` 在 `try_set_image` 返回前完整复制调用方 bytes。相对偏移按
+`SharedLoadImage` 在 `try_set_image` 返回前完整复制调用方 bytes。相对偏移按
 锁定 `RawLoadImage::loadFill` 的无符号 `start - vma` 做 64 位模减；模减结果
-不在 image 时抛 `DataUnavailError`，在 image 内但固定 16-byte fetch 跨过尾部
-时复制有效前缀并补零。fixture 同时覆盖普通越界与 `UINT64_MAX → 0` 回绕。
-为防止 `DisassemblyCache` 按旧地址命中解析树，当前 ABI 在首次 decode 或
-`instruction_length` 后保守冻结 image/context，后续替换返回
-`InvalidState`。这是 `RUGRA-GLUE` 生命周期策略，不是 Ghidra 行为等价结论。
-包括首次失败后替换 image 再重试在内的精确 mutable-loader/cache 语义归
-`SLEIGH-0002D`，必须以锁定 `Sleigh::reset` / `Sleigh::oneInstruction`
-fixture 判定，不能预设需要重建 translator 或重放 spec。
+不在 image 时抛 `DataUnavailError`（message 字节与 C++ 侧逐字节一致——
+op-for-op 57,817 错误对亲证），在 image 内但固定 16-byte fetch 跨过尾部时
+复制有效前缀并补零。首次 decode 或 `instruction_length` 后冻结 image/context
+（`decode_started` → `InvalidState`,镜像退役 shim 行为）。这是 `RUGRA-GLUE`
+生命周期策略，不是 Ghidra 行为等价结论。包括首次失败后替换 image 再重试
+在内的精确 mutable-loader/cache 语义归 `SLEIGH-0002D`，必须以锁定
+`Sleigh::reset` / `Sleigh::oneInstruction` fixture 判定，不能预设需要重建
+translator 或重放 spec。
 
 `decode() -> Vec<PcodeOpC>`、`set_image()` 与 `set_context()` 仅是旧 lifter
 的兼容桥：它们仍会折叠严格错误，不能用于 oracle 证据。生产调用链改用
 严格结果、移除 lifter 内二次 input cap，并采用 SLEIGH step，分别属于
-`SLEIGH-0002D` 与 `SLEIGH-FLOW-0001`。
+`SLEIGH-0002D` 与 `SLEIGH-FLOW-0001`。legacy `instruction_length()` 为
+`&mut self`（冻结语义所需）。
 
 ## 尚未闭合的边界
 
@@ -55,12 +63,11 @@ fixture 判定，不能预设需要重建 translator 或重放 spec。
   `SLEIGH-0002C/MISMATCH` 临时兼容层。它只扫 raw `<set>` tag，丢失
   `ContextInternal::decodeFromSpec` 的地址范围、explicit mask、tracked
   register 与子节点顺序，绝不构成行为等价证明。
-- `new() -> Option`、legacy `instruction_length() -> Option` 以及固定 64-byte
-  space/register name catalog 仍会压缩部分创建/metadata错误，未纳入本批次
-  MATCH 范围。
+- `new() -> Option`、legacy `instruction_length() -> Option` 仍会压缩部分
+  创建/metadata 错误，未纳入本批次 MATCH 范围。
 - 锁定 x86-64 SLA 的 alignment 为 1 且没有 null-template constructor，无法
   自然触发 `UnimplError`；该分支实现了 typed transport，但保持 `UNTESTED`。
-- 单 op 超过 16 个 input、delay-slot `step`、STORE space-id、OOM/标准/未知异常、
+- 单 op 超过 16 个 input、delay-slot `step`、OOM/标准/未知异常、
   `InvalidState` 与析构 fault injection 分支仍为 `UNTESTED`；动态协议已移除
   旧容量上限，但这些分支不能据实现形状升级 MATCH。
 - 首次 decode（包括失败）后替换 image/context 会保守返回 `InvalidState`；
@@ -72,19 +79,28 @@ fixture 判定，不能预设需要重建 translator 或重放 spec。
 ## 锁定 oracle 验证
 
 ```bash
-tools/run_sleigh_decode_oracle.sh
+tools/run_debugproto_unknown_model_oracle.sh   # 纯 Rust 引擎树上的 B2 fixture（MATCH）
 cargo test --offline --lib sleigh_ffi::tests -- --nocapture
 cargo run --offline --example sleigh_test
 ```
 
-oracle runner 使用锁定 commit
+Phase2 证据链（退役前双引擎形态,cursor=cfeb30c6 可复现）：
+`examples/sleigh_engine_diff`（36 面 698,605 decodes/5,550,599 ops/
+decode_divergences=0 catalog_divergences=0,含全部错误路径 message 字节恒等）
++ 五语料 A/B 字节恒等（curl 95,842B/httpd 56,219B/vsh 49,584B/sq 2,416,424B/
+sqlite3 233,520B）。
+
+`tools/run_sleigh_decode_oracle.sh` fixture（12 case,oracle 侧=锁定树 C++
+重建）在基线 d4347cd 即已红（预存 pin 漂移,GLOBREPIN 族,亲测 rc=1）,退役后
+还需 runner 手术（快照 live build.rs/sleigh_shim/C++ link 胶水）,归
+SLEIGH-RETIREE-FLEET-REPIN-0001 族票;Rust 引擎对该 fixture 族的等价性由
+op-for-op 零差传递闭包覆盖。oracle runner 使用锁定 commit
 `e40ed13014025f82488b1f8f7bca566894ac376b` 的真实 CORE + SLEIGH 源码，
-与 Rust FFI 对同一 SLA、显式 context、image/base/offset 运行同 schema
+与 Rust 侧对同一 SLA、显式 context、image/base/offset 运行同 schema
 stdout direct diff。12 个 manifest case 覆盖 CPUID 78 ops/134 inputs、三种
 zero-op NOP（含单字节尾部补零与 `UINT64_MAX -> 0` 模减回绕）、动态内存
 MOV 的跨 op pointer alias、BadData、三种 DataUnavail、owned source mutation
 以及成功后错误不泄漏；额外 reachability record 证明锁定 x86-64 无法触发
-`UnimplError`。fixture metadata 记录 architecture、compiler spec、options、
-输入指纹与全部 comparand hash。runner 对 12 个已覆盖 case 为 `MATCH`；因
+`UnimplError`。runner 对 12 个已覆盖 case 为 `MATCH`；因
 `Unimpl` 及上列剩余分支仍为 `UNTESTED`，fixture overall status 是
 `PARTIAL_MATCH`，模块继续保持 L2。
