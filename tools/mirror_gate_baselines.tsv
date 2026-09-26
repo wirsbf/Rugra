@@ -37,18 +37,25 @@
 # DB 符号通道上线, matched 124→156=+32 全部为 mapGlobals 产物状态符号行, defects=0/numbering=0,
 # 逐函数归因见票行: ap_fini_vhost_config 13→51 / main 61→47 改善 / net 6 函数混合）; floor 29
 # 保持（CR 裁决: floor 不动）; pinned_commit=cspecglobal 车道 tip 22708f97（156 实测锚）。
-# sq 面同批注记: cspecglobal DB 底修使 sq skeleton 6778→4530（−2288, STACKSPILL 残差痊愈）——
-# ceiling 7500 不动（收紧须先登记 TODO）, 现态 4530 记账于此（DUPDECL 头注先例形态）。
+# sq 面同批注记: cspecglobal DB 底修使 sq skeleton 6778→4481（−2297, STACKSPILL 残差痊愈+批内
+# 跨车道微增益; 车道树实测 4530, 集成态实测 **4481**——MERGEBATCH17 集成验证 ③ 亲测, 实测
+# 数字为准现态记账于此[DUPDECL 头注先例形态]）——ceiling 7500 不动（收紧须先登记 TODO）。
 # 2026-09-26 MERGEBATCH17 注记（genwire 并入态, GENWIRE-SQLITE-RATCHET-REPIN-0001）:
 # sqlite 第五面首钉（SQLITE3_SCOREBOARD §10 提案落地 + genwire 链② −140 落地）——
-# ceiling 27178 = genwire 车道 16 分片 mirror 臂 fresh 实测（27318→27178, 恰 3 块差异
-# 603/608/623 = sqlite3_config/db_config/test_control 重启第二遍效应: 栈槽去物化+类型
-# 精化+警告重定位, TRIGFACE §③ oracle 侧量化 272 行的方向与域落地）; floor 1385 = ok 满额;
-# pinned_commit=genwire 车道 tip 28e3fb26（27178 实测锚）; runner sqlite 臂同批上线
+# 16 分片 mirror 臂 fresh 实测 27318→27178（恰 3 块差异 603/608/623 = sqlite3_config/
+# db_config/test_control 重启第二遍效应: 栈槽去物化+类型精化+警告重定位, TRIGFACE §③
+# oracle 侧量化 272 行的方向与域落地）; floor 1385 = ok 满额; runner sqlite 臂同批上线
 # （单进程全量形态, 与 vsh/sq 同契约; SQLITE3_BINARY 可覆盖语料路径）。
+# **口径差实测显形（头注预留条款兑现, MERGEBATCH17 集成验证 ④）**: 门禁臂（单进程全量,
+# 20m15s）首跑实测 **26833** < 分片协议 27178——两协议口径差 −355, 方向有利（分片协议=
+# 逐函数 hermetic 隔离, 门禁臂=单进程全语料, 跨函数共享进程态[process-canonical 工厂层
+# 等]使部分函数输出微移, HERMETICITY 族已知潜伏面, typedef 闩锁已被 compare 归一化）。
+# **ceiling 按门禁臂实测重钉 27178→26833**（执法协议自洽: 门禁臂测什么钉什么;
+# pinned_commit=c4508bba=集成态测量锚[wave-ledger commit 为 docs-only 不改二进制];
+# 分片协议 27178 仍为 SQLITE3_SCOREBOARD 记分板口径, 两协议各按各的账本记账）。
 corpus	ceiling	floor	todo_id	pinned_commit	measured_at
 curl	65	74	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 httpd	156	29	CSPEC-GLOBAL-APPLY-HTTPD-RATCHET-0001	22708f97	2026-09-26
 vsh	16	71	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
 sq	7500	810	MERGEBATCH5-RATCHET-REPIN-0001	6178d1ea	2026-09-26
-sqlite	27178	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	28e3fb26	2026-09-26
+sqlite	26833	1385	GENWIRE-SQLITE-RATCHET-REPIN-0001	c4508bba	2026-09-26

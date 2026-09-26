@@ -201,8 +201,10 @@ PIPE-RESTART-0001 解锁链②（gen 驱动 RestartFlowCallback 接线）落地�
   TRIGFACE §③ oracle 侧量化 272 行的方向与域落地：栈槽去物化+类型精化+警告重定位）。
 - **零回退铁证**：1385 块逐块对照基线，**恰 3 块差异**（603/608/623），其余 1382 块字节恒等。
 - root 重钉已执行（**MERGEBATCH17, 2026-09-26**）：`tools/mirror_gate_baselines.tsv` sqlite 行首钉
-  ceiling **27178** / floor **1385**（todo_id=GENWIRE-SQLITE-RATCHET-REPIN-0001,
-  pinned_commit=wt/genwire tip `28e3fb26`——27178 实测锚;`tools/verify_mirror_gate.sh`
-  sqlite 臂同批上线,单进程全量形态与 vsh/sq 同契约,SQLITE3_BINARY 可覆盖语料路径;
-  16 分片 mirror 臂为记分板测量协议,门禁臂为单进程全量——两协议口径差若实测显形,
-  以门禁臂实测重钉并注记）。
+  floor **1385**（todo_id=GENWIRE-SQLITE-RATCHET-REPIN-0001）;`tools/verify_mirror_gate.sh`
+  sqlite 臂同批上线（单进程全量形态与 vsh/sq 同契约,SQLITE3_BINARY 可覆盖语料路径）。
+  **口径差实测显形（集成验证 ④）**：门禁臂首跑实测 **26833**（20m15s,ok=1385/1385,
+  defects=0/numbering=0）< 本档分片协议 27178——两协议口径差 −355,方向有利（分片=逐函数
+  hermetic 隔离,门禁臂=单进程跨函数共享态微移,HERMETICITY 族已知潜伏面,typedef 闩锁已被
+  compare 归一化）;**ceiling 按门禁臂实测重钉 26833**（pinned_commit=c4508bba 集成态测量锚;
+  本档 27178 仍为分片记分板口径——两协议各按各的账本记账,后续分片测量仍以本档为基线演进）。

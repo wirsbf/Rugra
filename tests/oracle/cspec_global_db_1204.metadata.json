@@ -25,14 +25,46 @@
   },
   "input": {
     "probe_grid": [
-      ["ram", "0x17000", 8],
-      ["ram", "0x18000", 1],
-      ["register", "0x1094", 4],
-      ["register", "0x1080", 2],
-      ["register", "0x1096", 2],
-      ["unique", "0x100", 4],
-      ["OTHER", "0x10", 1],
-      ["const", "0x5", 1]
+      [
+        "ram",
+        "0x17000",
+        8
+      ],
+      [
+        "ram",
+        "0x18000",
+        1
+      ],
+      [
+        "register",
+        "0x1094",
+        4
+      ],
+      [
+        "register",
+        "0x1080",
+        2
+      ],
+      [
+        "register",
+        "0x1096",
+        2
+      ],
+      [
+        "unique",
+        "0x100",
+        4
+      ],
+      [
+        "OTHER",
+        "0x10",
+        1
+      ],
+      [
+        "const",
+        "0x5",
+        1
+      ]
     ],
     "usepoint": "invalid Address() (the Funcdata::newVarnode call-site form, funcdata_varnode.cc:148-166)"
   },
@@ -63,9 +95,9 @@
     }
   ],
   "comparand": {
-    "rugra_base_commit": "PENDING-ROOT-REGISTER",
-    "rugra_base_tree": "PENDING-ROOT-REGISTER",
-    "snapshot_model": "direct bilateral run (locked-tree oracle libdecomp + worktree librugra); formal immutable runner + registry pin is root's integration step",
+    "rugra_base_commit": "c4508bbac92758479e70fc9159d5747f70691ab3",
+    "rugra_base_tree": "282a4befe1c8638096bbfcb6b951baf7c3a2a3e8",
+    "snapshot_model": "formal immutable runner + registry pin (fixture_registry.json #220) re-pinned by root at MERGEBATCH17 integration: rugra_base anchored at c4508bba (last src-affecting commit of the batch; wave-ledger commits are docs-only and do not enter the crate snapshot); direct bilateral run (locked-tree oracle libdecomp + this tree librugra)",
     "repro": "tools/run_cspec_global_db_oracle.sh"
   }
 }
