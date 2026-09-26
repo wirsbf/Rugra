@@ -1228,3 +1228,180 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+### 2026-09-26 — MIGW-FSPEC batch 1-2（EffectRecord 相等面 / ParamUnassignedError / ParameterBasic 旗标面 / ParamEntryRange 解析器数据面，Lane MIGWFSPEC）
+
+- **EffectRecord 相等性**：`impl PartialEq for EffectRecord` 按 oracle
+  fspec.hh:1769-1781 逐字段投影——`range != op2.range` 展开为
+  (space, offset, size) 成员比较 + `type == op2.type`。消费方
+  `ProtoModelMerged::intersectEffects`（fspec.cc:2791-2800）依赖"地址相等
+  且效果类型相等"才保留的语义。
+- **ParamUnassignedError**（fspec.hh:63-66）：`assignParameterStorage` 无法
+  为某原型位分配存储时抛出；Rust 形态为独立错误类型（String 载荷），
+  供 `FuncProto::updateAllTypes`（fspec.cc:4220-4222）的 catch 位模式匹配。
+- **ParameterBasic 旗标面（坍缩注记）**：Rugra 扁平 `ProtoParameter` 即
+  Ghidra `ParameterBasic` 的承载形态（结构文档已有注记）。本批补齐
+  `is_name_locked`/`is_size_type_locked`/`is_indirect_storage`/
+  `is_name_undefined`/`from_pieces`/`set_type_lock`（含 TYPE_UNKNOWN 时
+  附带 sizelock 的 cc:2929-2930 语义）/`set_name_lock`/
+  `override_size_lock_type`（尺寸必须精确相等 + 必须已 sizelock，否则
+  Err 镜像 throw）/`reset_size_lock_type`（经 TypeFactory 取同尺寸
+  TYPE_UNKNOWN）/`get_symbol`（恒 Err 镜像 cc:1190 throw）。
+  `impl PartialEq for ProtoParameter` 镜像基类内联 ==（fspec.hh:1144-1155）：
+  仅比存储地址 + 类型身份（`Arc::ptr_eq` 承载 Ghidra 指针等值），名字与
+  旗标不参与。
+- **ParamTrial::slot_group**（fspec.hh:265）：`entry->getSlot(addr,size-1)`
+  经 entry-index 投影（trial 持索引，调用方传 entry 切片）。
+  **ParamActive::test_shrink/shrink**（fspec.hh:329/336）：到
+  `trial[i]` 的逐字转发（shrink=endianness 参数由调用方携带，见
+  `ParamTrial::test_shrink` 注记）。
+- **ParamEntryRange 家族（fspec.hh:157-194，11 条）**：
+  `ParamEntryRange`（first/last/position/entry-index）、`InitData`
+  （→`ParamEntryRangeInitData`）、`SubsortPosition`（含 `bool ? 1000000 : 0`
+  极值形）、ctor/`getFirst`/`getLast`/`getSubsort`/`getParamEntry` 全部
+  落地。`ParamEntryResolver`（rangemap 的 Vec 投影，按 (first, position)
+  = (linetype, subsort) 序）提供 `insert`/`find`（物化"包含该 offset 的
+  全部 range"迭代器对）与 `has_range_starting_above`（cc:708
+  `iterpair.first != resolver->end()` 门探针）。
+- **resolver 数据面接通**：`ParamListStandard::populate_resolver`/
+  `add_resolver_range` 从 TODO 存根变为真实实现（cc:1174-1216 逐字：join
+  entry 按 piece 逐段注册、position 每段 +1、per-space 惰性建表）。
+  **管线零行为变化**：现行 `find_entry` 线性扫描与 `characterize_as_param`
+  查询路径未改动，resolver 仅作数据面填充 + `resolver_for` 查询面；
+  `stack_entry_index` 缓存行为保持（非 exclusion 栈 entry 最后写入者胜）。
+
+### 2026-09-26 — MIGW-FSPEC batch 3-4（ParamListMerged / ScoreProtoModel / ProtoModelMerged / UnknownProtoModel + ProtoModel 查询转发面，Lane MIGWFSPEC）
+
+- **ParamListMerged（fspec.hh:712-724 + cc:1794-1833）**：owned-base 形态
+  （`base: ParamListStandard` 承载 C++ 公有基类）。`fold_in` 逐字移植——
+  空并集直取 op2 的 spacebase+entry 列表；spacebase 冲突（op2 侧非空）报
+  "Cannot merge prototype models with different stacks"；subsume 分类
+  （existing subsumes new=typeint2 / new subsumes existing=typeint1，扫描
+  首个命中即断）+ minsize 不齐降级 append + typeint1 原位替换。
+  `finalize`=`populateResolver`；`assignMap`/`fillinMap` 拒绝形（Err 镜像
+  LowlevelError）。ctor 双形态（decode 形 + ParamListStandard 拷贝形）。
+- **ScoreProtoModel（fspec.hh:1040-1064 + cc:2705-2775）**：PEntry
+  （origIndex/slot/size，Ord=slot）+ ctor（finalscore=-1, mismatch=0,
+  reserve(numparam)）+ `add_parameter`（输入侧走
+  `possible_input_param_with_slot`，输出侧 `possible_output_param_with_slot`，
+  miss 计 mismatch）+ `do_score` 逐字（penalty 表 16/10/7/5、flat 3、
+  duplication 20、hole 逐槽累加、nextfree 推进三分支、终分
+  basescore+20*mismatch）。
+- **ProtoModelMerged（fspec.hh:1077-1090 + cc:2834-2921）**：整型落地。
+  `fold_in`——glb 守卫由单 Architecture 表结构性吸收（同表模型共享 glb）；
+  p_standard/p_register 输入种类守卫由 ProtoModelFull::input 共享 owner
+  形态结构性通过（register 残差已在 build_param_list 注记）；首折
+  分配 merged input + 拷贝 output StandardOut 面 + extrapop/injects/
+  effects/trash/ranges 逐字复制；后续折 input foldIn + extrapop 不齐降
+  `EXTRA_POP_UNKNOWN`(0x8000) + inject 不齐报错 + effects/trash/internal
+  三相交（复用既有 `ProtoModelFull::intersect_effects/intersect_registers`
+  静态助手术语）+ localrange/paramrange 取并。`select_model` 逐字：严格 <
+  保首个最优、score==0 早退、无 <500 者报 "No model matches : missing
+  default"。numModels/getModel/isMerged 访问面齐。
+- **UnknownProtoModel（fspec.hh:1025-1032）**：alias 拷贝构造（经
+  ProtoModelFull::clone 承载 `ProtoModel(nm,*placeHold)`）+ 改名 +
+  `placeholder_model` Arc 保身份 + `get_placeholder_model`/`is_unknown`。
+- **ProtoModel 查询转发面（fspec.hh:812-975 内联族，12 条）**：
+  check_input_join/check_output_join/internal_iter/characterize_as_output/
+  possible_input_param_with_slot/possible_output_param_with_slot/
+  unjustified_input_param/assumed_input_extension/assumed_output_extension/
+  get_biggest_contained_input_param/get_biggest_contained_output 落到
+  ProtoModelFull。effectBegin/effectEnd/trashBegin/trashEnd（hh:840-843）
+  既有 `effect_iter`/`trash_iter` 切片访问器即迭代器对等价物（hh:1017-1021
+  同名族已锚），本轮仅补 internalBegin/internalEnd。
+
+### 2026-09-26 — MIGW-FSPEC batch 5-6（FuncProto 方法残项 / ParameterSymbol / ProtoStoreSymbol / internal-store encode / setScope，Lane MIGWFSPEC）
+
+- **FuncProto 方法残项**：`update_output_no_types`（cc:4172-4185 逐字：locked
+  直返 / 空 trial 清输出 / 否则 trial[0] 地址 + getBase(size,UNKNOWN) 重建）、
+  `check_input_join`/`check_input_split`（hh:1513/1524 转发模型）、
+  `remove_param`（hh:1534 store->clearInput 的扁平 Vec::remove 投影）、
+  `internal_iter`（hh:1551-1552 → model.internal_iter）、
+  `assumed_input_extension`/`assumed_output_extension`（hh:1586/1599 转发）、
+  `get_this_pointer_storage`（cc:4516-4533：无 thisptr 模型得 None；
+  assignParameterStorage(ignoreOutputError=true) 后首个非 hiddenretparm 输入
+  piece 的地址）。effectEnd/trashBegin/trashEnd（cc:4251/4260/4269）由既有
+  `effect_iter`/`trash_iter` 切片访问器承载（FuncProto 侧 override-empty
+  委派语义已在其中），本轮不重复实现。
+- **ParameterSymbol（hh:1256-1279 + cc:2981-3099）**：整型落地，
+  (scope, Option<symbol>) 对承载 C++ 虚接口。13 个访问器全部逐字：读走
+  Symbol（name/type/五旗标），getAddress/getSize 经
+  `get_first_whole_map(scope.entries)`；`set_type_lock`（attr mask =
+  typelock|(≠undefined: namelock)，cc:3047-3058）、`set_name_lock`、
+  `set_this_pointer`（=Scope::setThisPointer 的 Symbol 直改，database.hh:770）、
+  `override_size_lock_type`/`reset_size_lock_type`（callee Scope 版逐字，
+  database.cc:1387-1408）、`clone_refuses`（Err 镜像 throw）、`get_symbol`。
+- **ProtoStoreSymbol（hh:1286-1306 + cc:3103-3303）**：整型落地。
+  ctor 装载 void outparam；`get_symbol_backed` 惰性缓存视图；
+  `set_input` 大体逐字（category-0 符号解析 → 存储 mismatch 移除重建 →
+  新符号 addSymbol+setCategory+mirror 旗标 → 既有符号只打 attr 增量 +
+  改名/改型）；`clear_input`（去类目+移除+重编号）、`clear_all_inputs`、
+  `get_num_inputs`、`get_input`、`set_output`/`clear_output`/`get_output`、
+  `duplicate`（=clone，inparam 缓存惰性重建）、`encode_noop`（cc:3293 注释
+  语义）、`decode_refuses`。Rugra 适配注记：add_symbol 走 type_name 形 +
+  dtype Arc 直挂；discoverScope 的多 scope usepoint 纪律为 ADDRESS-0001 期
+  残差（单函数 Scope 全拥 category-0，restricted_usepoint 恒为操作形）。
+- **encode_internal_store（cc:3421-3462）**：`<internallist>` 序列化逐字
+  （retparam typelock+addr+typeref / null outparam 的空 addr+void 对 /
+  每 param 的可选 name+真值旗标+addr+typeref）。FuncProto::encode 的
+  `encode_store` 钩子从此有真实实现可传。
+- **FuncProto::set_scope（cc:3879-3885）**：装 `symbol_store` +
+  无模型时取 default_model。`set_input_parameter` 在 store 存在时路由到
+  符号侧（管线零行为变化：现无调用方设置 scope）。扁平 `parameters`
+  保持 ProtoStoreInternal 投影同步。
+
+### 2026-09-26 — MIGW-FSPEC batch 7-8（FuncCallSpecs 调用点族 / internal-store encode 剩项 / assignAddressFromPieces + B2 fixture，Lane MIGWFSPEC）
+
+- **FuncCallSpecs 调用点族**：`compare_by_entry_address`（hh:1740）、
+  `get_spacebase_relative`（cc:4982-4992：占位 slot→spacebase 占位 varnode→
+  LOAD def→取 in(1)）、`check_input_join`（cc:5349-5368：active 拒绝/规模
+  拒绝/hi-lo 尺寸核对/模型 checkInputJoin 终裁）、`do_input_join`
+  （cc:5376-5395：locked 拒绝；constructJoinAddress 为闭包接缝）；
+  `late_restriction`（cc:5408-5431：无模型整拷 / 兼容+dotdotdot 门 /
+  locked 输入输出转移 / 终拷）、`force_set`（cc:5485-5509：override 登记→
+  late_restriction→commit 或 restart→恒锁 + 双 error 旗标采纳；
+  commit 钩子沿用既有接缝形）、`insert_pcode`（cc:5517-5528：负 id 直返/
+  payload 查证/live-inject 接缝）、`collect_output_trial_varnodes`
+  （cc:5536-5557：premature-output 拒绝/尺寸对齐/INDIRECT 创建回溯/试件
+  地址重钉）、`check_output_trial_use`（cc:5661-5677：checked 拒绝/
+  active-inactive 二分）、`find_preexisting_whole`（cc:5750-5760：双 lone
+  descendant 同一 PIECE→其 out）。
+- **FSPEC-OUTPUTJOIN-0001 半项**：`find_preexisting_whole` 移植完成
+  （静态方法本体 + 双 loneDescend/同一 PIECE/取 out 语义）。管线接线
+  **暂缓**（MIGW-FSPEC-0004）：hi/lo 的 def 本就是同一 PIECE op（两 piece
+  的 loneDescend 即 PIECE），销毁语义两臂同形；join 钩子增加 Some(whole)
+  复用臂属钩子契约变更，须随自身差分证据另行票决。
+- **FuncProto error_outputparam**（hh:1352/1464/1471）：`has_output_errors`/
+  `set_output_errors` + 旗标字段（forceSet 依赖）。
+- **ParameterPieces::assign_address_from_pieces**（cc:2191-2207）：
+  least→most 就地反转 → JoinRecord::merge_sequence 折并（经
+  space::VarnodeData 尺寸域转换）→ 单 piece 直取地址 / 多 piece 走
+  findAddJoin 闭包（吸收 SpaceVarnodeData 空间模型转换）。
+- **B2 双侧 fixture `fspec_score_merged_1204`**：ScoreProtoModel 罚分走
+  （exact 0/hole 16/dup 20/mixed 56/mismatch25 500 阈值/output 0）、
+  ParamListMerged::foldIn（adopt/replace/subsumed/different-stacks 拒绝/
+  finalize 后 characterize+slot 查询）、ProtoModelMerged::foldIn
+  （首折采纳/extrapop 降 unknown/inject 拒绝/effects+trash 相交）、
+  selectModel（strict-< 首优/无 active/500 阈值拒绝）。oracle 直跑（锁定
+  源自建 libdecomp + FixtureArchitecture/SpacebaseSpace 手工构型）与
+  Rust 侧 25 行字节全等。**该 fixture 抓到并修正一处移植缺陷**：
+  `ProtoModelMerged::fold_in` 曾误把 model push 进 modellist——oracle 证据
+  （两次 foldIn 后 numModels()==0）证明 push 属 decode（cc:2918）。
+  C++ 侧构型注记：output 列表必须 populateResolver（fspec.cc:1504 配置
+  形态;12.0.4 findEntry 走 resolver）。
+
+### 2026-09-26 — MIGW-FSPEC 终验补丁（锁缺陷修复 + resolver 幂等 + fixture 重钉，Lane MIGWFSPEC）
+
+- **Rust 回归测试抓到 `ProtoStoreSymbol::set_input` 自死锁**：if-let 绑定持有
+  scope 读锁跨 `set_category` 写请求（同线程 read+write 相持）。读锁作用域
+  收敛到查表语句后修复（oracle 侧无锁不显现——双侧 fixture 之外 Rust 侧
+  并发语义自行兜底的实例）。
+- `ParamListStandard::populate_resolver` 先清表再插（Ghidra 恒对新表调用——
+  decode cc:1504 一次、拷贝 ctor cc:610 对新拷贝；清表使 Rust 跨阶段 staging
+  调用幂等，保持 fresh-map 前置条件）。
+- 测试修正两笔：compare_by_entry_address 测试经 set_funcdata 建条目（ctor
+  只记 op 地址）；resolver extent 查询点 0x202（0x204 在 4B 域外）。
+- fixture 元数据重钉（fspec_rs/crate tree），runner 端到端复验 PASS
+  （ghidra=rugra=df4b4fbd…，25 行字节全等）；全部门禁在最终态复跑：
+  cargo test --lib 1758/0、canon curl+httpd vs 基线 0/0 行差、
+  镜面四面 PASS、bank 391/391、annotations/refs OK。

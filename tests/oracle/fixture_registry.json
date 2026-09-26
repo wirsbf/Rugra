@@ -8073,6 +8073,36 @@
           "GH12-F-65687a06a76eaa459f1f"
         ]
       }
+    },
+    {
+      "id": "fspec_score_merged",
+      "description": "MIGW-FSPEC wave bilateral fixture (ScoreProtoModel penalty walk, ParamListMerged foldIn, ProtoModelMerged foldIn/selectModel; oracle-caught foldIn/modellist fix)",
+      "runner": [
+        "tools/run_fspec_score_merged_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/fspec_score_merged_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_fspec_score_merged_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/fspec_score_merged_1204.cc",
+          "fixture_source_2": "tests/oracle/fspec_score_merged_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_fspec_score_merged_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
     }
   ]
 }
