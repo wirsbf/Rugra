@@ -51,6 +51,260 @@ fn format_range_list_bounds(rl: &RangeList) -> String {
     out
 }
 
+/// One disjoint ownership range in a Scope's space-keyed range tree.
+/// Faithful to `Range` (address.hh:169-175): `spc` + inclusive `first`/`last`
+/// byte offsets within that space. The tree order key is
+/// `(spc->getIndex(), first)` — exactly `Range::operator<`
+/// (address.hh:202-205: space index first, then first-offset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeRange {
+    /// Space containing the range (address.hh:175 `spc`), as Rugra's
+    /// IR-space enum (the SpecQuery flow's space carrier; ordering via
+    /// [`crate::space::AddressSpace::get_index`], the locked x86-64
+    /// space-index table).
+    spc: crate::space::AddressSpace,
+    /// Offset of the first byte (address.hh:176 `first`).
+    first: u64,
+    /// Offset of the last byte (address.hh:177 `last`).
+    last: u64,
+}
+
+impl ScopeRange {
+    // Ghidra: address.hh:185 Range::Range(AddrSpace*,uintb,uintb)
+    /// Construct without validation (the inline constructor form).
+    pub fn new(spc: crate::space::AddressSpace, first: u64, last: u64) -> Self {
+        ScopeRange { spc, first, last }
+    }
+
+    // Ghidra: address.hh:214 Range::getSpace
+    /// The owning space.
+    pub fn get_space(&self) -> crate::space::AddressSpace {
+        self.spc
+    }
+
+    // Ghidra: address.hh:218 Range::getFirst
+    /// First offset.
+    pub fn get_first(&self) -> u64 {
+        self.first
+    }
+
+    // Ghidra: address.hh:222 Range::getLast
+    /// Last offset.
+    pub fn get_last(&self) -> u64 {
+        self.last
+    }
+
+    // Ghidra: address.cc:283 Range::printBounds
+    /// `"<spacename>: <first hex>-<last hex>"` — the per-range
+    /// `printBounds` line (address.cc:283-288). The space name is the
+    /// SLEIGH-space form (`spec_space_name`, e.g. "OTHER" for the other
+    /// space), matching what the oracle's `spc->getName()` prints.
+    pub fn print_bounds(&self) -> String {
+        let name = crate::space::AddressSpace::spec_space_name(self.spc.get_index() as usize)
+            .unwrap_or_else(|| self.spc.name());
+        format!("{}: {:x}-{:x}", name, self.first, self.last)
+    }
+}
+
+/// A space-keyed set of disjoint ownership ranges — the Database-side
+/// `RangeList rangetree` (database.hh:465). Faithful to `RangeList`
+/// (address.hh:194-232): a `set<Range>` ordered by `(space index, first)`
+/// maintaining a disjoint cover per space. This is the twin of
+/// `crate::address::SpaceRangeList` (same oracle algorithms, keyed by the
+/// spec-side `AddrSpace` handle); the Database tree keys on the IR-space
+/// enum because the Architecture/SpecQuery flow carries no
+/// `SpaceRegistry`. Overlay spaces report index -1
+/// ([`crate::space::AddressSpace::get_index`]); no overlay range can be
+/// registered through the locked x86-64 spec flow (`is_overlay_base` is
+/// false for every space), so the ordering hole is unobservable.
+#[derive(Debug, Clone, Default)]
+pub struct ScopeRangeTree {
+    /// Sorted by `(space index, first)` — `set<Range> tree`
+    /// (address.hh:198).
+    tree: Vec<ScopeRange>,
+}
+
+impl ScopeRangeTree {
+    // Ghidra: address.cc:373 RangeList::RangeList
+    /// Construct an empty tree.
+    pub fn new() -> Self {
+        ScopeRangeTree { tree: Vec::new() }
+    }
+
+    // RUGRA-GLUE: upper_bound_pos (std::set::upper_bound realized as a
+    // binary search over the sorted Vec by the (index, first) key).
+    /// Index of the first range strictly greater than
+    /// `Range(spc, off, off)`.
+    fn upper_bound_pos(&self, spc: &crate::space::AddressSpace, off: u64) -> usize {
+        let mut lo = 0usize;
+        let mut hi = self.tree.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let candidate = &self.tree[mid];
+            let greater = match candidate.spc.get_index().cmp(&spc.get_index()) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => candidate.first > off,
+                std::cmp::Ordering::Less => false,
+            };
+            if greater {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+
+    // RUGRA-GLUE: insert_sorted (std::set::insert keeps the existing node
+    /// for an equivalent key; the Vec insert mirrors that no-op).
+    fn insert_sorted(&mut self, range: ScopeRange) {
+        let mut lo = 0usize;
+        let mut hi = self.tree.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let less = match self.tree[mid]
+                .spc
+                .get_index()
+                .cmp(&range.spc.get_index())
+            {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Equal => self.tree[mid].first < range.first,
+                std::cmp::Ordering::Greater => false,
+            };
+            match less {
+                true => lo = mid + 1,
+                false if self.tree[mid] == range => return, // set keeps existing
+                false => hi = mid,
+            }
+        }
+        self.tree.insert(lo, range);
+    }
+
+    // Ghidra: address.cc:383 RangeList::insertRange
+    /// Insert a range, merging as appropriate to maintain the disjoint
+    /// cover. Faithful to `insertRange` (address.cc:383-410): everything
+    /// between the first range with `last >= first` and the first range
+    /// with `first > last` (same space) folds into the new range; adjacent
+    /// but disjoint ranges are NOT merged; other spaces are never touched.
+    pub fn insert_range(&mut self, spc: crate::space::AddressSpace, first: u64, last: u64) {
+        let mut iter1 = self.upper_bound_pos(&spc, first);
+        if iter1 > 0 {
+            iter1 -= 1;
+            let prev = &self.tree[iter1];
+            if prev.spc != spc || prev.last < first {
+                iter1 += 1;
+            }
+        }
+        let iter2 = self.upper_bound_pos(&spc, last);
+        let (mut first, mut last) = (first, last);
+        for existing in &self.tree[iter1..iter2] {
+            if existing.first < first {
+                first = existing.first;
+            }
+            if existing.last > last {
+                last = existing.last;
+            }
+        }
+        self.tree.drain(iter1..iter2);
+        self.insert_sorted(ScopeRange::new(spc, first, last));
+    }
+
+    // Ghidra: address.cc:417 RangeList::removeRange
+    /// Remove/narrow/split existing ranges to eliminate the indicated
+    /// addresses while maintaining the disjoint cover. Faithful to
+    /// `removeRange` (address.cc:417-449): every overlapping range in the
+    /// given space is erased and its out-of-hole head/tail pieces are
+    /// re-inserted.
+    pub fn remove_range(&mut self, spc: crate::space::AddressSpace, first: u64, last: u64) {
+        if self.tree.is_empty() {
+            return;
+        }
+        let mut iter1 = self.upper_bound_pos(&spc, first);
+        if iter1 > 0 {
+            iter1 -= 1;
+            let prev = &self.tree[iter1];
+            if prev.spc != spc || prev.last < first {
+                iter1 += 1;
+            }
+        }
+        let iter2 = self.upper_bound_pos(&spc, last);
+        let pieces: Vec<(u64, u64)> = self.tree[iter1..iter2]
+            .iter()
+            .map(|range| (range.first, range.last))
+            .collect();
+        self.tree.drain(iter1..iter2);
+        for (a, b) in pieces {
+            if a < first {
+                self.insert_sorted(ScopeRange::new(spc, a, first.wrapping_sub(1)));
+            }
+            if b > last {
+                self.insert_sorted(ScopeRange::new(spc, last.wrapping_add(1), b));
+            }
+        }
+    }
+
+    // Ghidra: address.cc:468 RangeList::inRange
+    /// Is `[offset, offset+size-1]` fully contained? Faithful to `inRange`
+    /// (address.cc:468-487): an empty container returns false; the last
+    /// range whose `first <= offset` must be in the same space and reach
+    /// `offset + size - 1`. (The `addr.isInvalid()` early-true guard
+    /// (address.cc:471) is caller-gated here: the Database query channel
+    /// only reaches this tree with concrete varnode addresses.)
+    pub fn in_range(&self, spc: crate::space::AddressSpace, offset: u64, size: i32) -> bool {
+        if self.tree.is_empty() {
+            return false;
+        }
+        let iter = self.upper_bound_pos(&spc, offset);
+        if iter == 0 {
+            return false;
+        }
+        let candidate = &self.tree[iter - 1];
+        if candidate.spc != spc {
+            return false;
+        }
+        candidate.last >= offset.wrapping_add((size - 1) as u64)
+    }
+
+    // Ghidra: address.hh:226 RangeList::getRangeList
+    /// The disjoint ranges in `(space index, first)` order.
+    pub fn ranges(&self) -> &[ScopeRange] {
+        &self.tree
+    }
+
+    // Ghidra: address.cc:588 RangeList::printBounds
+    /// Print a one-line description of each disjoint range: `all` when the
+    /// tree is empty, else one `Range::printBounds` line per range
+    /// (address.cc:588-600).
+    pub fn print_bounds(&self) -> String {
+        if self.tree.is_empty() {
+            return "all\n".to_string();
+        }
+        let mut out = String::new();
+        for range in &self.tree {
+            out.push_str(&range.print_bounds());
+            out.push('\n');
+        }
+        out
+    }
+}
+
+// RUGRA-GLUE: spec-space-name → IR-space-enum resolver (the inverse of
+// `AddressSpace::spec_space_name`), standing in for
+// `Decoder::readSpace`'s `getSpaceByName` (marshal.cc) at the rangelist
+// decode site: the Database decode flow carries no `SpaceRegistry`, so
+// the reserved SLEIGH space names resolve through the locked x86-64
+// space table.
+fn space_by_spec_name(name: &str) -> Option<crate::space::AddressSpace> {
+    for index in 0..9usize {
+        if let Some(nm) = crate::space::AddressSpace::spec_space_name(index) {
+            if nm == name {
+                return crate::space::AddressSpace::from_index(index);
+            }
+        }
+    }
+    None
+}
+
 // RUGRA-GLUE: C++ `istringstream(s) >> uint8` (database.cc:1328-1331, with
 // dec/hex/oct unset) for `Scope::resolveScope`'s decimal-id branch: skip
 // leading whitespace, consume leading decimal digits, saturate at
@@ -1906,8 +2160,14 @@ pub struct Scope {
     pub display_name: String,
     /// Id of the parent scope (0 = global).
     pub parent_id: u64,
-    /// Range of data addresses owned by this scope.
-    pub rangetree: RangeList,
+    /// Range of data addresses owned by this scope. Faithful to
+    /// `RangeList rangetree` (database.hh:465) as the space-keyed
+    /// [`ScopeRangeTree`] — the tree holds `(space, first, last)` records
+    /// ordered by `(space index, first)`, exactly Ghidra's `set<Range>`
+    /// (CSPEC-GLOBAL-APPLY-0001: the previous spaceless `RangeList` could
+    /// not hold the cspec `<global>` triples for ram + register + OTHER
+    /// in one tree, so the Database write path was unreachable).
+    pub rangetree: ScopeRangeTree,
     /// Symbols in this scope, keyed by id.
     pub symbols: BTreeMap<u64, Arc<RwLock<Symbol>>>,
     /// Storage entries (static), keyed by (address, size).
@@ -1982,7 +2242,7 @@ impl Scope {
             name: nm.to_string(),
             display_name: nm.to_string(),
             parent_id,
-            rangetree: RangeList::new(),
+            rangetree: ScopeRangeTree::new(),
             symbols: BTreeMap::new(),
             entries: Vec::new(),
             dynamic_entries: Vec::new(),
@@ -2032,27 +2292,67 @@ impl Scope {
 
     // Ghidra: database.cc:1105 Scope::addRange
     /// Add a memory range to the ownership of this Scope. Faithful to
-    /// `addRange` (database.hh:521).
+    /// `addRange` (database.hh:521: `rangetree.insertRange(spc,first,last)`).
+    pub fn add_range_spaced(
+        &mut self,
+        spc: crate::space::AddressSpace,
+        first: u64,
+        last: u64,
+    ) {
+        self.rangetree.insert_range(spc, first, last);
+    }
+
+    // RUGRA-GLUE: ram-space delegate of `addRange` for the legacy
+    /// spaceless-`Range` callers (driver PT_LOAD seeding, cptr fixtures);
+    /// every existing caller's ranges are default-data-space (RAM)
+    /// offsets, so binding `spc = Ram` is the same call the C++ makes.
     pub fn add_range(&mut self, rng: Range) {
-        self.rangetree.insert_range(rng);
+        self.rangetree.insert_range(
+            crate::space::AddressSpace::Ram,
+            rng.get_first().as_u64(),
+            rng.get_last().as_u64(),
+        );
     }
 
     // Ghidra: database.cc:1114 Scope::removeRange
     /// Remove a memory range from the ownership of this Scope. Faithful to
-    /// `removeRange` (database.hh:522).
+    /// `removeRange` (database.hh:522:
+    /// `rangetree.removeRange(spc,first,last)`).
+    pub fn remove_range_spaced(
+        &mut self,
+        spc: crate::space::AddressSpace,
+        first: u64,
+        last: u64,
+    ) {
+        self.rangetree.remove_range(spc, first, last);
+    }
+
+    // RUGRA-GLUE: ram-space delegate of `removeRange` (same binding as
+    /// `add_range` above).
     pub fn remove_range(&mut self, rng: Range) {
-        self.rangetree.remove_range(rng);
+        self.rangetree.remove_range(
+            crate::space::AddressSpace::Ram,
+            rng.get_first().as_u64(),
+            rng.get_last().as_u64(),
+        );
     }
 
     // Ghidra: database.hh:34 Scope::inScope
     /// Query if the given range is owned by this Scope. Faithful to `inScope`
-    /// (database.hh:597).
+    /// (database.hh:597: `rangetree.inRange(addr,size)` — the containment
+    /// is `[offset, offset+size-1]` in ONE space, realized by the
+    /// same-space reach check of address.cc:468-487).
+    pub fn in_scope_spaced(&self, spc: crate::space::AddressSpace, offset: u64, size: i32) -> bool {
+        self.rangetree.in_range(spc, offset, size)
+    }
+
+    // RUGRA-GLUE: ram-space delegate of `inScope` for the legacy
+    /// spaceless-`Address` query channel (the Funcdata Database channel
+    /// only admits default-data-space varnodes, so the RAM binding is the
+    /// space every live query carries).
     pub fn in_scope(&self, addr: Address, size: i32) -> bool {
-        if size <= 1 {
-            return self.rangetree.in_range(addr);
-        }
-        let end = Address::new(addr.as_u64().saturating_add(size as u64 - 1));
-        self.rangetree.in_range(addr) && self.rangetree.in_range(end)
+        self.rangetree
+            .in_range(crate::space::AddressSpace::Ram, addr.as_u64(), size)
     }
 
     // Ghidra: database.cc:1510 Scope::addSymbol
@@ -2986,9 +3286,11 @@ impl Scope {
     /// Print a description of this Scope's owned memory ranges. Faithful
     /// to `printBounds` (database.hh:789: `rangetree.printBounds(s)`), the
     /// RangeList form of address.cc:588-600 — `all` when the scope owns no
-    /// ranges, else one `<space>: <first hex>-<last hex>` line per range.
+    /// ranges, else one `<space>: <first hex>-<last hex>` line per range
+    /// (the space-keyed tree always carries the space, matching the
+    /// oracle's `Range::printBounds` prefix).
     pub fn print_bounds(&self) -> String {
-        format_range_list_bounds(&self.rangetree)
+        self.rangetree.print_bounds()
     }
 
     // Ghidra: database.cc:880 Scope::hashScopeName
@@ -3297,14 +3599,22 @@ impl Scope {
     }
 
     // Ghidra: database.cc:2616 ScopeInternal::encode (rangelist portion)
-    /// Encode the scope's owned memory ranges as a `<rangelist>`. Faithful to
-    /// the `getRangeTree().encode(encoder)` call at database.cc:2627.
+    /// Encode the scope's owned memory ranges as a `<rangelist>`. Faithful
+    /// to the `getRangeTree().encode(encoder)` call at database.cc:2627 —
+    /// each `<range>` child carries `space` (the space NAME, the
+    /// XmlEncode::writeSpace form, marshal.cc:569-581) + `first` + `last`
+    /// (Range::encode, address.cc:292-299).
     fn rangetree_encode(&self, encoder: &mut dyn Encoder) {
         encoder.open_element(&ElementId::new("rangelist", 0));
         for rng in self.rangetree.ranges() {
             encoder.open_element(&ElementId::new("range", 0));
-            encoder.write_unsigned_integer(&AttributeId::new("first", 0), rng.get_first().as_u64());
-            encoder.write_unsigned_integer(&AttributeId::new("last", 0), rng.get_last().as_u64());
+            let space_name = crate::space::AddressSpace::spec_space_name(
+                rng.get_space().get_index() as usize,
+            )
+            .unwrap_or_else(|| rng.get_space().name());
+            encoder.write_string(&AttributeId::new("space", 0), space_name);
+            encoder.write_unsigned_integer(&AttributeId::new("first", 0), rng.get_first());
+            encoder.write_unsigned_integer(&AttributeId::new("last", 0), rng.get_last());
             encoder.close_element(&ElementId::new("range", 0));
         }
         encoder.close_element(&ElementId::new("rangelist", 0));
@@ -3503,7 +3813,11 @@ impl Scope {
     // Ghidra: database.cc:2744 ScopeInternal::decode (rangelist portion)
     /// Decode a `<rangelist>` child into the scope's rangetree. Faithful to the
     /// `RangeList newrangetree; newrangetree.decode(decoder)` block at
-    /// database.cc:2757.
+    /// database.cc:2757 — each `<range>` child resolves its `space`
+    /// attribute (Range::decode's readSpace, address.cc:300-331) and the
+    /// range inserts into the space-keyed tree; a range without a
+    /// recognized space attribute stays in the RAM partition (the
+    /// default-data-space binding of every legacy producer).
     fn decode_rangelist(&mut self, decoder: &mut dyn Decoder) {
         let rl_id = decoder.peek_element();
         if rl_id == 0 {
@@ -3519,6 +3833,7 @@ impl Scope {
                 break;
             }
             decoder.open_element();
+            let mut space_name = String::new();
             let mut first = 0u64;
             let mut last = 0u64;
             loop {
@@ -3527,6 +3842,7 @@ impl Scope {
                     break;
                 }
                 match decoder.attribute_name(aid).as_deref() {
+                    Some("space") => space_name = decoder.read_string(),
                     Some("first") => first = decoder.read_unsigned_integer(),
                     Some("last") => last = decoder.read_unsigned_integer(),
                     _ => {
@@ -3534,9 +3850,9 @@ impl Scope {
                     }
                 }
             }
-            if let Some(rng) = Range::new(Address::new(first), Address::new(last)) {
-                self.rangetree.insert_range(rng);
-            }
+            let spc = space_by_spec_name(&space_name)
+                .unwrap_or(crate::space::AddressSpace::Ram);
+            self.rangetree.insert_range(spc, first, last);
             decoder.close_element(sub_id);
         }
         decoder.close_element(rl_id);
@@ -5267,15 +5583,23 @@ impl Database {
     }
 
     // Ghidra: database.cc:3036 Database::setRange
-    /// Set the ownership range for a Scope. Faithful to `setRange`.
+    /// Set the ownership range for a Scope. Faithful to `setRange`
+    /// (database.cc:3036-3042: `clearResolve(scope)`, then the whole tree
+    /// is overwritten, then `fillResolve(scope)`). The legacy spaceless
+    /// `RangeList` parameter binds every range to the RAM partition (the
+    /// only space the existing callers' ranges occupy).
     pub fn set_range(&mut self, scope_id: u64, rlist: &RangeList) {
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
             // Clear existing ranges for this scope in resolvemap.
             self.resolvemap.retain(|(_, sid)| *sid != scope_id);
             // Set new range tree.
-            scope.rangetree = RangeList::new();
+            scope.rangetree = ScopeRangeTree::new();
             for rng in rlist.ranges() {
-                scope.rangetree.insert_range(*rng);
+                scope.rangetree.insert_range(
+                    crate::space::AddressSpace::Ram,
+                    rng.get_first().as_u64(),
+                    rng.get_last().as_u64(),
+                );
                 self.resolvemap.push((*rng, scope_id));
             }
         }
@@ -5301,11 +5625,21 @@ impl Database {
         size: i32,
     ) -> Option<u64> {
         // The ctx reads the global scope's discovery ranges and the
-        // flagbase (the same live-state wiring as Database::decode).
+        // flagbase (the same live-state wiring as Database::decode). The
+        // legacy spaceless projection takes the RAM partition (the only
+        // space the addMap discovery test admits).
         let global_ranges: Vec<Range> = self
             .scopes
             .get(&self.global_scope_id)
-            .map(|s| s.rangetree.ranges().to_vec())
+            .map(|s| {
+                s.rangetree
+                    .ranges()
+                    .iter()
+                    .filter(|r| r.get_space() == crate::space::AddressSpace::Ram)
+                    .map(|r| Range::new(Address::new(r.get_first()), Address::new(r.get_last())))
+                    .flatten()
+                    .collect()
+            })
             .unwrap_or_default();
         let Database {
             scopes, flagbase, ..
@@ -5349,9 +5683,15 @@ impl Database {
     /// every owned range into the resolvemap with rangemap split semantics
     /// (an inserted range takes over its overlap; neighbouring entries are
     /// trimmed to the remainder).
-    pub fn add_range(&mut self, scope_id: u64, rng: Range) {
+    pub fn add_range_spaced(
+        &mut self,
+        scope_id: u64,
+        spc: crate::space::AddressSpace,
+        first: u64,
+        last: u64,
+    ) {
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
-            scope.rangetree.insert_range(rng);
+            scope.rangetree.insert_range(spc, first, last);
         } else {
             return;
         }
@@ -5367,16 +5707,40 @@ impl Database {
         self.fill_resolve(scope_id);
     }
 
+    // RUGRA-GLUE: ram-space delegate of `Database::addRange` for the
+    /// legacy spaceless-`Range` callers (driver PT_LOAD/whole-ram
+    /// seeding, fixtures) — every existing caller's ranges are RAM
+    /// offsets, so binding `spc = Ram` is the same call the C++ makes.
+    pub fn add_range(&mut self, scope_id: u64, rng: Range) {
+        self.add_range_spaced(
+            scope_id,
+            crate::space::AddressSpace::Ram,
+            rng.get_first().as_u64(),
+            rng.get_last().as_u64(),
+        );
+    }
+
     // Ghidra: database.cc:2870 Database::clearResolve
     /// Erase this namespace Scope's ranges from the resolvemap. Faithful to
     /// `clearResolve` (database.cc:2871-2890): for each owned range, find
     /// the resolvemap partition starting at its first address and erase it
-    /// if this scope owns it. The global scope bails early.
+    /// if this scope owns it. The global scope bails early. Only RAM
+    /// partitions project into the legacy spaceless resolvemap (the
+    /// `mapScope` query channel admits default-data-space addresses
+    /// only); other spaces' ranges skip, exactly as a spaceless find
+    /// would never hit them.
     fn clear_resolve(&mut self, scope_id: u64) {
         let first_addrs: Vec<Address> = self
             .scopes
             .get(&scope_id)
-            .map(|s| s.rangetree.ranges().iter().map(|r| r.get_first()).collect())
+            .map(|s| {
+                s.rangetree
+                    .ranges()
+                    .iter()
+                    .filter(|r| r.get_space() == crate::space::AddressSpace::Ram)
+                    .map(|r| Address::new(r.get_first()))
+                    .collect()
+            })
             .unwrap_or_default();
         for first in first_addrs {
             if let Some(pos) = self
@@ -5394,12 +5758,21 @@ impl Database {
     /// Faithful to `fillResolve` (database.cc:2897-2908) — each insert goes
     /// through the rangemap `ScopeResolve::insert` overlap-split semantics
     /// (database.hh:900): the new range takes over its overlap from any
-    /// current owner; the owner keeps disjoint remainders.
+    /// current owner; the owner keeps disjoint remainders. RAM partitions
+    /// only, as in `clear_resolve`.
     fn fill_resolve(&mut self, scope_id: u64) {
         let ranges: Vec<Range> = self
             .scopes
             .get(&scope_id)
-            .map(|s| s.rangetree.ranges().to_vec())
+            .map(|s| {
+                s.rangetree
+                    .ranges()
+                    .iter()
+                    .filter(|r| r.get_space() == crate::space::AddressSpace::Ram)
+                    .map(|r| Range::new(Address::new(r.get_first()), Address::new(r.get_last())))
+                    .flatten()
+                    .collect()
+            })
             .unwrap_or_default();
         for rng in ranges {
             resolve_insert_split(&mut self.resolvemap, scope_id, rng);
@@ -5416,7 +5789,11 @@ impl Database {
             self.clear_resolve(scope_id);
         }
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
-            scope.rangetree.remove_range(rng);
+            scope.rangetree.remove_range(
+                crate::space::AddressSpace::Ram,
+                rng.get_first().as_u64(),
+                rng.get_last().as_u64(),
+            );
         }
         if scope_id != self.global_scope_id {
             self.fill_resolve(scope_id);
@@ -5865,11 +6242,23 @@ impl Database {
             // <mapsym> folds read getProperty at their document position.
             // The global discovery snapshot is refreshed per scope so a
             // previously decoded global <rangelist> is visible (the C++
-            // reads the live rangetree object at each addMap).
+            // reads the live rangetree object at each addMap). The legacy
+            // spaceless projection takes the RAM partition, as in
+            // `Database::add_symbol_mapped`.
             let global_ranges: Vec<Range> = self
                 .scopes
                 .get(&self.global_scope_id)
-                .map(|gs| gs.rangetree.ranges().to_vec())
+                .map(|gs| {
+                    gs.rangetree
+                        .ranges()
+                        .iter()
+                        .filter(|r| r.get_space() == crate::space::AddressSpace::Ram)
+                        .map(|r| {
+                            Range::new(Address::new(r.get_first()), Address::new(r.get_last()))
+                        })
+                        .flatten()
+                        .collect()
+                })
                 .unwrap_or_default();
             let Database {
                 scopes, flagbase, ..
@@ -7139,6 +7528,84 @@ mod tests {
         scope.adjust_caches();
         // State unchanged.
         assert_eq!(scope.num_symbols(), 1);
+    }
+
+    #[test]
+    fn test_scope_range_tree_insert_merge_and_order() {
+        use crate::space::AddressSpace;
+        // address.cc:383 — insertRange merges overlaps; adjacent disjoint
+        // ranges stay separate; other spaces untouched.
+        let mut tree = super::ScopeRangeTree::new();
+        tree.insert_range(AddressSpace::Ram, 0x100, 0x1ff);
+        tree.insert_range(AddressSpace::Ram, 0x300, 0x3ff);
+        assert_eq!(tree.ranges().len(), 2, "adjacent ranges are not merged");
+        tree.insert_range(AddressSpace::Ram, 0x180, 0x37f);
+        assert_eq!(
+            tree.ranges(),
+            &[
+                super::ScopeRange::new(AddressSpace::Ram, 0x100, 0x3ff),
+            ][..],
+            "overlapping insert folds the three ranges into one"
+        );
+        // register ranges live in a separate partition (space-keyed).
+        tree.insert_range(AddressSpace::Register, 0x1094, 0x1097);
+        assert_eq!(tree.ranges().len(), 2);
+        assert_eq!(tree.ranges()[0].get_space(), AddressSpace::Ram, "ram(3) before register(4)");
+        assert_eq!(tree.ranges()[1].get_space(), AddressSpace::Register);
+
+        // address.cc:468 — inRange: same-space reach, other space never
+        // answers.
+        assert!(tree.in_range(AddressSpace::Ram, 0x250, 1));
+        assert!(tree.in_range(AddressSpace::Ram, 0x3ff, 1));
+        assert!(!tree.in_range(AddressSpace::Ram, 0x400, 1));
+        assert!(!tree.in_range(AddressSpace::Ram, 0xff, 1));
+        assert!(tree.in_range(AddressSpace::Register, 0x1094, 4));
+        assert!(!tree.in_range(AddressSpace::Register, 0x1094, 5));
+
+        // address.cc:417 — removeRange splits.
+        tree.remove_range(AddressSpace::Ram, 0x200, 0x2ff);
+        assert_eq!(
+            tree.ranges()[..1],
+            [
+                super::ScopeRange::new(AddressSpace::Ram, 0x100, 0x1ff),
+                super::ScopeRange::new(AddressSpace::Ram, 0x300, 0x3ff),
+            ][..1],
+        );
+        assert_eq!(tree.ranges().len(), 3);
+
+        // address.cc:283/588 — printBounds lines carry the space name.
+        assert_eq!(tree.ranges()[0].print_bounds(), "ram: 100-1ff");
+        assert_eq!(tree.ranges()[2].print_bounds(), "register: 1094-1097");
+        let empty = super::ScopeRangeTree::new();
+        assert_eq!(empty.print_bounds(), "all\n");
+    }
+
+    #[test]
+    fn test_scope_range_tree_multi_space_global_projection() {
+        // The CSPEC-GLOBAL-APPLY-0001 shape: the cspec `<global>` triples
+        // (OTHER 0-max, ram 0-max, register 0x1094-0x1097) in one tree,
+        // sorted by (space index, first).
+        use crate::space::AddressSpace;
+        let mut tree = super::ScopeRangeTree::new();
+        tree.insert_range(AddressSpace::Ram, 0, u64::MAX);
+        tree.insert_range(AddressSpace::Other(1), 0, u64::MAX);
+        tree.insert_range(AddressSpace::Register, 0x1094, 0x1097);
+        assert_eq!(
+            tree.ranges()
+                .iter()
+                .map(|r| (r.get_space(), r.get_first(), r.get_last()))
+                .collect::<Vec<_>>(),
+            vec![
+                (AddressSpace::Other(1), 0, u64::MAX),
+                (AddressSpace::Ram, 0, u64::MAX),
+                (AddressSpace::Register, 0x1094, 0x1097),
+            ]
+        );
+        // A ram-offset query never matches the OTHER/register partitions
+        // even though they share offset 0 (address.cc:477-478 same-space
+        // check).
+        assert!(tree.in_range(AddressSpace::Ram, 0, 1));
+        assert!(!tree.in_range(AddressSpace::Unique, 0, 1));
     }
 
     #[test]

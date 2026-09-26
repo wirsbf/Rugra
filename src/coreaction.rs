@@ -19753,15 +19753,30 @@ mod tests {
     fn test_action_mapglobals_creates_symbol_for_persistent_ram_varnodes() {
         // ActionMapGlobals::apply is exactly `data.mapGlobals(); return 0`
         // (coreaction.hh:885). For a persistent RAM (global) varnode with no
-        // symbol (no channel attached in unit tests), the legacy proxy leg
-        // records a Symbol name at the group address via
-        // ScopeLocal::buildVariableName's persist branch (database.cc:2447:
-        // <printNameBase>Ram<offset>; no high type → no printNameBase). The
-        // old flag-only stub behavior (blanket PERSIST+READONLY) was NOT
-        // Ghidra behavior and is gone.
+        // symbol, the DB leg runs the cc:1701-1709 chain: no entry covers
+        // the base address → discoverScope → buildVariableName persist
+        // branch (database.cc:2447: <printNameBase>Ram<offset>; no high
+        // type → no printNameBase) → addSymbol into the discovered (global)
+        // scope. Since CSPEC-GLOBAL-APPLY-0001 every Architecture owns a
+        // symbol table; the Funcdata's canonical default arch carries an
+        // EMPTY tree, which — faithfully to funcdata_varnode.cc:1704-1705 —
+        // throws "Could not discover scope" on the first persist varnode.
+        // The production shape (a parsed cspec) owns the whole ram space,
+        // so the test installs exactly that range on its own arch.
         use crate::address::Address;
         use crate::varnode::{varnode_flags, Varnode};
+        let arch = crate::arch::Architecture::new();
+        {
+            let symboltab = arch.symboltab.as_ref().expect("constructor DB").clone();
+            let mut db = symboltab.write().unwrap();
+            let global_id = db.global_scope_id;
+            db.add_range(
+                global_id,
+                crate::address::Range::new(Address::new(0), Address::new(u64::MAX)).unwrap(),
+            );
+        }
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        fd.set_arch(std::sync::Arc::new(arch));
         // A persistent RAM (global) varnode, attached (not free) via WRITTEN.
         let g = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x4000, 4)));
         g.write()
@@ -19789,11 +19804,30 @@ mod tests {
 
         let status = ActionMapGlobals::new().apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE, "mapglobals returns 0");
-        // The uncovered persistent RAM group got a Symbol (proxy form).
-        let name = fd
-            .symbol_table
-            .get(&0x4000)
-            .expect("persistent RAM group must gain a symbol name");
+        // The uncovered persistent RAM group got a Symbol in the
+        // discovered global scope (cc:1709 addSymbol — the DB leg, not the
+        // legacy proxy).
+        let name = {
+            let db = fd
+                .arch
+                .as_ref()
+                .unwrap()
+                .symboltab
+                .as_ref()
+                .unwrap()
+                .read()
+                .unwrap();
+            let global = db.get_global_scope().unwrap();
+            let mut found = None;
+            for (_id, sym) in global.symbols.iter() {
+                let s = sym.read().unwrap();
+                let Some(entry_addr) = s.get_first_whole_map(&global.entries).map(|e| e.addr.as_u64()) else { continue };
+                if entry_addr == 0x4000 {
+                    found = Some(s.name.clone());
+                }
+            }
+            found.expect("persistent RAM group must gain a DB symbol")
+        };
         assert!(
             name.contains("Ram"),
             "persist-branch default name is <printNameBase>Ram<offset>, got {name}"
