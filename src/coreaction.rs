@@ -14371,17 +14371,17 @@ impl ActionConditionalConst {
                         .map(|o| {
                         let o_r = o.read().unwrap();
                         let v_r = var_vn.read().unwrap();
-                        // CSPEC-GLOBAL-APPLY-0001 承重补偿: the leading
-                        // `o_r.is_addr_tied()` conjunct has no oracle
-                        // counterpart (cc:4404 is `varVn->isAddrTied() &&
-                        // varVn->getAddr() == op->getOut()->getAddr()`
-                        // only). Bare-face gen_decompile has no Database,
-                        // so ram-merge output varnodes never carry the
-                        // addrtied flag; dropping this conjunct breaks
-                        // httpd canon byte-identity (md5 460367b2 vs
-                        // d6fd730a). Remove together with the
-                        // CSPEC-GLOBAL-APPLY-0001 database fix (A/B re-run).
-                        o_r.is_addr_tied() && o_r.get_addr() == v_r.get_addr()
+                        // cc:4404 verbatim: `varVn->isAddrTied() &&
+                        // varVn->getAddr() == op->getOut()->getAddr()` —
+                        // no output-side isAddrTied conjunct. The former
+                        // leading `o_r.is_addr_tied()` conjunction was a
+                        // load-bearing compensation for the pre-
+                        // CSPEC-GLOBAL-APPLY-0001 bare face (no Database
+                        // → no addrtied on ram varnodes); with the
+                        // constructor symboltab live on every face the
+                        // oracle form is restored (A/B: canon curl/httpd
+                        // byte-identical, mirror faces defects 0).
+                        o_r.get_addr() == v_r.get_addr()
                     })
                         .unwrap_or(false);
                     if var_addr_tied && out_matches_addr { continue; }

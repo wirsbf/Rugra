@@ -3807,3 +3807,15 @@ CSPEC-GLOBAL-APPLY-0001 起每个 `Architecture` 构造即持有 Database
 parse 后形态），可观察面从 legacy symbol_table proxy 改为 DB 全局 scope 的
 addSymbol（cc:1709）。生产行为零改动；cc:4404 承重补偿合取（:14342 注记）
 的 A/B 摘除见同车道第二 commit。
+
+## 2026-09-26：cc:4404 oracle 精确形还原（CSPEC-GLOBAL-APPLY-0001 第二 commit，Lane CSPECGLOBAL）
+
+`ActionConditionalConst::propagate_constant` MULTIEQUAL 臂的守卫还原为
+coreaction.cc:4404 逐字形：`varVn->isAddrTied() && varVn->getAddr() ==
+op->getOut()->getAddr()`——摘除输出侧 `out.is_addr_tied()` 承重补偿合取
+（裸面无 DB 时代的补偿;constructor symboltab 落地后每面 ram varnode 经同
+一 newVarnode 折叠取得 addrtied,合取冗余）。A/B 三态（base d153c868 /
+commit1 / commit2）: canon curl+httpd 字节恒等（md5 c33052a3/6923d6c1）,
+镜面 curl 74/58/0/0、vsh 71/15/0/0、sq 810/4530/0/0、httpd 29/156/0/0
+全同 commit1;1778P/0F;bank 391/391。CR-STACKSPILL 时代"单独落地打破
+httpd canon(460367b2)"不再复现。
