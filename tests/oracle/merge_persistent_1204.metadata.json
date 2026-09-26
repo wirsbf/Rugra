@@ -10,7 +10,7 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "a4a2fe947e9798beccdf8c1b10641ad5c7a5e1e0",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
  "analysis_options": {
@@ -88,7 +88,7 @@
   "host_make_path": "/usr/bin/make",
   "host_git_path": "/usr/bin/git",
   "host_python_path": "/usr/bin/python3.10",
-  "runner_sha256": "a0b33f5a4290a2526405446f1b7c56420ff1170fa80d5897fd168d8cf077d1eb"
+  "runner_sha256": "c213bff598a1e94b0bfb1343ac72ebe82b4f920a7bd74d4b29575e48a8418e7e"
  },
  "build": {
   "registry_packages": 164,

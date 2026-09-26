@@ -33,40 +33,40 @@
   "source_policy": "Materialize every SLEIGH/spec file and curl binary from verified Git blobs at the pinned Rugra provenance commit; never consume their working-tree copies and never require runtime HEAD equality",
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.sla",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.sla",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86.ldefs",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86.ldefs",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by its verified object ID; never read the working-tree file and never require runtime HEAD equality",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
@@ -87,7 +87,7 @@
   "sha256": "c17979231f81e1b33e87d2763eb4b822afa08ae0a9ceca1ccb366c6ed5e44a42",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -131,10 +131,10 @@
   "order": "Request/result arrays preserve declared input order; anonymous structural order preserves TypeFactory tree traversal order"
  },
  "comparand": {
-  "rust_base_commit": "6e373f08f42fd5d3b0a02d282d4245c046387558",
-  "rust_base_tree": "2e28f7ce3fec43bb6af562ab6530c1cd333b7ceb",
+  "rust_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "rust_base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
   "typefactory_base_blob": "d34f5038b19eaf5165bcf6fef0304ba0cd86aa25",
-  "runner_sha256": "689eb87f1a2af6fef655a18e51e7497054db6a6fa2a1c1e998f21bb1875f0557",
+  "runner_sha256": "0a1eaf3da5bce36f0d93addc85d55d9edb5486635a5c60debc366241a7f08fe1",
   "cpp_fixture_sha256": "64cbd48442865785c4a4532aa99183034b4dff654aed297ffa1ae88f79940ac4",
   "rust_fixture_sha256": "ac825148b07df74a1a2f97d0d22c4d3ee296a5b9e692d71650bf2529399e1e2a",
   "typefactory_rs_sha256": "15255e97974f4e02b6dd270d170fd070186dd3d11bed7d46adacfd632c911a2e",

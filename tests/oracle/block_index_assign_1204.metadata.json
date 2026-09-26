@@ -47,13 +47,13 @@
   "graph": "preorder vector, final rootlist, final list order after list = rpostorder, per-slot out-edge and mirrored in-edge label classification, distinct-index invariant"
  },
  "comparand": {
-  "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
   "cpp_fixture_sha256": "223b584f631f9f7567fbc73a4739758a35136ce2b63fdb3affb7b04d39587bcd",
   "rust_fixture_sha256": "cb3c342571287f657b4b15e0cb036f343c129ce1e9418e86b3d731f5e4f3e193",
   "block_rs_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
   "block_doc_sha256": "e4acec236a88e3e0df3805c9a53390820fb0786e356e7510dc8651f32b539538",
-  "runner_sha256": "a5350853208eb5ae22b274aa750e0dac01bc9582ab77c143a0810b23ac7e6d00",
+  "runner_sha256": "b8e3727a25cb80b96b0a9208250def86b0eaed909cc14e10e1f57fecf7990ea1",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

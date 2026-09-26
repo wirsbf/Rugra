@@ -26,10 +26,10 @@
   "signature": "uint4 VarnodeBank::overlapLoc(VarnodeLocSet::const_iterator iter,vector<VarnodeLocSet::const_iterator> &bounds) const; void Merge::mergeAddrTied(void); void Merge::mergeRangeMust(VarnodeLocSet::const_iterator startiter,VarnodeLocSet::const_iterator enditer)"
  },
  "rugra_source": {
-  "base_commit": "463664610f23956530f627e28f9388a6af858a99",
-  "base_tree": "710c1e9b9698b4a6a4d1537a7efe549b1e1b1679",
-  "base_src_tree": "56e09aae43f4c091a5310997d6fbc96f7e0c4530",
-  "base_merge_blob": "ba8242f1aeb45610eb4fd1be4b13ff1b1d9dcce7"
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_merge_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d"
  },
  "comparand": {
   "cpp_fixture_sha256": "7ef43040c42d870b0308d7eefa672ad90a32a6db6b3cf3124aaa0e0ddc9f8802",
@@ -59,5 +59,5 @@
   "per_member_or_negative_control": "DISCRIMINATING (verified): a candidate merge.rs that ORs every same-location member's flags into the range gate (last.head_flags |= flags on append) diverges on the negative case \u2014 the gate wrongly passes and a+b get merged (post hi=2, same=a~b=1) while the locked oracle holds hi=1, same=a~b=0; the runner's required token pins the oracle-side projection so any such regression fails the gate",
   "task_attribution_correction": "The original TODO hypothesis (Rust drops one side's flags in the overlap-loc merge path) is REFUTED by instrumentation: Rust's per-range first_flags fold already implements Ghidra's head-only gate union. The extraout_RAX / __nptr convergence symptoms must have a different root cause; re-registered on docs/TODO_BOARD.md under MERGE-OVERLAPLOC-FLAGUNION-0001."
  },
- "expected_runner_sha256": "060a6f2cdd9eb75aa8aa25a38cc6adb80080dd4baca3270ca7d8c9b23d40ea61"
+ "expected_runner_sha256": "762a6d99f184aa9b115bfc6a65633db3839ad57a4197256e131c8a1493f75d56"
 }

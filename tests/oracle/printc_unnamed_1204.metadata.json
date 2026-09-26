@@ -80,12 +80,12 @@
   }
  },
  "comparand": {
-  "rugra_base_commit": "8b81c15fbabbce417e731270fecfb30055bfd13b",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "bf4483327d91dca85f3dd8377255326fb05704a7",
   "rugra_base_src_tree": "5ac2e45f40b5543f66e1c6ef1780c23a451a4767",
   "cpp_fixture_sha256": "3ecd95885e78385dcd46f0c9a9d76e430f5b698a4271bb5173a141b69e038f56",
   "rust_fixture_sha256": "1869788b10ebae68a2abde2a8865ab8b82e52540b859d5675e7657caf6ab7d83",
-  "runner_sha256": "aee73f55e0136d5346745fe98076ada9a671e1364de7f4c7acbe33bbeb93e966",
+  "runner_sha256": "2ad2f5e29efedb888a2ed17981345b86555bb5abf1c25b86cb29edcca6e65c82",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-unnamed-base-overlay-b1-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit with src/printc.rs overlaid from the live tree (slice A: unnamed-location fallback token form unified to PrintC::pushUnnamedLocation, printc.cc:1938-1945, on top of slice B1's name-representative address source, printlanguage.cc:244)",
   "rust_crate_tree_sha256": "a1a21113d488246993cc77b90d224e8112e6d6a7f0d0c81b53e1ab88de192a0d",
   "overlays": [

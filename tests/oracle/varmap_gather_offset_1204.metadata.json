@@ -5,7 +5,7 @@
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
  },
- "rugra_base_commit": "d972d7ffee980218f4b30a9c93bfeb1fdb215bfb",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "rugra_build_input_files": 103,
  "architecture": "synthetic little-endian uintb64 P-code IR; const and unique spaces; byte sizes 7 and 8",
  "compiler_spec": "N/A: direct AliasChecker::gatherOffset state fixture; no prototype or calling convention consulted",
@@ -48,8 +48,8 @@
   "rust_fixture": "920318252ffed9c0a6f06d54535568695860c670672cf895a7ccc524e1fef90b",
   "rugra_varmap_source": "654a4a7db5923633d375b70465f251b2e667709d119d899ff01222b8d6fa0cda",
   "api_document": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
-  "runner": "c88272e82116e592da1e692061fff387178a7871216c5e4d93e8fb6652b55aff",
-  "rugra_build_inputs": "c42d89828acb50be909fa071f2e57714ee7cc6d8c2030d1da9cd2a094703f069",
+  "runner": "28a1ecd959aadedeb6750b0bea9129711ce6a60bf4dfcb4814d2c91d2dfa6577",
+  "rugra_build_inputs": "568ea71b0da0b437d87a72c6053a0f519a9a687d9b5f598c137ca4fb097304af",
   "cargo_lock": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
  },

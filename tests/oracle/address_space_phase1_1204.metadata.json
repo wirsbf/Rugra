@@ -51,13 +51,13 @@
   "order": "sorted-container walks in (null base first, then space index, then offset) order"
  },
  "comparand": {
-  "rugra_base_commit": "197b34cb6bde4959e93a8606eaa1f41f57814b82",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "f3e7c3c3db80178cf71f3e719f9508d16e10a638",
   "cpp_fixture_sha256": "7b97cda051dd3b4a8e1ee955d18bce8daa2fe1969bea5543d74fb5565ff2e53a",
   "rust_fixture_sha256": "13e955b9fc9cfe5f0ad29b36c29dcd1ae1c0ff44f8a76c3482ed74511f9ff62f",
   "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
   "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
-  "runner_sha256": "1825b0a696ce2ffc911c07af3532feac2f05a7230d95e733e7cbbec92e076ed8",
+  "runner_sha256": "b4e939e16164911bccff87f0ab81993b7aa185c2e8d3f7535bb01e53f6b8eaf9",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

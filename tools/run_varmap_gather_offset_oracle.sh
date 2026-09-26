@@ -10,7 +10,7 @@ metadata="$repo_root/tests/oracle/varmap_gather_offset_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/varmap_gather_offset_1204.cc"
 rust_fixture="$repo_root/tests/oracle/varmap_gather_offset_1204.rs"
 runner="$repo_root/tools/run_varmap_gather_offset_oracle.sh"
-rugra_base_commit=ca19466135f2cd24dcdd3bd4265f1d5ea5e8917b
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 
 oracle_tmp=$(mktemp -d /tmp/rugra-varmap-gather-offset-1204.XXXXXX)
 cleanup() {

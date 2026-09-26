@@ -18,14 +18,14 @@
   ]
  },
  "rugra_source": {
-  "commit": "52b1ccbb9f1c50518e6535721a48f955a4c4831c",
-  "tree": "85987c6ed633fd63fa3f138326d85758dcf385ce",
-  "src_tree": "559b450cdc9dd0248e322d40251be4648bf11ad9",
+  "commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
-  "base_coreaction_blob": "7c4c07d7f6c5e2efa837e2ca145a053d7b9ba51c",
+  "base_coreaction_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "base_coreaction_sha256": "6b7da863e0d87c363ae9794b7969b7cb67dc37b701c0871013861c2339fc6d84",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -98,8 +98,8 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree file and never require runtime HEAD equality",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
@@ -119,7 +119,7 @@
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -212,7 +212,7 @@
  "comparand": {
   "cpp_fixture_sha256": "ad6daa0363c77d0b452f0c58f83f211ce50678e3d84b2d31e647d60b4e472696",
   "rust_fixture_sha256": "0f8adbeee9e4d392488f0e2f5337cba746298e0b2f173c1305b3a10eaf25dd1a",
-  "runner_sha256": "d564f64f4068cd93c2055fbb743d086378744e7af0ece715b1a8c052d8a60659",
+  "runner_sha256": "64f63599891b1b5cbeb4eaf1123cec22f2c0fce63a6392d3f998b5ddb1d949f5",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",

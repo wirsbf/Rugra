@@ -58,12 +58,12 @@
   "action_status_mirroring": "protected count/status are read through a ProbeLaneDivide subclass on the C++ side and through the public ActionState companion on the Rust side; perform return values, counts and statuses are projected as plain integers"
  },
  "rugra_source": {
-  "base_commit": "98c3a9b12a2f40c4053c09b6c81354a9fffe19c4",
-  "base_tree": "9ddf46fe84538621e132e1131cc756f92263409e",
-  "base_src_tree": "b3301e02b00c034f483d56c25db7e27c91fe91aa",
-  "base_coreaction_blob": "80c4462300c62c5d7bd2cc4746a716af305b9930",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_coreaction_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "overlays": [
    {
@@ -76,40 +76,40 @@
   "cpp_fixture_sha256": "3545f3a0e718cd604d345f30a1fe97b67c265982fe40b90db3177a961cc3863d",
   "rust_fixture_sha256": "54fb416d348ea07a341782527f22a2499e313f0488b80752486e1382c6f2cffd",
   "coreaction_overlay_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
-  "runner_sha256": "002bbec137d6cf69cd528c4311fe35443172f1be344855419b36f9255b8db722"
+  "runner_sha256": "db2982696c69d7e9289aa23cc6db7695123fae5798b8e69fecbbf389177fa3f3"
  },
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -126,7 +126,7 @@
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544

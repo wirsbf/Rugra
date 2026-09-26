@@ -51,7 +51,7 @@
  },
  "comparand": {
   "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-driver-switch-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
   "cpp_fixture_sha256": "57f34a6cafb3a2c7101f51666cf379f74ed2097dfc91d39e6fb1f29c13e7b1fb",
   "rust_fixture_sha256": "199135bc3139d611a72a453bd128855bc872ee9d3c19e940abeedf0cbcd03e96",
@@ -61,7 +61,7 @@
   "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
   "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
   "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
-  "runner_sha256": "ca4d1432e4f00cd9a6e2ad79bc200663769eabd98cae5e1c78950d5143004ba9",
+  "runner_sha256": "d4476040a34631077a087164281f6b413eea4f99de73c40f5105920b5c15a246",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

@@ -44,7 +44,7 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -62,7 +62,7 @@
   "canonicalization": "RFC 8785-compatible JSON subset: UTF-8, sorted keys, compact separators, no floats",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -85,7 +85,7 @@
  "comparand": {
   "cpp_fixture_sha256": "d2f00e8ae7cec9159168478e3ff053ab5ba63154d7fd3362d7e5a2232d9ec97e",
   "rust_fixture_sha256": "e3b8158fdc4641302a6ad729b6262f4d8e99a48b2ec7741a039cc2498b7a7a73",
-  "runner_sha256": "6898d7923f1b6bf957bbba772880ef13de3828f0e0da785208104d4a3921f3d8",
+  "runner_sha256": "f4e6eb55658e72d506c64617b600f62f95d4d1790a8e5cd500b4413c6afe3eeb",
   "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
   "op_rs_sha256": "088059518ebed202e512f0155ef3fcd70a8927eac96409b355eb341d98cd6ca1",
   "varnode_rs_sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7",

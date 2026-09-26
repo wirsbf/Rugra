@@ -9,7 +9,7 @@
   "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "x86:LE:64:default",
  "compiler_spec": {
   "id": "gcc",
@@ -77,7 +77,7 @@
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 161728
@@ -105,7 +105,7 @@
     "expected": "the input's linkSymbol finds the 4-byte Symbol via queryProperties (usepoints match at base-1); handleSymbolConflict's isInput leg attaches the partial entry; HighVariable::setSymbol computes symboloffset=1 (variable.cc:258-270 branch 4), so the input high fails coreaction.cc:2965's getSymbolOffset() < 0 namerec gate and shares the whole symbol's name"
    }
   ],
-  "sha256": "2bc4ac8d2d32aa0972a91e820e26d528b72ad79e350d6b52fd5ce2d86942cdfc"
+  "sha256": "f8543a014ff7cfa0eece04ef676601cff774b6c40d1cead617b9b83fe15cfdf5"
  },
  "observation_schema": {
   "format": "Six fixed-order UTF-8 records (before/after for three cases) with a final newline",
@@ -116,14 +116,14 @@
  "comparand": {
   "cpp_fixture_sha256": "352cad94590b25123be3e2c6a19d3345e33325f1094f6ae46d35786b2d77ebc1",
   "rust_fixture_sha256": "27ee4ea055814f614bb519ed2ec5b94e94283260f5b9aa2f93b27d6b60a7efdd",
-  "runner_sha256": "d9e4d910738706543c6bd8318a59baea49ca81b0c869280611fcc2cf0f157d99",
+  "runner_sha256": "076985189f030186f5b52a9ea29fd014a1f0c26a7b81aed0ab4c31497ce641c5",
   "doc_funcdata_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
   "doc_varmap_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
   "doc_merge_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
-  "rust_crate_tree_sha256": "ec7bf0fc6244e70c0c390ebcb381c8c3c4fb4cabc12591e845da45877ad2af57",
+  "rust_crate_tree_sha256": "17640f6c72275368abd9ce48684eeec3e638426c1a3ec113e78490593e317797",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-linksymbol-typed-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
  },
  "known_dependencies": {},
  "record_verdicts": {

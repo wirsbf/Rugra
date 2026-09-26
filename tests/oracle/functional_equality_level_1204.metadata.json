@@ -187,7 +187,7 @@
   "rugra_base_commit": "daeda9cb841f01d6070bdd7398714ae0f876ce47",
   "cpp_fixture_sha256": "62afd92dbbb7966ed5575ea83aed78756630171a678a8f44ae3004c97949a85d",
   "rust_fixture_sha256": "832daf40243245e3a600d4aafab883f0d950265622ffd0c66a98d3bc1be6cadf",
-  "runner_sha256": "377bb4a925ef799bd3ed4c04909795c0ed08f990042406c3c8d49bc1f2add3d2",
+  "runner_sha256": "1f324a9798d5767c60bd685df22fea83a64107c997b63645a42abadeb0285284",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-functional-equality-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_tree_sha256": "8023ee949bf2b89e57a98eba4eb6bf4b1797b3d9e4cac28832c34a5f87582586"
  },

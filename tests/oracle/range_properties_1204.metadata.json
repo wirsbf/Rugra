@@ -44,13 +44,13 @@
     "error": "Ghidra DecoderError/Rust result adapter category and exact message"
   },
   "comparand": {
-    "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+    "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
     "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
     "cpp_fixture_sha256": "e03bd7eb609d1ad27d9758441a71920c321e06cf7840280aa9854966abddb0f8",
     "rust_fixture_sha256": "7f6f81524b482e8087250210d48ed52d90b2f11c9e658154d64570c33015291a",
     "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
     "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
-    "runner_sha256": "2d791102c1071a14c6ba748027ccc28e47e9f75d38c0a4ddfcaed3b4ed962624",
+    "runner_sha256": "47eb2ccad5698feb09626cd2fbb9f582c95a53863d25fef6f4fed1362948edec",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

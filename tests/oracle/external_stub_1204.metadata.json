@@ -58,7 +58,7 @@
   "order": "getNextSpaceInOrder walks"
  },
  "comparand": {
-  "rugra_base_commit": "194901d0de8bd45069829c948c9c0f991e097d84",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "1fe1b70437cc90d373a697770e45b2a686c5d8a4",
   "cpp_fixture_sha256": "291f8eb91feea0d374731a218bcb9395902ff0a0012b63641afc2abeae8a5223",
   "rust_fixture_sha256": "e87a6f0b0aec9e2b13ec9713f07235ded64c934e80dd660c6401667aa1c1e08d",
@@ -66,7 +66,7 @@
   "translate_rs_sha256": "e001dcd5acf0aeeb918a957adb2a5c850bfd89499b99239b18c380e3826856a8",
   "space_doc_sha256": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
   "translate_doc_sha256": "79c17c7d38839169115b73db1a266ef17421b8ca54489fd7067df4c99494194b",
-  "runner_sha256": "01d4cc549c95fbe41fdd4560c6a5fc45c3908da414df2dfc42f87d1e4d6d32d4",
+  "runner_sha256": "70f70027a717b59ea9d97960da5ead8d6b23ae014502ac70dd9d9b7ee4395d7a",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

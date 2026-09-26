@@ -28,40 +28,40 @@
   "source_policy": "Materialize the four SLEIGH/spec files and curl binary from verified Git blob IDs at the pinned Rugra provenance commit; never consume their working-tree copies",
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.sla",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.sla",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:sleigh_specs/x86.ldefs",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:sleigh_specs/x86.ldefs",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "bd781781bcdca6595bd2fbe2bd4151b47b605d30:examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544,
@@ -84,7 +84,7 @@
   "sha256": "fbf6d7ebd9ad658ee9a2160df866b7f8e8f45d94961e4d7b9c5bd13092b1b8d4",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -163,7 +163,7 @@
  "comparand": {
   "cpp_fixture_sha256": "3a0d06d606923beefbc1ebaf1d37df7cb56f82b13ca4846a94874f97a111a5b2",
   "rust_fixture_sha256": "3026a7fa7c9f467e5598e99c2dd7aa3ac89c7bb1dd4416f0cf57f98afc251b07",
-  "runner_sha256": "002bdc787401e4d14c59fc2d27b38c07ec401e3ebd143a7b840504b76d15d585",
+  "runner_sha256": "952c69f57f6aa1529c6f333b005e4014771933c0de35f16a69d2e4c52645b9d3",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-collect-terms-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
   "rust_crate_tree_sha256": "9403eb418ab2d5fe0849a3e304c0e1d036f02047f8bd4bdbbc57cdb8fb0417f7"
  },

@@ -82,7 +82,7 @@
   "order": "sorted-container walks in (space index, offset) order with minimal first and maximal last; RangeList printBounds in (index, first) order"
  },
  "comparand": {
-  "rugra_base_commit": "ae2385a8eb6daa0ec7849f177fdad90166ec4596",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "85de2925a3424bd19e3c4de2e664c1fa6beaae81",
   "cpp_fixture_sha256": "1e759163173acb900e0270d5c1c91b04e65931606586468f12cef041801c0110",
   "rust_fixture_sha256": "b17bc40a71780854596d037a5e3884c52b667efbfe7cc3b8a71937f5f2396c50",
@@ -90,7 +90,7 @@
   "space_rs_sha256": "08bcdc1a81d0db2fb3b85a9a228ce9cba25a7ac0b296526a4cb2674fb977dc53",
   "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
   "space_doc_sha256": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
-  "runner_sha256": "6787fc8ae891125f4e9ab113041f2a4ce5b973fbf1ad71911c1a57fbd3fee94a",
+  "runner_sha256": "007029c5a0f91473c072fda093e5c668d316c9616f4a14cb9a0d5949b8553422",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

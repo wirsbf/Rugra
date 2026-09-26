@@ -45,7 +45,7 @@
   "graph": "per-varnode input/written/explicit/implied flags, HighVariable instance count, per-op opcode and SeqNum order, HighVariable identity pairing for the two temporaries"
  },
  "comparand": {
-  "rugra_base_commit": "9fbb1945ec92a9378f077f77209b2fd251bf1146",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "3124866e9b14e5151e0ac2aad2ed5e6fd517c6cf",
   "cpp_fixture_sha256": "53145576e712e427d1bc954ebaa50e50a449a7d4f476a63dbed3bd1d4653393e",
   "rust_fixture_sha256": "10bb08db8274ef2f9f6aba8882aaa97592bed860116eee75894291ae36990be0",
@@ -53,7 +53,7 @@
   "coreaction_rs_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
   "action_doc_sha256": "fea6c8ff227e3d025584d39afaae9300d598b7c47faceebf65e743a9813bce1b",
   "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
-  "runner_sha256": "745644a89fa9ffbddc414e147196be8be4d86f829f8913927ec1e7c5905d7f37",
+  "runner_sha256": "659a06f4387d72f0f9a843fb470dbbfe5f370f9f65e3642991baa0549987f129",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

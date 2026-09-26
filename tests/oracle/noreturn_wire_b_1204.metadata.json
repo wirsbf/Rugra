@@ -19,12 +19,12 @@
   "signature": "void FlowInfo::queryCall(FuncCallSpecs &fspecs); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs); void FlowInfo::truncateIndirectJump(PcodeOp *op,JumpTable::RecoveryMode mode); bool FlowInfo::setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc); void FuncProto::copyFlowEffects(const FuncProto &op2); void FuncCallSpecs::setFuncdata(Funcdata *f)"
  },
  "rugra_source": {
-  "base_commit": "7b1da21a3a874598423a4b6b941eb2209545fc15",
-  "base_tree": "9b825d99ad55d7b41e5e509beb2c266497d4645e",
-  "base_src_tree": "39ec7ab3fe815fab106266b7033f7fcadbf01074",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_blobs": {
-   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "Cargo.toml": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+   "Cargo.lock": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
    "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
   "archive_paths": [
@@ -49,7 +49,7 @@
  "comparand": {
   "cpp_fixture_sha256": "4523108e9b51b42797dee541d72fd41dbac2345ca3ebab63b13490d8ce98f9d1",
   "rust_fixture_sha256": "b148ce820bd3c90209868128c0693131528618d64de53e60fd5227ea40aa3c1e",
-  "runner_sha256": "15082ebd3eea67f89e4e6c0aacce391651d0dccdfe6f2073b69c948b9afcb528"
+  "runner_sha256": "d32518abefcea091f8b39af3c14df27d56b6d032ab23587aa1e2a09bb4189ebb"
  },
  "architecture": "x86:LE:64:default (locked fixture binary: gcc -fno-pie naked-function probes; SLEIGH x86-64 via sleigh_specs on both sides)",
  "compiler_spec": {

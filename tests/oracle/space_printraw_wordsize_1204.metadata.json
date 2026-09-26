@@ -9,7 +9,7 @@
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
  },
- "rugra_base_commit": "dce02f7897757ba647105987b40a839425d30219",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": "locked synthetic LE 64-bit fixture architecture: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 (x86-64-shaped ram/register/stack sizes); printRaw wordsize cases use synthetic IPTR_PROCESSOR spaces with addrsize 2/4/8 and wordsize 1/2/4",
  "compiler_spec": "none: AddrSpace::printRaw / getAddrSize are pure space methods; no Funcdata, P-code, or cspec input",
  "analysis_options": {
@@ -109,7 +109,7 @@
   "rust_fixture": "7ba0f7a7e8164d48c913362320314cb5b533e9f9e8fc7be22df1b57a830431b1",
   "rugra_space_source": "08bcdc1a81d0db2fb3b85a9a228ce9cba25a7ac0b296526a4cb2674fb977dc53",
   "api_document": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
-  "runner": "df76be8f897deb3398804e47ae17950e05e6bd01f3005a0f9a65926572baabdd"
+  "runner": "133c22490cb7e8ee55d8b216d5701e0e6eaf6f354a55319f741982a55c355ce8"
  },
  "expected_stdout_sha256": "6ee9ab9889c05a302b011f26bc78d192c22f21956cdfe2b4d4475de10c5993cf",
  "expected_line_count": 61,

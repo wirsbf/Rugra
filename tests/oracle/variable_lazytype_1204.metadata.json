@@ -34,7 +34,7 @@
   "VARNODE-SETSYMBOLENTRY-HIGHLEG-0001"
  ],
  "comparand": {
-  "rugra_base_commit": "25f8f83ab6f28a3818f3ac10bb7b2f4381446dfb",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "12821f723bd26406201ad127de542f1950fa801e",
   "cpp_fixture_sha256": "3c6f63ae4ecb61a3629a0b3b208ce6d4c565361ff178c47b05e360121db1c64f",
   "rust_fixture_sha256": "35ff0d2423e06eb7ab98a4cce3c207416190aa991c9cffb7a098569779e3d9e1",
@@ -46,7 +46,7 @@
   "type_infer_doc_sha256": "809d04aaa3bfaab3e5c7949f042a4c0939c7ae12244af7428c416cf71bcbe395",
   "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
   "merge_doc_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
-  "runner_sha256": "63d55541cbbab7cb49f67fc459bfc680cfabee6e7dec39a5b124684db1b694de",
+  "runner_sha256": "2287b1213408bafcf7fe97e1f9afb9a7fa56d09db16449d730020a104c5a511b",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

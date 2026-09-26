@@ -1,7 +1,7 @@
 {
  "schema_version": 2,
  "fixture_id": "LANEDIVIDE-INFRA-0001",
- "status_note": "Twelve projections (arch lookup/min/identity, lanedMap lifecycle, PIECE and MULTIEQUAL splits through doTrace+apply, INT_MULT zero-mutation rejection, SUBPIECE terminator with allowSubpieceTerminator, STORE/LOAD lane splits with INT_ADD pointer advancement, INT_RIGHT/INT_LEFT lane-to-lane copying with zero-fill lanes, INT_ZEXT half-register extension, INDIRECT lane splits with shared iop annotations, restricted skipLanes>0 windows through SUBPIECE restriction/extension, and the typelock metatype gate rejecting INT and STRUCT while admitting ARRAY) are byte-identical MATCH against the locked 12.0.4 oracle. TRANSFORM-CONSTANT-IOP-SPACE-0001 is resolved: TransformVar::createReplacement's constant_iop arm now resolves the affecting op from the placeholder value (offset-based getOpFromConst mirroring op.hh:249/transform.cc:213) and re-materializes the annotation via Funcdata::new_varnode_iop as an iop-space varnode (transform.cc:211-215); the INDIRECT slot-1 projection was de-normalized so both sides are byte-compared through the true iop-space classification, and the de-normalized run reproduced the pinned golden hashes unchanged. subflow.cc:3942 stays NO_ORACLE (undefined behavior in the oracle itself). 2026-08-24 repin: base moved from a52d3e3 to 4599b5011c87129e3e6bb83a63f9cff6b0d00118 (overlay sha256 values refreshed; overlays are now byte-equal to the pinned base files), the runner resolves libbfd-2.38-system.so from the unpacked BFD package path with an embedded rpath, and a full bilateral rebuild against the locked oracle reproduced every pinned golden hash unchanged (ghidra stdout sha256 == rugra stdout sha256 == 9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de, both stderrs empty, diff exit 0, fixture exit codes 0/0). Residual set unchanged and not shrunk: LANEDIVIDE-INFRA-RESIDUAL-0001 remains NO_ORACLE. Fixture-level B2 status: MATCH.",
+ "status_note": "Twelve projections (arch lookup/min/identity, lanedMap lifecycle, PIECE and MULTIEQUAL splits through doTrace+apply, INT_MULT zero-mutation rejection, SUBPIECE terminator with allowSubpieceTerminator, STORE/LOAD lane splits with INT_ADD pointer advancement, INT_RIGHT/INT_LEFT lane-to-lane copying with zero-fill lanes, INT_ZEXT half-register extension, INDIRECT lane splits with shared iop annotations, restricted skipLanes>0 windows through SUBPIECE restriction/extension, and the typelock metatype gate rejecting INT and STRUCT while admitting ARRAY) are byte-identical MATCH against the locked 12.0.4 oracle. TRANSFORM-CONSTANT-IOP-SPACE-0001 is resolved: TransformVar::createReplacement's constant_iop arm now resolves the affecting op from the placeholder value (offset-based getOpFromConst mirroring op.hh:249/transform.cc:213) and re-materializes the annotation via Funcdata::new_varnode_iop as an iop-space varnode (transform.cc:211-215); the INDIRECT slot-1 projection was de-normalized so both sides are byte-compared through the true iop-space classification, and the de-normalized run reproduced the pinned golden hashes unchanged. subflow.cc:3942 stays NO_ORACLE (undefined behavior in the oracle itself). 2026-08-24 repin: base moved from a52d3e3 to 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d (overlay sha256 values refreshed; overlays are now byte-equal to the pinned base files), the runner resolves libbfd-2.38-system.so from the unpacked BFD package path with an embedded rpath, and a full bilateral rebuild against the locked oracle reproduced every pinned golden hash unchanged (ghidra stdout sha256 == rugra stdout sha256 == 9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de, both stderrs empty, diff exit 0, fixture exit codes 0/0). Residual set unchanged and not shrunk: LANEDIVIDE-INFRA-RESIDUAL-0001 remains NO_ORACLE. Fixture-level B2 status: MATCH.",
  "decisive_semantics": {
   "reference_output_parameters": "setReplacement returns the pieceMap array start of the first split for a varnode (marked varnodes reuse the existing array, ignoring the requested subset, subflow.cc:3521-3522) and rejects type-locked varnodes whose metatype is above TYPE_ARRAY or is TYPE_STRUCT/TYPE_UNION (subflow.cc:3532-3538); getLanedRegister returns a const LanedRegister* shared by pointer identity into lanedMap (Rugra Arc identity); doTrace/apply mutate Funcdata in place only through TransformManager placeholders until apply materializes ops/varnodes; failed doTrace leaves every op/varnode byte unchanged except cleared marks; buildStore/buildLoad read the spaceid constant by offset only (getSpaceFromConst); newIop placeholders share the affecting op across lane INDIRECTs; inheritIndirect propagates indirect_creation vs indirect_creation_possible_out based on the original input's indirect-zero flag (transform.cc:273-282). INDIRECT slot-1 annotation varnodes are projected through their true iop-space classification (si/k0, non-constant) on both sides: Rugra's constant_iop arm decodes the placeholder value back into the affecting PcodeOp and re-materializes it via new_varnode_iop, exactly as transform.cc:211-215 does through getOpFromConst; only the raw pointer offset (process pointer in the oracle, Arc pointer in Rugra) is omitted from the projection; every other annotation property (create index, size, flags, def-use) stays byte-compared.",
   "loop_bounds_traversal_order": "traceForward walks the descend list front-to-back incrementing the iterator before processing each op (subflow.cc:3923-3924); doTrace drains the workList LIFO via pop_back until empty or first failure (subflow.cc:4118-4123); processNextWork runs traceBackward then traceForward; buildStore/buildLoad iterate count 0..numLanes with little-endian lane i=count (big-endian numLanes-1-count), emitting the base pointer at bytePos 0 and an INT_ADD-advanced newUnique pointer afterwards; buildMultiequal creates one input placeholder set per op input (input-major) then one MULTIEQUAL per lane; buildRightShift/buildLeftShift scan src/dest lane pairs while the shifted window fits inside numLanes; createOps iterates newOps in creation order with the follow-fixpoint loop (transform.cc:665-680); createVarnodes iterates pieceMap ascending by create index then newVarnodes in append order (transform.cc:684-711); the Rust comparand snapshots the descend list once before iterating because placeholder creation cannot mutate it.",
@@ -29,15 +29,15 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "4599b5011c87129e3e6bb83a63f9cff6b0d00118",
-  "base_tree": "fa73b6d748ef3b47b61d5bc4a5710ce55805d780",
-  "base_src_tree": "af8f7a9318d6f9b6429c840a0eeac611c508f539",
-  "base_subflow_blob": "e42479af547350de04a1eb368263bd9b8c689c1a",
-  "base_arch_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877",
-  "base_funcdata_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
-  "base_transform_blob": "e7f01bec34cc5e21bd4d1c0a9fb5ba149754e810",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_subflow_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_arch_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_funcdata_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_transform_blob": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -127,35 +127,35 @@
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -173,7 +173,7 @@
   "sha256": "e6ab27cc6f1eb75b9d60fbc10d9e6a1912e1d79ca96f1c79a9079e8349e2a390",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -421,7 +421,7 @@
   "arch_overlay_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
   "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
-  "runner_sha256": "ca3cc40bddb6142d2b46699b19d6cfa36fac5442b380e5a940a8a73397710ea8"
+  "runner_sha256": "9d5f2a2083329a36830f5e2c1ca1c872c395e281468ad9927d2d27b18fb73046"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",

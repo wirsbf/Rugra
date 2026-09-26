@@ -33,7 +33,7 @@
    {
     "binary": "examples/curl",
     "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-    "repository_commit": "86ffa7bcaba0100cdd32b55a619bb07e31af84ad",
+    "repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
     "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
     "git_object_type": "blob",
     "git_object_size": 162544,

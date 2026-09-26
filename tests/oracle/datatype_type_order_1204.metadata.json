@@ -42,7 +42,7 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_commit": "0c607aa88b550eb07f6a8c443b34fcad86ec6d72",
+   "source_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
   }
  },

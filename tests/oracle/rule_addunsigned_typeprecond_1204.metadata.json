@@ -11,7 +11,7 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "8012627083360e0111506dc70d891552383a8c65",
+ "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
  "architecture": {
   "id": "synthetic-le64-rule-fixture",
   "endianness": "little",
@@ -98,7 +98,7 @@
   "cpp_fixture_sha256": "49731c02f192ae6da1b055202a01f70b6f9d2add039be8192e2118bf3d72d938",
   "rust_fixture_sha256": "587346f7b4bf2b2c12cb07c72f0ad17b4cd1cf8f1ebfb3fd8c01f69e8b83dfe4",
   "ruleaction_rs_sha256": "ce83162551b9818f4cd0024f0d3c34e475d3f85fed7665409c86b7082239b002",
-  "runner_sha256": "dcf324ee33e6f8dc48553d411d5a4acaf38f46e5fa960f04037ec4a13a040f21",
+  "runner_sha256": "b9cab2244f2534a0e27012db2ec09e6b299edbfc9ca5d245c98d58a813d24687",
   "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
@@ -109,7 +109,7 @@
   "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
  },
  "build": {
-  "rust_overlay": "Archive Rugra base 8012627083360e0111506dc70d891552383a8c65 and overlay only the owned src/ruleaction.rs candidate before the isolated offline build",
+  "rust_overlay": "Archive Rugra base 895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d and overlay only the owned src/ruleaction.rs candidate before the isolated offline build",
   "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler",
   "expected_stdout_lines": 7
  }

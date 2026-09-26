@@ -81,7 +81,7 @@
   "rust_fixture": "14750e3165848ad94a8275a682618db7245d9738af9e47909ff62f2a26afd20f",
   "rugra_funcdata_source": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "api_document": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
-  "runner": "21d662919733d103f3a9e0051598051ae968626f579773296af9b926b6baff18"
+  "runner": "5059e5fec9ec40a95524edb46309cb327e073a272e4eab8ac1993105b3afccc1"
  },
  "expected_stdout_sha256": "369cdf8eff0804031c84790aa9f79277fa277ecc7cad29261c6b6fdbc6291244",
  "expected_record_count": 7,

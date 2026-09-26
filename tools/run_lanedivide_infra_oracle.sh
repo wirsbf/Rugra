@@ -7,17 +7,17 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=4599b5011c87129e3e6bb83a63f9cff6b0d00118
-rugra_source_tree=fa73b6d748ef3b47b61d5bc4a5710ce55805d780
-rugra_source_src_tree=af8f7a9318d6f9b6429c840a0eeac611c508f539
-rugra_source_subflow_blob=e42479af547350de04a1eb368263bd9b8c689c1a
-rugra_source_arch_blob=cd3fd77747d6377e14f2e672956ddfbc9ff17877
-rugra_source_funcdata_blob=f4f0308e571b0ca56af88ab627a6eab2aebb6c7a
-rugra_source_transform_blob=e7f01bec34cc5e21bd4d1c0a9fb5ba149754e810
-rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
-rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
+rugra_source_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
+rugra_source_tree=ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03
+rugra_source_src_tree=2f252f03a1542c5e3aee261b4000b9614541390e
+rugra_source_subflow_blob=800a8163ad7c89fe31fc5d074fec693407601468
+rugra_source_arch_blob=aaaeca869c022b0d8b1e24c571efd7175bd67e0f
+rugra_source_funcdata_blob=a688f99c83e4322249815aa3d0886ae6f04a86c3
+rugra_source_transform_blob=bd918f13c048db0124d015061bb7e4d1f2d9f6ad
+rugra_source_cargo_toml_blob=f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341
+rugra_source_cargo_lock_blob=c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_input_commit=bd781781bcdca6595bd2fbe2bd4151b47b605d30
+rugra_input_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 rugra_input_blob=4e26a362f92ac1961bab63000215a84b4d7212dd
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/lanedivide_infra_1204.metadata.json"
@@ -108,7 +108,7 @@ git -C "$repo_root" archive --format=tar \
   --output="$oracle_tmp/rugra-source.tar" "$rugra_source_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim
+  src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 cp "$subflow_overlay" "$snapshot_root/src/subflow.rs"
 cp "$arch_overlay" "$snapshot_root/src/arch.rs"

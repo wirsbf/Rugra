@@ -22,50 +22,50 @@
  },
  "analysis_options": "none: direct Varnode::copySymbolIfValid/EquateSymbol::isValueClose harness; no decompilation pipeline options",
  "rugra_source": {
-  "base_commit": "f7f8c399aa1ac44c6efc13ffc6d5b35b93eeb8e7",
-  "base_tree": "f59894b71704d97a5836270efa4440c38335394a",
-  "base_src_tree": "34239dd7245fe54867812b1bf58625e23dc0902d",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
  },
  "comparand": {
   "cpp_fixture_sha256": "c30d6108c35cc217647935674da853286936abedf516a6cb2210aadb336dc63d",
   "rust_fixture_sha256": "cb496471e97531b9b76ebd4c01b9c1bdd8340d0b89b0fcf213f67b4593c45c48",
-  "runner_sha256": "abcc2af1dd2ba7b0f2e7bbeac417335fe04cbb0e18896797511e92f5e00cf549"
+  "runner_sha256": "aeb8da28067c2e555a45ddae959ae1f33386d0264891c577b2045b58191c701b"
  },
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544

@@ -43,7 +43,7 @@
   "graph": "complete location-tree and definition-tree iteration orders with name, space, hex offset, size, class letter, and createIndex (definition tree adds the SeqNum order or dash)"
  },
  "comparand": {
-  "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
   "cpp_fixture_sha256": "ee903b5c7885c1be2b7aad086e578eb29eb510ad33ce624c3a1e59808952d6a4",
   "rust_fixture_sha256": "a2815557f2e2c7229efeeef7997e61bdcbd582e585c3009ae4de1c5b2a0f017e",
@@ -51,7 +51,7 @@
   "coreaction_rs_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
   "varnode_doc_sha256": "5650e8516fd024fcdaacc4a22b13b45d7a155ad18f438cf6929a2bdd83597f82",
   "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
-  "runner_sha256": "337428d25a152cd5853094f5ffd43b595f675e4d3f51f8e81382564fc22adf26",
+  "runner_sha256": "9d20e3835c5114f1042b683df8649d3b575824cf4aea026cc734766438d96d5c",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

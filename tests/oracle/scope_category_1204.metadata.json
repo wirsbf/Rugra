@@ -167,11 +167,11 @@
   "excluded": "Category values outside the documented Symbol enum {-1,0,1,2,3}, allocation failure, corrupt pre-state (category/index not naming an allocated slot), lock poisoning, concurrent access, and categorySanity/clearCategory are outside this fixture."
  },
  "comparand": {
-  "rugra_base_commit": "0e2c87d5d75ca755198d1f2cae1218d8d0a88135",
-  "rugra_base_tree": "2eaa964981c4c49377888972d57d2a83b044be17",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "rugra_base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
   "cpp_fixture_sha256": "1aafafb9a6f9ae90ad9666966131adf616423c21ef2c43d87037a75ee9a163b6",
   "rust_fixture_sha256": "7aa15e164f09e342b11c145e3a0cd4d6dd06b22f51f40138d4efbcfc9ea61520",
-  "runner_sha256": "f06f4610dd0ac1e7e91d016360b445b1055fb4e749404bd73f3f9487f7b42494",
+  "runner_sha256": "720d5b39b8430c8a278fa80ce553f9fdd86bc34a0696512afc433360fdc30517",
   "database_rs_sha256": "217d3ed47d3fe1c5119c7d0904ce2aab5996b49dd573a7b5b0922d6e589b2356",
   "database_doc_sha256": "a568c0535af2ba8e22e4f8d11c6d956f4df7ee74fd9c92eb1519b4fb2294db8e",
   "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",

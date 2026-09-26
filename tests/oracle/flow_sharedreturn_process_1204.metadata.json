@@ -44,12 +44,12 @@
   }
  },
  "rugra_source": {
-  "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
-  "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
-  "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_blobs": {
-   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "Cargo.toml": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+   "Cargo.lock": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
    "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
   "overlays": {
@@ -94,7 +94,7 @@
  },
  "assets": {
   "binary": {
-   "source_ref": "92daed300bcce3c4d855b311cf9667ba21eb475a:examples/curl",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
    "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
    "git_object_size": 161728,
    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
@@ -194,7 +194,7 @@
   "program_flow_metadata": "43139b68055ede8683dd53d0e258028a45b8193976c6d55933f05c85ab85db72",
   "ghidra_curl_golden": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
   "compare_ghidra": "82ad32e0d25a1cad309074f581d1178bd80008c5d100bb85da849b5604c5f3b9",
-  "runner": "16310567bb676c8abd4ba7df5271cedd45046600c7aaa9b852f518ca77332b14"
+  "runner": "55939933e449e942c7130cd20ddde423a73a09441e320c449438dbdc8a4d2ef3"
  },
  "machine_input_sha256": {
   "curl_text": "287c95bed17616bd6e71c393fa61b28ae14e5671f1a7fac8a93137eda9e159d4"

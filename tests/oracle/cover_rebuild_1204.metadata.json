@@ -48,7 +48,7 @@
   "cover": "ascending block-index start-end endpoint pairs in the uindex domain (b/e sentinels or decimal order)"
  },
  "comparand": {
-  "rugra_base_commit": "6597db0afc5b8ca234d65ba6ac29ce328daa62f5",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "a83ff098d35e4efd6d4e32c50cccbbbeb27f8295",
   "cpp_fixture_sha256": "aebe23193ca42bef1dd4f81fe93d5915dc3c67ceeaec2953abcbe16fabc92d0d",
   "rust_fixture_sha256": "3cd805a9565955b00103addf7259cf20c8a956d509c064b18cc68ed38b776fb9",
@@ -58,7 +58,7 @@
   "cover_doc_sha256": "1abb783122bf93c6292888f1d53d75ce50b61a8ba92e2cb0238af5d462be9597",
   "varnode_doc_sha256": "5650e8516fd024fcdaacc4a22b13b45d7a155ad18f438cf6929a2bdd83597f82",
   "merge_doc_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
-  "runner_sha256": "3950c23bdf0e982769721cd8c08bece7b2da15c710b41c2aa12d70e1840c05b8",
+  "runner_sha256": "c326a3a7384c8175883abb9b30ba6baf0d4fa4dbe8531fb30314207daf1da500",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

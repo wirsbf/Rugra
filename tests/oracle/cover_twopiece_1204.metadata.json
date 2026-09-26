@@ -51,7 +51,7 @@
   "part_b": "per-op SeqNum orders and per-block endpoint identity pairs (b/e/i/order/0m) of the rebuilt or merged Cover"
  },
  "comparand": {
-  "rugra_base_commit": "a301036407de8f1b2291abf600f0ac72335a1912",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "b8ea38f30882068bb2e902db2a5cc836b28c6891",
   "cpp_fixture_sha256": "23ded8939901206c7e323056df69567f1d32a0c0c738588fba9b632c3b573cd3",
   "rust_fixture_sha256": "62f10a4a6d9e1b693258bb4b27487bd746c22cb5a0d1f4cd1deb453a310fe2a7",
@@ -59,7 +59,7 @@
   "merge_rs_sha256": "e3410e6e0830819f928ed6a1a5eca13c3871b1eaa31053616ed7fe95498f2330",
   "cover_doc_sha256": "1abb783122bf93c6292888f1d53d75ce50b61a8ba92e2cb0238af5d462be9597",
   "merge_doc_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
-  "runner_sha256": "34a5b4f645c20a00b1b46d7f99a5fa5a4c247ea785d12346460bb78e82b65b03",
+  "runner_sha256": "34c0c19cb643da8d019d5535e184ba3d326537829409f813592c2c090c006a14",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

@@ -28,8 +28,8 @@
   "extra_pool_rules": []
  },
  "rugra_source": {
-  "base_commit": "ca19466135f2cd24dcdd3bd4265f1d5ea5e8917b",
-  "base_tree": "a0241e3f77197a73d01b68b82b22ee56a4634e3c",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
   "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_action_blob": "40b15b0873e83caf6318ef26267d799be89e624c",
   "base_coreaction_blob": "e5fb0a75534d714556206c765e6cc075cf3bd8c3",
@@ -42,7 +42,7 @@
   "rust_fixture_sha256": "7714ee78e9b6648aa9c97875e2c472a99a72286e9e76293ceed3d1a585d5f39b",
   "action_overlay_sha256": "c97e9ac8d029d751522f011fd404742d017c9a94985fedb627b16812b72fd26c",
   "coreaction_overlay_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
-  "runner_sha256": "63653ec4ec5a9ff7c1136de4ff0ce2ad30ffbf1e7d38475a47f8a6c6ddae2103"
+  "runner_sha256": "042326f5321fa450c58b350768b46ffa7ea0228702da8418153f131bf4ccc1b8"
  },
  "input_manifest": {
   "inputs": {

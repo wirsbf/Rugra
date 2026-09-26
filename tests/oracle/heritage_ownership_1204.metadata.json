@@ -44,7 +44,7 @@
   "graph": "def-use class per op input slot (input/written/free/constant), Varnode space class and def-use class multiset"
  },
  "comparand": {
-  "rugra_base_commit": "6597db0afc5b8ca234d65ba6ac29ce328daa62f5",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "a83ff098d35e4efd6d4e32c50cccbbbeb27f8295",
   "cpp_fixture_sha256": "3f8e6d199ab3495c11ddf86d704ae7225c436e03e96841386626f54935bd5250",
   "rust_fixture_sha256": "435c25ed6d97b9534c028e80cdbd966f08a3af0f83d643966e9ec5fd48ccc321",
@@ -52,7 +52,7 @@
   "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "heritage_doc_sha256": "1d9585665ae01207a39851a08306b805c1af52cafb91eed62cbb67e0ec0fc5dd",
   "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
-  "runner_sha256": "1f06455473b59f34ecbbad6e303727dbe54caaaf9070d124b01064be269d3693",
+  "runner_sha256": "a76b2a1eff20e0923a3ece940b6afab6cd0d7525b9dac5a018b0c0493d7e2202",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

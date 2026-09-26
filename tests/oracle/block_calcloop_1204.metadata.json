@@ -53,7 +53,7 @@
   "graph": "component list order, per-slot out-edge and mirrored in-edge label classification, final rootlist and the blocks_unreachable decision for driver cases"
  },
  "comparand": {
-  "rugra_base_commit": "d915255e200006c9a99dceed0b11311410ef63bb",
+  "rugra_base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
   "rugra_base_tree": "76b42aa10bbc483630138a1b11cebba4ba8d569f",
   "cpp_fixture_sha256": "9af88021308952f93d94461905e033ec8e90b08d750e37a7dace9933a239c0bd",
   "rust_fixture_sha256": "d09c18733d0426ec52c7e13f189cb650c67694d4b9f87d47e4ed0005ad9b68dc",
@@ -61,7 +61,7 @@
   "blockaction_rs_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
   "block_doc_sha256": "e4acec236a88e3e0df3805c9a53390820fb0786e356e7510dc8651f32b539538",
   "blockaction_doc_sha256": "2a3cfbc2aba0cdd94d77690dcc482d490aac27d5710423b81f7c4c25bc2b2ced",
-  "runner_sha256": "b45db89c43f095dc005deda59201bd1660d65339f69ce9bb63e4b957e8eb51bb",
+  "runner_sha256": "cc8496ad5904eceeaa5f5745d66c8c0678da2b5715f4cfd856d89ea57c7f63d6",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

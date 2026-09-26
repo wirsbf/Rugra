@@ -50,8 +50,8 @@
   },
   "binary": {
    "path": "examples/curl",
-   "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_ref": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d:examples/curl",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by its verified object ID; never read the working-tree file and never require runtime HEAD equality",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
@@ -72,7 +72,7 @@
   "sha256": "d03913b659295591951516a7470f568e28457bc6da41f9ab7b22a89f5152e737",
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544
@@ -266,7 +266,7 @@
  "comparand": {
   "cpp_fixture_sha256": "e036e2c7d6a56967de1d4e14bc0d03706f0d0d6bc32e0b24e55cc125ae632fa8",
   "rust_fixture_sha256": "e5be09c0272154697e764f0bd92384a1329940ee4c97bcee61d53a50f7db352f",
-  "runner_sha256": "9e2353bf9a7041835dc3311d2d507e1cf70560ea7a2d02a8bd3807b27e209408",
+  "runner_sha256": "834ae925ef128b8f5216ac881fd4a62ccea6fb30d9e0e5907f1089b8f3df6b1f",
   "action_rs_sha256": "c97e9ac8d029d751522f011fd404742d017c9a94985fedb627b16812b72fd26c",
   "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
   "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
