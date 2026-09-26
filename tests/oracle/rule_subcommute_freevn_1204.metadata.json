@@ -1,0 +1,99 @@
+{
+  "schema_version": 2,
+  "fixture_id": "RULE-SUBCOMMUTE-FREEVN-0001",
+  "status_note": "RuleSubCommute generic tail commute loop order semantics (ticket BINSWEEP-SUBCOMMUTE-FREEVARNODE-0001, CR-SUBCOMMUTE finding 3): ruleaction.cc:4640 opSetInput(longform,newVn,i) must free vn from longform slot i BEFORE ruleaction.cc:4641 opSetInput(newsub,vn,0) attaches it, because Varnode::addDescend throws on a free varnode's second descendant (varnode.cc:334-336) and a still-read constant takes the Funcdata::opSetInput dedup copy (funcdata_op.cc:108-115) instead of the original identity. The reversed order was the P1 panic family on the ip corpus (3 functions, varnode.rs:2716) and a benign varnode-identity deviation for constants. Free varnodes are manufactured pipeline-style (COPY writer + opUnsetOutput -> makeFree keeps descend). 13 normal cases: free/free ADD (the panic form), free/const both orders, const/const, MULT/AND/OR16 free tails, single-input NEGATE, XOR at offset!=0, MULT free/const, same-written-vn dup-reuse leg (cc:4636 guard, cc:4646 reuse - exactly one new SUBPIECE), RuleSubZext overlap reject (cc:4623-4628, a pre-existing Rugra gap this fixture exposed and this ticket closes), second-reader reject (cc:4621). Trap mode (trap_dupfree, same free varnode in both XOR slots) locks the crash-form pair: the oracle itself throws LowlevelError rc=1 'Free varnode has multiple descendants' (0-byte stdout) vs Rugra panic rc=101 at varnode.rs:2716 with the same message - the varnode.cc:336 invariant is preserved on both sides, no golden. Coverage is ticket-domain scoped: the tail loop order + pre-check of RuleSubCommute::applyOp; the applyOp function-level status stays governed by the sibling tickets (RULEACTION-SUBCOMMUTE-SDIV-SEXT16-0001 residual UNTESTED plus ZEXT-PARTIAL/SUBZEXT-OVERLAP P3s).",
+  "decisive_semantics": {
+    "reference_output_parameters": "applyOp(op,data) mutates the IR by reference; the tail loop's opSetInput calls share live Varnode state across slots: opSetInput(longform,newVn,i) erases longform from vn's descend list (funcdata_op.cc:97 via opUnsetInput) BEFORE opSetInput(newsub,vn,0) calls vn->addDescend (funcdata_op.cc:123), so a free vn never observably holds two descendants; constants attached while still read would be replaced by a fresh copy inside opSetInput (funcdata_op.cc:108-115) - with the oracle order the slot is freed first so the original const identity survives (observable as keep=cn|readers=1).",
+    "loop_bounds_traversal_order": "for i in 0..longform->numInput() (cc:4633), i!=j skips the INT_LEFT shift-amount slot; creation branch when lastIn != vn || newVn == 0 (cc:4636 - first slot always creates), reuse branch opSetInput(longform,newVn,i) otherwise (cc:4646); lastIn = vn unconditionally at each iteration tail (cc:4648); statement order inside the creation branch: newOp(2,subAddr) -> opSetOpcode(SUBPIECE) -> newUniqueOut(outvn size) -> opSetInput(longform,newVn,i) -> opSetInput(newsub,vn,0) -> newConstant(4,offset) inline at slot-1 time -> opInsertBefore(newsub,longform) (cc:4637-4643).",
+    "counter_accumulator_lens": "lastIn and newVn are per-application locals initialized null before the loop (cc:4631-4632); newVn is rebound on every creation and reused by the dup leg; no cross-application state; the pre-check reads outvn->loneDescend() once (cc:4624) and compares the ZEXT output size against insize = base->getSize() read once at cc:4522.",
+    "sorting_comparison_keys": "loneDescend identity is pointer equality (exactly one descendant else reject, cc:4621/4624); lastIn != vn is Varnode pointer identity (cc:4636); size comparisons numeric: ZEXT out size == insize (cc:4626), ext input sizes vs outvn size in the SDIV/SREM arms; keep-line readers observation uses pointer identity against the captured longform input varnodes."
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec"
+  },
+  "analysis_options": "none: direct RuleSubCommute::applyOp harness on a real BfdArchitecture Funcdata; no decompilation pipeline options",
+  "rugra_source": {
+    "base_commit": "a637227e8919590e19c5d20d63498938c337817f",
+    "note": "src/ruleaction.rs tail-order fix + cc:4623-4629 RuleSubZext overlap pre-check commit; bilateral normal-mode byte equality proven on this tree"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "53a5bd4fd6424f71e707947c589bbd531e01aacb84b21229b0f6a3e2d31f6a1d",
+    "rust_fixture_sha256": "2fd706e0288f137a8463d1011fea92a0e67e591e3189765f6e0dd7b7c407eaaa",
+    "oracle_record_sha256": "5634e84db6b14ce5ada210e222641107bcd67264f884a80f62231fa0f019b75f",
+    "runner_sha256": "6cfa2f663f110d7303c23c9963ab359952e90f338a855704c2fe302567f630ef"
+  },
+  "expected_results": {
+    "normal_stdout_sha256": "5634e84db6b14ce5ada210e222641107bcd67264f884a80f62231fa0f019b75f",
+    "normal_stderr": "empty both sides",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "case_order": [
+      "add_free_free",
+      "add_free_const",
+      "add_const_free",
+      "add_const_const",
+      "mult_free_free",
+      "and_free_free",
+      "or_free16",
+      "negate_free",
+      "xor_free_off4",
+      "mult_free_const",
+      "xor_same_written",
+      "add_free_zext_overlap",
+      "add_two_readers"
+    ],
+    "trap_forms": {
+      "trap_dupfree": {
+        "oracle": "LowlevelError rc=1, stderr 'Ghidra LowlevelError: Free varnode has multiple descendants', 0-byte stdout",
+        "rugra": "panic rc=101 at varnode.rs:2716 'Free varnode has multiple descendants', 0-byte stdout"
+      }
+    }
+  },
+  "coverage": {
+    "tail_order_free_inputs": {
+      "status": "MATCH",
+      "covers": "SUB4(ADD8(freeA,freeB),0) - the ip-corpus panic form - commutes cleanly (apply=1, each free vn ends read by exactly one new SUBPIECE, descends=1); pre-fix Rugra panicked at varnode.rs:2716 here (fixture proves discrimination)",
+      "residual_todo_ids": []
+    },
+    "tail_order_const_identity": {
+      "status": "MATCH",
+      "covers": "free/const, const/free, const/const, mult free/const: the original constant varnode survives the commute (keep=cn|readers=1) instead of being replaced by the Funcdata::opSetInput dedup copy (funcdata_op.cc:108-115)",
+      "residual_todo_ids": []
+    },
+    "commuting_opcodes_and_offsets": {
+      "status": "MATCH",
+      "covers": "MULT/AND/OR(16->8)/NEGATE(single-input)/XOR offset=4 free tails all commute with identical op-window dumps and unique-space offsets",
+      "residual_todo_ids": []
+    },
+    "dup_reuse_leg": {
+      "status": "MATCH",
+      "covers": "same written vn in both XOR slots: exactly one new SUBPIECE is created (cc:4636 guard + cc:4646 reuse); shared vn ends with descends=1",
+      "residual_todo_ids": []
+    },
+    "rule_subzext_overlap_precheck": {
+      "status": "MATCH",
+      "covers": "offset==0 + outvn loneDescend ZEXT with out size == insize rejects (cc:4623-4628, sub_apply=0) - pre-existing Rugra gap (Rugra commuted where oracle leaves the SUBPIECE) exposed by this fixture and closed in the same commit",
+      "residual_todo_ids": []
+    },
+    "lone_descend_guard": {
+      "status": "MATCH",
+      "covers": "second SUBPIECE reading base rejects via base->loneDescend() != op (cc:4621, sub_apply=0)",
+      "residual_todo_ids": []
+    },
+    "free_varnode_invariant_trap": {
+      "status": "MATCH",
+      "covers": "same free varnode in both slots (trap_dupfree): both sides throw 'Free varnode has multiple descendants' (oracle LowlevelError rc=1, Rust panic rc=101 varnode.rs:2716) - the varnode.cc:334-336 invariant is faithfully preserved, not a divergence",
+      "residual_todo_ids": []
+    }
+  },
+  "notes": "BINSWEEP-SUBCOMMUTE-FREEVARNODE-0001 E2E evidence recorded in the lane report: ip print_addrinfo(206)/do_iptunnel(246)/print_neigh(248) master rc=101 panic varnode.rs:2716 -> fixed rc=0 with non-empty C (bin_sweep --sweep-one status ok)."
+}

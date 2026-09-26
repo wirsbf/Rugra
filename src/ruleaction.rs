@@ -8764,14 +8764,34 @@ impl Rule for RuleSubCommute {
         };
         if !is_lone { return Ok(action_status::NO_CHANGE); }
 
+        // cc:4623-4629: Look for overlap with RuleSubZext. If offset==0 and
+        // outvn's lone descendant is an INT_ZEXT whose output size equals
+        // insize (base size), reject — the form belongs to RuleSubZext.
+        // (Pre-existing gap exposed by the rule_subcommute_freevn_1204
+        // fixture's add_free_zext_overlap case: Rugra used to commute here
+        // where the oracle leaves the SUBPIECE intact.)
+        if offset == 0 {
+            let outvn_pre = op_arc.read().unwrap().output.as_ref().unwrap().clone();
+            let nextop = {
+                let g = outvn_pre.read().unwrap();
+                g.lone_descend()
+            };
+            if let Some(nextop) = nextop {
+                let is_zext_same_size = {
+                    let g = nextop.read().unwrap();
+                    g.opcode == OpCode::CPUI_INT_ZEXT
+                        && g.output
+                            .as_ref()
+                            .is_some_and(|o| o.read().unwrap().get_size() == insize)
+                };
+                if is_zext_same_size { return Ok(action_status::NO_CHANGE); }
+            }
+        }
+
         // For each input of longform (except the special j slot), push a
         // SUBPIECE inside (cc:4633-4649).
         let num_inputs = longform_arc.read().unwrap().inrefs.len();
         let outvn = op_arc.read().unwrap().output.as_ref().unwrap().clone();
-        let mut new_vn_for: Vec<
-            Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-        > = Vec::with_capacity(num_inputs);
-        new_vn_for.resize(num_inputs, None);
         let inputs_snapshot: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
             longform_arc.read().unwrap().inrefs.clone();
         let mut last_in: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
@@ -8784,18 +8804,31 @@ impl Rule for RuleSubCommute {
                     .map(|p| std::sync::Arc::ptr_eq(p, &vn))
                     .unwrap_or(false) && new_vn.is_some();
                 if !dup {
-                    // newsub = newOp(2); opSetOpcode(SUBPIECE); newUniqueOut(outvn_size)
-                    let newsub = fd.new_op(2, op_addr.clone());
-                    fd.op_set_opcode(&newsub, OpCode::CPUI_SUBPIECE);
-                    let newout = fd.new_unique_out(outvn_size, &newsub);
-                    let offset_const = fd.new_constant(4, offset as u64);
-                    fd.op_set_input(&newsub, vn.clone(), 0);
-                    fd.op_set_input(&newsub, offset_const, 1);
-                    fd.op_insert_before(&newsub, &crate::op::PcodeOpRef(longform_arc.clone()));
-                    new_vn = Some(newout);
-                    fd.op_set_input(
-                        &crate::op::PcodeOpRef(longform_arc.clone()), new_vn.clone().unwrap(), i,
+                    // cc:4637-4643 statement order carries semantics: free vn
+                    // from longform slot i FIRST (opSetInput(longform,newVn,i),
+                    // cc:4640), THEN attach vn to newsub slot 0 (cc:4641, whose
+                    // oracle comment reads "vn may be free, so set as input
+                    // after setting newVn"). The reversed order (newsub taking
+                    // vn while longform still reads it) made a free non-const vn
+                    // hit the Varnode::addDescend second-descendant throw
+                    // (varnode.cc:334-336) and made a still-read constant take
+                    // the Funcdata::opSetInput dedup copy (funcdata_op.cc:108-115)
+                    // instead of the original vn identity
+                    // (BINSWEEP-SUBCOMMUTE-FREEVARNODE-0001).
+                    let newsub = fd.new_op(2, op_addr.clone()); // cc:4637
+                    fd.op_set_opcode(&newsub, OpCode::CPUI_SUBPIECE); // cc:4638
+                    new_vn = Some(fd.new_unique_out(outvn_size, &newsub)); // cc:4639
+                    fd.op_set_input( // cc:4640: frees vn (its only descendant was longform)
+                        &crate::op::PcodeOpRef(longform_arc.clone()),
+                        new_vn.clone().unwrap(),
+                        i,
                     );
+                    fd.op_set_input(&newsub, vn.clone(), 0); // cc:4641: vn now has no live descendant -> no throw, no dedup copy
+                    // cc:4642: constant created inline at slot-1 time (not
+                    // hoisted) so vbank create order matches newVn-then-const.
+                    let offset_const = fd.new_constant(4, offset as u64);
+                    fd.op_set_input(&newsub, offset_const, 1);
+                    fd.op_insert_before(&newsub, &crate::op::PcodeOpRef(longform_arc.clone())); // cc:4643
                 } else if let Some(ref nv) = new_vn {
                     fd.op_set_input(&crate::op::PcodeOpRef(longform_arc.clone()), nv.clone(), i);
                 }
