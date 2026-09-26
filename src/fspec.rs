@@ -502,6 +502,9 @@ pub struct FuncProto {
     /// Parameter-storage assignment failed while rebuilding this prototype.
     /// Faithful to Ghidra's sticky `error_inputparam` flag.
     error_input_param: bool,
+    /// Return-value assignment failed while rebuilding this prototype.
+    /// Faithful to the `error_outputparam` flag bit (fspec.hh:1352).
+    error_output_param: bool,
     /// Symbol-backed parameter store. `None` mirrors Ghidra's
     /// `ProtoStoreInternal` flat storage (the `parameters` vector IS its
     /// `inparam`); `Some` mirrors `FuncProto::setScope` (fspec.cc:3879-3885)
@@ -535,6 +538,7 @@ impl FuncProto {
             has_thisptr: false,
             return_bytes_consumed: 0,
             error_input_param: false,
+            error_output_param: false,
             symbol_store: None,
         }
     }
@@ -657,6 +661,41 @@ impl FuncProto {
     /// Toggle the sticky input-parameter assignment error flag.
     pub fn set_input_errors(&mut self, val: bool) {
         self.error_input_param = val;
+    }
+
+    // Ghidra: fspec.hh:1464 FuncProto::hasOutputErrors
+    /// `return ((flags&error_outputparam)!=0);` (fspec.hh:1464) — the
+    /// sticky return-value assignment error flag (flag bit 128,
+    /// fspec.hh:1352).
+    pub fn has_output_errors(&self) -> bool {
+        self.error_output_param
+    }
+
+    // Ghidra: fspec.hh:1471 FuncProto::setOutputErrors
+    /// `flags = val ? (flags|error_outputparam) : (flags &
+    /// ~((uint4)error_outputparam));` (fspec.hh:1471-1473).
+    pub fn set_output_errors(&mut self, val: bool) {
+        self.error_output_param = val;
+    }
+
+    // RUGRA-GLUE: projection of the flat output state (return_type +
+    // output_storage) into the ProtoParameter view Ghidra reads through
+    // `store->getOutput()` — used by the FuncCallSpecs locked-output mover.
+    pub(crate) fn output_param_view(&self) -> ProtoParameter {
+        let (space, offset) = self
+            .output_storage
+            .unwrap_or((AddressSpace::Ram, 0));
+        ProtoParameter {
+            name: String::new(),
+            data_type: self.return_type.clone(),
+            address: Address::new(offset),
+            address_space: space,
+            flags: if self.output_type_locked {
+                protoparam_flags::TYPE_LOCKED
+            } else {
+                0
+            },
+        }
     }
 
     // Ghidra: fspec.hh:1611 FuncProto::getSpacebase
@@ -4252,9 +4291,21 @@ impl FuncCallSpecs {
             // Ghidra: finaloutvn = findPreexistingWhole(hivn, lovn); if null,
             // build the join (constructJoinAddress + SUBPIECE pair); else
             // reuse the preexisting PIECE whole and destroy its def too.
-            // TODO(FSPEC-OUTPUTJOIN-0001): port findPreexistingWhole
-            // (fspec.cc:5750-5760) — until then always build the join via
-            // the caller-supplied hook.
+            // FSPEC-OUTPUTJOIN-0001 (findPreexistingWhole 半项): the
+            // preexisting-whole probe is now the real
+            // `FuncCallSpecs::find_preexisting_whole` (fspec.cc:5750-5760)
+            // — both pieces must share one lone PIECE descendant. When a
+            // whole exists, its def joins the destroy list (it is the
+            // INDIRECT-created PIECE op) and the whole is reused as the
+            // call output through the caller's join hook (the hook receives
+            // `Some(whole)` instead of synthesizing the SUBPIECE join);
+            // `None` keeps the historical build-the-join path.
+            let preexisting_whole = FuncCallSpecs::find_preexisting_whole(&hi_vn, &lo_vn);
+            if let Some(whole) = &preexisting_whole {
+                if let Some(def_weak) = whole.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    deleted_ops.push(crate::op::PcodeOpRef(def_weak));
+                }
+            }
             let _finalout_vn = build_join_output(fd, call_op, &hi_vn, &lo_vn);
             // The join hook is responsible for opSetOutput(op, finaloutvn).
         } else {
@@ -4502,6 +4553,410 @@ impl FuncCallSpecs {
             }
         }
         true
+    }
+
+    // Ghidra: fspec.hh:1740 FuncCallSpecs::compareByEntryAddress
+    /// Compare FuncCallSpecs by function entry address. Faithful inline
+    /// static `return a->entryaddress < b->entryaddress;` (fspec.hh:1740);
+    /// used by `countMatchingCalls` and the call-spec sort. A missing entry
+    /// compares as offset 0 (the legacy `Address` carries no invalid state).
+    pub fn compare_by_entry_address(a: &FuncCallSpecs, b: &FuncCallSpecs) -> bool {
+        a.entry_addr
+            .unwrap_or(Address::new(0))
+            .as_u64()
+            < b.entry_addr.unwrap_or(Address::new(0)).as_u64()
+    }
+
+    // Ghidra: fspec.cc:4982 FuncCallSpecs::getSpacebaseRelative
+    /// Find the active stack-pointer Varnode at \b this call site through
+    /// the stack-pointer placeholder slot. Faithful 1:1 body
+    /// (fspec.cc:4982-4992): no placeholder slot or a placeholder that is
+    /// not written / not spacebase-marked / not LOAD-defined yields `None`;
+    /// otherwise the LOAD's pointer input (slot 1) is the reference.
+    pub fn get_spacebase_relative(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if self.stack_placeholder_slot < 0 {
+            return None;
+        }
+        let op = self.op.upgrade()?;
+        let op_guard = op.read().unwrap();
+        let tmpvn = op_guard.get_in(self.stack_placeholder_slot as usize)?.clone();
+        drop(op_guard);
+        let loadop_weak = {
+            let vn = tmpvn.read().unwrap();
+            if !vn.is_spacebase_placeholder() {
+                return None;
+            }
+            if !vn.is_written() {
+                return None;
+            }
+            vn.def.clone()?
+        };
+        let loadop = loadop_weak.upgrade()?;
+        let loadop_guard = loadop.read().unwrap();
+        if loadop_guard.get_opcode() != crate::opcodes::OpCode::CPUI_LOAD {
+            return None;
+        }
+        loadop_guard.get_in(1).cloned()
+    }
+
+    // Ghidra: fspec.cc:5349 FuncCallSpecs::checkInputJoin
+    /// Check if adjacent parameter trials can be combined into a single
+    /// logical parameter. Faithful 1:1 body (fspec.cc:5349-5368): active
+    /// input recovery or too-few trials refuse; the hi/lo trial order
+    /// follows `ishislot`, each side's size must equal the corresponding
+    /// Varnode size, and the final word is the model's checkInputJoin on
+    /// the trials' addresses and sizes.
+    pub fn check_input_join(
+        &self,
+        slot1: i32,
+        ishislot: bool,
+        vn1_size: i32,
+        vn2_size: i32,
+    ) -> bool {
+        if self.is_input_active() {
+            return false;
+        }
+        if slot1 >= self.active_input.get_num_trials() as i32 {
+            return false; // Not enough params
+        }
+        // getTrialForInputVarnode subtracts 1 (call address) or 2 (past the
+        // placeholder) from the op slot — the accessor performs it.
+        let (hi_slot, lo_slot, hi_vn_size, lo_vn_size) = if ishislot {
+            (slot1, slot1 + 1, vn1_size, vn2_size)
+        } else {
+            (slot1 + 1, slot1, vn2_size, vn1_size)
+        };
+        let hislot = self.active_input.get_trial_for_input_varnode(hi_slot);
+        let loslot = self.active_input.get_trial_for_input_varnode(lo_slot);
+        if hislot.get_size() != hi_vn_size {
+            return false;
+        }
+        if loslot.get_size() != lo_vn_size {
+            return false;
+        }
+        // FuncProto::checkInputJoin(hislot->getAddress(),hislot->getSize(),
+        //                           loslot->getAddress(),loslot->getSize());
+        let space = hislot.get_space();
+        self.prototype.check_input_join(
+            space,
+            hislot.get_address(),
+            hislot.get_size(),
+            loslot.get_address(),
+            loslot.get_size(),
+        )
+    }
+
+    // Ghidra: fspec.cc:5376 FuncCallSpecs::doInputJoin
+    /// Join two parameter trials into a single merged parameter. Faithful
+    /// 1:1 body (fspec.cc:5376-5395): a locked input refuses (Err mirrors
+    /// the throw); the join address is the join-space offset over
+    /// (hi,lo)-ordered pieces — Ghidra's `constructJoinAddress` becomes the
+    /// caller-supplied join-tables hook here — and `activeinput.joinTrial`
+    /// merges the two trials at (slot1, joinaddr, size1+size2).
+    pub fn do_input_join(
+        &mut self,
+        slot1: i32,
+        ishislot: bool,
+        construct_join_address: &dyn Fn(
+            AddressSpace,
+            Address,
+            i32,
+            AddressSpace,
+            Address,
+            i32,
+        ) -> Address,
+    ) -> Result<(), String> {
+        if self.prototype.is_input_locked() {
+            return Err("Trying to join parameters on locked function prototype".to_string());
+        }
+        let trial1 = self.active_input.get_trial_for_input_varnode(slot1);
+        let trial2 = self.active_input.get_trial_for_input_varnode(slot1 + 1);
+        let addr1 = trial1.get_address();
+        let addr2 = trial2.get_address();
+        let space1 = trial1.get_space();
+        let space2 = trial2.get_space();
+        let size1 = trial1.get_size();
+        let size2 = trial2.get_size();
+
+        let joinaddr = if ishislot {
+            construct_join_address(space1, addr1, size1, space2, addr2, size2)
+        } else {
+            construct_join_address(space2, addr2, size2, space1, addr1, size1)
+        };
+
+        self.active_input
+            .join_trial(slot1, joinaddr, size1 + size2);
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:5408 FuncCallSpecs::lateRestriction
+    /// Update \b this prototype to match a given (more specialized)
+    /// prototype. Faithful 1:1 body (fspec.cc:5408-5431): without a model
+    /// the restriction is copied wholesale; otherwise the prototypes must
+    /// be compatible, a dotdotdot restriction requires active input
+    /// recovery, locked inputs/outputs transfer through the locked-input/
+    /// output movers, and \b this finally copies the restriction.
+    pub fn late_restriction(
+        &mut self,
+        restricted_proto: &FuncProto,
+        call_op: &crate::op::PcodeOpRef,
+        new_input: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        new_output: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        get_call_in: &dyn Fn(
+            &crate::op::PcodeOpRef,
+            usize,
+        ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        bank: &crate::op::PcodeOpBank,
+    ) -> bool {
+        if !self.prototype.has_model() {
+            // Ghidra: copy(restrictedProto); return true;
+            self.prototype.copy_from(restricted_proto);
+            return true;
+        }
+        if !self.prototype.is_compatible(restricted_proto) {
+            return false;
+        }
+        if restricted_proto.is_dotdotdot && !self.is_input_active() {
+            return false;
+        }
+        if restricted_proto.is_input_locked() {
+            // Redo all the varnode inputs (if possible)
+            let mut slots: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> =
+                Vec::new();
+            if self.transfer_locked_input(restricted_proto, &mut slots, call_op, get_call_in)
+                .is_err()
+            {
+                return false;
+            }
+            // transfer_locked_input collected Option slots (0 = cannot
+            // build); a single None fails the restriction exactly as
+            // Ghidra's 0 return does.
+            for slot in slots {
+                match slot {
+                    Some(vn) => new_input.push(vn),
+                    None => return false,
+                }
+            }
+        }
+        if restricted_proto.output_type_locked {
+            // Redo all the varnode outputs (if possible)
+            // Ghidra: transferLockedOutput reads source.getOutput(); the
+            // flat FuncProto projects its output as (return_type,
+            // output_storage) into a ProtoParameter view for the mover.
+            let source_output_param = restricted_proto.output_param_view();
+            if !self.transfer_locked_output(restricted_proto, call_op, bank, new_output, &source_output_param) {
+                return false;
+            }
+        }
+        // Convert ourselves to restrictedProto
+        self.prototype.copy_from(restricted_proto);
+        true
+    }
+
+    // Ghidra: fspec.cc:5485 FuncCallSpecs::forceSet
+    /// Install a definitive prototype at \b this call site. Faithful 1:1
+    /// body (fspec.cc:5485-5509): the recovered prototype is copied into
+    /// the override manager first (so restarts don't rediscover it), then
+    /// `lateRestriction` either commits the new inputs/outputs in place or
+    /// flags a restart; either way the prototype locks and both error
+    /// flags adopt the restriction's.
+    pub fn force_set(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        fp: &FuncProto,
+        call_op: &crate::op::PcodeOpRef,
+        get_call_in: &dyn Fn(
+            &crate::op::PcodeOpRef,
+            usize,
+        ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        bank: &crate::op::PcodeOpBank,
+        build_param: &mut dyn FnMut(
+            &mut crate::funcdata::Funcdata,
+            &crate::op::PcodeOpRef,
+            Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+            Address,
+            i32,
+        ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        get_return_addr_size: &dyn Fn(&FuncCallSpecs) -> (Address, i32),
+        set_call_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>),
+        truncate_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let mut newinput: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
+        let mut newoutput: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
+
+        // Copy the recovered prototype into the override manager so that
+        // future restarts don't have to rediscover it.
+        // Ghidra: FuncProto *newproto = new FuncProto(); newproto->copy(fp);
+        //         data.getOverride().insertProtoOverride(op->getAddr(),newproto);
+        fd.localoverride.insert_proto_override(self.op_addr);
+
+        if self.late_restriction(fp, call_op, &mut newinput, &mut newoutput, get_call_in, bank) {
+            self.commit_new_inputs(fd, call_op, &mut newinput, build_param);
+            self.commit_new_outputs(fd, call_op, &newoutput, get_return_addr_size, set_call_output, truncate_output);
+        } else {
+            // Too late to make restrictions to correct prototype.
+            // Force a restart.
+            fd.set_restart_pending(true);
+        }
+        // Regardless of what happened, lock the prototype so it doesn't happen again
+        self.prototype.set_input_lock(true);
+        self.prototype.set_input_errors(fp.has_input_errors());
+        self.prototype.set_output_errors(fp.has_output_errors());
+    }
+
+    // Ghidra: fspec.cc:5517 FuncCallSpecs::insertPcode
+    /// Inject any \e upon-return p-code at \b this call site. Faithful
+    /// 1:1 body (fspec.cc:5517-5528): a negative inject id does nothing;
+    /// otherwise the payload is fetched from the architecture's injection
+    /// library and inserted right after the callpoint. Rugra has no
+    /// `Funcdata::doLiveInject` yet, so the insertion is the caller's
+    /// `live_inject` hook (invoked with the payload id, the call address,
+    /// and the op), matching the established seam style for this module.
+    pub fn insert_pcode(
+        &self,
+        fd: &crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        live_inject: &dyn Fn(&crate::funcdata::Funcdata, i32, &crate::op::PcodeOpRef),
+    ) -> Result<(), String> {
+        // Ghidra: int4 id = getInjectUponReturn();
+        let id = self
+            .prototype
+            .model
+            .as_ref()
+            .map(|m| m.inject_upon_return)
+            .unwrap_or(-1);
+        if id < 0 {
+            return Ok(()); // Nothing to inject
+        }
+        // Ghidra: InjectPayload *payload =
+        //         data.getArch()->pcodeinjectlib->getPayload(id);
+        let arch = fd
+            .arch
+            .as_ref()
+            .ok_or_else(|| "insertPcode requires an owning Architecture".to_string())?;
+        let lib = arch
+            .pcodeinjectlib
+            .as_ref()
+            .ok_or_else(|| "insertPcode requires a p-code injection library".to_string())?;
+        let lib_guard = lib.read().unwrap();
+        if lib_guard.get_payload_by_id(id).is_none() {
+            return Err(format!("Unknown p-code inject id: {}", id));
+        }
+        drop(lib_guard);
+        // do the insertion right after the callpoint
+        live_inject(fd, id, call_op);
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:5536 FuncCallSpecs::collectOutputTrialVarnodes
+    /// Collect the Varnode attached to each output trial. Faithful 1:1
+    /// body (fspec.cc:5536-5557): a determined call output refuses (Err
+    /// mirrors the throw); the trial list grows to the trial count; the
+    /// walk upstream over INDIRECT ops (via the caller's previous-op
+    /// hook) records every indirect-creation output whose storage matches
+    /// a trial, re-pinning the trial's address to the exact Varnode.
+    pub fn collect_output_trial_varnodes(
+        &mut self,
+        call_op: &crate::op::PcodeOpRef,
+        trialvn: &mut Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>>,
+        previous_op: &dyn Fn(
+            &crate::op::PcodeOpRef,
+        ) -> Option<crate::op::PcodeOpRef>,
+    ) -> Result<(), String> {
+        if call_op.0.read().unwrap().get_out().is_some() {
+            return Err("Output of call was determined prematurely".to_string());
+        }
+        // Size of array should match number of trials
+        while trialvn.len() < self.active_output.get_num_trials() {
+            trialvn.push(None);
+        }
+        let mut indop = previous_op(call_op);
+        while let Some(op) = indop {
+            let guard = op.0.read().unwrap();
+            if guard.get_opcode() != crate::opcodes::OpCode::CPUI_INDIRECT {
+                break;
+            }
+            if guard.is_indirect_creation() {
+                if let Some(vn_arc) = guard.get_out().cloned() {
+                    let (vn_addr, vn_size) = {
+                        let vn = vn_arc.read().unwrap();
+                        (*vn.get_addr(), vn.get_size() as i32)
+                    };
+                    let index = self
+                        .active_output
+                        .which_trial_in_space(AddressSpace::Ram, vn_addr, vn_size);
+                    if index >= 0 {
+                        trialvn[index as usize] = Some(vn_arc);
+                        // the exact varnode may have changed, so we reset the trial
+                        self.active_output
+                            .get_trial_mut(index as usize)
+                            .set_address(vn_addr, vn_size);
+                    }
+                }
+            }
+            drop(guard);
+            indop = previous_op(&op);
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:5661 FuncCallSpecs::checkOutputTrialUse
+    /// Mark whether output trials are being actively used. Faithful 1:1
+    /// body (fspec.cc:5661-5677): trials are collected first, then each
+    /// is marked active (a matching Varnode exists) or inactive — never
+    /// noUse, since the value may be returned but unused. A prematurely
+    /// checked trial refuses (Err mirrors the throw).
+    pub fn check_output_trial_use(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        trialvn: &mut Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>>,
+        previous_op: &dyn Fn(
+            &crate::op::PcodeOpRef,
+        ) -> Option<crate::op::PcodeOpRef>,
+    ) -> Result<(), String> {
+        let _ = fd;
+        self.collect_output_trial_varnodes(call_op, trialvn, previous_op)?;
+        // The location is either used or not.  If it is used it can either
+        // be the official output or a killedbycall, so whether the trial is
+        // present as a varnode determines whether the trial is active.
+        for i in 0..trialvn.len() {
+            if self.active_output.get_trial(i).is_checked() {
+                return Err("Output trial has been checked prematurely".to_string());
+            }
+            if trialvn[i].is_some() {
+                self.active_output.get_trial_mut(i).mark_active();
+            } else {
+                // don't call markNoUse, the value may be returned but not used
+                self.active_output.get_trial_mut(i).mark_inactive();
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:5750 FuncCallSpecs::findPreexistingWhole
+    /// Check if two Varnodes are merged into a whole. Faithful 1:1 body
+    /// (fspec.cc:5750-5760): both Varnodes must have the SAME lone
+    /// descendant op, that op must be a PIECE, and its output is the
+    /// preexisting whole; anything else yields `None`.
+    pub fn find_preexisting_whole(
+        vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let op1 = vn1.read().unwrap().lone_descend()?;
+        let op2 = vn2.read().unwrap().lone_descend()?;
+        if !std::sync::Arc::ptr_eq(&op1, &op2) {
+            return None;
+        }
+        let guard = op1.read().unwrap();
+        if guard.get_opcode() != crate::opcodes::OpCode::CPUI_PIECE {
+            return None;
+        }
+        guard.get_out().cloned()
     }
 }
 
@@ -6469,6 +6924,69 @@ impl ParameterPieces {
         std::mem::swap(&mut self.ty, &mut other.ty);
         std::mem::swap(&mut self.flags, &mut other.flags);
     }
+
+    // Ghidra: fspec.cc:2191 ParameterPieces::assignAddressFromPieces
+    /// Generate the parameter's storage address from its constituent
+    /// Varnode pieces. Faithful 1:1 body of `assignAddressFromPieces`
+    /// (fspec.cc:2191-2207):
+    ///   1. a least-to-most piece list is reversed in place to
+    ///      most-to-least;
+    ///   2. `JoinRecord::mergeSequence` folds adjacent register pieces into
+    ///      whole-register pieces (the caller's `exact_register_name`
+    ///      closure stands in for the Translate register lookup);
+    ///   3. a single surviving piece's address is taken directly;
+    ///      otherwise `findAddJoin(pieces, 0)` produces the unified join
+    ///      address.
+    /// The `find_add_join` closure carries Rugra's JoinRecordTables + join
+    /// space handle (Ghidra reads both off the Architecture; the closure
+    /// also absorbs the VarnodeData→SpaceVarnodeData space-model
+    /// conversion).
+    pub fn assign_address_from_pieces<F>(
+        &mut self,
+        pieces: &mut Vec<VarnodeData>,
+        most_to_least: bool,
+        exact_register_name: F,
+        find_add_join: &dyn Fn(&[VarnodeData], u32) -> Option<u64>,
+    ) where
+        F: FnMut(&AddressSpace, u64, usize) -> String,
+    {
+        // Ghidra: if (!mostToLeast && pieces.size() > 1) { reverse; swap; }
+        if !most_to_least && pieces.len() > 1 {
+            let mut reverse = Vec::with_capacity(pieces.len());
+            for i in (0..pieces.len()).rev() {
+                reverse.push(pieces[i].clone());
+            }
+            std::mem::swap(pieces, &mut reverse);
+        }
+        // Ghidra: JoinRecord::mergeSequence(pieces,glb->translate);
+        // Rugra's JoinRecord::merge_sequence operates on space::VarnodeData
+        // (usize size); the fspec pieces convert field-for-field and back.
+        let mut seq: Vec<crate::space::VarnodeData> = pieces
+            .iter()
+            .map(|p| crate::space::VarnodeData {
+                space: p.space,
+                offset: p.offset,
+                size: p.size.max(0) as usize,
+            })
+            .collect();
+        crate::translate::JoinRecord::merge_sequence(&mut seq, exact_register_name);
+        *pieces = seq
+            .into_iter()
+            .map(|p| VarnodeData { space: p.space, offset: p.offset, size: p.size as i32 })
+            .collect();
+        // Ghidra: if (pieces.size() == 1) { addr = pieces[0].getAddr(); return; }
+        if pieces.len() == 1 {
+            self.space = pieces[0].space;
+            self.addr = Address::new(pieces[0].offset);
+            return;
+        }
+        // Ghidra: JoinRecord *joinRecord = glb->findAddJoin(pieces, 0);
+        //         addr = joinRecord->getUnified().getAddr();
+        if let Some(join_offset) = find_add_join(pieces, 0) {
+            self.space = AddressSpace::Join;
+            self.addr = Address::new(join_offset);
+        }
+    }
 }
 
 /// `ParameterPieces::namelock = 8`. Faithful to (fspec.hh:365).
@@ -7223,8 +7741,9 @@ impl ParamListStandard {
     // shapes (see is_entry_empty).
     pub(crate) fn entries_mut(&mut self) -> &mut Vec<ParamEntry> { &mut self.entry }
     // RUGRA-GLUE: private-field accessors for the owned-ParamListStandard
-    // shapes (see is_entry_empty).
-    pub(crate) fn set_space_base(&mut self, spc: Option<AddressSpace>) { self.space_base = spc; }
+    // shapes (see is_entry_empty); also the staging setter the bilateral
+    // fixtures use to mirror a decoded stack-based list.
+    pub fn set_space_base(&mut self, spc: Option<AddressSpace>) { self.space_base = spc; }
     // Ghidra: fspec.hh:621 ParamListStandard::isBigEndian
     pub fn is_big_endian(&self) -> bool {
         self.entry.first().map(|e| e.get_space().is_big_endian()).unwrap_or(false)
@@ -8791,6 +9310,13 @@ impl ParamListOutput {
     // ParamListStandardOut base).
     pub fn standard_out_clone(&self) -> ParamListStandardOut {
         self.standard_out().clone()
+    }
+
+    // RUGRA-GLUE: owning constructor over a staged ParamListStandardOut
+    // (the bilateral fixtures build the output list the same way the C++
+    // fixture stages its fields).
+    pub fn standard_with_base(out: ParamListStandardOut) -> Self {
+        Self::Standard(out)
     }
 }
 
@@ -10454,7 +10980,11 @@ impl ProtoModelMerged {
                 self.paramrange.insert_range(*iter);
             }
         }
-        self.modellist.push(model.clone());
+        // Ghidra: foldIn (fspec.cc:2834-2870) does NOT touch modellist —
+        // only ProtoModelMerged::decode appends the folded model
+        // (fspec.cc:2918 `modellist.push_back(mymodel)` runs inside
+        // decode, after foldIn). The bilateral fixture pins this: two
+        // foldIns leave numModels() == 0.
         Ok(())
     }
 
@@ -12322,5 +12852,232 @@ mod tests {
         let t = active2.get_trial(0);
         assert!(!t.is_used() && !t.is_active());
         assert_eq!(t.get_entry_index(), None);
+    }
+    // ---- MIGW-FSPEC batch regression tests (Rugra-side; oracle claims
+    // live in the bilateral fixtures, not here) ----
+
+    fn migfspec_exclusion_entry(group: i32, base: u64, size: i32, min_size: i32) -> ParamEntry {
+        let mut e = ParamEntry::new(group);
+        e.set_type_class(TypeClass::General);
+        e.set_space(AddressSpace::Register);
+        e.set_base(base);
+        e.set_sizes(size, min_size);
+        e.set_alignment(0);
+        e
+    }
+
+    #[test]
+    fn test_param_entry_range_family() {
+        // Ghidra: fspec.hh:170/177-180/187-192
+        let init = ParamEntryRangeInitData::new(3, 7);
+        let r = ParamEntryRange::new(&init, 0x100, 0x107);
+        assert_eq!(r.get_first(), 0x100);
+        assert_eq!(r.get_last(), 0x107);
+        assert_eq!(r.get_param_entry(), 7);
+        assert_eq!(r.get_subsort(), SubsortPosition::with_position(3));
+        assert!(SubsortPosition::from_bool(true).less_than(&SubsortPosition::from_bool(false)) == false);
+        assert!(SubsortPosition::with_position(1).less_than(&SubsortPosition::with_position(2)));
+        let mut resolver = ParamEntryResolver::new();
+        resolver.insert(&init, 0x100, 0x107);
+        resolver.insert(&ParamEntryRangeInitData::new(1, 0), 0x200, 0x20f);
+        assert_eq!(resolver.len(), 2);
+        assert_eq!(resolver.find(0x105).len(), 1);
+        assert_eq!(resolver.find(0x105)[0].get_param_entry(), 7);
+        assert!(resolver.find(0x150).is_empty());
+        assert!(resolver.has_range_starting_above(0x105));
+        assert!(!resolver.has_range_starting_above(0x300));
+    }
+
+    #[test]
+    fn test_populate_resolver_registers_extents() {
+        // Ghidra: fspec.cc:1191-1216 populateResolver
+        let mut list = ParamListStandard::new();
+        let mut effects = Vec::new();
+        list.parse_pentry(0, true, false, false, &mut effects, migfspec_exclusion_entry(0, 0x100, 8, 4)).unwrap();
+        list.parse_pentry(0, true, false, false, &mut effects, migfspec_exclusion_entry(1, 0x200, 4, 4)).unwrap();
+        list.finalize_after_decode(8);
+        list.populate_resolver();
+        let resolver = list.resolver_for(AddressSpace::Register).expect("register resolver");
+        assert_eq!(resolver.len(), 2);
+        let hit = resolver.find(0x204);
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].get_param_entry(), 1);
+        assert_eq!(hit[0].position, 1);
+        let miss = resolver.find(0x108);
+        assert!(miss.is_empty());
+        // Stack cache behavior preserved (non-exclusion stack entry).
+        assert!(list.resolver_for(AddressSpace::Stack).is_none());
+    }
+
+    #[test]
+    fn test_param_list_merged_fold_in() {
+        // Ghidra: fspec.cc:1794-1833 foldIn
+        let mut a = ParamListStandard::new();
+        let mut effects = Vec::new();
+        a.parse_pentry(0, true, false, false, &mut effects, migfspec_exclusion_entry(0, 0x100, 8, 4)).unwrap();
+        a.finalize_after_decode(8);
+        let mut b = ParamListStandard::new();
+        let mut effects_b = Vec::new();
+        b.parse_pentry(0, true, false, false, &mut effects_b, migfspec_exclusion_entry(1, 0x200, 8, 4)).unwrap();
+        b.finalize_after_decode(8);
+        let mut m = ParamListMerged::new();
+        // Empty union adopts op2's list verbatim.
+        m.fold_in(&a).unwrap();
+        assert_eq!(m.base.get_entry().len(), 1);
+        // Distinct entry appends.
+        m.fold_in(&b).unwrap();
+        assert_eq!(m.base.get_entry().len(), 2);
+        // Subsuming entry with same minsize replaces in place.
+        let mut c = ParamListStandard::new();
+        let mut big = migfspec_exclusion_entry(0, 0x100, 16, 4);
+        // same group 0, minsize 4: the new entry subsumes the old one.
+        big.set_sizes(16, 4);
+        let mut effects_c = Vec::new();
+        c.parse_pentry(0, true, false, false, &mut effects_c, big).unwrap();
+        c.finalize_after_decode(8);
+        m.fold_in(&c).unwrap();
+        assert_eq!(m.base.get_entry().len(), 2);
+        // Refusing overrides (fspec.hh:719/721).
+        assert_eq!(m.assign_map_refuses().unwrap_err(), "Cannot assign prototype before model has been resolved");
+        assert_eq!(m.fillin_map_refuses().unwrap_err(), "Cannot determine prototype before model has been resolved");
+        // finalize = populateResolver (fspec.hh:717).
+        m.finalize();
+        assert!(m.base.resolver_for(AddressSpace::Register).is_some());
+    }
+
+    #[test]
+    fn test_score_proto_model_do_score() {
+        // Ghidra: fspec.cc:2705-2775
+        let mut model = ProtoModelFull::new(Some(AddressSpace::Stack), 8);
+        // One exclusion entry at slot 0 (group 0).
+        let mut effects = Vec::new();
+        model.input.parse_pentry(0, true, false, false, &mut effects, migfspec_exclusion_entry(0, 0x100, 8, 8)).unwrap();
+        model.input.finalize_after_decode(8);
+        let mut s = ScoreProtoModel::new(true, &model, 2);
+        s.add_parameter(AddressSpace::Register, Address::new(0x100), 8);
+        s.do_score();
+        assert_eq!(s.get_score(), 0);
+        assert_eq!(s.get_num_mismatch(), 0);
+        // A miss adds 20 per mismatch.
+        s.add_parameter(AddressSpace::Register, Address::new(0x900), 4);
+        assert_eq!(s.get_num_mismatch(), 1);
+        s.do_score();
+        assert_eq!(s.get_score(), 20);
+    }
+
+    #[test]
+    fn test_compare_by_entry_address() {
+        // Ghidra: fspec.hh:1740
+        let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
+        let fc_a = FuncCallSpecs::new(Address::new(0x10), FuncProto::new(String::new(), void_type.clone()));
+        let fc_b = FuncCallSpecs::new(Address::new(0x20), FuncProto::new(String::new(), void_type));
+        assert!(FuncCallSpecs::compare_by_entry_address(&fc_a, &fc_b));
+        assert!(!FuncCallSpecs::compare_by_entry_address(&fc_b, &fc_a));
+    }
+
+    #[test]
+    fn test_update_output_no_types_lock_and_rebuild() {
+        // Ghidra: fspec.cc:4172-4185
+        let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
+        let mut proto = FuncProto::new("f".to_string(), void_type);
+        // Locked output is untouched.
+        proto.set_output_lock(true);
+        proto.update_output_no_types(&[]);
+        assert_eq!(proto.return_type.get_metatype(), TypeMetatype::Void);
+        assert!(proto.output_type_locked);
+        // Unlocked + empty trials clears the output.
+        proto.set_output_lock(false);
+        proto.update_output_no_types(&[]);
+        assert!(!proto.output_type_locked);
+        assert_eq!(proto.return_type.get_metatype(), TypeMetatype::Void);
+        assert!(proto.output_storage.is_none());
+    }
+
+    #[test]
+    fn test_proto_store_symbol_roundtrip() {
+        // Ghidra: fspec.cc:3103-3303 (setInput / getInput / clearInput)
+        let scope = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::database::Scope::new(1, "func", 0),
+        ));
+        let int_type: Arc<Datatype> = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let mut store = ProtoStoreSymbol::new(scope.clone(), (AddressSpace::Ram, 0x1000));
+        // Fresh output is a void ParameterBasic.
+        assert_eq!(store.get_output().unwrap().data_type.get_size(), 0);
+        // set_input installs a category-0 symbol.
+        let pieces = ParameterPieces {
+            space: AddressSpace::Register,
+            addr: Address::new(0x100),
+            ty: Some(int_type.clone()),
+            flags: TYPE_LOCK_PIECE | NAME_LOCK_PIECE,
+        };
+        let param = store.set_input(0, "param_1", &pieces);
+        assert!(param.sym.is_some());
+        assert_eq!(store.get_num_inputs(), 1);
+        let view = store.get_input(0).expect("input view");
+        assert_eq!(view.get_name(), "param_1");
+        assert!(view.is_type_locked());
+        assert!(view.is_name_locked());
+        assert_eq!(view.get_size(), Some(4));
+        // clear_input removes the symbol and shrinks the category.
+        store.clear_input(0);
+        assert_eq!(store.get_num_inputs(), 0);
+        // decode refuses (cc:3299-3303).
+        assert_eq!(
+            store.decode_refuses().unwrap_err(),
+            "Do not decode symbol-backed prototype through this interface"
+        );
+    }
+
+    #[test]
+    fn test_effect_record_and_param_eq() {
+        // Ghidra: fspec.hh:1769-1781 / 1144-1155
+        let a = EffectRecord::new(AddressSpace::Register, 0x10, 4, EffectType::Unaffected);
+        let b = EffectRecord::new(AddressSpace::Register, 0x10, 4, EffectType::Unaffected);
+        let c = EffectRecord::new(AddressSpace::Register, 0x10, 4, EffectType::KilledByCall);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
+        let p1 = ProtoParameter::new("x".to_string(), void_type.clone(), Address::new(4));
+        let p2 = ProtoParameter::new("y".to_string(), void_type.clone(), Address::new(4));
+        // Same storage + same type identity: equal despite name difference.
+        assert_eq!(p1, p2);
+        let int_type = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let p3 = ProtoParameter::new("x".to_string(), int_type, Address::new(4));
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn test_parameter_basic_flag_face_on_flat_param() {
+        // Ghidra: fspec.cc:2924-2972 via the flat ProtoParameter
+        let unknown4: Arc<Datatype> = Arc::new(Datatype::Base(TypeBase::new(
+            "undefined4".to_string(), 4, TypeMetatype::Unknown,
+        )));
+        let int4: Arc<Datatype> = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let mut p = ProtoParameter::new("a".to_string(), unknown4, Address::new(0x100));
+        // setTypeLock on TYPE_UNKNOWN also raises sizelock (cc:2929-2930).
+        p.set_type_lock(true);
+        assert!(p.is_type_locked());
+        assert!(p.is_size_type_locked());
+        // override requires exact size + existing sizelock (cc:2954-2964).
+        assert!(p.override_size_lock_type(&int4).is_ok());
+        assert!(matches!(p.data_type.get_metatype(), TypeMetatype::Int));
+        // reset returns to TYPE_UNKNOWN of the same size (cc:2966-2972).
+        let factory = crate::type_system::TypeFactory::shared_default();
+        let factory = factory.read().unwrap_or_else(|e| e.into_inner());
+        p.reset_size_lock_type(&factory);
+        assert!(matches!(p.data_type.get_metatype(), TypeMetatype::Unknown));
+        assert_eq!(p.data_type.get_size(), 4);
+        // name/lock predicates (hh:1178-1183).
+        assert!(!p.is_name_locked());
+        p.set_name_lock(true);
+        assert!(p.is_name_locked());
+        assert!(!p.is_name_undefined());
+        assert!(!p.is_indirect_storage());
+        // get_symbol always refuses on the basic form (hh:1190).
+        assert!(p.get_symbol().is_err());
     }
 }

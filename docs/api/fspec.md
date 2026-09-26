@@ -1349,3 +1349,42 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   无模型时取 default_model。`set_input_parameter` 在 store 存在时路由到
   符号侧（管线零行为变化：现无调用方设置 scope）。扁平 `parameters`
   保持 ProtoStoreInternal 投影同步。
+
+### 2026-09-26 — MIGW-FSPEC batch 7-8（FuncCallSpecs 调用点族 / internal-store encode 剩项 / assignAddressFromPieces + B2 fixture，Lane MIGWFSPEC）
+
+- **FuncCallSpecs 调用点族**：`compare_by_entry_address`（hh:1740）、
+  `get_spacebase_relative`（cc:4982-4992：占位 slot→spacebase 占位 varnode→
+  LOAD def→取 in(1)）、`check_input_join`（cc:5349-5368：active 拒绝/规模
+  拒绝/hi-lo 尺寸核对/模型 checkInputJoin 终裁）、`do_input_join`
+  （cc:5376-5395：locked 拒绝；constructJoinAddress 为闭包接缝）；
+  `late_restriction`（cc:5408-5431：无模型整拷 / 兼容+dotdotdot 门 /
+  locked 输入输出转移 / 终拷）、`force_set`（cc:5485-5509：override 登记→
+  late_restriction→commit 或 restart→恒锁 + 双 error 旗标采纳；
+  commit 钩子沿用既有接缝形）、`insert_pcode`（cc:5517-5528：负 id 直返/
+  payload 查证/live-inject 接缝）、`collect_output_trial_varnodes`
+  （cc:5536-5557：premature-output 拒绝/尺寸对齐/INDIRECT 创建回溯/试件
+  地址重钉）、`check_output_trial_use`（cc:5661-5677：checked 拒绝/
+  active-inactive 二分）、`find_preexisting_whole`（cc:5750-5760：双 lone
+  descendant 同一 PIECE→其 out）。
+- **FSPEC-OUTPUTJOIN-0001 半项接线**：`build_output_from_trials` 的
+  preexisting-whole 探测改为真实 `find_preexisting_whole`；命中时 whole 的
+  def 加入销毁列表（whole 经 join 钩子 `Some(whole)` 复用），未命中保持
+  既有 join 构建路径。
+- **FuncProto error_outputparam**（hh:1352/1464/1471）：`has_output_errors`/
+  `set_output_errors` + 旗标字段（forceSet 依赖）。
+- **ParameterPieces::assign_address_from_pieces**（cc:2191-2207）：
+  least→most 就地反转 → JoinRecord::merge_sequence 折并（经
+  space::VarnodeData 尺寸域转换）→ 单 piece 直取地址 / 多 piece 走
+  findAddJoin 闭包（吸收 SpaceVarnodeData 空间模型转换）。
+- **B2 双侧 fixture `fspec_score_merged_1204`**：ScoreProtoModel 罚分走
+  （exact 0/hole 16/dup 20/mixed 56/mismatch25 500 阈值/output 0）、
+  ParamListMerged::foldIn（adopt/replace/subsumed/different-stacks 拒绝/
+  finalize 后 characterize+slot 查询）、ProtoModelMerged::foldIn
+  （首折采纳/extrapop 降 unknown/inject 拒绝/effects+trash 相交）、
+  selectModel（strict-< 首优/无 active/500 阈值拒绝）。oracle 直跑（锁定
+  源自建 libdecomp + FixtureArchitecture/SpacebaseSpace 手工构型）与
+  Rust 侧 25 行字节全等。**该 fixture 抓到并修正一处移植缺陷**：
+  `ProtoModelMerged::fold_in` 曾误把 model push 进 modellist——oracle 证据
+  （两次 foldIn 后 numModels()==0）证明 push 属 decode（cc:2918）。
+  C++ 侧构型注记：output 列表必须 populateResolver（fspec.cc:1504 配置
+  形态;12.0.4 findEntry 走 resolver）。
