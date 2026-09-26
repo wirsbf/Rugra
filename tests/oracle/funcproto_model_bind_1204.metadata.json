@@ -14,7 +14,7 @@
  "analysis_options": "default BfdArchitecture target=default; no option overrides; evalfp_current/evalfp_called unset (option database defaults)",
  "input_fingerprints": {
   "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-  "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "x86-64.sla": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
   "curl": "pinned from locked base examples/curl",
   "bfd.h": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
   "libbfd-2.38-system.so": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
@@ -145,7 +145,7 @@
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  "sla_sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
  },
  "host_tools": {
   "paths": {
