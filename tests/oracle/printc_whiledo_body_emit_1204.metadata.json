@@ -61,16 +61,16 @@
  "expected_ghidra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
  "expected_rugra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
  "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
- "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
+ "rust_fixture_sha256": "9ac280b78c9ef100aef3521ba38fe2271ea4bd17427ab9cef83c09fed7622b1d",
  "expected_exit_code": 0,
  "comparand": {
   "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
-  "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
-  "runner_sha256": "af94080ba662bb2b10c6da8d3835e5e75a76d4c77ab43695dc6d51cdf73dc495"
+  "rust_fixture_sha256": "9ac280b78c9ef100aef3521ba38fe2271ea4bd17427ab9cef83c09fed7622b1d",
+  "runner_sha256": "ad8d375947adac01a63e82b7db6bdc5787e9f99c4b4df6964169fe00790da4f2"
  },
  "source_snapshot_sha256": {
-  "rugra_printc": "f9ed7a3634f779573c3017a31441e408a6512b108a82091ba515559a6cba5823",
-  "rugra_prettyprint": "c39ace2c509bed65b939fab33a1103f7cad1120b6a68884e694f55d15019ac40",
+  "rugra_printc": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962",
+  "rugra_prettyprint": "60f2a37f9090855b11ad937cd97e82f46e2209114f8520eea7095fa4fb69375b",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
   "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
   "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",

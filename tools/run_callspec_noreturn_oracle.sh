@@ -195,7 +195,7 @@ canonical = json.dumps(
 require("manifest sha", sha(canonical), manifest["sha256"])
 
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")

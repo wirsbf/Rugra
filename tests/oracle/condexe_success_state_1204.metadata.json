@@ -26,12 +26,12 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "274344078af83b30c5d59ba02bc2a84353015f73",
-  "base_tree": "e55940ac25548fc5d863e7e52b64aee34304bdff",
-  "base_src_tree": "1f6a5a5ff448fe3d402636709ab4d0e83f8b8fc9",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_condexe_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
-  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -156,7 +156,7 @@
   "cpp_fixture_sha256": "9bae9b4e93c84d5e3ceb42db45c306de00735ea1bc301027bb432fab54544893",
   "rust_fixture_sha256": "cfaae7150026c3f2ef89fd63e44184d41b17ee6fb18a17b358a9aa6601df2dad",
   "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
-  "runner_sha256": "4926c73df3b661d6cfe694b90575263abc47dbd55969c1236bf9d262f104470e"
+  "runner_sha256": "36bcc10eecbf16cb84c68ce4ac8c35ca3d08dbdb82048b2260384f52ee492d7f"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "dbe19349dee114c9284bfa6b89146facbadf9d28644e29fb3fd24f065842c4bf",

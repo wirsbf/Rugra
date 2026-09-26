@@ -57,7 +57,7 @@
   "rust_fixture_sha256": "13e955b9fc9cfe5f0ad29b36c29dcd1ae1c0ff44f8a76c3482ed74511f9ff62f",
   "address_rs_sha256": "83fa59d9d0aad7d455dceb284fe563b3ec840b85d54b7d4a599e941aa7da75b6",
   "address_doc_sha256": "507cc5ad8da8cc023b92664e550f6a4d29ebae85a60d0b556dc8d57dd94b527c",
-  "runner_sha256": "8fc8aa537e3f9e14dd1fe505444bbbad6bbd4f364b9e35734dd72ef4946f4805",
+  "runner_sha256": "1825b0a696ce2ffc911c07af3532feac2f05a7230d95e733e7cbbec92e076ed8",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

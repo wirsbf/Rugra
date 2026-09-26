@@ -122,9 +122,9 @@
   "cpp_fixture_sha256": "03baae19e70e736f92bb49529e6946010e5defd415991e357aea7f13e2ad3e12",
   "rust_fixture_sha256": "9fea5b5b3db13669b63788e8ff05da810058054b8099234a1170e8f144a62435",
   "runner_sha256": "9ad879fa9d0d6fbc151c3b0ba0ffe282847c03ef8993fb2cedf479f8cfc34da4",
-  "doc_funcdata_sha256": "0ec191a1cd272b0995a1f0636f67ffd16143293d317caa18c77d1955131a9aa2",
-  "doc_coreaction_sha256": "b9129211f1ffaba094a038d1fa60bef683ad4c7b06f1dafe0b4ac04fdfaf8f97",
-  "rust_crate_tree_sha256": "acf769d3591b7af803822b9197b6443114cc0497deaa3aeb90d4f5f810e97e9a",
+  "doc_funcdata_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
+  "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
+  "rust_crate_tree_sha256": "9f464eab1f2945e63c0e1d87fada76833ef85bf137a3b1724fc30c24cdb06cf2",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-scope-sync-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_source_policy": "Every crate file comes from the pinned base commit 609981d706edb3e384b148a12ed190028baa1984 Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
  },

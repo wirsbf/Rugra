@@ -87,11 +87,11 @@
   "rust_fixture_sha256": "1869788b10ebae68a2abde2a8865ab8b82e52540b859d5675e7657caf6ab7d83",
   "runner_sha256": "fe7880a095125b2e434391984ef111304ba914880ab2531d5e5ee3e638b7268e",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-unnamed-base-overlay-b1-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit with src/printc.rs overlaid from the live tree (slice A: unnamed-location fallback token form unified to PrintC::pushUnnamedLocation, printc.cc:1938-1945, on top of slice B1's name-representative address source, printlanguage.cc:244)",
-  "rust_crate_tree_sha256": "7114cb95bd3730982d56046d457e70a62985c13129f9873035b61c3248702ec5",
+  "rust_crate_tree_sha256": "7ab7670b5176c6e8ad6c037a1338c8441bed238c4a28995721b73f674c50d9a5",
   "overlays": [
    {
     "path": "src/printc.rs",
-    "sha256": "01b49d39de11193cf8ea3cbdc40f7bae1ed03d876a5ed78d00f6a23b00522e06"
+    "sha256": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962"
    }
   ],
   "host": {

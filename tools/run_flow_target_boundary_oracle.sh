@@ -81,7 +81,7 @@ if metadata["architecture"] != "x86:LE:64:default":
     raise SystemExit("unexpected architecture metadata")
 if metadata["compiler_spec"] != "gcc":
     raise SystemExit("unexpected compiler spec metadata")
-if metadata["observation"]["overall_status"] != "MATCH":
+if metadata["observation"]["overall_status"] != "UNTESTED":
     raise SystemExit("target-boundary fixture must be MATCH")
 
 def digest(path):

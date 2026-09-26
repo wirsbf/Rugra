@@ -7,8 +7,8 @@
  "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (addBlock/addEdge, structureLoops entry state); no AddrSpace, no Funcdata, no PcodeOps",
  "comparand_sha256": {
   "cpp_fixture_sha256": "bad7bf4af2d5c40e77dd5ce778b522df0a6bc67829a9b2f69616047cd93920c5",
-  "rugra_block_sha256": "6feb58f2ba3dcfd4f7ae339dd8bc7a1016836573a888cef29610d9ba21508364",
-  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
+  "rugra_block_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "rugra_blockaction_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
   "rust_fixture_sha256": "2a3903c5afa1fa2df79f8b56008422d9ae1b10eac6bd7f27f49a24b131dd7265"
  },
  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",

@@ -65,8 +65,8 @@
  "comparand_sha256": {
   "cpp_fixture": "5ae93bff11dc5d1b7e7c83bf1fd0d4de0872089e9460629f2e4109ae1af6b8f0",
   "rust_fixture": "260ec3c3b3b06addbb84dc48c20abeefcc703197b7f3b936492ade2e5bbe9afd",
-  "rugra_varmap_source": "e9642192d96c411802fe7ec14b535b2afcbc64bf4dad2016f0f835c8ce80085a",
-  "api_document": "572e1ee365b5c0cf8a6f73f4e7a9eb87e06a79209cecdd5846ced894ea7f9fd7",
+  "rugra_varmap_source": "654a4a7db5923633d375b70465f251b2e667709d119d899ff01222b8d6fa0cda",
+  "api_document": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
   "runner": "8cb71316b964986615f86c7628db1764dbfc951aa8388f1e80fd86e89f0179f4",
   "rugra_build_inputs": "bd96a7bbf490780cbc67e5446e30e36e2dc9485c67ec6e45e05770748d6e3d8f",
   "cargo_lock": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",

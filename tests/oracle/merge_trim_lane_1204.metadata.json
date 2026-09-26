@@ -25,12 +25,12 @@
   ]
  },
  "rugra_source": {
-  "base_commit": "b1c73088a9ec045d5e7af428d45cea134f1369f1",
-  "base_tree": "6f3b84eede4ee50edd6885c075ec9abbc25b2cf3",
-  "base_src_tree": "a7b9070d7a5c492c7afbfbec198ebf98b74a0f0e",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_merge_blob": "7be3b18e0f721d952de26f77c70fb4865997877a",
-  "cargo_toml_blob": "bb22dd03e7519b9465d046f8bb0cdd86a7a54a6f",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -122,8 +122,8 @@
  "comparand": {
   "cpp_fixture_sha256": "8dceb49da3082fc4f0b9c1296875148b772a26c6efba34edb9d7c2c546748fc0",
   "rust_fixture_sha256": "87ed917166b4154211060701c854e868a33399da64d178250d58a189cdb601c5",
-  "merge_overlay_sha256": "983e714973016a3f941e57770860c895c0ba88313c22b77f627c9e5bb1c7f179",
-  "runner_sha256": "2817aa5f1c941af13c93103ca16f9d43f7fcca4e7766c49560e180e4b2032d41"
+  "merge_overlay_sha256": "e3410e6e0830819f928ed6a1a5eca13c3871b1eaa31053616ed7fe95498f2330",
+  "runner_sha256": "8582b7b83eca96bb2a441996420a007a527eb94b90fbdfec92205f68b2a03bfd"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "46892c561a1de54702924b0455f05133ad4ce7d31cdbd67002bb607994085091",

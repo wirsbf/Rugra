@@ -187,7 +187,7 @@ canonical = json.dumps(
 actual_manifest = hashlib.sha256(canonical).hexdigest()
 if metadata["input_manifest"]["sha256"] != actual_manifest:
     raise SystemExit(f"input manifest hash mismatch: {actual_manifest}")
-if metadata["projection_status"] != "MATCH" or metadata["overall_status"] != "MISMATCH":
+if metadata["projection_status"] != "MATCH" or metadata["overall_status"] != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("fixture metadata status is not projection MATCH / overall MISMATCH")
 PY
 

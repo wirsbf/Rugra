@@ -89,7 +89,7 @@ def require(label, actual, expected):
 
 data = json.loads(pathlib.Path(metadata_raw).read_text(encoding="utf-8"))
 require("fixture", data["fixture_id"], "MERGE-OVERLAPLOC-FLAGUNION-1204")
-require("overall", data["overall_status"], "MATCH")
+require("overall", data["overall_status"], "UNTESTED: (B2 downgrade: two-sided output pinning incomplete; original claim was pre-B2 match prose)")
 comparand = data["comparand"]
 for key, path in (
     ("cpp_fixture_sha256", cpp_raw),

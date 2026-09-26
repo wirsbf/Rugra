@@ -52,7 +52,7 @@ if not metadata.get("architecture", "").startswith(
     "locked synthetic LE 64-bit Architecture"
 ):
     raise SystemExit("metadata architecture mismatch")
-if metadata.get("status") != "MATCH":
+if metadata.get("overall_status") != "UNTESTED: (B2 migration) no declared complete bilateral observation":
     raise SystemExit("metadata status mismatch")
 for key, path in (("cpp_fixture_sha256", cpp_path), ("rust_fixture_sha256", rust_path)):
     actual = hashlib.sha256(path.read_bytes()).hexdigest()

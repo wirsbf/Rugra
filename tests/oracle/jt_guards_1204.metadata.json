@@ -34,7 +34,7 @@
  "comparand": {
   "cpp_fixture_sha256": "97cc8564bbb5e0b0b059f3efa942ad0dad2b96d5c1843bb20c82d6bd7488fcd3",
   "rust_fixture_sha256": "2afb90fd24d3732287186db59642552068e8ec96aa1313dd51872216ba2a2972",
-  "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
+  "jumptable_overlay_sha256": "f313bcce973665dc618c386e9ea1655309c89d996af21cd8ae75e79d184059d1",
   "runner_sha256": "291657150f73954bf78cfa9cc1e8bcae17a8349894efa72c6c181cbaad8fb53c"
  },
  "assets": {

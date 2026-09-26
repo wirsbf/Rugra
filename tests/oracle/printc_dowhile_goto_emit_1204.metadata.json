@@ -32,14 +32,14 @@
   "mismatch": []
  },
  "host": {
-  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)"
  },
  "cpp_fixture_sha256": "3e7b10b13f91eea5f8407c3fca430e2a4c0c41bdf6eda3e33ab9fccaf86e3c95",
  "rust_fixture_sha256": "4d4fc0ee7ec05e11a701e7d5839bcabf499c75f06b3d0715e79c19d882f3cf01",
  "comparand_sha256": {
-  "rugra_printc": "29225b8abddc69e8dada03bbda7b70d6b5d3826085f0e670ce858919b79fad96",
-  "rugra_prettyprint": "7631a7ee583db8c7c5b4db65cd8c762b24f38c63e39e0bc1cbe586574a3bfe0a",
+  "rugra_printc": "925779699a9fd2d2a79ec2dbdc7bff5ee4109daeedd31de1ae7d1aec77190962",
+  "rugra_prettyprint": "60f2a37f9090855b11ad937cd97e82f46e2209114f8520eea7095fa4fb69375b",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
   "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
   "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",

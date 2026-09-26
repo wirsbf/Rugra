@@ -151,7 +151,7 @@ def require(label, actual, expected):
 require("schema", metadata["schema_version"], 2)
 require("fixture id", metadata["fixture_id"], "RULE-ADDUNSIGNED-TYPEPRECOND-0001")
 require("projection status", metadata["projection_status"], "MATCH")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
 require("oracle tag", metadata["oracle"]["tag"], oracle_tag)
 require("oracle C++ tree", metadata["oracle"]["decompiler_cpp_tree"], cpp_tree)

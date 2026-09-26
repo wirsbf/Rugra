@@ -49,12 +49,12 @@
   "overlays": [
    {
     "path": "src/flow.rs",
-    "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
+    "sha256": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
     "policy": "Live overlay; hash-verified against the pinned base commit blob before replacing."
    },
    {
     "path": "src/pcodeinject.rs",
-    "sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+    "sha256": "abdef04b76bf615cd9214e870caece638e37207d3f6e888ae958dfa2b0f5242d",
     "policy": "Live overlay; hash-verified against the pinned base commit blob before replacing."
    }
   ],
@@ -146,8 +146,8 @@
  "comparand": {
   "cpp_fixture_sha256": "5d9729e8de1d65a078983e265a630e784531764dff1d75969c400a4d3ac9c996",
   "rust_fixture_sha256": "d1ac04209d6148cb4907c1e38bad0d274d9c27c9f1ea6d2ee935dd0d3b87b4f3",
-  "flow_overlay_sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
-  "pcodeinject_overlay_sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+  "flow_overlay_sha256": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
+  "pcodeinject_overlay_sha256": "abdef04b76bf615cd9214e870caece638e37207d3f6e888ae958dfa2b0f5242d",
   "runner_sha256": "7cf7c7bd546fb5b0593f7a74f4c15dff9aad767ec32ba41191464e7b9482a65b"
  },
  "expected_results": {

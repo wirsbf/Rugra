@@ -13,12 +13,12 @@
  },
  "rugra_base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4",
  "rugra_source": {
-  "base_src_tree": "593f652fa402b30eb3258b2b15b4a7c5a6ab0209",
-  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "base_cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "rust_overlay": "Archive Rugra base 8d59b7730472bde2147e9fdf28a494221c2f26c4 and overlay the owned src/comment.rs + src/block.rs candidates before the isolated offline build (block.rs carries the set_initial_range visibility the fixture's legal-cover construction needs, BLOCK-STOPADDR-FIXTURE-REGRESSION-0001)",
-  "base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4"
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d"
  },
  "architecture": {
   "id": "synthetic-le64-comment-sorter-fixture",
@@ -139,7 +139,7 @@
   "cpp_fixture_sha256": "a23be7e654bcea45359460f12e253ec3fba7409b6e80ede8869a74b12adac98e",
   "rust_fixture_sha256": "094471779acedf18b3200bfd78e069845efe608042f9c7e629c99c87adc8ede5",
   "comment_rs_sha256": "5e3e15b9fc14fb0a4b5fad04028aa14f4feb9c10b3acbce2950c26cd868affe3",
-  "runner_sha256": "1ca9d1296b2613e3e0e036a4074adc99f953ffebb70b914e1b447f4cea022fc4",
+  "runner_sha256": "6a52e6829a114928be0f04f78e04cf421f197f679be751ede96e45cab9d24b1a",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

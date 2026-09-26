@@ -9,12 +9,12 @@
   "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{address.hh:519-535,coreaction.cc:3556-3568,3840-3892,3925-3964,jumptable.cc:1546-1553,2574-2591,fspec.cc:3891-3964,varnode.cc:572-607}"
  },
  "rugra_source": {
-  "base_commit": "a33761225c5bfd90b0206d3363ca52867c99faea",
-  "base_tree": "113127fcea2bdbdb10dd23417697edfb9ebca806",
-  "base_src_tree": "e4cc3db3f5bc221fc86bd01200d22191e981c92b",
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
   "base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
-  "cargo_toml_blob": "775553773f9e5ad0cbac50264bd6e7497dbf0ac4",
-  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+  "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
   "archive_paths": [
    "Cargo.toml",
@@ -29,11 +29,11 @@
   ],
   "overlays": {
    "src/address.rs": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
-   "src/coreaction.rs": "be306f8d8f4f5695a157bf9829da46746b8e471fee4527fe35fe7a18497a93a6",
-   "src/jumptable.rs": "3adb90079457cee025b36dcc3bfdc68615192f13198e88768c99a6e97a1724ca",
-   "src/varnode.rs": "427b4f978ecbd9992b22f7d80d19488f30834f3b8aa7f4b58017bb847d0b17bb",
-   "src/funcdata.rs": "6e3aea71c47e4f9888496b1ca050c1afc60cf3164b2395ec0d5066064a79eca5",
-   "src/fspec.rs": "bed9dcc15df461634a1575c906b493eda8e0ef35ebb46ea2592babe882a8baad"
+   "src/coreaction.rs": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+   "src/jumptable.rs": "f313bcce973665dc618c386e9ea1655309c89d996af21cd8ae75e79d184059d1",
+   "src/varnode.rs": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7",
+   "src/funcdata.rs": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+   "src/fspec.rs": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329"
   }
  },
  "architecture": "synthetic FixtureArchitecture/FixtureTranslate (action_break_pool_1204 skeleton): constant/other/unique/ram/register/stack/join/iop spaces, TypeOp::registerInstructions, ScopeInternal global scope, fixture ProtoModel; Funcdata 'minimalmask' @ram:0x1000",
@@ -58,12 +58,12 @@
   "cpp_fixture_sha256": "3b432456e69d25e299dc05db4a474f051e6d5bcd2092bc953003f2df0cc45194",
   "rust_fixture_sha256": "0b054dc58e5485a5d8c513df1662a45e55da138471524ee0f4d850accaa92810",
   "address_overlay_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
-  "coreaction_overlay_sha256": "be306f8d8f4f5695a157bf9829da46746b8e471fee4527fe35fe7a18497a93a6",
-  "jumptable_overlay_sha256": "3adb90079457cee025b36dcc3bfdc68615192f13198e88768c99a6e97a1724ca",
-  "varnode_overlay_sha256": "427b4f978ecbd9992b22f7d80d19488f30834f3b8aa7f4b58017bb847d0b17bb",
-  "funcdata_overlay_sha256": "6e3aea71c47e4f9888496b1ca050c1afc60cf3164b2395ec0d5066064a79eca5",
-  "fspec_overlay_sha256": "bed9dcc15df461634a1575c906b493eda8e0ef35ebb46ea2592babe882a8baad",
-  "runner_sha256": "1cc54ed6e46c73f39fa1adc9a14c91568bc49c405ed98149177c1926c55dd06e",
+  "coreaction_overlay_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+  "jumptable_overlay_sha256": "f313bcce973665dc618c386e9ea1655309c89d996af21cd8ae75e79d184059d1",
+  "varnode_overlay_sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7",
+  "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "fspec_overlay_sha256": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329",
+  "runner_sha256": "7770c4bf47ef4d00b026d24885ac5b9eb5f6f49755a376f745aa4dffcbaafbb1",
   "rust_visibility_transform_sha256": "0589ee71b3030f8fda2560e651b23ab07b0655ec7d3c35bddc42fe8749b9e90c"
  },
  "expected_results": {

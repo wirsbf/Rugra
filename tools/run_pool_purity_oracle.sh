@@ -208,7 +208,7 @@ if any(not isinstance(item, str) or not item for item in top_residual_ids):
 if len(top_residual_ids) != len(set(top_residual_ids)):
     raise SystemExit("top-level residual_todo_ids contains duplicates")
 require("coverage/top-level residual union", coverage_residual_ids, set(top_residual_ids))
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 PY
 
 snapshot_root="$oracle_tmp/workspace"

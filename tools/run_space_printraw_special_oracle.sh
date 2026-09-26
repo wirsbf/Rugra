@@ -20,7 +20,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=102c476abf13a78f4a10062244286de53d46c755
+rugra_base_commit=895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/space_printraw_special_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/space_printraw_special_1204.cc"

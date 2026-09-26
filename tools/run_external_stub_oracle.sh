@@ -316,7 +316,7 @@ require(
     metadata["stable_function_id"],
     "GH12-F-de1535e978a573cef2cd",
 )
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

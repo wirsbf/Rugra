@@ -312,7 +312,7 @@ metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
 require("fixture id", metadata["fixture_id"], "HERITAGE-OWNERSHIP-0001")
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),

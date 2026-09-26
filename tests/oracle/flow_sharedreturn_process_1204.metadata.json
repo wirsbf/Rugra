@@ -194,7 +194,7 @@
   "program_flow_metadata": "adf5311c6979d14eb66acd91a05351fb65bb2f9448a2cd3f848279954c415cc5",
   "ghidra_curl_golden": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
   "compare_ghidra": "3877d4c8580122f3755de7452378ab1ebdf09e6c1039ede4fb34e5bcfc349f1d",
-  "runner": "862139e2ae4fe18e5c38685aad162b8b1ccc0d8495940f78175ec37c21d6ecf6"
+  "runner": "16310567bb676c8abd4ba7df5271cedd45046600c7aaa9b852f518ca77332b14"
  },
  "machine_input_sha256": {
   "curl_text": "287c95bed17616bd6e71c393fa61b28ae14e5671f1a7fac8a93137eda9e159d4"

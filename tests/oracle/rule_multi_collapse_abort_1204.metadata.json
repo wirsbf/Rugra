@@ -120,7 +120,7 @@
   "cpp_fixture_sha256": "acfb87381a83b40bb1b61d26fcc572b92a4b8ee36e83a3627521181530594c40",
   "rust_fixture_sha256": "f6ab61499cd05141cb23ec61b5fb025e134921bbbda567fce65aca6b9dbc562c",
   "runner_sha256": "63cdad84bd63c5bc062e8cac34518d149c0b6449f2e7ff6382945ac43e864b06",
-  "doc_sha256": "de154014a33c6251e359c3ede33d34c6ba368c30ce335d2a81e896aa4bc12e64",
+  "doc_sha256": "0efdd08ea2003e752d65ee1098c8843d2ba0f1f80cefaec056d994deb4ac7594",
   "rust_crate_tree_sha256": "0aad5094e1b9413b4f2fec5cd429e8515b55051baff9ed27fff42e5402791811",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-abort-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_source_policy": "Every crate file comes from the pinned base commit a51e0c5c14a5dec130d4e7a050e2512c9c518280 Git blob except the src/ruleaction.rs overlay, which is taken from the live working tree"

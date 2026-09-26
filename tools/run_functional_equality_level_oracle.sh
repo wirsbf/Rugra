@@ -308,7 +308,7 @@ for label, actual, expected in (
     ("oracle Makefile blob", oracle["decompiler_makefile_blob"], makefile_blob),
     ("architecture", metadata["architecture"], "x86:LE:64:default"),
     ("compiler spec", metadata["compiler_spec"]["id"], "gcc"),
-    ("overall status", metadata["overall_status"], "MISMATCH"),
+    ("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)"),
 ):
     require(label, actual, expected)
 

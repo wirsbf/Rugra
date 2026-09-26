@@ -25,15 +25,15 @@
   "signature": "int4 ActionMarkExplicit::baseExplicit(Varnode *vn,int4 maxref); int4 ActionMarkExplicit::apply(Funcdata &data); int4 ActionMarkImplied::apply(Funcdata &data); int4 Action::perform(Funcdata &data)"
  },
  "rugra_source": {
-  "base_commit": "1ff25f924635e12489ca9cba9c688443cae2401e",
-  "base_tree": "61d5dd05b8f3d95c711a5367bf4d793d87e332eb",
-  "base_src_tree": "4d553d6c0bfe78ac997fb5565389b7ca78df9ed9",
-  "base_coreaction_blob": "e5f2d7238b4974ef8a11a29b798a6ab5e8562764"
+  "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+  "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+  "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
+  "base_coreaction_blob": "e5fb0a75534d714556206c765e6cc075cf3bd8c3"
  },
  "comparand": {
   "cpp_fixture_sha256": "f5a4adb03364f8540f1443ff529ff8d816b26a73f824e9bdb26ea54c09f35aff",
   "rust_fixture_sha256": "3604dbd056b21e3fc7a2d5dd7fc70dc6f62c505fbbf231f5ebd3f03733ba8bfc",
-  "runner_sha256": "8a7aaadef88084dd5e1342868844ad19f05d09e6c5ca10c1e1b8d31a6681e80f"
+  "runner_sha256": "522e9ca990711a47b6f90c09d3185fc0ab4dc1f91b78cec43423181bc84873fb"
  },
  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",

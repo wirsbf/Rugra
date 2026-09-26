@@ -156,7 +156,7 @@ if metadata["oracle"]["tag"] != oracle_tag or metadata["oracle"]["commit"] != or
     raise SystemExit("metadata oracle mismatch")
 if metadata["rugra_base_commit"] != rugra_base_commit:
     raise SystemExit("metadata Rugra base commit mismatch")
-if metadata["overall_status"] != "MISMATCH":
+if metadata["overall_status"] != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("fixture must remain MISMATCH overall until registered residuals close")
 if metadata.get("projection_status") != "MATCH":
     raise SystemExit("covered 29-line projection must remain MATCH")

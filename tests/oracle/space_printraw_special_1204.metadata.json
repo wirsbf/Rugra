@@ -118,11 +118,11 @@
  "comparand_sha256": {
   "cpp_fixture": "da9445ef95ceb0427097e7bdb30d549acd9cf04fb16f4c23e361d065b950b0f6",
   "rust_fixture": "7a1033dbbd0ff7657fa3012fa7a5d0e521061abf5cc279df9e73f3aef116928f",
-  "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
-  "rugra_op_source": "c98e202ae4fb6b119c1604fc21b98c489e4bd050d8771f54bb27d602752a4655",
-  "api_document_space": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
-  "api_document_op": "7f294f135b5071b40a777b28b8ad368a8a959a6243b90ed23fd748996518870e",
-  "runner": "21995845926134763a99fb0e27a0e0a657774bc0b0511be6d06303b04a366fb9"
+  "rugra_space_source": "08bcdc1a81d0db2fb3b85a9a228ce9cba25a7ac0b296526a4cb2674fb977dc53",
+  "rugra_op_source": "088059518ebed202e512f0155ef3fcd70a8927eac96409b355eb341d98cd6ca1",
+  "api_document_space": "bf5d6cbe5df539400c861a71e1688a3eb87912ade7f087aa9b9444dcc6230b73",
+  "api_document_op": "762182346909d080454341ac07749483dcfce2192cf568de1a8e57c4da930d81",
+  "runner": "4e5aa31226574c7fe06617776ac629bf7b6dc50f8d0046cd16d4504c1aa8b086"
  },
  "expected_stdout_sha256": "08cbbe565a0a3f6c8790a6defc4a43831a46d312308f810fec89030142b12aa1",
  "expected_line_count": 11,

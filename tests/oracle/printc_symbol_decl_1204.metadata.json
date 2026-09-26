@@ -107,8 +107,8 @@
   "cpp_fixture_sha256": "1bf58ef315569b9554c4ba9f8f0b11aba9939cd5060f572a80141a71d94b873d",
   "rust_fixture_sha256": "8411136056b33b9525879019402eedb6283558bab6aa52e2a1a5809f353eadff",
   "runner_sha256": "0acad1f26e8479d76e135be679a9330974680b5e33005c3dd5a32c14c2a69965",
-  "doc_printc_sha256": "55a5b3ac218f347be126eacf4eb1c96332eeaaaefc1a39564bcd1474654e5258",
-  "rust_crate_tree_sha256": "a1aecafd5b3fe846d2ae52f0b0462f33ba726961d63fa4286f3562dbfe0b5a45",
+  "doc_printc_sha256": "23a0c8a5428edce50a64805d6ef5ed25fc99ecb8d4440d61926467c51faab3d1",
+  "rust_crate_tree_sha256": "16d98e1c267b68ac4060727918525384735b7441b23cbe0e7f0725ef535e3fb5",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-symbol-decl-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents"
  },
  "overall_status": "UNTESTED: (B2 downgrade: two-sided pinning incomplete - (B2 canonicalization)..."

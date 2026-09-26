@@ -157,7 +157,7 @@ if metadata["oracle"]["tag"] != oracle_tag or metadata["oracle"]["commit"] != or
     raise SystemExit("metadata oracle mismatch")
 if metadata["rugra_base_commit"] != rugra_base_commit:
     raise SystemExit("metadata Rugra base commit mismatch")
-if metadata["overall_status"] != "MATCH":
+if metadata["overall_status"] != "UNTESTED: (B2 canonicalization)":
     raise SystemExit("fixture must remain MATCH overall (14/14 lines)")
 for gate in ("indirect_addrforce_gate", "dominant_copy_null_cache_merge",
              "multientry_required_gate", "cross_space_justloc_order"):

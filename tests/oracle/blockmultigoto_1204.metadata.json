@@ -11,9 +11,9 @@
  },
  "comparand_sha256": {
   "cpp_fixture_sha256": "d0104bbcb64f05cec4e8934a6bb25782c579a38e3fdcadf534c88ecfecb24bcd",
-  "rugra_block_sha256": "f4481aefb8d2ba689d4f1f2161480d10d1a12a70a1f0d4c54027a696a1ef14bf",
-  "rugra_blockaction_sha256": "3937ccb29fa179e4f04d1affc5b6a2de478e0c3d8282bc6271cd49d8c20fff0a",
-  "rust_fixture_sha256": "2816d7475ac8d95e24fb53c0ce4ff155072cde2ab9c56978395f2d33b21c7e61"
+  "rugra_block_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "rugra_blockaction_sha256": "fa9de1eac0d2e3ddfbf36a4e5a655b00714bb9eebc75f4ebb065809f6716104f",
+  "rust_fixture_sha256": "b1a524c3bd8d5302391803bb29e1d1a07911b6a7d65a761fb9820cc3c9815596"
  },
  "covered_projection_status": "MATCH",
  "fixture_id": "BLOCKSTRUCT-MULTIGOTO-0001",

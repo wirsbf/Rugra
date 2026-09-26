@@ -41,7 +41,7 @@
     ],
     "overlay": {
       "path": "src/funcdata.rs",
-      "sha256": "d114a6a0430f8add7756964600fe880e73e27dd17b7ac3491f88200b2862fbb6",
+      "sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
       "policy": "The only live library-source input (the pushMultiequals port); hash-verify before replacing the pinned base funcdata.rs"
     },
     "archive_policy": "Immutable explicit dependency closure plus one verified funcdata.rs overlay; unrelated worktree files are excluded"
@@ -200,7 +200,7 @@
   "comparand": {
     "cpp_fixture_sha256": "b912c43a40b4bf673807538bb7719f881a75b5bfca018863e4750d38a2e30f5b",
     "rust_fixture_sha256": "985e09866bc1d88a6d267319c1308222862bba9e47ee92a7c359b7f15cb8feb2",
-    "funcdata_overlay_sha256": "81e9febb646680a4184627383dc208a0bc8221076b78873e684f7a5f141b8bdf",
+    "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
     "runner_sha256": "b085b846b74bcc00330d4f88af37974450ddf9de5e87561f880cf2c1ec5b7e15"
   }
 }

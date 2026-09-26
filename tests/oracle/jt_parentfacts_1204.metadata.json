@@ -26,12 +26,12 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "ef2f25f776b3c0ff877296772482d953f5e4127d",
-    "base_tree": "79cee1dbd3b4f98e90e5a100de0f7e391106940f",
-    "base_src_tree": "ae4196c362ec31ef4691430dc03d99cd74a5ed27",
+    "base_commit": "895f69d0baebeb67db7ae27cc1ba676b8fcb4f5d",
+    "base_tree": "ace2e9c5fddf79050ad9f8fe2bd2de6aa954cc03",
+    "base_src_tree": "2f252f03a1542c5e3aee261b4000b9614541390e",
     "base_jumptable_blob": "2fce5447c396417b691e9a052a465251921ca8d1",
-    "cargo_toml_blob": "775553773f9e5ad0cbac50264bd6e7497dbf0ac4",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "cargo_toml_blob": "f3d9fa9d3ba45eb2f6f5b736c6cd581820c0f341",
+    "cargo_lock_blob": "c1eef0a52f44f92d77b02f3e48b5d6781ec4bd94",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
     "archive_paths": [
       "Cargo.toml",
@@ -135,8 +135,8 @@
   "comparand": {
     "cpp_fixture_sha256": "c0dc1efbb22f5274c77277e2290eacdcdd10d66aaafd3f2479718c27c1246b76",
     "rust_fixture_sha256": "27f54b166585c323dcd469cd2c46be8a1eabc1b0e584e6834a8e09319e93ee95",
-    "jumptable_overlay_sha256": "12430ba7ee91312943077c82a7ebfe5bf4b65d66a5105c0fcb56db7ecceca091",
-    "runner_sha256": "a0d1f62107da98ae895b7609fd5906bba3b10a461febc9ed8a3cbb1f87fe89d4"
+    "jumptable_overlay_sha256": "f313bcce973665dc618c386e9ea1655309c89d996af21cd8ae75e79d184059d1",
+    "runner_sha256": "d6300f954fba32104526ab69b0e6f0cf9c5494fbb13d35872686f1832232ba4e"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "6f972431e3fd04906ab9594cb2d2f6d3cf6024a15c3e44e5655e29eecbdb6554",

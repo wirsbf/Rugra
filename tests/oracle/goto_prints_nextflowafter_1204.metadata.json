@@ -7,9 +7,9 @@
  "architecture": "locked synthetic copy-level FlowBlock trees built through production BlockGraph APIs (newBlockCopy + copymap/replaceUsingMap exactly as BlockGraph::buildCopy block.cc:1925-1938, newBlockGoto/newBlockList/newBlockWhileDo/newBlockDoWhile/newBlockInfLoop, grabCaseBasic+identifyInternal+addBlock as newBlockSwitch block.cc:1904-1919); no AddrSpace, no Funcdata, no PcodeOps",
  "comparand_sha256": {
   "cpp_fixture_sha256": "e1e2a881590841da6fb4d9a25f14aa878709ebed13c918dfd751d0e0a1a528c7",
-  "rugra_block_sha256": "9e7d1e1e14914d639ae434307b66d93096a6ac4f408a70d09245c0cb090828fc",
-  "rugra_coreaction_sha256": "3f3968d71acd780383a467e5d08e4ef00afac8ad3f81a8b98fd7005845b59d54",
-  "rust_fixture_sha256": "91282e2d0ddb51efdc4b2a7cd22fcbff31115e51978193d4c7f1b467b8424e5b"
+  "rugra_block_sha256": "16f74d49b604dbcb329893271d631b86fe279b34499283ec0d8e3619fac2e24f",
+  "rugra_coreaction_sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7",
+  "rust_fixture_sha256": "85a42b9a34407a09ea2869beb092cd50f94b087f8e38b94f71c57de9a42ceaaa"
  },
  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
  "fixture_id": "GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001",

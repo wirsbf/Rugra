@@ -180,7 +180,7 @@ def require(label, actual, expected):
 require("schema", metadata["schema_version"], 2)
 require("fixture", metadata["fixture_id"], "FLOW-SHAREDRETURN-0001")
 require("projection status", metadata["projection_status"], "MISMATCH")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 require("architecture", metadata["architecture"], "x86:LE:64:default")
 require("compiler id", metadata["compiler_spec"]["id"], "gcc")
 require(

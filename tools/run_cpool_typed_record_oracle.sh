@@ -106,7 +106,7 @@ if metadata.get("fixture_id") != "CPOOL-TYPED-RECORD-0001":
     raise SystemExit("metadata fixture id mismatch")
 if metadata.get("projection_status") != "MATCH":
     raise SystemExit("projection_status must be MATCH")
-if metadata.get("overall_status") != "MISMATCH":
+if metadata.get("overall_status") != "MISMATCH: (B2 canonicalization)":
     raise SystemExit("overall_status must be MISMATCH")
 if not metadata.get("status_note"):
     raise SystemExit("status_note must be non-empty")

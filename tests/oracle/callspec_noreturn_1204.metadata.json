@@ -39,7 +39,7 @@
    "sleigh_shim"
   ],
   "overlays": {
-   "src/fspec.rs": "5d49169dfd5bbb674b0ee1e58b9545f4ca7adbab9cd0da4b279e5ce761dcb6c3"
+   "src/fspec.rs": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329"
   },
   "snapshot_build_link": {
    "path": "ghidra",
@@ -51,7 +51,7 @@
  "comparand": {
   "cpp_fixture_sha256": "537529dce610365a1e9a40154885bf61ffafdb1514bec822e6b25c30197f862b",
   "rust_fixture_sha256": "33a2a3d818daba87aa0c85b777598427bdf60ce0f0235e056d4253998fefa410",
-  "runner_sha256": "794efbcbaa0c9e62bad6dd855c56a13b16acdabdabf5b0b3d28a098efc43a20b"
+  "runner_sha256": "953624fa317c5f31407350727b46dfdb343a6ef649100bc13b729b4b388c685c"
  },
  "architecture": "locked synthetic LE 64-bit fixture (const/other/unique/ram/register/stack/join/iop spaces, TypeFactory, decoded 'fixture' ProtoModel); no sleigh",
  "compiler_spec": {

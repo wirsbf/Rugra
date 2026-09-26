@@ -25,9 +25,9 @@
  "comparand": {
   "cpp_fixture_sha256": "d4feea9a84ab1f6f22baecb00a478591601975505102d55cb111af3634a97d9f",
   "rust_fixture_sha256": "6bcf975e77d1f6e3b69208d8a85caf46aebb590a6584f6167887610bb89e1b5a",
-  "typefactory_overlay_sha256": "296b0835a989fe501f46561ce133b2021a970aef666d7e248ee6beb25e5211c4",
-  "datatype_overlay_sha256": "474bf205807ff846f5d09b72ee3db88e58552b214f085d7dcf207c6eb288b70f",
-  "api_typefactory_document_sha256": "09fecbadc3f300e55bed2c6a54aef87b9711f3b2c9b6796123a271b145ffebc9",
+  "typefactory_overlay_sha256": "15255e97974f4e02b6dd270d170fd070186dd3d11bed7d46adacfd632c911a2e",
+  "datatype_overlay_sha256": "8ea630941c8a2d6d2b0752b1fe7f576d44d2de3d8e7b66d14706c34f91b3e263",
+  "api_typefactory_document_sha256": "203fdd751bb8fe1060d2838fbbaad1df3353ec056d8f202250268f7972c71360",
   "api_datatype_document_sha256": "64b9b81a032bc6236b7ccafbd9e6f834f1fac79f8cca35ff0885ad82f42e5cd7",
   "runner_sha256": "80da874db333c993d6cea3f436cba7b4546437d778d95e35ff4d894ef329817c",
   "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the two hash-verified live files (src/type_system/typefactory.rs, src/type_system/datatype.rs), build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed."
@@ -38,7 +38,7 @@
   "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
   "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_toml_sha256": "7be4e8e82dd5432fa893bec9e9f72da37a1b72ac26232b1ddb592eb910d125fe",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",
   "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8efeb34f0de0cde25702",
   "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"

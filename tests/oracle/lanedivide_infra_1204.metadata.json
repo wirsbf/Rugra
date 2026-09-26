@@ -53,22 +53,22 @@
   "overlays": [
    {
     "path": "src/subflow.rs",
-    "sha256": "bc826b803c954935fd1a7d1565781659929ec2da302a3c1de2c84d35e4a055c9",
+    "sha256": "d0aacb66185c5073c8529aa6a93e2abe75920faed2d3ab053f9204694bf2f095",
     "policy": "LaneDivide class layer; hash-verify before replacing the pinned base subflow.rs"
    },
    {
     "path": "src/arch.rs",
-    "sha256": "492efc3a7226fb0a7b2c7def414d9b66abec7df1edc5aca779679aa92237f162",
+    "sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
     "policy": "laned-register records and queries; hash-verify before replacing the pinned base arch.rs"
    },
    {
     "path": "src/funcdata.rs",
-    "sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+    "sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
     "policy": "lanedMap/minLanedSize lifecycle; hash-verify before replacing the pinned base funcdata.rs"
    },
    {
     "path": "src/transform.rs",
-    "sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
+    "sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
     "policy": "constant_iop iop-space materialization (TRANSFORM-CONSTANT-IOP-SPACE-0001 fix); hash-verify before replacing the pinned base transform.rs"
    }
   ],
@@ -417,10 +417,10 @@
  "comparand": {
   "cpp_fixture_sha256": "3eb5ec6dda2e5b83d39feff2cc68387f35b43da89b1d68821e60ece12fbf5f45",
   "rust_fixture_sha256": "6d2ccb1ac22612fe5cea904b5218f09313894f3a0aef2c7807789fb46b4a6734",
-  "subflow_overlay_sha256": "bc826b803c954935fd1a7d1565781659929ec2da302a3c1de2c84d35e4a055c9",
-  "arch_overlay_sha256": "492efc3a7226fb0a7b2c7def414d9b66abec7df1edc5aca779679aa92237f162",
-  "funcdata_overlay_sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
-  "transform_overlay_sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
+  "subflow_overlay_sha256": "d0aacb66185c5073c8529aa6a93e2abe75920faed2d3ab053f9204694bf2f095",
+  "arch_overlay_sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
+  "funcdata_overlay_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
+  "transform_overlay_sha256": "84a5a158aad0b7ad6183d5440b27058b1c093ca3bad450f160c309a42ffbf88e",
   "runner_sha256": "2de33a436f30b41cf3b8ae54cedf553058b01801cd577d09a6ee8832694fda37"
  },
  "expected_results": {

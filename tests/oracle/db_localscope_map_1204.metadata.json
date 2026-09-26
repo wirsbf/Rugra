@@ -47,40 +47,40 @@
  "comparand": {
   "cpp_fixture_sha256": "01f123b8715e0dd1059dababf49436f42f9d662f38a4a3525d6c502406030e3b",
   "rust_fixture_sha256": "47a0b3850982b0bccf53c5edd2f9a9536e1498a86cc5d8c6de6ab5f3451ef6ce",
-  "runner_sha256": "631c66e8198732cf01b003fccf4da09ee3d8b62338cdb3c3fd153f623f455c4d"
+  "runner_sha256": "dc4f657fe6b5b86923119419eb852fbb8584e1f4242264c8c6e11dac477523a4"
  },
  "assets": {
   "sla": {
    "path": "sleigh_specs/x86-64.sla",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
    "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
    "size": 484937
   },
   "processor_spec": {
    "path": "sleigh_specs/x86-64.pspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
    "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
    "size": 11721
   },
   "compiler_spec": {
    "path": "sleigh_specs/x86-64-gcc.cspec",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
    "size": 12182
   },
   "language_definitions": {
    "path": "sleigh_specs/x86.ldefs",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
    "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
    "size": 5390
   },
   "binary": {
    "path": "examples/curl",
-   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "source_repository_commit": "bd781781bcdca6595bd2fbe2bd4151b47b605d30",
    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
    "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
    "size": 162544

@@ -44,12 +44,12 @@
   "overlays": [
    {
     "path": "src/action.rs",
-    "sha256": "57d7bce3f4a479f9c4af8d882bbb267cfddfb198e9608fadef55e17facb49545",
+    "sha256": "c97e9ac8d029d751522f011fd404742d017c9a94985fedb627b16812b72fd26c",
     "policy": "Hash this owned live source before replacing the same path in the pinned Rugra archive"
    },
    {
     "path": "src/arch.rs",
-    "sha256": "06b44a01b391d38df6c87bbb970a066ae98cca59a2a2e438884127acf5588586",
+    "sha256": "6e3e093f2a17b08574d5d5846fb2e277deef1add47728499adaecdcd2cf38f77",
     "policy": "Hash this owned live source before replacing the same path in the pinned Rugra archive"
    }
   ]
