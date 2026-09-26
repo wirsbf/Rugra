@@ -314,7 +314,9 @@ def main() -> int:
 
     canon = sub.add_parser("canon")
     canon.add_argument("--runner", required=True)
-    canon.add_argument("--binary", required=True)
+    canon.add_argument("--binary", required=True,
+                       help="label only — the canon drivers hardcode their "
+                            "input and take no argv")
     canon.add_argument("--timeout", type=float, default=7200.0)
     canon.add_argument("--record-file", required=True)
 
@@ -333,7 +335,8 @@ def main() -> int:
                    "binary_sha256": file_sha256(args.binary)},
             args.timeout)
     else:
-        argv = [args.runner, args.binary]
+        # canon drivers hardcode their input binary and take no argv
+        argv = [args.runner]
         record = sweep_time_v(
             argv, {"side": "rugra", "mode": "canon", "binary": args.binary,
                    "binary_sha256": file_sha256(args.binary)},
