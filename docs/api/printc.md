@@ -3605,3 +3605,24 @@ this`）——union 分歧非潜伏（curl golden 含活 union
   全额 −46,名字票面=−44 工具度量）。httpd/bank/镜面见 lane 报告。
   - 测试侧 3 处 `get_varnode_display_name` 裸调用补 `None` consult 参数
     （单测名诊断路径,无数据流边,语义=无 union consult）。
+
+### 2026-09-26 — MIGW1-TYPEOP-0002 per-op virtual emitters（printc.hh:283-344 Rust 化）
+
+- 新增 printc.hh:283-344 全部 53 个具名 per-op 虚方法（`op_int_equal`..
+  `op_lzcount`，`_rpn` 后缀者为 printc.cc 真函数体族：opIntZext/opIntSext/
+  opBoolNegate/opFloatInt2Float/opFloatFloat2Float/opFloatTrunc/opSubpiece/
+  opPtradd），共享机制 `rpn_op_binary`（printlanguage.cc:546 opBinary：negatetoken
+  翻转前奏 + pushOp + 反序 pushVn）与 `rpn_op_unary`（:566）。token 一律经
+  optoken::BINARY_TOKENS 注册表 id 显式传入（oracle 静态 OpToken 实例身份）。
+- `dispatch_op_rpn` 的 52+PTRADD 臂退役为 `crate::typeop::push_opcode_rpn`
+  提前委托（typeop.rs 承载路由——oracle 的 TypeOp::push 层）；INT_ADD 结构
+  字段恢复前检查随迁 `op_int_add`；SUBPIECE/PTRADD 臂体原样抽为
+  `op_subpiece_rpn_full`/`op_ptradd_rpn`（行为零变化，canon A/B 逐字节恒等
+  亲证）。
+- opBoolNegate 完整三分支（printc.cc:814-828）首次落地：branch1 negatetoken
+  消费直推 in0、branch2 checkPrintNegation 命中时 `mods|negatetoken` 骑 nodepend
+  （rpn_op_binary 的翻转前奏消费——`!(a==b)`→`a!=b`，双重否定抵消）、branch3
+  boolean_not token。B2 fixture 三 case 锁定。
+- fixture 顺带暴露并修复 prettyprint.rs 补偿层 pass3 缺陷（见
+  docs/api/prettyprint.md 同日节）；`rpn_def_inline_reachable` 补 FLOAT_NAN/
+  POPCOUNT/LZCOUNT（printc.hh:317/343/344 opFunc 臂可达）。

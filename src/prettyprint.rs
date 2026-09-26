@@ -707,6 +707,36 @@ impl EmitNoMarkup {
         })
     }
 
+    // RUGRA-GLUE: 补偿层内部 helper(POSTFIX-BOOLFOLD-TOKEN-0001;Ghidra 无
+    /// 对应物——pass 3 的 token 边界判据)。Strip every `1 || ` whose `1`
+    /// begins a standalone token (preceded by start, `(` or whitespace),
+    /// leaving number-token tails (`0x11 || `, `a1 || `) untouched.
+    fn fold_standalone_one_or(line: &str) -> String {
+        let bytes = line.as_bytes();
+        let mut out = String::with_capacity(line.len());
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'1' && line[i..].starts_with("1 || ") {
+                let boundary_ok = i == 0 || matches!(bytes[i - 1], b'(' | b' ' | b'\t');
+                if boundary_ok {
+                    i += "1 || ".len();
+                    continue;
+                }
+            }
+            // Copy one UTF-8 character (never splits a multibyte scalar).
+            let ch_len = Self::utf8_char_len(bytes[i]);
+            out.push_str(&line[i..i + ch_len]);
+            i += ch_len;
+        }
+        out
+    }
+
+    // RUGRA-GLUE: UTF-8 scalar length for fold_standalone_one_or's
+    /// char-wise copy (first byte tag: 0xxxxxxx=1, 110=2, 1110=3, 11110=4).
+    fn utf8_char_len(b: u8) -> usize {
+        if b < 0x80 { 1 } else if b >> 5 == 0b110 { 2 } else if b >> 4 == 0b1110 { 3 } else { 4 }
+    }
+
     // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——
     // oracle 发射路径零后处理:prettyprint.hh:547-594 的 EmitNoMarkup 是无缓冲直写
     // emitter,printc.cc:2665 docFunction 以 flush() 结束,无任何 post-process)。
@@ -1042,10 +1072,15 @@ impl EmitNoMarkup {
 
             if line.contains("1 || ") {
                 // "if (1 || anything)" → "if (1)" which will be caught next pass
-                // For now, replace the condition
-                while line.find("1 || ").is_some() {
-                    line = line.replacen("1 || ", "", 1);
-                }
+                // For now, replace the condition.
+                // POSTFIX-BOOLFOLD-TOKEN-0001 (MIGW1-TYPEOP-0002 fixture
+                // exposure): the fold target is the standalone literal
+                // token `1`, never the tail digit of a larger numeric
+                // token — the naive replacen matched the "1 || " inside
+                // `0x11 || x` / `0x21 || x` and emitted the mangled
+                // `0x10x22`-family forms. Fold only when the `1` starts a
+                // token: preceded by start-of-line, `(`, or whitespace.
+                line = Self::fold_standalone_one_or(&line);
             }
 
             // 4. "+N - N" cancellation (e.g., "+ 1 - 1" → "")

@@ -653,3 +653,34 @@ void/尺寸失配=919-920。varnode.rs RETURN 臂与 coreaction build_localtypes
 - 本模块 7 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+
+### 2026-09-26 — MIGW1-TYPEOP-0002 per-op push carrying (52 禁链 Rust 化)
+
+- **typeop.hh:359..912 的 53 条 TypeOpX::push 全部 Rust 化承载**（52 禁链 +
+  TypeOpPtradd::push——后者是 printc.rs emit_expression 注释登记的"table gap
+  归 typeop.rs owner lane"项）。形态：每条 push 一个具名自由函数
+  `pub fn push_<op>(lng, op_arc, op[, read_op])`，锚 `// Ghidra: typeop.hh:<line>
+  TypeOpX::push`，体 = `as_printc_mut(lng)` 下探到 PrintC 具名 per-op 虚方法
+  （`op_int_equal`..`op_lzcount`），非 PrintC 语言回退泛型 `op_binary/op_unary`
+  （与既有 PcodeOp::push wrapper 的 CALLIND/PTRSUB 族模式一致）。
+- **生产接线**：`pub fn push_opcode_rpn(lng, op_arc, op, read_op) -> bool` 是
+  typeop.hh:170 虚分发的 Rust 孪生（inst 表→静态 per-opcode match，GLUE 注释
+  登记"PrintC 无 Architecture/TypeFactory 管道达及构造实例、push 不读实例
+  态"）；printc.rs `dispatch_op_rpn` 头部对 53 opcode 提前委托
+  （`printc.cc:2493/printlanguage.cc:532 的 op->getOpcode()->push hop`），
+  其余 opcode（COPY/LOAD/STORE/CALL/CALLIND/CALLOTHER/RETURN/CBRANCH/CAST/
+  PTRSUB + 空体 MULTIEQUAL/INDIRECT）保留本地臂。
+- **可观测验证**：`tests/oracle/typeop_push_dispatch_1204.{cc,rs}` +
+  `tools/run_typeop_push_dispatch_oracle.sh`（B2 双侧 fixture）——59 records
+  （schema+58 cases）逐字节一致：31 binary token / 3 unary token / 12 opFunc
+  name / ZEXT·SEXT cast+hide 臂 / opBoolNegate 三分支链（含 negatetoken 翻转
+  `!(a==b)`→`a!=b` 与双重否定抵消）/ FLOAT_INT2FLOAT·FLOAT2FLOAT·TRUNC cast
+  形 / SUBPIECE SUB48 opFunc 兜底 / PTRADD binary_plus 形。covered projection
+  MATCH；残差分支（misc readers/subpiece 特印/subscript 形）UNTESTED 登记
+  于 metadata。
+- 语义缺口 3 项随本承载闭合（皆 oracle 方向）：FLOAT_ABS/SQRT/CEIL/FLOOR/
+  ROUND 由"仅泄操作数"改为 opFunc `ABS(x)` 族；FLOAT_NAN/POPCOUNT/LZCOUNT
+  由无臂（泄 unnamed-location）改为 `NAN(x)` 族 + rpn_def_inline_reachable
+  补登记；opBoolNegate 由恒 boolean_not 改为完整三分支。五语料不可达
+  （canon 双语料与 master 逐字节恒等），故全部走 fixture 构造输入验证。
