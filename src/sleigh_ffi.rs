@@ -324,9 +324,10 @@ impl SleighCtx {
     }
 
     // RUGRA-GLUE: legacy length-only wrapper retained until callers consume the
-    // atomic `one_instruction` result in SLEIGH-0002D
-    pub fn instruction_length(&self, offset: u64) -> Option<usize> {
-        match &self.backend {
+    // atomic `one_instruction` result in SLEIGH-0002D; &mut because the C++
+    // shim freezes image/context here (decode_started, rugra_sleigh.cpp:500)
+    pub fn instruction_length(&mut self, offset: u64) -> Option<usize> {
+        match &mut self.backend {
             #[cfg(has_sleigh)]
             SleighBackend::Cpp(engine) => engine.instruction_length(offset),
             SleighBackend::Rust(engine) => engine.instruction_length(offset),
@@ -1080,8 +1081,11 @@ mod rust_backend {
         }
 
         // RUGRA-GLUE: mirror of rugra_sleigh_instruction_length (rugra_sleigh.cpp:496-507):
-        // any failure folds to None exactly like the C++ catch -> -1 path.
-        pub(crate) fn instruction_length(&self, offset: u64) -> Option<usize> {
+        // the C++ shim sets decode_started here too (the parse tree cache is
+        // consulted), so a later set_image/set_context returns InvalidState;
+        // any decode failure folds to None exactly like the C++ catch -> -1.
+        pub(crate) fn instruction_length(&mut self, offset: u64) -> Option<usize> {
+            self.decode_started = true;
             let code_space = self
                 .sleigh
                 .manager_rc()

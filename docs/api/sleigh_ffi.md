@@ -62,7 +62,10 @@ translator 或重放 spec。
 `decode() -> Vec<PcodeOpC>`、`set_image()` 与 `set_context()` 仅是旧 lifter
 的兼容桥：它们仍会折叠严格错误，不能用于 oracle 证据。生产调用链改用
 严格结果、移除 lifter 内二次 input cap，并采用 SLEIGH step，分别属于
-`SLEIGH-0002D` 与 `SLEIGH-FLOW-0001`。
+`SLEIGH-0002D` 与 `SLEIGH-FLOW-0001`。legacy `instruction_length()` 现为
+`&mut self`：C++ shim 在此处同样置 `decode_started`（rugra_sleigh.cpp:500）,
+两个后端在首次 decode/instruction_length 后都冻结 image/context
+（`InvalidState`）,镜像一致。
 
 ## 尚未闭合的边界
 
