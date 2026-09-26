@@ -7717,6 +7717,34 @@
       }
     },
     {
+      "id": "blockstruct_switch_default_whiledo_1204",
+      "description": "BLOCK-FINALIZE-DEFAULT-RECURSE-0001 bilateral finalizePrinting default-arm recursion fixture: a switch whose installSwitchDefaults-marked default edge carries a while-do (canonical for shape) must run BlockWhileDo::finalizePrinting through the switch's plain component-list recursion (block.cc:3556-3559 -> 1364-1371 -> 3403-3424, opMarkNonPrinting cc:3422) — the decisive observable is the iterate statement INT_ADD flagged notPrinted. Pre-fix Rugra skipped the default_case slot in finalize_printing_block's Switch arm (for->while degradation, latent: no corpus sample has a default-nested loop). Tree installed through production factories (newBlockWhileDo then newBlockSwitch/try_rule_switch) because a single collapse run consumes the raw default target first (ruleSwitch obvious-exit scan) — direct-construction family of printc_switch_emit_1204. Companion unit lock: block.rs finalize_visited_tests::finalize_recurses_into_structured_default_whiledo_for_extraction.",
+      "runner": [
+        "tools/run_blockstruct_switch_default_whiledo_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_switch_default_whiledo_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_blockstruct_switch_default_whiledo_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_switch_default_whiledo_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_switch_default_whiledo_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs"
+        ]
+      }
+    },
+    {
       "id": "printc_dowhile_goto_emit_1204",
       "description": "PrintC emitBlockDoWhile body / emitBlockGoto wrapped structural dispatch (printc.cc:3068-3095, 2766-2778): do { body } while (cond); emission with nested properif rendered through getBlock(0)->emit, the wrapped DoWhile-inside-Goto composite, and the null-parent gotoPrints arm versus locked Ghidra 12.0.4 (d4fd9f87)",
       "runner": [

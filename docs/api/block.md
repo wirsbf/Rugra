@@ -1682,11 +1682,13 @@ BlockSwitch 补齐 Ghidra ctor/finalizePrinting 语义（block.cc:3485-3601）�
 - `BlockGraph::finalize_printing`（block.cc:1364-1371）：子节点递归入口，
   由 ActionFinalStructure 调用（见 docs/api/blockaction.md）。
 - 自由函数 `finalize_printing_block`（RUGRA-GLUE，C++ virtual dispatch 的
-  Rust 形态）：Switch 分支先递归 control+非 goto case（= newBlockSwitch 经
-  identifyInternal 消费的 list 成员，cc:3559/1913；goto 臂目标留在周围图由
-  父图递归覆盖，cc:3548-3553）再跑 finalize_case_labels；其余复合块走
+  Rust 形态）：Switch 分支先递归 control+非 goto case+结构化（gototype==0）
+  default 臂（= newBlockSwitch 经 identifyInternal 消费的 list 成员，
+  cc:3559/1913；goto 臂目标与 gototype!=0 的 default 留在周围图由父图递归
+  覆盖，cc:3548-3553）再跑 finalize_case_labels；其余复合块走
   component_list_dyn 继承递归；叶子为 FlowBlock::finalizePrinting 空实现
-  （block.hh:262）。
+  （block.hh:262）。（default 臂下推为 2026-09-26 BLOCK-FINALIZE-DEFAULT-
+  RECURSE-0001 修复，见下节。）
 
 fixture：tests/oracle/printc_switch_emit_1204.rs 字面量补
 `jump: None, case_order: Vec::new()`（行为不变，仅结构体字段跟进），
@@ -1896,8 +1898,10 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
   ①`final_transform_block` 走 `component_list_dyn`（Switch 臂=cases+
   default，含 goto 臂）→ 别名成员可经两路到达，其 visited 守卫是**承重**
   的（去重后等价 oracle per-node-once）；②`finalize_printing_block` 的
-  Switch 分发只走 control+gototype==0 cases → 别名成员被结构性排除，
-  **无需守卫**——不对称是两扫描成员集不同的必然结果，非缺陷。③新增
+  Switch 分发只走 control+gototype==0 cases+gototype==0 default 臂
+  （default 下推为 2026-09-26 BLOCK-FINALIZE-DEFAULT-RECURSE-0001 修复）→
+  别名成员被结构性排除，**无需守卫**——不对称是两扫描成员集不同的必然
+  结果，非缺陷。③新增
   debug-only `BlockGraph::debug_assert_structure_tree_unique`（两扫描入口
   各调一次，oracle 走形=control+结构化 cases+结构化 default，其余=
   component_list_dyn）：任何其他重复可达（真共享子/父环）在 debug 构建
@@ -1915,3 +1919,36 @@ phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=86
   先标 NONPRINTING，收窄版 testTerminal 拒 notPrinted 根），至多单通道触发。
 
 行为证据见 TODO_BOARD HTTPDMAIN-F8-FORLOOP-0001 行（canon/mirror A/B 全表）。
+
+## 2026-09-26：finalizePrinting default 臂递归（BLOCK-FINALIZE-DEFAULT-RECURSE-0001）
+
+`finalize_printing_block` 的 Switch 分发补齐 oracle 形状的 default 臂下推
+（block.cc:3556-3559）：`default_gototype == 0` 时把 `default_case` 槽的
+结构化 default 体加入先序递归子列表——与 checker
+`debug_assert_component_tree_unique` 的 oracle 走形臂逐字一致，与 oracle 的
+朴素 list 递归（cc:3559 `BlockGraph::finalizePrinting(data)` 先于 label
+pass 遍历全部 identifyInternal 消费成员，含 ruleSwitch cc:1714-1720 push 进
+cs 的 default 臂体）对齐；`default_gototype != 0` 的 default 体留周围图不
+递归（镜像 cc:3548-3553 goto 臂语义）。
+
+- 缺陷表现：default 臂内嵌 WhileDo 的 for 提取 finalize
+  （BlockWhileDo::finalizePrinting cc:3403-3424 的 testTerminal→
+  testIterateForm→opMarkNonPrinting）不被执行 → iterate 语句保持可打印
+  （for→while 降级）。潜伏缺陷：canon/mirror 语料无 default-内嵌循环样本
+  （golden `default:` 臂均为直线体），F8VISITED 车道 checker（oracle 走形
+  含 default）与递归分发（漏 default）不一致自证。
+- 顺带同 commit 更新三处描述旧走形的注释（finalize_printing_block 文档/
+  finalize_printing_graph 守卫论证/final_transform_block 的 twin 论证）。
+- B2 双侧 fixture：`tests/oracle/blockstruct_switch_default_whiledo_1204`
+  （runner `tools/run_blockstruct_switch_default_whiledo_oracle.sh`）——
+  canonical for 形态 switch-default-WhileDo 经生产工厂安装
+  （newBlockWhileDo→newBlockSwitch/try_rule_switch；单次 collapse 先消费裸
+  default 目标，语料无样本，见 metadata normalizations），锁定 oracle 同
+  输入/同输出 MATCH：决定性观察行 `op blk2#0 INT_ADD notprinted=1`
+  （cc:3422）；A/B 验证：修复摘除→该行 0（MISMATCH），恢复→MATCH。
+  oracle 自身 findInitializer 门（cc:3336 初始化块须只流入循环）拒绝本
+  形态（初始化 COPY 在 2 出边的 switch 头内）→ initialize=- 双侧一致，
+  iterate 侧为决定性观察。
+- 单元锁：block.rs `finalize_visited_tests::
+  finalize_recurses_into_structured_default_whiledo_for_extraction`
+  （同 CFG 全管线，断言 INT_ADD 置 NONPRINTING + iterate_op/loop_def 存活）。
