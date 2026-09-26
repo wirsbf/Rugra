@@ -1,211 +1,211 @@
 {
- "schema_version": 2,
- "fixture_id": "DYNHASH-UNIQUE-ANCHOR-0001",
- "status_note": "DYNHASH-UNIQUE-ANCHOR-0001 verification fixture (CASTFUSE-A correction root-cause triplet, piece 1): the pre-fix Rust calc_hash_vn dead-coded the base-phase buildVnDown pass (vnproc poisoned to mark_vn.len() between the two base loops), dropping every reader edge from the neighborhood CRC and mis-anchoring CAST-adjacent temps at the pre-skip defining COPY with the not-attached fallback bit; the locked oracle dynamic.cc:277-280 builds BOTH the up and the down edges from vnproc=0 in every calcHash(Varnode*, method) call. The fix (wt/dynhash a3017edc) restores the walk; this fixture is minted AFTER the fix, so all ten cases are byte-identical MATCH with a zero divergence budget, pinning the walk shapes that the copytrim_remat_1204 mint lines previously diverged on.",
- "decisive_semantics": {
-  "reference_output_parameters": "calcHash/uniqueHash take the root Varnode by pointer and mutate only the DynamicHash member state (markvn/markop/vnedge/opedge, the vnproc/opproc/opedgeproc cursors, hash/addrresult); pieceTogetherHash clears the marks as its final mutation. uniqueHash(Varnode*) takes Funcdata* read-only for gatherFirstLevelVars. The Rust twin passes the Arc'd root and &Funcdata with the same mutation surface.",
-  "loop_bounds_traversal_order": "dynamic.cc:277-278 walks the base up pass with a LOCAL index starting at vnproc WITHOUT consuming it; dynamic.cc:279-280 then walks the down pass from vnproc=0, so the root gets its up edge (def, crossing skip ops upward via getIn(0)) and down edges (every reader, crossing skip ops downward via loneDescend) in every method. Method 1/2/3 continue from the consumed cursor (inputs staged by buildOpUp / outputs by buildOpDown, then the corresponding edge builder over only the NEW varnodes). buildVnDown sorts the newly added edges by ToOpEdge::operator< (SeqNum address, then order, then slot) before they are folded.",
-  "counter_accumulator_lifecycle": "vnproc/opproc/opedgeproc reset to 0 at calcHash entry; the base two passes consume vnproc to markvn.size(); gatherUnmarkedOp advances opedgeproc over the edge list exactly once per staged batch; the champion loop in uniqueHash keeps the FIRST smallest collision list (strictly-smaller replacement, dynamic.cc:454-456) but tmphash/tmpaddr are overwritten every method iteration, so the emitted hash carries the LAST method's bits (the escaped loop variable, dynamic.cc:474) with the champion list's total/position — pinned by the champion_collision case.",
-  "sorting_comparison_keys": "ToOpEdge::operator< compares op SeqNum address, then SeqNum order, then slot; ToOpEdge::hash folds slot, transtable[opcode], then getAddrSize() bytes of the op address LSB-first (crc_update consumes only the low 8 bits of each word, crc32.hh:37-39); pieceTogetherHash scans opedge in order for the first edge whose slot varnode IS the root (attached), falling back to opedge[0] with the not-attached bit; gatherFirstLevelVars filters ops at the address by translated opcode and slot and follows the not-attached bit through one skip op; findVarnode requires the recomputed collision total to match exactly before returning the varnode at the encoded position."
- },
- "oracle": {
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-  "instrumentation_policy": "No oracle source changes: the fixture only calls public APIs (Funcdata::newOp/newVarnodeOut/newVarnode/setInputVarnode/opSetInput/opSetOpcode/opInsertEnd/setHighLevel/clear, DynamicHash::calcHash/uniqueHash/findVarnode and the hash-decode statics). The private/protected access shim defines are inert for this surface and only mirror the copytrim_remat_1204 fixture shape."
- },
- "architecture": "x86:LE:64:default",
- "compiler_spec": {
-  "id": "gcc",
-  "path": "sleigh_specs/x86-64-gcc.cspec",
-  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
- },
- "analysis_options": {
-  "entry": "Direct construction per case: hand-built SSA bodies on fresh fd.clear() state (BfdArchitecture+real GetStr Funcdata on the Ghidra side; bare Funcdata twins on the Rust side). Pure DynamicHash observation surface: calc_hash_vn per method 0..3, unique_hash_vn with all decoded hash fields (method/opcode/slot/not-attached/position/total), and find_varnode round-trips by fixture varnode name. No symbols are minted (no ScopeLocal involvement); varnode explicit/implied flags are hand-set on the CAST-adjacent cases to mirror the ActionMarkExplicit/ActionMarkImplied production shapes.",
-  "funcproto_state": "none (no prototype locking; register offsets chosen at 0x80+ outside the cspec [8,39) param window so no static symbol interferes)",
-  "cases": [
-   "def_single_reader",
-   "multi_reader_sort",
-   "cast_above",
-   "cast_below",
-   "double_cast_chain",
-   "skip_no_reader",
-   "input_root",
-   "const_root",
-   "champion_collision",
-   "fold_detach"
-  ]
- },
- "assets": {
-  "sla": {
-   "path": "sleigh_specs/x86-64.sla",
-   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+  "schema_version": 2,
+  "fixture_id": "DYNHASH-UNIQUE-ANCHOR-0001",
+  "status_note": "DYNHASH-UNIQUE-ANCHOR-0001 verification fixture (CASTFUSE-A correction root-cause triplet, piece 1): the pre-fix Rust calc_hash_vn dead-coded the base-phase buildVnDown pass (vnproc poisoned to mark_vn.len() between the two base loops), dropping every reader edge from the neighborhood CRC and mis-anchoring CAST-adjacent temps at the pre-skip defining COPY with the not-attached fallback bit; the locked oracle dynamic.cc:277-280 builds BOTH the up and the down edges from vnproc=0 in every calcHash(Varnode*, method) call. The fix (wt/dynhash a3017edc) restores the walk; this fixture is minted AFTER the fix, so all ten cases are byte-identical MATCH with a zero divergence budget, pinning the walk shapes that the copytrim_remat_1204 mint lines previously diverged on.",
+  "decisive_semantics": {
+    "reference_output_parameters": "calcHash/uniqueHash take the root Varnode by pointer and mutate only the DynamicHash member state (markvn/markop/vnedge/opedge, the vnproc/opproc/opedgeproc cursors, hash/addrresult); pieceTogetherHash clears the marks as its final mutation. uniqueHash(Varnode*) takes Funcdata* read-only for gatherFirstLevelVars. The Rust twin passes the Arc'd root and &Funcdata with the same mutation surface.",
+    "loop_bounds_traversal_order": "dynamic.cc:277-278 walks the base up pass with a LOCAL index starting at vnproc WITHOUT consuming it; dynamic.cc:279-280 then walks the down pass from vnproc=0, so the root gets its up edge (def, crossing skip ops upward via getIn(0)) and down edges (every reader, crossing skip ops downward via loneDescend) in every method. Method 1/2/3 continue from the consumed cursor (inputs staged by buildOpUp / outputs by buildOpDown, then the corresponding edge builder over only the NEW varnodes). buildVnDown sorts the newly added edges by ToOpEdge::operator< (SeqNum address, then order, then slot) before they are folded.",
+    "counter_accumulator_lifecycle": "vnproc/opproc/opedgeproc reset to 0 at calcHash entry; the base two passes consume vnproc to markvn.size(); gatherUnmarkedOp advances opedgeproc over the edge list exactly once per staged batch; the champion loop in uniqueHash keeps the FIRST smallest collision list (strictly-smaller replacement, dynamic.cc:454-456) but tmphash/tmpaddr are overwritten every method iteration, so the emitted hash carries the LAST method's bits (the escaped loop variable, dynamic.cc:474) with the champion list's total/position — pinned by the champion_collision case.",
+    "sorting_comparison_keys": "ToOpEdge::operator< compares op SeqNum address, then SeqNum order, then slot; ToOpEdge::hash folds slot, transtable[opcode], then getAddrSize() bytes of the op address LSB-first (crc_update consumes only the low 8 bits of each word, crc32.hh:37-39); pieceTogetherHash scans opedge in order for the first edge whose slot varnode IS the root (attached), falling back to opedge[0] with the not-attached bit; gatherFirstLevelVars filters ops at the address by translated opcode and slot and follows the not-attached bit through one skip op; findVarnode requires the recomputed collision total to match exactly before returning the varnode at the encoded position."
   },
-  "processor_spec": {
-   "path": "sleigh_specs/x86-64.pspec",
-   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "instrumentation_policy": "No oracle source changes: the fixture only calls public APIs (Funcdata::newOp/newVarnodeOut/newVarnode/setInputVarnode/opSetInput/opSetOpcode/opInsertEnd/setHighLevel/clear, DynamicHash::calcHash/uniqueHash/findVarnode and the hash-decode statics). The private/protected access shim defines are inert for this surface and only mirror the copytrim_remat_1204 fixture shape."
   },
+  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-   "path": "sleigh_specs/x86-64-gcc.cspec",
-   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
   },
-  "language_definitions": {
-   "path": "sleigh_specs/x86.ldefs",
-   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  "analysis_options": {
+    "entry": "Direct construction per case: hand-built SSA bodies on fresh fd.clear() state (BfdArchitecture+real GetStr Funcdata on the Ghidra side; bare Funcdata twins on the Rust side). Pure DynamicHash observation surface: calc_hash_vn per method 0..3, unique_hash_vn with all decoded hash fields (method/opcode/slot/not-attached/position/total), and find_varnode round-trips by fixture varnode name. No symbols are minted (no ScopeLocal involvement); varnode explicit/implied flags are hand-set on the CAST-adjacent cases to mirror the ActionMarkExplicit/ActionMarkImplied production shapes.",
+    "funcproto_state": "none (no prototype locking; register offsets chosen at 0x80+ outside the cspec [8,39) param window so no static symbol interferes)",
+    "cases": [
+      "def_single_reader",
+      "multi_reader_sort",
+      "cast_above",
+      "cast_below",
+      "double_cast_chain",
+      "skip_no_reader",
+      "input_root",
+      "const_root",
+      "champion_collision",
+      "fold_detach"
+    ]
   },
-  "binary": {
-   "path": "examples/curl",
-   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+    },
+    "bfd": {
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
   },
-  "bfd": {
-   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
-   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  "rugra_source": {
+    "base_commit": "8ac3f7f0283beed06e7c33c0ff36b7a161232d06",
+    "base_dynamic_blob": "7f43e898f918693c7bd41941c69e959e852dc977",
+    "cargo_toml_blob": "9bac59625a35d003008b459c9d31d668d6497162",
+    "cargo_lock_blob": "d5b634cc9a5e459587b1bebe56dafc178a47c0f8",
+    "archive_policy": "Snapshot Cargo.toml + Cargo.lock + src/** + crates/** + benches/** from the pinned base commit (the fix commit); the fixtures and this metadata are overlaid from the working tree."
+  },
+  "host_tools": {
+    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "platform": "Linux 7.1.8-arch1-3 x86_64 (worktree host)"
+  },
+  "input_manifest": {
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0
+    },
+    "cases": [
+      {
+        "id": "def_single_reader"
+      },
+      {
+        "id": "multi_reader_sort"
+      },
+      {
+        "id": "cast_above"
+      },
+      {
+        "id": "cast_below"
+      },
+      {
+        "id": "double_cast_chain"
+      },
+      {
+        "id": "skip_no_reader"
+      },
+      {
+        "id": "input_root"
+      },
+      {
+        "id": "const_root"
+      },
+      {
+        "id": "champion_collision"
+      },
+      {
+        "id": "fold_detach"
+      }
+    ],
+    "sha256": "fa2e76a226f5df992ce428b264812f16dbcee975a8627e4361647eb1cd2de7d0"
+  },
+  "coverage": {
+    "def_single_reader": {
+      "status": "MATCH",
+      "covers": "Base walk: up edge (def COPY, attached slot -1) + down edge (reader) folded into the CRC at method 0; methods 1/2/3 add the level-1 neighborhoods (inputs of marked ops, outputs of marked ops, inputs staged with down edges); uniqueHash resolves champion=1 at method 0 and findVarnode round-trips.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "multi_reader_sort": {
+      "status": "MATCH",
+      "covers": "Three readers created out of address order: buildVnDown sorts the newly added down edges by ToOpEdge::operator< (SeqNum address, order, slot) before folding (dynamic.cc:147-148); anchor stays the attached def edge.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "cast_above": {
+      "status": "MATCH",
+      "covers": "Root = CAST output (implied, explicit pre-skip side): the up walk crosses the skip CAST so the up edge is not attached to the root; the down edge at the reading op IS attached — the anchor is the reading op (0x3020) with slot 0, exactly the shape the pre-fix Rust walk mis-anchored at the defining COPY with the not-attached bit (copytrim_remat_1204 late_cast_retarget anchor divergence).",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "cast_below": {
+      "status": "MATCH",
+      "covers": "Root read via a CAST feeding a real op: the down walk crosses the skip CAST, folding the reading-op edge with the CAST output's slot; the attached def edge anchors the hash at the defining COPY.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "double_cast_chain": {
+      "status": "MATCH",
+      "covers": "CAST(CAST(x)): t2 pins the multi-hop skip loop in buildVnUp with the attached reading-op anchor; t1 (mid-chain) has no attached edge on either side — the opedge[0] fallback fires with the not-attached bit (dynamic.cc:363-367) and findVarnode still round-trips via the gather redirection.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "skip_no_reader": {
+      "status": "MATCH",
+      "covers": "CAST output with no reader: exactly one (not-attached) edge exists; the fallback bit is set and gatherFirstLevelVars follows it through the skip op (loneDescend of the COPY output hits the CAST, whose output is returned) so the lookup round-trips.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "input_root": {
+      "status": "MATCH",
+      "covers": "Unwritten register input (newVarnode + setInputVarnode shape): buildVnUp contributes no edge; the anchor is the first sorted down edge, attached at slot 0 of the lower-address reader.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "const_root": {
+      "status": "MATCH",
+      "covers": "Constant root: pieceTogetherHash folds the root size and offset bytes into the CRC (dynamic.cc:341-347); no up edge; reader-anchored at the first sorted down edge.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "champion_collision": {
+      "status": "MATCH",
+      "covers": "Two identical-shape temps (defs share address 0x9000, readers share 0x9010): ToOpEdge::hash folds slot/opcode/address only, so t1/t2 hash identically at every method; uniqueHash keeps method-0's collision list as champion but emits the escaped method-3 tmphash bits (dynamic.cc:474) with total=2 and position 0/1; findVarnode recomputes with method 3, matches the total, and returns the varnode at the encoded position — the temps stay distinguishable through their hashes.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    },
+    "fold_detach": {
+      "status": "MATCH",
+      "covers": "Def+use anchored mint round-trips (pre ok=1); after the reader is rewired to the pre-copy varnode (RulePropagateCopy's IR effect) the recomputed neighborhood hash no longer matches — findVarnode returns null (postfold ok=0) and no op is created anywhere: the silent detach shape for vn-rooted dynamic entries.",
+      "residual_todo_ids": [],
+      "pinned_divergence_kinds": []
+    }
+  },
+  "residual_union": [],
+  "projection_status": "MATCH",
+  "overall_status": "MATCH: DYNHASH-UNIQUE-ANCHOR-0001 fixed (wt/dynhash a3017edc) — all ten cases byte-identical, zero divergence budget; the remaining copytrim_remat_1201 pinned divergences belong to DYNMAP-SETPROPS-RET-0001 / DYNMAP-LATE-CAST-RETARGET-0001 / COREACT-DYNMAP-STUB-0001 / COREACT-DYNSYM-STUB-0001 (funcdata.rs / coreaction.rs domains, held by other lanes)",
+  "comparand": {
+    "cpp_fixture_sha256": "d8c4d5fa7cf4af4d12b4d1582cd02ff6a2f482be6943c7c062d3a17239f909ed",
+    "rust_fixture_sha256": "3618894476afd82d86d738e4198133a59ab381d8dc61948a4c105abec545320d",
+    "runner_sha256": "5558565ee7c36b11bebfc8fa93866aab1cfc85468237543df5eef8a4f90a7751",
+    "rust_crate_tree_sha256": "c1e8f4287ffc2df181b3716aac73eb6bb444b483569282a064f922cc3709a2a6",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-dynhash-anchor-base-v1 plus base commit and sorted length-prefixed paths and contents"
+  },
+  "expected_results": {
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "ghidra_stdout_sha256": "d03e12b6b9e94bb169c558e5f34899ba61038c19db0cf49361095a1ae94b2d17",
+    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+    "rugra_stdout_sha256": "d03e12b6b9e94bb169c558e5f34899ba61038c19db0cf49361095a1ae94b2d17",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diff_exit_code": 0,
+    "record_count": 73,
+    "divergence_line_count": 0
   }
- },
- "rugra_source": {
-  "base_commit": "a3017edc",
-  "base_dynamic_blob": "7f43e898f918693c7bd41941c69e959e852dc977",
-  "cargo_toml_blob": "ee257b7b06893499ea0011b34e4daf037c4222fb",
-  "cargo_lock_blob": "dcb52f7bca56892266b532c30994bb5147a37f58",
-  "archive_policy": "Snapshot Cargo.toml + Cargo.lock + src/** + crates/** + benches/** from the pinned base commit (the fix commit); the fixtures and this metadata are overlaid from the working tree."
- },
- "host_tools": {
-  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-  "platform": "Linux 7.1.8-arch1-3 x86_64 (worktree host)"
- },
- "input_manifest": {
-  "binary": {
-   "path": "examples/curl",
-   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
-  },
-  "function": {
-   "name": "GetStr",
-   "entry": 14032,
-   "size": 0
-  },
-  "cases": [
-   {
-    "id": "def_single_reader"
-   },
-   {
-    "id": "multi_reader_sort"
-   },
-   {
-    "id": "cast_above"
-   },
-   {
-    "id": "cast_below"
-   },
-   {
-    "id": "double_cast_chain"
-   },
-   {
-    "id": "skip_no_reader"
-   },
-   {
-    "id": "input_root"
-   },
-   {
-    "id": "const_root"
-   },
-   {
-    "id": "champion_collision"
-   },
-   {
-    "id": "fold_detach"
-   }
-  ],
-  "sha256": "fa2e76a226f5df992ce428b264812f16dbcee975a8627e4361647eb1cd2de7d0"
- },
- "coverage": {
-  "def_single_reader": {
-   "status": "MATCH",
-   "covers": "Base walk: up edge (def COPY, attached slot -1) + down edge (reader) folded into the CRC at method 0; methods 1/2/3 add the level-1 neighborhoods (inputs of marked ops, outputs of marked ops, inputs staged with down edges); uniqueHash resolves champion=1 at method 0 and findVarnode round-trips.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "multi_reader_sort": {
-   "status": "MATCH",
-   "covers": "Three readers created out of address order: buildVnDown sorts the newly added down edges by ToOpEdge::operator< (SeqNum address, order, slot) before folding (dynamic.cc:147-148); anchor stays the attached def edge.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "cast_above": {
-   "status": "MATCH",
-   "covers": "Root = CAST output (implied, explicit pre-skip side): the up walk crosses the skip CAST so the up edge is not attached to the root; the down edge at the reading op IS attached — the anchor is the reading op (0x3020) with slot 0, exactly the shape the pre-fix Rust walk mis-anchored at the defining COPY with the not-attached bit (copytrim_remat_1204 late_cast_retarget anchor divergence).",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "cast_below": {
-   "status": "MATCH",
-   "covers": "Root read via a CAST feeding a real op: the down walk crosses the skip CAST, folding the reading-op edge with the CAST output's slot; the attached def edge anchors the hash at the defining COPY.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "double_cast_chain": {
-   "status": "MATCH",
-   "covers": "CAST(CAST(x)): t2 pins the multi-hop skip loop in buildVnUp with the attached reading-op anchor; t1 (mid-chain) has no attached edge on either side — the opedge[0] fallback fires with the not-attached bit (dynamic.cc:363-367) and findVarnode still round-trips via the gather redirection.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "skip_no_reader": {
-   "status": "MATCH",
-   "covers": "CAST output with no reader: exactly one (not-attached) edge exists; the fallback bit is set and gatherFirstLevelVars follows it through the skip op (loneDescend of the COPY output hits the CAST, whose output is returned) so the lookup round-trips.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "input_root": {
-   "status": "MATCH",
-   "covers": "Unwritten register input (newVarnode + setInputVarnode shape): buildVnUp contributes no edge; the anchor is the first sorted down edge, attached at slot 0 of the lower-address reader.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "const_root": {
-   "status": "MATCH",
-   "covers": "Constant root: pieceTogetherHash folds the root size and offset bytes into the CRC (dynamic.cc:341-347); no up edge; reader-anchored at the first sorted down edge.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "champion_collision": {
-   "status": "MATCH",
-   "covers": "Two identical-shape temps (defs share address 0x9000, readers share 0x9010): ToOpEdge::hash folds slot/opcode/address only, so t1/t2 hash identically at every method; uniqueHash keeps method-0's collision list as champion but emits the escaped method-3 tmphash bits (dynamic.cc:474) with total=2 and position 0/1; findVarnode recomputes with method 3, matches the total, and returns the varnode at the encoded position — the temps stay distinguishable through their hashes.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  },
-  "fold_detach": {
-   "status": "MATCH",
-   "covers": "Def+use anchored mint round-trips (pre ok=1); after the reader is rewired to the pre-copy varnode (RulePropagateCopy's IR effect) the recomputed neighborhood hash no longer matches — findVarnode returns null (postfold ok=0) and no op is created anywhere: the silent detach shape for vn-rooted dynamic entries.",
-   "residual_todo_ids": [],
-   "pinned_divergence_kinds": []
-  }
- },
- "residual_union": [],
- "projection_status": "MATCH",
- "overall_status": "MATCH: DYNHASH-UNIQUE-ANCHOR-0001 fixed (wt/dynhash a3017edc) — all ten cases byte-identical, zero divergence budget; the remaining copytrim_remat_1201 pinned divergences belong to DYNMAP-SETPROPS-RET-0001 / DYNMAP-LATE-CAST-RETARGET-0001 / COREACT-DYNMAP-STUB-0001 / COREACT-DYNSYM-STUB-0001 (funcdata.rs / coreaction.rs domains, held by other lanes)",
- "comparand": {
-  "cpp_fixture_sha256": "d8c4d5fa7cf4af4d12b4d1582cd02ff6a2f482be6943c7c062d3a17239f909ed",
-  "rust_fixture_sha256": "3618894476afd82d86d738e4198133a59ab381d8dc61948a4c105abec545320d",
-  "runner_sha256": "18bdd94113ded74bdc6ac11ee6812e56bbcd3c6162c0c967ae0449a9a2a2b0af",
-  "rust_crate_tree_sha256": "7b4cad6a5c4ecb6ba322d8013f5ebe1d30f0ebf3b81bc9de9ee3f91330d36ef5",
-  "rust_crate_tree_hash_scheme": "sha256 of rugra-dynhash-anchor-base-v1 plus base commit and sorted length-prefixed paths and contents"
- },
- "expected_results": {
-  "ghidra_exit_code": 0,
-  "rugra_exit_code": 0,
-  "ghidra_stdout_sha256": "d03e12b6b9e94bb169c558e5f34899ba61038c19db0cf49361095a1ae94b2d17",
-  "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
-  "rugra_stdout_sha256": "d03e12b6b9e94bb169c558e5f34899ba61038c19db0cf49361095a1ae94b2d17",
-  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "diff_exit_code": 0,
-  "record_count": 73,
-  "divergence_line_count": 0
- }
 }
