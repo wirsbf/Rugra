@@ -428,3 +428,51 @@ C0-C5（可选破环）、R7（capability 接线裁决）。执行触发由 root
 - 关键 grep 事实（防内存盘丢失，正文已引用）：typeop.hh:25、varnode.hh:214、op.hh:21、
   space.hh:22-23、marshal.hh:19-20、heritage.hh:23、varmap.hh:22、fspec.hh:22-23、
   address.rs:2010、typeop.rs:65、typefactory.rs:2730、lib.rs:126-127、Cargo.toml:6。
+
+---
+
+## 7. A2 修订（2026-09-26 晚，HHMIRROR 压测后）
+
+> 压测终判：**FEASIBLE-WITH-CONDITIONS**。权威记录：`docs/alignment_docs/LANE_HHMIRROR_2026-09-26.md`
+> （285 行，12 边逐边亲核+生产 types 图实测）。本节为该终判的蓝图落地，与其冲突处以该报告为准。
+
+### 7.1 目标降格（红线条件）
+
+原"23 层无环"目标表述**作废**，替换为：**压缩无环 + 冻结核心 SCC（24 模块）+ 环棘轮**。
+宣称零环 = 机制 D 红线。理由（实测）：.hh include 图无环的第一功臣是 **C++ 前置声明**
+（Rust 无法复刻——无 incomplete type），.cc 浮顶只是第二功臣（可复刻）。Rust 复刻后者可得
+SCC[60]→24，复刻前者不可能。
+
+### 7.2 边分类结论（12 边+4 新发现）
+
+- 12 边中多数为 (a) 浮动变体（impl/签名级，类型下沉即断）；E5 伪影确认（address.rs:2010
+  level-0 副本，C1 维持）；E7 op↔varnode↔block↔variable 为 (c) 真互持（Ghidra 靠 fwd decl，
+  op.hh 根本不 include varnode.hh）；E9 旗舰成立（五卫星 types 逐字段核验干净，Heritage 无
+  fd 字段=GLUE 已线程化）。
+- **4 条本蓝图未列的 (c) 类真阻断边**：E13 Action/Rule trait 签名→funcdata（action.rs:100/:495，
+  被 ActionDatabase/ActionPool 持有）；E14 ArchOption 签名→arch（options.rs:51）；E15 JumpModel
+  签名→funcdata（jumptable.rs:1518）；E16 type_system 反转环 ×2（TypeSpacebase.fd→varmap +
+  ScopeLocal.arch_lookup→arch + Architecture.types→type_system 三环；TypeCode.proto↔
+  FuncCallSpecs.proto_model 二环）。
+- 生产 types 图实测（三轮迭代修掉测试假阳性）：**24 模块核心 SCC（含 funcdata）+ 74 solo**。
+
+### 7.3 C 程序状态更新
+
+C0/C2/C3/C4/C5 在 A2 下**自动完成或作废**（E11→C0 作废、E10→C5 作废、E3/E4 签名已干净→
+C3 大部作废、E8 marshal trait 浮动→C4 作废）；**仅 C1（E5 错置副本）维持**。新增可选
+C6-C8（E13/E14/E15 的 trait 反转，B2 语义工程）**默认不排期**。
+
+### 7.4 A2 设计与成本
+
+~9 层组（foundation/pcode-IR/types-db/arch-hub/funcdata-hub/impls 浮顶层/print/frontend +
+core-scc 冻结节点），六步执行（卫星先行→IR 组→枢纽→trait 归位→环棘轮工具进 CI→runner
+级联）。**"纯移动"改写为"移动+可见性放宽（impl 移兄弟模块后私有字段须升 pub(crate)）+1
+GLUE 修复（action.rs:341 activate() 默认体内 drillobserve 拖入）"**。成本：A2 增量 ≈ 6-8
+车道日；与 Phase A 同窗合并总盘 ≈ 10-12 车道日。28 overlay 是重建非改名（文件拆分后 overlay
+集合+sha256 表按新清单重写）——**必须与 Phase A 同窗执行，分窗=双倍重钉级联**。
+
+### 7.5 触发判据（不变）
+
+对齐收敛（canon 零未解释差异）+ 零待并分支 + wave 边界；Phase B 追加 SLEIGH 换装（✓ 已完成）
++ TFSINGLE step-2。kuna 对照结论：其止步非硬阻碍（单 crate 文件夹纯导航，从未设无环目标）；
+本方案可在其止步处推进至 24 模块冻结 SCC——存在性证明+机制证明双立，零环不可达。
