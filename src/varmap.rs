@@ -1911,6 +1911,183 @@ pub mod symbol_category {
     pub const FAKE_INPUT: i32 = 3;
 }
 
+// RUGRA-GLUE: SymbolStore — stable-identity symbol arena (database.hh:809
+//   ScopeInternal::nametree owns the Symbol objects by POINTER; Rust cannot
+//   hand out stable pointers from a Vec, so this arena hands out stable slot
+//   ids instead — the pointer-identity equivalent PERF-VARMAP-REMOVE-REKEY-0001
+//   requires).
+/// Dense-push, tombstone-on-remove arena for [`LocalSymbol`].
+///
+/// Ghidra's `ScopeInternal` stores no symbol vector at all: the symbols live
+/// as heap `Symbol *` objects owned by the `nametree` set (database.hh:809,
+/// `SymbolCompareName` order database.hh:358-372), with `category` slots and
+/// the `maptable` rangemaps holding raw pointers back into them.
+/// `removeSymbol` (database.cc:2138-2150) erases the pointers from all three
+/// indexes and `delete`s the object — O(log n) per index, and crucially every
+/// SURVIVING `Symbol *` elsewhere in the process stays valid: no re-keying.
+///
+/// This container reproduces that identity discipline in safe Rust:
+/// - `push` allocates a fresh slot id (monotonic, never reused — the
+///   generational-id form of a fresh heap pointer);
+/// - `remove_slot` tombstones the slot (`delete symbol`, database.cc:2149)
+///   without moving any other slot — the O(1) equivalent of pointer
+///   invalidation for exactly one symbol;
+/// - the Vec-mimicking surface (`iter`/`get`/`Index`/`len`/`push`/`clear`/
+///   `last`) yields only live symbols, in slot-id order — the exact
+///   subsequence order a compacting Vec of the same push/remove history
+///   would show, so every caller written against the old
+///   `Vec<LocalSymbol>` observes the same sequence.
+///
+/// Slot ids replace the old dense indices in `nametree` values,
+/// `category_lists` slots and `mapentry_log` entries; a stale id (held across
+/// a removal) now reads as dead/absent instead of silently aliasing the
+/// symbol that a dense Vec would have shifted into its place — the null
+/// `Symbol *` semantics of the oracle, not a behavior change for any id that
+/// was live when captured.
+#[derive(Clone, Debug, Default)]
+pub struct SymbolStore {
+    slots: Vec<Option<LocalSymbol>>,
+    live: usize,
+}
+
+impl SymbolStore {
+    // RUGRA-GLUE: container constructor (no Ghidra counterpart)
+    pub fn new() -> Self {
+        Self { slots: Vec::new(), live: 0 }
+    }
+
+    // RUGRA-GLUE: arena allocation = new heap Symbol* (database.cc:1810)
+    /// Allocate a fresh stable slot for `sym`, returning its slot id.
+    pub fn push(&mut self, sym: LocalSymbol) -> usize {
+        let id = self.slots.len();
+        self.slots.push(Some(sym));
+        self.live += 1;
+        id
+    }
+
+    // RUGRA-GLUE: live-slot read (null Symbol* reads as absent)
+    pub fn get(&self, idx: usize) -> Option<&LocalSymbol> {
+        self.slots.get(idx).and_then(|s| s.as_ref())
+    }
+
+    // RUGRA-GLUE: live-slot mutable read
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut LocalSymbol> {
+        self.slots.get_mut(idx).and_then(|s| s.as_mut())
+    }
+
+    // RUGRA-GLUE: pointer-liveness test (stale nametree-entry guard form
+    //   of the old `idx < symbols.len()` dense bounds check)
+    pub fn has(&self, idx: usize) -> bool {
+        self.slots.get(idx).is_some_and(|s| s.is_some())
+    }
+
+    // RUGRA-GLUE: live count (the Vec::len a compacting store would show)
+    pub fn len(&self) -> usize {
+        self.live
+    }
+
+    // RUGRA-GLUE: live emptiness
+    pub fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    // RUGRA-GLUE: live iteration in slot-id order (compacted-Vec order)
+    pub fn iter(&self) -> impl Iterator<Item = &LocalSymbol> {
+        self.slots.iter().flatten()
+    }
+
+    // RUGRA-GLUE: live mutable iteration in slot-id order
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LocalSymbol> {
+        self.slots.iter_mut().flatten()
+    }
+
+    // RUGRA-GLUE: last live symbol (Vec::last of the compacted view)
+    pub fn last(&self) -> Option<&LocalSymbol> {
+        self.slots.iter().flatten().next_back()
+    }
+
+    // RUGRA-GLUE: wholesale drop (the funcdata startProcessing/clear
+    //   `scope.symbols.clear()` seam — Ghidra's clearUnlocked projection)
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.live = 0;
+    }
+
+    // RUGRA-GLUE: tombstone = delete symbol (database.cc:2149) with zero
+    //   re-keying of every other slot (the O(n²) hotspot this container
+    //   exists to remove — PERF-VARMAP-REMOVE-REKEY-0001)
+    pub(crate) fn remove_slot(&mut self, idx: usize) {
+        if self.slots.get_mut(idx).is_some_and(|s| s.take().is_some()) {
+            self.live -= 1;
+        }
+    }
+
+    // RUGRA-GLUE: slot-aware first-match (Vec::iter().position() returned a
+    //   DENSE index; this returns the stable slot id of the same first live
+    //   match — the iteration orders coincide for any push/remove history)
+    pub(crate) fn position_live(
+        &self,
+        mut pred: impl FnMut(&LocalSymbol) -> bool,
+    ) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(&mut pred))
+    }
+
+    // RUGRA-GLUE: consuming live walk with slot ids (rebuild seam)
+    pub(crate) fn into_live_slots(self) -> impl Iterator<Item = (usize, LocalSymbol)> {
+        self.slots
+            .into_iter()
+            .enumerate()
+            .filter_map(|(id, slot)| slot.map(|sym| (id, sym)))
+    }
+}
+
+// RUGRA-GLUE: &store IntoIterator — `for sym in &scope.symbols` yields the
+//   live symbols in slot-id order (the compacted-Vec traversal parity).
+impl<'a> IntoIterator for &'a SymbolStore {
+    type Item = &'a LocalSymbol;
+    type IntoIter = std::iter::Flatten<std::slice::Iter<'a, Option<LocalSymbol>>>;
+    // RUGRA-GLUE: IntoIterator glue (trait signature, no Ghidra counterpart)
+    fn into_iter(self) -> Self::IntoIter {
+        self.slots.iter().flatten()
+    }
+}
+
+// RUGRA-GLUE: &mut store IntoIterator — the iter_mut()/for-in mutable pair.
+impl<'a> IntoIterator for &'a mut SymbolStore {
+    type Item = &'a mut LocalSymbol;
+    type IntoIter = std::iter::Flatten<std::slice::IterMut<'a, Option<LocalSymbol>>>;
+    // RUGRA-GLUE: IntoIterator glue (trait signature, no Ghidra counterpart)
+    fn into_iter(self) -> Self::IntoIter {
+        self.slots.iter_mut().flatten()
+    }
+}
+
+// RUGRA-GLUE: Vec-parity indexing — a live slot dereferences like the dense
+//   Vec element; a dead/out-of-bounds slot panics loudly instead of silently
+//   aliasing a shifted neighbor (an impossible state for callers holding ids
+//   captured while the symbol was live).
+impl std::ops::Index<usize> for SymbolStore {
+    type Output = LocalSymbol;
+    // RUGRA-GLUE: Index glue (operator[], no Ghidra counterpart)
+    fn index(&self, idx: usize) -> &LocalSymbol {
+        self.slots[idx]
+            .as_ref()
+            .expect("SymbolStore index of dead slot")
+    }
+}
+
+// RUGRA-GLUE: mutable indexing (typelock/namelock writes through scope.symbols[idx])
+impl std::ops::IndexMut<usize> for SymbolStore {
+    // RUGRA-GLUE: IndexMut glue (operator[]=, no Ghidra counterpart)
+    fn index_mut(&mut self, idx: usize) -> &mut LocalSymbol {
+        self.slots[idx]
+            .as_mut()
+            .expect("SymbolStore index_mut of dead slot")
+    }
+}
+
 /// A restructured local variable symbol.
 /// Corresponds to Ghidra's Symbol (database.hh:168) plus its first whole
 /// SymbolEntry mapping (database.hh:130 SymbolEntry).
@@ -2105,7 +2282,9 @@ impl RangeSubsort for EntrySubsort {
 /// symbols.
 #[derive(Clone, Debug)]
 pub struct LocalMapEntry {
-    /// Index into `ScopeLocal::symbols` of the mapped Symbol.
+    /// Stable slot id into `ScopeLocal::symbols` (the `Symbol *` of the
+    /// mapped Symbol — the arena never re-keys ids, so this stays valid
+    /// until the symbol's own removal drops the entry).
     pub sym: usize,
     /// Storage space of this mapping (`SymbolEntry::addr`'s space).
     pub space: crate::space::AddressSpace,
@@ -2240,8 +2419,13 @@ pub struct TypeRecommend {
 /// ScopeInternal (database.hh:795).
 #[derive(Debug, Clone)]
 pub struct ScopeLocal {
-    /// The restructured local symbols
-    pub symbols: Vec<LocalSymbol>,
+    /// The restructured local symbols in the stable-slot [`SymbolStore`]
+    /// arena — the Rust form of Ghidra's heap-`Symbol*` ownership by the
+    /// nametree (database.hh:809): slot ids are stable across removals
+    /// (tombstones, never re-keyed), so every index held in `nametree`,
+    /// `category_lists` and `mapentry_log` behaves like the oracle's
+    /// pointers (PERF-VARMAP-REMOVE-REKEY-0001).
+    pub symbols: SymbolStore,
     /// Whether restructuring had overlap problems
     pub overlap_problems: bool,
     /// Stack growth direction following Ghidra's convention (varmap.cc:700):
@@ -2250,14 +2434,17 @@ pub struct ScopeLocal {
     /// Ghidra's `AliasChecker::direction` exactly — do not flip it.**
     pub stack_direction: i32,
     /// Ghidra ScopeInternal::nametree (database.hh:809): the set of Symbol
-    /// indices ordered by `(name, nameDedup)` — SymbolCompareName
+    /// references ordered by `(name, nameDedup)` — SymbolCompareName
     /// (database.hh:358-372): `name.compare()` first, then `nameDedup`.
-    /// Maps the SymbolNameTree key to the index into `symbols`.
+    /// Maps the SymbolNameTree key to the symbol's STABLE slot id in
+    /// `symbols` (the `Symbol *` element of the oracle's
+    /// `set<Symbol *, SymbolCompareName>`); erasure is a plain map remove
+    /// — no re-keying of any other entry (database.cc:2148).
     nametree: std::collections::BTreeMap<(String, u32), usize>,
     /// Ghidra ScopeInternal::category lists (database.hh:805): per-category
     /// ordered slots mirroring `vector<vector<Symbol *>> category`.
     /// `None` slots are the null entries popped by `setCategory`
-    /// (database.cc:2828-2832).
+    /// (database.cc:2828-2832); `Some(id)` holds a stable slot id.
     category_lists: Vec<Vec<Option<usize>>>,
     /// Ghidra ScopeLocal::space (varmap.hh:213): address space of the local
     /// stack. Rugra models the space as the `AddressSpace::Stack` enum.
@@ -2355,7 +2542,7 @@ impl ScopeLocal {
     // disabling alias analysis. See docs/alignment_audit/INDEX.md P0-1.
     pub fn new() -> Self {
         Self {
-            symbols: Vec::new(),
+            symbols: crate::varmap::SymbolStore::new(),
             overlap_problems: false,
             stack_direction: 1,
             nametree: std::collections::BTreeMap::new(),
@@ -2450,11 +2637,18 @@ impl ScopeLocal {
     /// Remove the symbol: null its category slot (popping trailing nulls,
     /// database.cc:2141-2146), drop its mappings (removeSymbolMappings,
     /// database.cc:2117-2136 — every maptable entry of the symbol, dynamic
-    /// entries excluded from the static log by construction), and erase it
-    /// from the nametree (database.cc:2147-2149). The Vec-based storage
-    /// re-keys every nametree/category/entry-log reference above the hole
-    /// down by one; entry-log survivors keep their relative order — the
-    /// multiset equivalent-element order `rangemap::erase` preserves.
+    /// entries excluded from the static log by construction), erase it from
+    /// the nametree (database.cc:2148), and delete it (database.cc:2149).
+    ///
+    /// Storage form (PERF-VARMAP-REMOVE-REKEY-0001): the slot id is the
+    /// `Symbol *` — the nametree/category/mapentry-log references are stable
+    /// ids, so removal is one map erase + one retain + one tombstone with
+    /// ZERO re-keying, exactly the oracle's O(log n) pointer-identity
+    /// discipline (the old dense-`Vec::remove` form re-keyed every
+    /// nametree/category/entry-log reference above the hole, making
+    /// removal-driven loops O(n²)). The retain keeps the survivors'
+    /// relative order — the multiset equivalent-element order
+    /// `rangemap::erase` preserves.
     /// (Public: `Scope::removeSymbol` is a public oracle entry point —
     /// database.hh:601 — and the locked fixture drives it directly.)
     pub fn remove_symbol(&mut self, idx: usize) {
@@ -2471,26 +2665,12 @@ impl ScopeLocal {
                 }
             }
         }
-        self.symbols.remove(idx);
-        self.nametree.remove(&key);
-        for value in self.nametree.values_mut() {
-            if *value > idx {
-                *value -= 1;
-            }
-        }
-        for list in &mut self.category_lists {
-            for slot in list.iter_mut().flatten() {
-                if *slot > idx {
-                    *slot -= 1;
-                }
-            }
-        }
+        // removeSymbolMappings (database.cc:2117-2136)
         self.mapentry_log.retain(|entry| entry.sym != idx);
-        for entry in &mut self.mapentry_log {
-            if entry.sym > idx {
-                entry.sym -= 1;
-            }
-        }
+        // nametree.erase(symbol) (database.cc:2148)
+        self.nametree.remove(&key);
+        // delete symbol (database.cc:2149) — tombstone the stable slot
+        self.symbols.remove_slot(idx);
     }
 
     // Ghidra: varmap.cc:1590 ScopeLocal::addTypeRecommendation
@@ -2606,13 +2786,13 @@ impl ScopeLocal {
     ///   sym); }
     /// The oracle walks the SymbolNameTree with a stable iterator while
     /// `addRecommendName` removes the current symbol. The Rust port
-    /// snapshots the candidate indices in nametree order, then replays
-    /// `add_recommend_name` with immediate removal in that same order,
-    /// adjusting each snapshot index by the number of prior removals below
-    /// it (the pointer-stability seam) — the append order, the removal
-    /// timing, and the end state are identical to the oracle's single loop.
+    /// snapshots the candidate ids in nametree order, then replays
+    /// `add_recommend_name` with immediate removal at those SAME ids (the
+    /// stable-slot arena keeps them valid — the pointer-stability seam) —
+    /// the append order, the removal timing, and the end state are
+    /// identical to the oracle's single loop.
     /// The "this"-pointer type recommendations run as a first pass over
-    /// the same snapshot (before any index shift); they land on the
+    /// the same snapshot (before any removal can run); they land on the
     /// separate `type_recommend` list, so the interleaving with the name
     /// appends is unobservable to both consumers (varmap.cc:1574/1507
     /// iterate the lists independently).
@@ -2652,22 +2832,18 @@ impl ScopeLocal {
             self.add_type_recommendation(space, offset, dt);
         }
         // Replay pass: addRecommendName in nametree order with immediate
-        // removal (cc:378), each snapshot index corrected by the prior
-        // removals below it.
-        let mut removed_below: Vec<usize> = Vec::new();
+        // removal (cc:378). The snapshot ids are STABLE slot ids (the
+        // pointer-stability form of the oracle's single nametree walk —
+        // `Symbol *sym = *iter++;` keeps every remaining iterator position
+        // valid across `removeSymbol(sym)`, varmap.cc:363-380), so each
+        // pick is replayed at its snapshot id: the same candidate set, the
+        // same nametree order, the same per-symbol removal timing, and the
+        // same end state as the CR-F7NAME-verified dense-shift replay.
         for snap_idx in picks {
-            let shift = removed_below.iter().filter(|&&j| j < snap_idx).count();
-            let live_idx = snap_idx - shift;
-            if live_idx >= self.symbols.len() {
+            if !self.symbols.has(snap_idx) {
                 continue;
             }
-            // cc:1616-1617 arm inside addRecommendName: only category < 0
-            // symbols are removed, so only those shift later indices.
-            let will_remove = self.symbols[live_idx].category < 0;
-            self.add_recommend_name(live_idx);
-            if will_remove {
-                removed_below.push(snap_idx);
-            }
+            self.add_recommend_name(snap_idx);
         }
     }
 
@@ -3318,7 +3494,7 @@ impl ScopeLocal {
         let old_mapentries = std::mem::take(&mut self.mapentry_log);
         let mut kept: Vec<LocalSymbol> = Vec::new();
         let mut kept_old_idx: Vec<usize> = Vec::new();
-        for (old_idx, mut sym) in old_symbols.into_iter().enumerate() {
+        for (old_idx, mut sym) in old_symbols.into_live_slots() {
             let survive = if sym.category >= 0 {
                 true
             } else if sym.typelock {
@@ -3340,16 +3516,21 @@ impl ScopeLocal {
         }
         // Rebuild all derived containers from the survivors, preserving each
         // survivor's whole map entry (space/start/size/flags/uselimit) and
-        // category slot.
-        let mut new_symbols: Vec<LocalSymbol> = Vec::new();
+        // category slot. The rebuild re-densifies into a FRESH store (the
+        // wholesale-reset semantics this pass has always had — clearUnlocked
+        // + gatherSymbols re-feed, varmap.cc:1273/1269), so survivor ids
+        // are dense 0..K exactly as before the storage change.
+        let mut new_symbols = crate::varmap::SymbolStore::new();
         let mut new_entries: Vec<LocalMapEntry> = Vec::new();
         self.nametree.clear();
         self.category_lists.clear();
-        for (new_idx, sym) in kept.into_iter().enumerate() {
+        for sym in kept.into_iter() {
+            let new_idx = new_symbols.push(sym);
+            let new_sym = &new_symbols[new_idx];
             let old_idx = kept_old_idx[new_idx];
-            let cat = sym.category;
-            let cat_index = sym.cat_index as i32;
-            let key = (sym.name.clone(), sym.name_dedup);
+            let cat = new_sym.category;
+            let cat_index = new_sym.cat_index as i32;
+            let key = (new_sym.name.clone(), new_sym.name_dedup);
             self.nametree.insert(key, new_idx);
             while self.category_lists.len() <= cat as usize && cat >= 0 {
                 self.category_lists.push(Vec::new());
@@ -3366,7 +3547,6 @@ impl ScopeLocal {
                 e.sym = new_idx;
                 new_entries.push(e);
             }
-            new_symbols.push(sym);
         }
         self.symbols = new_symbols;
         self.mapentry_log = new_entries;
@@ -3502,11 +3682,13 @@ impl ScopeLocal {
         }
         // Rename pass: type-locked symbols with an unlocked, defined name
         // take the undefined placeholder (order-independent of removals).
+        // position_live returns the STABLE slot id (the dense
+        // iter().position() of the old storage returned the compacted
+        // index; both walk live symbols in insertion order).
         loop {
             let idx = self
                 .symbols
-                .iter()
-                .position(|s| {
+                .position_live(|s| {
                     s.category == cat
                         && s.typelock
                         && !s.namelock
@@ -3519,13 +3701,13 @@ impl ScopeLocal {
             self.rename_symbol(idx, &undef);
         }
         // Removal pass: every non-type-locked symbol of the category
-        // (database.cc:2088-2089). Removing by position repeatedly keeps the
-        // Vec re-keying consistent.
+        // (database.cc:2088-2089). position_live re-finds the first live
+        // slot of the category each round — the slot-id form of the dense
+        // re-find loop, zero re-keying per removal.
         loop {
             let idx = self
                 .symbols
-                .iter()
-                .position(|s| s.category == cat && !s.typelock);
+                .position_live(|s| s.category == cat && !s.typelock);
             match idx {
                 Some(idx) => {
                     self.remove_symbol(idx);
@@ -3545,7 +3727,7 @@ impl ScopeLocal {
             return;
         }
         loop {
-            let idx = self.symbols.iter().position(|s| s.category == cat);
+            let idx = self.symbols.position_live(|s| s.category == cat);
             match idx {
                 Some(idx) => {
                     self.remove_symbol(idx);
@@ -4109,20 +4291,21 @@ impl ScopeLocal {
     }
 
     // Ghidra: database.cc:2733 ScopeInternal::findFirstByName
-    /// Find the index of the first symbol in the SymbolNameTree ordering with
-    /// the given name. Faithful to `ScopeInternal::findFirstByName`
+    /// Find the symbol id in the SymbolNameTree ordering with the given
+    /// name. Faithful to `ScopeInternal::findFirstByName`
     /// (database.cc:2733-2742): a `lower_bound` lookup on `(nm, 0)` that
     /// returns `None` (nametree.end()) unless the found symbol's name equals
-    /// `nm` exactly. Indices invalidated by an external
-    /// `symbols.clear()` (funcdata.rs startProcessing clears only the vec,
+    /// `nm` exactly. Ids invalidated by an external
+    /// `symbols.clear()` (funcdata.rs startProcessing clears only the store,
     /// modeling Ghidra's `localmap->clearUnlocked()` whose Rugra counterpart
-    /// cannot touch the private nametree) are treated as absent.
+    /// cannot touch the private nametree) read as dead slots — absent, like
+    /// the oracle's null pointer.
     pub fn find_first_by_name(&self, nm: &str) -> Option<usize> {
         self.nametree
             .range((nm.to_string(), 0u32)..)
             .next()
             .and_then(|(k, &idx)| {
-                if k.0 == nm && idx < self.symbols.len() {
+                if k.0 == nm && self.symbols.has(idx) {
                     Some(idx)
                 } else {
                     None
@@ -4344,7 +4527,6 @@ impl ScopeLocal {
         usepoint: Option<u64>,
         property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
     ) -> usize {
-        let idx = self.symbols.len();
         let mut sym = LocalSymbol::new(nm, start, 1, ct, symbol_category::NO_CATEGORY);
         sym.space = space;
         if sym.name.is_empty() {
@@ -4358,7 +4540,7 @@ impl ScopeLocal {
             .map(|d| d.get_size() as i32)
             .unwrap_or(1);
         sym.size = size;
-        self.symbols.push(sym);
+        let idx = self.symbols.push(sym);
         self.insert_name_tree(idx);
         // addMapPoint (database.cc:1548-1557): a valid usepoint restricts the
         // uselimit to that single address, then Scope::addMap (via
@@ -4511,7 +4693,6 @@ impl ScopeLocal {
         property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
         in_global_discovery: Option<&dyn Fn(crate::space::AddressSpace, u64) -> bool>,
     ) -> usize {
-        let idx = self.symbols.len();
         let space = sym.space;
         let start = sym.start;
         let size = sym.size;
@@ -4532,7 +4713,7 @@ impl ScopeLocal {
         // (database.cc:1149-1150) on the (possibly cleared) usepoint.
         sym.addrtied = usepoint.is_none() && !is_dynamic;
         sym.usepoint = usepoint;
-        self.symbols.push(sym);
+        let idx = self.symbols.push(sym);
         self.insert_name_tree(idx);
         if !is_dynamic {
             let code_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
@@ -4569,7 +4750,6 @@ impl ScopeLocal {
         hash: u64,
         caddr: Option<u64>,
     ) -> usize {
-        let idx = self.symbols.len();
         let size = ct.as_ref().map(|d| d.get_size() as i32).unwrap_or(1);
         let mut sym = LocalSymbol::new(nm, 0, size, ct, symbol_category::NO_CATEGORY);
         sym.is_dynamic = true;
@@ -4583,7 +4763,7 @@ impl ScopeLocal {
             sym.name = self.build_undefined_name().unwrap_or_else(|| "$$undef00000000".into());
             sym.display_name = sym.name.clone();
         }
-        self.symbols.push(sym);
+        let idx = self.symbols.push(sym);
         self.insert_name_tree(idx);
         idx
     }
@@ -4785,7 +4965,7 @@ impl ScopeLocal {
     }
 
     // RUGRA-GLUE: symbols_in_nametree_order (locked naming-fixture observation accessor)
-    /// Read-only view of the symbol indices in SymbolNameTree order
+    /// Read-only view of the live symbol ids in SymbolNameTree order
     /// (database.hh:373, sorted by name then nameDedup). Production C++
     /// iterates the `nametree` set directly; the locked naming fixture needs
     /// the same walk order through the public API to observe the
@@ -4794,7 +4974,7 @@ impl ScopeLocal {
         self.nametree
             .values()
             .copied()
-            .filter(|&idx| idx < self.symbols.len())
+            .filter(|&idx| self.symbols.has(idx))
             .collect()
     }
 
@@ -4818,7 +4998,7 @@ impl ScopeLocal {
             .collect();
         for key in walk {
             let idx = match self.nametree.get(&key) {
-                Some(&i) if i < self.symbols.len() => i,
+                Some(&i) if self.symbols.has(i) => i,
                 // Slot vacated by an external symbols.clear() or by an
                 // earlier rename in this walk; Ghidra's iterator cannot see
                 // either, so treat as exhausted.

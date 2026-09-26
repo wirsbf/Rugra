@@ -243,8 +243,12 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332-1391) 忠实状态机：按 maptable 条目序（per-space rangemap `(first,size,subsort)` 升序）遍历；**跨条目 sticky 状态**（`aliason` 初 false、alias 游标 `i` 单调推进、rangeIter 不回退）；别名消费循环 `alias[i] <= curoff`（:1358-1361）；**range-tree 走查**（:1363-1375，"别名不穿过 unmapped 区域"：范围 `first > curalias && curoff >= first` 或被越过的范围 `last > curalias` 关闭 aliason，`last >= curoff` 时 break 且游标停在当前范围）；0xffff 距离启发式（:1378，**可变更 aliason 对后续条目生效**）；`setAttribute(nolocalalias)` **只置位不清位**（database.cc:2200-2207 |= 语义）；locked-type 阻断（:1381-1390，`glb->alias_block_level` 默认 2=struct+array 阻断，arch_lookup 接入，fixture 无 arch 回退 0）。2026-09-24 PM-HF 车道 oracle 探针实证（helpf：entry -0xf8 与 alias -0x228..-0x220 相距 <0xffff，仅 range-gap 规则可判 unaliased——旧实现按符号独立重算且无 range 走查，判 aliased 致 RuleIndirectCollapse 拒折 6 个 free-阻 INDIRECT，oppool1 count 118 vs 110）
 - `find_symbol(offset)` — 按偏移查找重构后的符号
 
-**命名状态字段**（database.hh:809/805, varmap.cc:345-348）：`nametree: BTreeMap<(String,u32),usize>`、
-`category_lists`、`local_range: Vec<(first,last)>`（symboltab 并集范围树——resetLocalWindow
+**命名状态字段**（database.hh:809/805, varmap.cc:345-348）：`symbols: SymbolStore`
+（**稳定槽位 arena，2026-09-26 PERF-VARMAP-REMOVE-REKEY-0001**——database.hh:795-813
+ScopeInternal 无符号向量，Symbol 对象由 nametree 按指针拥有；Rugra 以
+"分配即新槽位 id、删除即墓碑"复刻指针身份，id 永不复用、跨删除稳定）、
+`nametree: BTreeMap<(String,u32),usize>`（值=稳定槽位 id，erase 零重键 database.cc:2148）、
+`category_lists`（`Some(id)`=稳定槽位 id）、`local_range: Vec<(first,last)>`（symboltab 并集范围树——resetLocalWindow
 装入的 localRange ∪ paramRange，`longest_fit`/`local_range_remove_range`/`in_scope` 消费）、
 `proto_local_range: Vec<(first,last)>`（**原型自身 localRange** 缓存——buildVariableName 的门，
 varmap.cc:555；正偏移参数在并集内但不在本窗口，命名落入 ScopeInternal 分支）、`min_param_offset`/
@@ -395,7 +399,19 @@ oracle 证据承担：
   的空间维形式；`has_overlap(offset,size)` 保持无空间签名（funcdata.rs
   mapGlobals 冻结调用面的兼容 shim，遍历日志中出现过的空间）。
 - `remove_symbol` 改 pub（database.hh:601 公共入口）并维护条目日志
-  （retain+重键）。`in_scope`（database.hh:597 rangetree.inRange 全包含）。
+  （retain）。**2026-09-26 存储重设计（PERF-VARMAP-REMOVE-REKEY-0001）**：
+  `symbols: SymbolStore` 稳定槽位 arena 取代 dense `Vec<LocalSymbol>`——
+  槽位 id 单调分配、删除仅墓碑化（`delete symbol`，database.cc:2149），
+  nametree/category_lists/mapentry_log 全部持稳定 id，**删除零重键**
+  （oracle database.cc:2138-2150 指针身份纪律：nametree erase O(log n)+
+  rangemap erase，无任何 survivor 引用迁移；旧 dense 形态 `Vec::remove`+
+  四处下移重键使 markNotMapped/clearCategory/collectNameRecs 的删除循环
+  O(n²)）。容器 Vec-mimicking 面（iter/get/Index/len/push/clear/last/
+  IntoIterator）只产生 live 符号、槽位 id 序==压实 Vec 序——旧调用方
+  观察序不变；stale id 读作 dead/absent（null `Symbol*` 语义）而非静默
+  别名移位后的邻居。micro-bench（/dev/shm/rugra-tests/varmrekey/bench，
+  n=8000/删半）：legacy 240.9ms → new 59.3ms（4.1×，legacy 二次方增长）。
+  `in_scope`（database.hh:597 rangetree.inRange 全包含）。
 
 验证：varmap:: 43/43 单测绿；`tests/oracle/scopelocal_query_1204` 27 记录
 （equal-subsort 双向、wide/narrow 双序、多 uselimit 二区间/间隙、跨空间
@@ -491,9 +507,11 @@ store is ported yet"）：
 - **`collect_name_recs()`**（varmap.cc:357-381）— 把 name-locked 但非
   type-locked 的符号降级为名字推荐并移除（category<0 者），nametree 序遍历；
   "this"指针臂（指向 struct 的指针类型）在降级前经 `add_type_recommendation`
-  保留数据类型（cc:367-377）。Rust 索引稳定 seam：快照 nametree 序后按序重放
-  `add_recommend_name`（即时移除），每个快照索引按低于它的先前移除数校正——
-  追加序/移除时机/终态与 oracle 单循环一致。调用点=ActionRestructureVarnode
+  保留数据类型（cc:367-377）。Rust 索引稳定 seam（**2026-09-26 稳定槽位形**）：
+  快照 nametree 序后按序在**同一快照 id** 上重放 `add_recommend_name`（即时
+  移除）——SymbolStore 槽位 id 跨删除稳定（oracle `*iter++` 指针稳定性），
+  追加序/移除时机/终态与 oracle 单循环一致（CR-F7NAME 校过的 dense-shift
+  校正术随存储退役，可观察集/序/时机逐字保持）。调用点=ActionRestructureVarnode
   scope 构造块尾（localdb decode 边界，varmap.cc:476 `ScopeLocal::decode` 尾调
   语义）。
 - **`add_recommend_name(sym_idx)`**（varmap.cc:1600-1618）— 静态映射入
