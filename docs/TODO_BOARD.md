@@ -2,6 +2,32 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
+## 移植 wave 票池：`W-2026-09-26-MIGW1`（未派发；root 认领调度；来源=车道 DECOMP 未映射分解）
+
+> 数据源: `docs/alignment_audit/UNMAPPED_DECOMPOSITION_2026-09-26.md`（未映射 4956 四类分解:
+> 真缺失 2645 / 未链接 747 / 胶水吸收 383 / SLEIGH 替代层 1181，闭环=4956，抽样准确率
+> unlinked 86.7%·glue/missing/sleigh 100%）。本票池只含**主管线真缺失** Top5；REGEN 批量链接输入
+> 见 `/dev/shm/rugra-reports/decomp/unlinked_link_candidates.json`（747 边；typeop push 52 条禁链）。
+> 共同验收: 每一定义补 `// Ghidra:` 注解 + B2 逐函数 fixture（锁定 oracle 同输入/同输出，状态
+> NO_ORACLE→MATCH/MISMATCH 如实记录）；`cargo test --lib` 全绿；curl/httpd E2E 差分门禁
+> defects/numbering 无回归；同 commit 更新 `docs/api/*.md` 与本板；含红词的 commit 附机制 A 块；
+> blockaction/fspec 域触发机制 C 独立复核。
+> write-set 互斥已核（五票 src 文件两两无重叠；typeop 票含 printlanguage/printc 钩子，与 printc
+> 后续票需串行调度）。
+
+| 稳定 ID | 模块 | 定义数 | 优先级 | write-set | 验收要点 |
+|---|---|---:|---|---|---|
+| `MIGW1-FSPEC-0001` | fspec 参数绑定/原型模型 | 136 | P0 | `src/fspec.rs` + `docs/api/fspec.md` | ParameterBasic/ParameterSymbol/ProtoStoreSymbol/ProtoParameter/ParamListMerged 整类 + FuncProto/ProtoModel 方法残项；机制 B 差分门禁（varmap 域）；XL（~1570 Rust LOC） |
+| `MIGW1-TYPEOP-0002` | typeop per-op 打印语义 | 160 | P0 | `src/typeop.rs` + `src/printlanguage.rs` + `src/printc.rs` 钩子 + `docs/api/` 同步 | 52 条 per-op `push`（printc `op_binary` 为泛型分发，需补 per-op 语义）+ 56 整类 TypeOp 子类；机制 B 门禁（printc 域）；XL（~1500） |
+| `MIGW1-BLOCK-0003` | block/blockaction 结构化输出面 | 138 | P1 | `src/block.rs` + `src/blockaction.rs` + `docs/api/` | BlockGraph::emit/createVirtualRoot + 结构化残项；机制 B + **机制 C 强制**（白名单）；XL（~2110） |
+| `MIGW1-FUNCDATA-0004` | funcdata 核心维护面 | ~53 | P1 | `src/funcdata.rs` + `docs/api/funcdata.md` | 先核验 ~24 条迭代器改名族（beginLoc/endLoc→Rust 迭代器）是否已存在对应物（存在→补注解边转 REGEN，不存在→移植）；M-L（~590） |
+| `MIGW1-DATABASE-0005` | database Scope/Symbol 查询 | ~63 | P2 | `src/database.rs` + `docs/api/database.md` | UnionFacetSymbol/ExternRefSymbol 符号子类 + Scope 查询残项；MapIterator/NullSubsort ~13 条按结构吸收裁决不逐行移植；L（~750） |
+
+> wave-2 候选（未开票）: printc 68 单例族 / coreaction 39（含 protectSwitchPathIndirects 53 行算法）/
+> type 73 / marshal+xml encode-decode / architecture / jumptable / userop / sleigh_arch 48。
+> 结构吸收裁决票（未开）: clone-family+Rule-ctor ~411 条工厂等价证明。
+> UI-控制台桥 618 条（AGENTS 豁免）与 SLEIGH 替代层 1181 条不进入移植 wave。
+
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
 > ### 派发：STAGE-BISECT-E2E（2026-09-21 root，deepwork 最高并发指令）
