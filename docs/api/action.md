@@ -1308,6 +1308,10 @@ oracle 的重启环依赖 `Funcdata::startProcessing → followFlow`
 MAIN-POSTSTRUCT-SPIN-0001 观察到的 post-blockstruct 动作环不收敛形态
 （≥250s 静默挂起 / subflow tryCallPull 连发）。
 
+> **2026-09-26 更新（PIPE-RESTART-0001）**：本条目描述的保守降级已被
+> 真实重启环取代，见下方 2026-09-26 条目；无回调安装面（standalone
+> fixture）仍走有界完成路径。
+
 现行行为（保守降级，登记 PIPE-RESTART-0001）：curstart 未超
 maxrestarts 时，`eprintln!("[ACTION] restart pending after convergence:
 ...")` 后 `return Ok(0)` 有界完成；pending 标志保持置位（与 oracle
@@ -1317,6 +1321,55 @@ curstart 超 maxrestarts 路径（cc:569-573 warningHeader + curstart=-1）
 defects=0/numbering=0；语料内唯一 restart 触发者=match_url（heritage
 bump register，见 heritage.md）。真实重启环（clearAnalysis + in-Funcdata
 流再生成 + 双侧 fixture 对拍）归 PIPE-RESTART-0001。
+
+## 2026-09-26（PIPE-RESTART-0001）：ActionRestartGroup 真实重启环落地
+
+`apply_restart`（action.cc:553-582）的重启分支现按 oracle 逐句执行
+（替代上文的保守降级）：
+
+1. **clearAnalysis 两半**（action.cc:574 → architecture.cc:335-341）：
+   `fd.clear()`（funcdata.cc:84-112 的忠实移植已在 funcdata.rs，含
+   restart_pending/processing_started 标志清除、overrides 存活）+
+   `commentdb.clear_type(fd.baseaddr, WARNING|WARNINGHEADER)`（Architecture
+   持有的注释库按函数入口地址清 warning/warningheader 注释）。
+2. **流再生成 seam**：oracle 第二遍经 `ActionStart → startProcessing →
+   followFlow`（funcdata.cc:157）在 Architecture 持有的 loader/lifter 上
+   重建原始 p-code；Rugra 的流生成在驱动边界，故由驱动安装的
+   `RestartFlowCallback`（`Arc<dyn Fn(&mut Funcdata) -> Result<()> +
+   Send + Sync>`）在此处执行——与 clearAnalysis 的相对位置和 oracle 的
+   followFlow 一致。**未安装回调的调用面（standalone fixture）走有界完成**
+   （eprintln + `return Ok(0)`，pending 保持置位）——降级路径保留，
+   因为 `Funcdata::start_processing` 的 followFlow 移植仍是登记缺口。
+   该降级分支在 clearAnalysis **之前**返回：无回调面零状态突变，打印
+   阶段保留第一遍收敛态（oracle 无此路径——其 Architecture 恒持有
+   loader）。
+3. **逐子 reset**（action.cc:576-580）：`group.reset(fd)` 重新武装
+   rule_onceperfunc 门（mapglobals 等）供第二遍重跑。**本环不调用
+   `start_processing`**——重启子树的首子 ActionStart 恰好调用一次
+   （coreaction.hh:41-43），`fd.clear()` 已清 processing_started 守卫，
+   环内再调会双入 LowlevelError 守卫（funcdata.cc:153-154）。
+4. **status_start + 游标复位**（action.cc:581 + action.cc:508-509）：
+   `group.reset_apply_cursor()`（RUGRA-GLUE：组合模型绕过
+   perform/prepare_apply 的 status 基游标复位）+ 外置 group_state 的
+   `STATUS_START`。
+
+新增公开面（全部 RUGRA-GLUE，无 Ghidra 对应物——oracle 经
+`Funcdata::getArch()` 直达 Architecture 持有的 loader）：
+
+- `pub type RestartFlowCallback`：驱动边界回调类型。
+- `ActionRestartGroup::set_restart_flow(callback)`：安装点。
+- `ActionDatabase::set_restart_flow(root_name, callback) -> bool`：驱动
+  经数据库句柄在派生根（"decompile"）上安装；非 restart-group 根返回
+  false。`clone_restart_group` 产出的派生根从 `None` 起步（回调是驱动
+  状态而非树状态），驱动须在 perform 前安装到实际运行的根上。
+- `ActionGroup::reset_apply_cursor()`：重启环的派生迭代器复位。
+- `Action::as_restart_group_mut()`：trait 级 mutable 下转视图。
+
+驱动侧安装（examples/curl_decompile.rs）见同日 examples 条目：回调捕获
+post-F2B 配置好的 `SleighLifter`（`Arc<Mutex>`）+ no-return callee 表 +
+镜像门，重启时按第一遍同一流契约再生成（mirror 模式=oracle 全空间
+`followFlow(baddr,eaddr)` 载入契约 RUGRA-FLOW-MIRROR-0001；默认模式=
+历史有界驱动区间）。
 
 ## 2026-08-29:nodejoin join-block 强制 heritage 重构 fixture(NODEJOIN-STRUCTURERESET-0001)
 
