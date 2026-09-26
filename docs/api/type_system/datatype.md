@@ -44,6 +44,33 @@ Rugra 的数据类型系统，对应 Ghidra 的 `Datatype` 类层次
 （`TypeBase`/`TypePointer`/`TypeArray`/`TypeStruct`/`TypeUnion`/`TypeEnum`/`TypeCode`/`TypeSpacebase`）。
 采用 `enum Datatype` + 携带各自 `TypeBase` 的变体表示。
 
+## 2026-09-26：WORKPKG-UNMAP-TYPEUNION-0003（wt/typeunion，union store 仲裁地基收口）
+
+- `test_for_array_slack`（type.cc:990-1005 `TypePointer::testForArraySlack`）从
+  保守 stub（非数组恒 false）接通为忠实虚分派：`TYPE_ARRAY` 短路后按
+  `off < 0` 走 `nearest_arrayed_component_forward_in_struct` /
+  `off >= 0` 走 `nearest_arrayed_component_backward_in_struct`（两 walks
+  提取出的 TypeStruct 覆写体，type.cc:1698-1740/1669-1696；基类 null walk
+  type.cc:188-205）。spacebase 覆写（type.cc:2971/3020）不经
+  `isPtrsubMatching` 的 consult 面（其 subType 查询只返回 map 符号类型），
+  与生产 `RulePtrsubUndo` 孪生同判度面。B2 证明：
+  `tests/oracle/typeunion_resolveflow_1204`（34 records 双侧逐字节 MATCH，
+  slack.* 六格中三格为 stub 形态不可达）。
+- `TypeStruct::score_single_component` 的 CALL 臂（type.cc:1913-1925）从
+  过期降级（"Rugra does not yet thread FuncCallSpecs"）补全为忠实移植：
+  `fd.get_call_specs_of_op`（funcdata.cc:484-496）→ `slot >= 1 &&
+  isInputLocked` 取 `getParam(slot-1)`（ProtoStoreInternal::getInput 越界
+  null 守卫 fspec.cc:3372-3377 的 Option 镜像）/ `slot < 0 &&
+  isOutputLocked` 取输出参数型（Rugra FuncProto 的 `return_type` 承载）→
+  与 `parent` 的 `Datatype*` 指针恒等比较 → -1。B2：同 fixture 的
+  `box.call.lock/default/output` 三格（真实 FuncCallSpecs + 锁定参数/输出，
+  经 `__stdcall` 模型 setPieces 保型实证）。
+- `nearest_arrayed_component_forward/backward` 重构为 Arc 入口 + struct 核
+  （`*_in_struct`）双形态，walk 体单份共享（行为逐字节不变，
+  `test_struct_nearest_arrayed_component_walks` 既有断言全保）。
+- 新增单测：`test_for_array_slack_dispatches_the_walks`（stub 不可达的三格
+  + miss/cutoff 反例）。
+
 ## 2026-08-11 ANN-J annotation bootstrap
 
 This pass classified eighteen previously unanchored helpers without changing

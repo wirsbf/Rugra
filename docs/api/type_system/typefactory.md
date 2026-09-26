@@ -1,5 +1,22 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-09-26：decode 告警尾接线（WORKPKG-UNMAP-TYPEUNION-0003，wt/typeunion）
+
+- `decode_struct` 的 overlap 告警从丢弃改为逐字构建并接入
+  `insert_warning`（type.cc:1849-1860 告警文本两形态 +
+  4357-4358 `if (!warning.empty()) insertWarning(ct, warning)`）：
+  首个 overlap 命名字段，后续 collapse 为 multiple-overlapping 形态；
+  匿名（id-0）类型使 `insert_warning` 抛逐字
+  `Can only issue warnings for named data-types`（type.cc:3753-3754）；
+  返回 Arc 为 flag 写入后的注册体（define_replace 重包语义）。
+- `decode_enum` 的重复名告警同样接通（type.cc:4326-4327）。
+  union decode 路径无告警通道（type.cc:4382 丢弃返回值）——镜像保持。
+- B2 证明：`tests/oracle/typefactory_recalcptr_1204`（42 records，40 逐字节
+  MATCH；2 条 identity 记录为已登记 `TYPEFACTORY-ARC-IDENTITY-0001`
+  MISMATCH——runner 棘轮精确钉住该已登记 delta）；新增单测
+  `test_decode_struct_overlap_warning_rides_insert_warning`（命名告警
+  注册+逐字文本、匿名逐字抛错、无 overlap 不注册）。
+
 ## 2026-09-24：DataOrg core-type 表改为 Java headless `<coretypes>` 精确投影（Lane GH）
 
 `init_data_org_core_types` 的整数命名不再用 `int{N}`/`uint{N}` 约定式拼写，改为

@@ -4496,7 +4496,15 @@ impl TypeFactory {
             | type_flags::ENUMTYPE
             | if forcecore { type_flags::CORETYPE } else { 0 };
         let dt = self.find_add(Datatype::Enum(TypeEnum { base, values }), false)?;
-        let _ = warning; // Ghidra: insertWarning(res, warning); — Rugra has no warning store.
+        // type.cc:4326-4327: `if (!warning.empty()) insertWarning(res,
+        // warning);` — the duplicate-enum-name warning rides the same
+        // channel (verbatim throw on anonymous id-0 types); the returned
+        // Arc is the post-flag-write registration.
+        let dt = if !warning.is_empty() {
+            self.insert_warning(&dt, warning)?
+        } else {
+            dt
+        };
         Ok(dt)
     }
 
@@ -4547,6 +4555,7 @@ impl TypeFactory {
         let mut last_off: i64 = -1;
         let mut calc_size: i64 = 0;
         let mut calc_align: usize = 1;
+        let mut warning = String::new();
         while decoder.peek_element() != 0 {
             let child_id = decoder.open_element();
             let attrs = TypeField::decode_field_attributes(decoder);
@@ -4577,10 +4586,22 @@ impl TypeFactory {
             }
             last_off = attrs.offset as i64;
             // type.cc:1849-1860: a field starting inside the previous field's
-            // extent is thrown out with a warning (warning storage — the
-            // `warning_issued` flag and the factory warnings list — is not
-            // modelled on Rugra; the FIELD DROP is observable and mirrored).
+            // extent is thrown out with a warning. The warning text is built
+            // verbatim (first overlap names the field; later ones collapse
+            // to the multiple-fields form) and rides to the
+            // `insertWarning(ct, warning)` tail at type.cc:4357-4358.
             if (attrs.offset as i64) < calc_size {
+                if warning.is_empty() {
+                    warning = format!(
+                        "Struct \"{}\": ignoring overlapping field \"{}\"",
+                        basic.name, attrs.name
+                    );
+                } else {
+                    warning = format!(
+                        "Struct \"{}\": ignoring multiple overlapping fields",
+                        basic.name
+                    );
+                }
                 continue;
             }
             // type.cc:1861-1866: field must fit within the declared size.
@@ -4683,6 +4704,17 @@ impl TypeFactory {
                         | type_flags::TYPE_INCOMPLETE);
                 Ok(())
             })?
+        };
+        // type.cc:4357-4358: `if (!warning.empty()) insertWarning(ct,
+        // warning);` — the registered type carries the decodeFields
+        // overlap warning; an anonymous (id-0) type makes insertWarning
+        // throw the verbatim LowlevelError (type.cc:3753-3754). The
+        // returned Arc is the post-flag-write registration (Ghidra's `ct`
+        // mutates in place; Rugra re-wraps under the same slots).
+        let result = if !warning.is_empty() {
+            self.insert_warning(&result, warning)?
+        } else {
+            result
         };
         self.resolve_incomplete_typedefs()?;
         Ok(result)
@@ -8756,6 +8788,75 @@ mod tests {
         factory.remove_warning(other.as_ref());
         assert_eq!(factory.warnings.len(), 1);
         let _ = warned2;
+    }
+
+    #[test]
+    fn test_decode_struct_overlap_warning_rides_insert_warning() {
+        // type.cc:4349/4357-4358: the decodeFields overlap warning reaches
+        // insertWarning through decodeStruct. A NAMED struct gets the
+        // warning registered (hasWarning set); an ANONYMOUS (id-0) struct
+        // makes insertWarning throw the verbatim LowlevelError
+        // (type.cc:3753-3754).
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        use std::sync::{Arc, RwLock};
+
+        fn decode_struct_fields(
+            factory: &mut TypeFactory,
+            name: Option<&str>,
+            fields: &[(&str, &str)],
+        ) -> Result<Arc<Datatype>, String> {
+            let mut root = Element::new();
+            root.set_name("type");
+            if let Some(nm) = name {
+                root.add_attribute("name", nm);
+            }
+            root.add_attribute("size", "8");
+            root.add_attribute("metatype", "struct");
+            for (fname, off) in fields {
+                let mut field = Element::new();
+                field.set_name("field");
+                field.add_attribute("name", fname);
+                field.add_attribute("offset", off);
+                let mut ty = Element::new();
+                ty.set_name("type");
+                ty.add_attribute("name", "int");
+                ty.add_attribute("size", "4");
+                ty.add_attribute("metatype", "int");
+                field.add_child(Arc::new(RwLock::new(ty)));
+                root.add_child(Arc::new(RwLock::new(field)));
+            }
+            let registry = Arc::new(RwLock::new(IdRegistry::new()));
+            let mut decoder = TreeDecoder::new(Arc::new(RwLock::new(root)), registry);
+            factory.decode_type(&mut decoder)
+        }
+
+        // Named, no overlap: no warning.
+        let mut factory = TypeFactory::new(8);
+        let plain = decode_struct_fields(&mut factory, Some("fixture_dec_plain"), &[("x", "0")])
+            .expect("decodes");
+        assert!(!plain.has_warning());
+        assert!(factory.warnings.is_empty());
+        // Named, overlapping second field: warning registered verbatim.
+        let warned = decode_struct_fields(
+            &mut factory,
+            Some("fixture_dec_warn"),
+            &[("x", "0"), ("y", "0")],
+        )
+        .expect("decodes");
+        assert!(warned.has_warning());
+        assert_eq!(factory.warnings.len(), 1);
+        assert_eq!(factory.warnings[0].type_name, "fixture_dec_warn");
+        assert_eq!(
+            factory.warnings[0].warning,
+            "Struct \"fixture_dec_warn\": ignoring overlapping field \"y\""
+        );
+        // ANONYMOUS overlapping struct: insertWarning throws verbatim.
+        let mut factory_anon = TypeFactory::new(8);
+        let anon = decode_struct_fields(&mut factory_anon, None, &[("x", "0"), ("y", "0")]);
+        assert_eq!(
+            anon.err(),
+            Some("Can only issue warnings for named data-types".to_string())
+        );
     }
 
     #[test]

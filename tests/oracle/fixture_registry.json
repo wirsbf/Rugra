@@ -8433,6 +8433,71 @@
           "RuleSubCommute::applyOp"
         ]
       }
+    },
+    {
+      "id": "typeunion_resolveflow_1204",
+      "description": "TYPEUNION-RESOLVEFLOW-ARBITRATION-0001: union-store arbitration foundation family (nearestArrayedComponent walks, testForArraySlack, resolveInFlow/findResolve/resolveTruncation/findTruncation, scoreSingleComponent incl. the CALL arm, TypePartialUnion walk) through the real ScoreUnionFields machinery",
+      "runner": [
+        "tools/run_typeunion_resolveflow_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/typeunion_resolveflow_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/typeunion_resolveflow_1204.cc",
+          "rust_fixture": "tests/oracle/typeunion_resolveflow_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_typeunion_resolveflow_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/type_system/datatype.rs",
+          "src/unionresolve.rs",
+          "tests/oracle/typeunion_resolveflow_1204.*",
+          "tools/run_typeunion_resolveflow_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "typefactory_recalcptr_1204",
+      "description": "TYPEFACTORY-RECALCPTR-WARNINGS-0001: recalcPointerSubmeta/setName/warnings/destroyType/getTypePointerWithSpace/setFields-flags family; 40/42 records byte-identical, the 2 identity records are the registered TYPEFACTORY-ARC-IDENTITY-0001 delta (runner ratchets the exact registered diff)",
+      "runner": [
+        "tools/run_typefactory_recalcptr_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/typefactory_recalcptr_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/typefactory_recalcptr_1204.cc",
+          "rust_fixture": "tests/oracle/typefactory_recalcptr_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_typefactory_recalcptr_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/type_system/typefactory.rs",
+          "tests/oracle/typefactory_recalcptr_1204.*",
+          "tools/run_typefactory_recalcptr_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
     }
   ]
 }

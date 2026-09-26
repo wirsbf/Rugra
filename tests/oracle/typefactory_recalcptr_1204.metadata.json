@@ -1,0 +1,108 @@
+{
+ "schema_version": 1,
+ "fixture_id": "TYPEFACTORY-RECALCPTR-WARNINGS-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default:gcc",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "usage": "Locked BfdArchitecture initialization over examples/curl; archid asserted as x86:LE:64:default:gcc by the C++ fixture"
+ },
+ "analysis_options": {
+  "apis": [
+   "string2typeclass (type.cc:371-411) + metatype2typeclass (type.cc:420-432)",
+   "TypeFactory::recalcPointerSubmeta (type.cc:3724-3745) as driven by the struct setFields tail (type.cc:3490-3491)",
+   "TypeFactory::setName (type.cc:3445-3459)",
+   "TypeFactory::insertWarning/removeWarning (type.cc:3750-3757/3761-3773) through PUBLIC decode triggers (decodeStruct type.cc:4357-4358, decodeEnum type.cc:4326-4327, destroyType type.cc:4126-4127)",
+   "TypeFactory::getTypePointerWithSpace (type.cc:4055-4065)",
+   "TypeFactory::destroyType (type.cc:4122-4132)",
+   "TypeFactory::setFields flags mask (type.cc:3487-3488 struct / 3508-3509 union)"
+  ],
+  "fixture_model": "Production BfdArchitecture TypeFactory over examples/curl; every fixture type built exactly once under a unique fixture_recp_* name. The warning cells ride the PUBLIC decode channel: an anonymous (id-0) overlapping struct reaches insertWarning via decodeType and throws the verbatim text; a named one gets hasWarning set; destroyType drains the list through removeWarning. The C++ fixture re-exposes the class-default-private insertWarning/removeWarning call sites only through that public channel (no direct private calls).",
+  "type_construction": "The Rust twin decodes the curl cspec <size_alignment_map> through the production decode_data_organization entry (alignMap[0] stays -1) so findAdd's size-0 incomplete probes behave identically; base types come from the factory's core table (int/int8 names are not observed by any record).",
+  "debug_macros": "none",
+  "normalization": "none: raw enum values, verbatim LowlevelError texts, identity/flag bits. The setname cells observe id equality against the name-registered slot (hashName is protected on Datatype)."
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "source_policy": "WIP live-tree runner consumed the working-tree examples/curl; the integration runner should re-pin to the base-commit Git blob (34a3febf blob 4e26a362f92f1961bab63000215a84b4d7212dd, sha256 4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a) exactly like run_printc_symbol_decl_oracle.sh and regenerate expected_stdout_sha256 under that input"
+  },
+  "bfd": {
+   "package_version": "2.38-4ubuntu2.12",
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+  }
+ },
+ "cases": [
+  {
+   "id": "s2tc",
+   "records": 13,
+   "covers": "string2typeclass full spelling table + two verbatim rejections"
+  },
+  {
+   "id": "m2tc",
+   "records": 3,
+   "covers": "metatype2typeclass float/ptr/int"
+  },
+  {
+   "id": "recalc",
+   "records": 6,
+   "covers": "recalcPointerSubmeta migration: single-field struct SUB_PTR_STRUCT(4)->SUB_PTR(6), multi-field early-out"
+  },
+  {
+   "id": "setname",
+   "records": 6,
+   "covers": "setName rename registration + anonymous id-0 hashName branch"
+  },
+  {
+   "id": "warn",
+   "records": 3,
+   "covers": "insertWarning verbatim anon throw via decode, hasWarning set, destroyType removeWarning drain"
+  },
+  {
+   "id": "destroy",
+   "records": 2,
+   "covers": "destroyType core-type verbatim throw + warned named type removal"
+  },
+  {
+   "id": "ptrspace",
+   "records": 5,
+   "covers": "getTypePointerWithSpace name/id/wordsize/size/space"
+  },
+  {
+   "id": "flags",
+   "records": 4,
+   "covers": "setFields flags mask: struct carries opaque_string AND variable_length; union mask has NO opaque_string"
+  }
+ ],
+ "input_model_difference": "Both sides drive the production factory. The warning cells use only public triggers on both sides (decodeType overlap / destroyType); the C++ fixture's access override only re-exposes the Datatype flag constants and the private warning methods' VERBATIM texts are observed through the public channel.",
+ "cpp_fixture_sha256": "718e81990743deccc3b54f6e70cb13565d2e8f4361fa68e67c8ee16fffd417cd",
+ "rust_fixture_sha256": "8a3756ef3d3080136b0e74b7a31cb3e04bed972da0fdf54d318d9c95cd38a250",
+ "expected_stdout_sha256": "2ab72ca566b57c9c283828bb339241b23971227e1f65152e425776ba4b4b2fdc",
+ "expected_stdout_records": 42,
+ "status": "MISMATCH",
+ "status_note": "40/42 records byte-identical. The two remaining records (recalc.single.identity, recalc.multi.identity) are the registered TYPEFACTORY-ARC-IDENTITY-0001 MISMATCH: Ghidra's recalcPointerSubmeta erases the incomplete-composite pointer, mutates submeta in place, and reinserts, so the pre-completion handle IS the post-completion probe result (identity=1); Rugra's immutable Arc<Datatype> can only do controlled replacement, so the external pre-handle keeps the old object (identity=0). The ticket explicitly forbids marking MATCH before the global interior-mutability migration; the subbefore/subafter records (4->6 single, 4->4 multi) prove the submeta migration semantics itself matches. The fixture also required wiring the decodeStruct/decodeEnum warning tails to the warnings store (type.cc:4357-4358/4326-4327) \u2014 previously the decoded warning was dropped."
+}

@@ -2439,27 +2439,45 @@ pub fn pointer_is_ptrsub_matching(
 // Ghidra: type.cc:990 TypePointer::testForArraySlack (static)
 /// Test if an out-of-bounds offset makes sense as array slack: i.e. whether
 /// the data-type is itself an array or has an arrayed component at `off`.
-/// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005).
+/// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005):
+/// the `TYPE_ARRAY` short-circuit, then the virtual
+/// `nearestArrayedComponentForward` (off < 0) / `nearestArrayedComponentBackward`
+/// (off >= 0) dispatch, reporting whether any component was found.
 ///
-/// Rugra note: `nearestArrayedComponentForward/Backward` are not yet ported
-/// on `Datatype` (they live inlined in `ruleaction.rs`); the forward/backward
-/// branches therefore currently reduce to the `TYPE_ARRAY` short-circuit,
-/// matching Ghidra's behaviour when no arrayed component is found. The full
-/// nearest-component walk will be wired in when the
-/// `nearest_arrayed_component_*` methods are lifted to `Datatype`.
+/// Virtual-dispatch note: only `TypeStruct` overrides the walks
+/// (type.cc:1669/1698); the base overrides (type.cc:188-205) return null, so
+/// every non-struct without array metatype reports no slack. The
+/// `TYPE_SPACEBASE` overrides (type.cc:2971/3020) live on the in-map twins
+/// (`TypeSpacebase::nearest_arrayed_component_*_in_map`) — a spacebase
+/// cannot reach this consult through `isPtrsubMatching` (its `subType`
+/// lookups return map-symbol types, never a spacebase), matching the
+/// production `RulePtrsubUndo` twin's dispatch surface.
 pub fn test_for_array_slack(dt: &Datatype, off: i64) -> bool {
+    // type.cc:995-996 — a bare array always has slack.
     if dt.get_metatype() == TypeMetatype::Array {
         return true;
     }
-    // Ghidra: compType = (off < 0)
-    //           ? dt->nearestArrayedComponentForward(off,&newoff,&elSize)
-    //           : dt->nearestArrayedComponentBackward(off,&newoff,&elSize);
-    //         return (compType != null);
-    // Rugra: nearest-arrayed-component methods are not yet on Datatype; until
-    // they land, no non-array type reports slack. This is the conservative
-    // (false-negative) fallback.
-    let _ = off;
-    false
+    // type.cc:998-1004:
+    //   compType = (off < 0)
+    //             ? dt->nearestArrayedComponentForward(off,&newoff,&elSize)
+    //             : dt->nearestArrayedComponentBackward(off,&newoff,&elSize);
+    //   return (compType != (Datatype *)0);
+    let found = if off < 0 {
+        match dt {
+            Datatype::Struct(s) => {
+                nearest_arrayed_component_forward_in_struct(s, off).dtype.is_some()
+            }
+            _ => false,
+        }
+    } else {
+        match dt {
+            Datatype::Struct(s) => {
+                nearest_arrayed_component_backward_in_struct(s, off).dtype.is_some()
+            }
+            _ => false,
+        }
+    };
+    found
 }
 
 /// Result of `Datatype::decode_basic`. Mirrors the field updates Ghidra's
@@ -3214,11 +3232,40 @@ impl TypeStruct {
                 }
             }
         } else if op.is_call() {
-            // Ghidra consults FuncCallSpecs for a type-locked param/output
-            // equal to `parent`. Rugra does not yet thread FuncCallSpecs
-            // through PcodeOp, so we fall through to the "resolve to
-            // component" default. This matches Ghidra's behaviour when no
-            // call specs are available (fc == null).
+            // cc:1913-1925: consult the call-specs for a type-locked
+            // parameter/output equal to `parent`. FuncCallSpecs lookup is
+            // Funcdata::getCallSpecs(op) (funcdata.cc:484-496).
+            if let Some(fc_arc) = fd.get_call_specs_of_op(op_ref) {
+                let fc = fc_arc.read().unwrap();
+                // cc:1918-1921:
+                //   if (slot >= 1 && fc->isInputLocked())
+                //     param = fc->getParam(slot-1);
+                //   else if (slot < 0 && fc->isOutputLocked())
+                //     param = fc->getOutput();
+                // ProtoStoreInternal::getInput returns null out of bounds
+                // (fspec.cc:3372-3377); Rust's Option mirrors that guard.
+                // The output ProtoParameter's getType() is Rugra's FuncProto
+                // `return_type` (the output param's data-type carrier).
+                let param_type: Option<&Arc<Datatype>> =
+                    if slot >= 1 && fc.prototype.is_input_locked() {
+                        fc.prototype
+                            .get_param((slot - 1) as usize)
+                            .map(|p| &p.data_type)
+                    } else if slot < 0 && fc.prototype.is_output_locked() {
+                        Some(&fc.prototype.return_type)
+                    } else {
+                        None
+                    };
+                if let Some(pt) = param_type {
+                    // cc:1922: param->getType() == parent — pointer equality
+                    // between two `Datatype*`.
+                    let param_ptr = Arc::as_ptr(pt) as *const Datatype;
+                    if std::ptr::eq(param_ptr, parent) {
+                        // Function signature refers to parent directly.
+                        return -1;
+                    }
+                }
+            }
         }
         // In all other cases resolve to the component.
         0
@@ -4356,56 +4403,65 @@ fn arrayed_element_size(dt: &Datatype) -> i64 {
 /// `TypeSpacebase::nearest_arrayed_component_forward_in_map`.
 pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
     if let Datatype::Struct(s) = dt.as_ref() {
-        // type.cc:1701-1714.
-        let mut i = nearest_lower_bound(s, off);
-        let mut remain: i64;
-        if i < 0 {
-            // No component starting before off: start at first after.
+        return nearest_arrayed_component_forward_in_struct(s, off);
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:1698 TypeStruct::nearestArrayedComponentForward
+/// The `TypeStruct` override body (type.cc:1698-1740), shared by the
+/// `&Arc<Datatype>` virtual-dispatch entry above and the borrowed
+/// `test_for_array_slack` consult.
+fn nearest_arrayed_component_forward_in_struct(s: &TypeStruct, off: i64) -> ArrayedComponent {
+    // type.cc:1701-1714.
+    let mut i = nearest_lower_bound(s, off);
+    let mut remain: i64;
+    if i < 0 {
+        // No component starting before off: start at first after.
+        i += 1;
+        remain = 0;
+    } else {
+        let subfield = &s.fields[i as usize];
+        remain = off - subfield.offset as i64;
+        if remain != 0
+            && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
+                || remain >= subfield.type_ptr.get_size() as i64)
+        {
+            // Middle of a non-structure we must go forward from: skip it.
             i += 1;
             remain = 0;
-        } else {
-            let subfield = &s.fields[i as usize];
-            remain = off - subfield.offset as i64;
-            if remain != 0
-                && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
-                    || remain >= subfield.type_ptr.get_size() as i64)
-            {
-                // Middle of a non-structure we must go forward from: skip it.
-                i += 1;
-                remain = 0;
-            }
         }
-        // type.cc:1715-1738.
-        while (i as usize) < s.fields.len() {
-            let subfield = &s.fields[i as usize];
-            let diff = subfield.offset as i64 - off; // may be negative (first field)
-            if diff > 128 {
+    }
+    // type.cc:1715-1738.
+    while (i as usize) < s.fields.len() {
+        let subfield = &s.fields[i as usize];
+        let diff = subfield.offset as i64 - off; // may be negative (first field)
+        if diff > 128 {
+            break;
+        }
+        let subtype = &subfield.type_ptr;
+        if subtype.get_metatype() == TypeMetatype::Array {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: -diff,
+                elsize: arrayed_element_size(subtype),
+            };
+        }
+        let res = nearest_arrayed_component_forward(subtype, remain);
+        if res.dtype.is_some() {
+            // type.cc:1729 — subdiff = diff + remain - suboff.
+            let subdiff = diff + remain - res.newoff;
+            if subdiff > 128 {
                 break;
             }
-            let subtype = &subfield.type_ptr;
-            if subtype.get_metatype() == TypeMetatype::Array {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: -diff,
-                    elsize: arrayed_element_size(subtype),
-                };
-            }
-            let res = nearest_arrayed_component_forward(subtype, remain);
-            if res.dtype.is_some() {
-                // type.cc:1729 — subdiff = diff + remain - suboff.
-                let subdiff = diff + remain - res.newoff;
-                if subdiff > 128 {
-                    break;
-                }
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: -diff,
-                    elsize: res.elsize,
-                };
-            }
-            i += 1;
-            remain = 0;
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: -diff,
+                elsize: res.elsize,
+            };
         }
+        i += 1;
+        remain = 0;
     }
     ArrayedComponent::miss()
 }
@@ -4417,40 +4473,49 @@ pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> Arraye
 /// spacebase/precision notes.
 pub fn nearest_arrayed_component_backward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
     if let Datatype::Struct(s) = dt.as_ref() {
-        // type.cc:1672-1694.
-        let first_index = nearest_lower_bound(s, off);
-        let mut i = first_index;
-        while i >= 0 {
-            let idx = i as usize;
-            let subfield = &s.fields[idx];
-            let diff = off - subfield.offset as i64;
-            if diff > 128 {
-                break;
-            }
-            let subtype = &subfield.type_ptr;
-            if subtype.get_metatype() == TypeMetatype::Array {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: diff,
-                    elsize: arrayed_element_size(subtype),
-                };
-            }
-            // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
-            let remain = if idx == first_index as usize {
-                diff
-            } else {
-                subtype.get_size() as i64 - 1
-            };
-            let res = nearest_arrayed_component_backward(subtype, remain);
-            if res.dtype.is_some() {
-                return ArrayedComponent {
-                    dtype: Some(subtype.clone()),
-                    newoff: diff,
-                    elsize: res.elsize,
-                };
-            }
-            i -= 1;
+        return nearest_arrayed_component_backward_in_struct(s, off);
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:1669 TypeStruct::nearestArrayedComponentBackward
+/// The `TypeStruct` override body (type.cc:1669-1696), shared by the
+/// `&Arc<Datatype>` virtual-dispatch entry above and the borrowed
+/// `test_for_array_slack` consult.
+fn nearest_arrayed_component_backward_in_struct(s: &TypeStruct, off: i64) -> ArrayedComponent {
+    // type.cc:1672-1694.
+    let first_index = nearest_lower_bound(s, off);
+    let mut i = first_index;
+    while i >= 0 {
+        let idx = i as usize;
+        let subfield = &s.fields[idx];
+        let diff = off - subfield.offset as i64;
+        if diff > 128 {
+            break;
         }
+        let subtype = &subfield.type_ptr;
+        if subtype.get_metatype() == TypeMetatype::Array {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: diff,
+                elsize: arrayed_element_size(subtype),
+            };
+        }
+        // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
+        let remain = if idx == first_index as usize {
+            diff
+        } else {
+            subtype.get_size() as i64 - 1
+        };
+        let res = nearest_arrayed_component_backward(subtype, remain);
+        if res.dtype.is_some() {
+            return ArrayedComponent {
+                dtype: Some(subtype.clone()),
+                newoff: diff,
+                elsize: res.elsize,
+            };
+        }
+        i -= 1;
     }
     ArrayedComponent::miss()
 }
@@ -6862,6 +6927,76 @@ mod tests {
         // Non-struct base: the base null walks (type.cc:188/201).
         assert!(nearest_arrayed_component_forward(&scalar8, 0).dtype.is_none());
         assert!(nearest_arrayed_component_backward(&scalar8, 0).dtype.is_none());
+    }
+
+    #[test]
+    fn test_for_array_slack_dispatches_the_walks() {
+        // type.cc:990-1005: TYPE_ARRAY short-circuit, then the
+        // nearestArrayedComponentForward (off < 0) / Backward (off >= 0)
+        // virtual dispatch. The struct-hit answers are impossible for the
+        // former conservative stub (which returned false for every
+        // non-array).
+        let arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 1,
+        }));
+        let int4 = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let arr2 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a2".into(), 8, TypeMetatype::Array),
+            array_of: int4.clone(),
+            num_elements: 2,
+        }));
+        let slack = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 16, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "pad".into(), offset: 0, type_ptr: int4.clone() },
+                TypeField { name: "arr".into(), offset: 4, type_ptr: arr2 },
+                TypeField { name: "tail".into(), offset: 12, type_ptr: int4 },
+            ],
+        }));
+        let plain = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("P".into(), 16, TypeMetatype::Struct),
+            fields: vec![
+                TypeField {
+                    name: "p".into(),
+                    offset: 0,
+                    type_ptr: Arc::new(Datatype::Base(TypeBase::new(
+                        "l1".into(),
+                        8,
+                        TypeMetatype::Int,
+                    ))),
+                },
+                TypeField {
+                    name: "q".into(),
+                    offset: 8,
+                    type_ptr: Arc::new(Datatype::Base(TypeBase::new(
+                        "l2".into(),
+                        8,
+                        TypeMetatype::Int,
+                    ))),
+                },
+            ],
+        }));
+        // Array short-circuit regardless of offset (type.cc:995-996).
+        assert!(test_for_array_slack(arr.as_ref(), 0));
+        assert!(test_for_array_slack(arr.as_ref(), 17));
+        // Struct with an arrayed component: forward (off < 0) and
+        // backward (off >= 0) consults both find it.
+        assert!(test_for_array_slack(slack.as_ref(), -2));
+        assert!(test_for_array_slack(slack.as_ref(), 6));
+        // Struct without arrays: both directions miss.
+        assert!(!test_for_array_slack(plain.as_ref(), 6));
+        // 128-cutoff: the first candidate field is too far.
+        assert!(!test_for_array_slack(plain.as_ref(), 200));
     }
 
     // ---- is_primitive_whole (type.cc:501-513, CR-PJOINS M1) ----
