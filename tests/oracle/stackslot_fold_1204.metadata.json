@@ -1,7 +1,7 @@
 {
  "schema_version": 2,
  "fixture_id": "HTTPD-STACKSLOT-FOLD-0001",
- "status_note": "Spacebase-relative STORE/LOAD reindex fixture. Root cause: Rugra's httpd runner constructed Funcdata without an Architecture, so RuleLoadVarnode::correctSpacebase/RuleStoreVarnode (ruleaction.cc:4173-4341) took the Option-None miss branch for the input-RSP case and spacebase-relative STORE/LOAD never reindexed into the stack space (printed as raw *(..)(in_RSP-8) pointer expressions; 148 in_RSP lines corpus-wide). Fix: examples/httpd_decompile.rs attaches the canonical x86-64 Architecture via fd.set_arch before inject_raw_ops, mirroring the oracle invariant (glb = scope->getArch(), funcdata.cc:48) that the headless oracle (which produced tests/golden/ghidra_httpd_1204.c with full provenance) satisfies by construction. Observable verified: corpus in_RSP lines 148 -> 0 (golden has 0); ap_parse_vhost_addrs surviving LOAD/STORE after pipeline 7 -> 1 (the survivor is INT_ADD(in_RDX,param_1)+0x60, a legitimate non-stack pointer, matching golden's *(param_3 + 0x60) form); push/pop prologue STOREs now fold to stack-space COPYs and dead-eliminate. Per-function B2 status: MISMATCH with registered differences — the pinned comparands still differ by skeleton diff 46 (param inference 6->2 vs golden 3, loop-rotation shape, deref print form *param_1 + 0x60), which belong to PARAM-INFERENCE/PRINTC-DEREF/loop-structure gap families outside this TODO's write-set; the spacebase-fold observable itself is zero-diff. Deterministic regression runner: examples/stackfold_dbg.rs (exit 0; stderr census 'total surviving LOAD/STORE: 1' with RUGRA default arch present; '7' reproduces the pre-fix break only by removing the set_arch call).",
+ "status_note": "Spacebase-relative STORE/LOAD reindex fixture. Root cause: Rugra's httpd runner constructed Funcdata without an Architecture, so RuleLoadVarnode::correctSpacebase/RuleStoreVarnode (ruleaction.cc:4173-4341) took the Option-None miss branch for the input-RSP case and spacebase-relative STORE/LOAD never reindexed into the stack space (printed as raw *(..)(in_RSP-8) pointer expressions; 148 in_RSP lines corpus-wide). Fix: examples/httpd_decompile.rs attaches the canonical x86-64 Architecture via fd.set_arch before inject_raw_ops, mirroring the oracle invariant (glb = scope->getArch(), funcdata.cc:48) that the headless oracle (which produced tests/golden/ghidra_httpd_1204.c with full provenance) satisfies by construction. Observable verified: corpus in_RSP lines 148 -> 0 (golden has 0). STACKFOLD-FIXTURE-F6DC-BREAK-0001 repair (2026-09-26, base 9ac04ade): the driver's original bare Architecture::new() attach was cspec-less (defaultfp=None -> funcp model-less) and f6dcbed0's faithful ActionRestrictLocal loop-2 port (coreaction.cc:1983-1985; oracle dereferences the ctor-bound defaultfp unconditionally via funcdata.cc:69 -> fspec.cc:3884, no model-less path exists) turned it into the fspec.rs:574 panic on master baseline; repair attaches the canon httpd cspec-bearing architecture (model_bearing_architecture mirrors examples/httpd_decompile.rs tracked_context_architecture: pspec context_data/register_data + x86-64-gcc.cspec parse_compiler_config -> defaultfp bound via set_arch). Census re-observed under loop-2: ap_parse_vhost_addrs surviving LOAD/STORE after pipeline = 9 with in_RSP-chained=0 (survivors = in_RDX +0x30/+0x60 and in_RSI +0x28 param-register pointer chains plus RBP-derived stack-address values, matching the pinned rugra excerpt's *param_1 + 0xNN deref forms); the loop-1-era pin 'surviving=1' was a bare-Architecture observation (no TypeFactory/casts, no effect walk) and is retired. push/pop prologue STOREs fold to stack-space COPYs and dead-eliminate. Per-function B2 status: MISMATCH with registered differences — the pinned comparands still differ by skeleton diff 46 (param inference 6->2 vs golden 3, loop-rotation shape, deref print form *param_1 + 0x60), which belong to PARAM-INFERENCE/PRINTC-DEREF/loop-structure gap families outside this TODO's write-set; the spacebase-fold observable itself is zero-diff. Deterministic regression runner: examples/stackfold_dbg.rs (exit 0; stderr census 'total surviving LOAD/STORE: 9' with the canon cspec arch present; removing the arch attach now panics at fspec.rs:574 under loop-2 — the model-less break has no graceful path in the oracle either, so the loop-1-era census-7 reproduction mode is retired with STACKFOLD_ARCH=0 kept as the model-less differential mode).",
  "decisive_semantics": {
   "reference_output_parameters": "RuleStoreVarnode::applyOp (ruleaction.cc:4319-4341) creates the stack-space output via data.newVarnodeOut(size, Address(baseoff, offoff), op), removes STORE inputs 1 and 0, sets opcode COPY and marks the output setStackStore; RuleLoadVarnode::applyOp (cc:4277-4305) symmetric via data.newVarnode(size, baseoff, offoff); correctSpacebase (cc:4173-4184) requires vn->isSpacebase() && vn->isInput() and resolves glb->getSpaceBySpacebase(addr,size) with assoc->getContain() == the STORE/LOAD spaceid space; Funcdata::spacebase() (funcdata.cc:230-269) marks ALL varnodes at the spacebase register location (not just input) so written-RSP chains collapse onto the input spacebase first.",
   "loop_bounds_traversal_order": "vnSpacebase (cc:4194-4227) tries getIn(0) as spacebase then getIn(1); Funcdata::spacebase iterates beginLoc/endLoc per spacebase record ascending (cc:248-250); no per-prefix or split counting is involved in the reindex itself.",
@@ -24,16 +24,19 @@
   ]
  },
  "rugra": {
-  "worktree_base": "d4e83496 (master)",
+  "worktree_base": "d4e83496 (master); repair STACKFOLD-FIXTURE-F6DC-BREAK-0001 2026-09-26 on base 9ac04ade (wt/stackfold)",
   "changed_files": [
    "examples/httpd_decompile.rs",
    "examples/stackfold_dbg.rs",
+   "tools/run_stackslot_fold_oracle.sh",
    "tests/oracle/stackslot_fold_1204.ghidra.c",
-   "tests/oracle/stackslot_fold_1204.rugra.c"
+   "tests/oracle/stackslot_fold_1204.rugra.c",
+   "tests/oracle/stackslot_fold_1204.metadata.json"
   ],
   "verification": {
    "httpd_e2e": "skeleton 2546 -> 2230, defects 5 -> 5 (<=5), numbering 0 -> 0, in_RSP lines 148 -> 0 (compare_ghidra.py vs tests/golden/ghidra_httpd_1204.c)",
    "curl_e2e": "3089/0/0 exact hold (compare_ghidra.py vs tests/golden/ghidra_curl_1204.c); curl runner sets its own worker Architecture so is unaffected by construction",
+   "stackfold_fixture_repair_2026_09_26": "driver census re-observed under the canon cspec-bearing arch with ActionRestrictLocal loop-2 active: surviving=9 (param-register pointer chains in_RDX +0x30/+0x60, in_RSI +0x28, plus RBP-derived stack-address values), in_RSP-chained=0, deterministic across double run; runner green with re-pinned expectations; metadata comparand sha checks green",
    "cargo_test_lib": "examples-only diff; the lib test binary is identical to master, failure-set identity holds by construction (observed run-to-run jitter 15 vs 11 matches the documented pre-existing 15-17 flakiness band)"
   },
   "cross_review": "PENDING (mechanism C is not triggered by this commit: no src/*.rs core-algorithm file changed; final diff is runner + fixture only. The Funcdata constructor-level invariant restoration in src/funcdata.rs — canonical Architecture auto-attach at Funcdata::new — was prototyped and measured (identical E2E 2230/5/0) but withheld: it deterministically flips subflow::tests::test_split_datatype_constructs (stale arch-less premise, subflow.rs outside this lease) and belongs in a dedicated wave with that test update.)"
@@ -44,14 +47,14 @@
   "in_RSP idiom now absent from Rugra httpd output exactly as in golden; remaining per-function skeleton diffs are loop-rotation/param/cast families already registered on the board",
   "Debug-build overflow at scope_local_find_overlap (funcdata.rs:173, introduced 38881244; i32 size sign-extended into the u64 last-offset arithmetic) traps examples/stackfold_dbg on this corpus; the deterministic driver therefore runs release like every E2E gate; src-side fix belongs outside this fixture's write-set"
  ],
- "last_updated": "2026-08-30",
- "input": "HTTPD-STACKSLOT-FOLD-0001 corpus=examples/httpd ap_parse_vhost_addrs@0x12cf30 (ghidra 189B) vs @0x2cf30 (rugra 203B); golden=tests/golden/ghidra_httpd_1204.c (pinned headless run, provenance ghidra_httpd_1204.provenance.json); driver=examples/stackfold_dbg.rs (surviving=1 in_RSP-chained=0); observation=spacebase-relative STORE/LOAD reindex census + ap_parse_vhost_addrs body",
- "input_fingerprint": "sha256:798648071e1df19345a7b318f31cf71349ea2d620d1225489a6d13d59adba2d0",
+ "last_updated": "2026-09-26",
+ "input": "HTTPD-STACKSLOT-FOLD-0001 corpus=examples/httpd ap_parse_vhost_addrs@0x12cf30 (ghidra 189B) vs @0x2cf30 (rugra 203B); golden=tests/golden/ghidra_httpd_1204.c (pinned headless run, provenance ghidra_httpd_1204.provenance.json); driver=examples/stackfold_dbg.rs (surviving=9 in_RSP-chained=0); observation=spacebase-relative STORE/LOAD reindex census + ap_parse_vhost_addrs body",
+ "input_fingerprint": "sha256:a4e44a6919e4a3ea18eb09faf4f82f011c2aa368e8a764f02c64a10da1e5bb35",
  "architecture": "x86:LE:64:default",
  "compiler_spec": "gcc",
  "analysis_options": {
-  "pipeline": "standard rugra pipeline via examples/httpd_decompile.rs with the canonical x86-64 Architecture attached (fd.set_arch before inject_raw_ops); golden produced by the pinned headless Ghidra run (full default analysis)",
-  "observation_scope": "corpus in_RSP census + ap_parse_vhost_addrs surviving LOAD/STORE pointer chains; per-function body comparison against the golden excerpt stays MISMATCH with the registered param-inference/deref/loop-rotation residual families"
+  "pipeline": "standard rugra pipeline via examples/httpd_decompile.rs with the canonical x86-64 Architecture attached (fd.set_arch before inject_raw_ops); golden produced by the pinned headless Ghidra run (full default analysis). Driver (examples/stackfold_dbg.rs) attaches the same canon cspec-bearing architecture form since STACKFOLD-FIXTURE-F6DC-BREAK-0001 (x86-64.pspec tracked context + x86-64-gcc.cspec parse_compiler_config -> defaultfp), so ActionRestrictLocal loop-2 walks the model's effect records exactly as the oracle's analysis-time prototype path does",
+  "observation_scope": "corpus in_RSP census + ap_parse_vhost_addrs surviving LOAD/STORE pointer chains (census 9 / in_RSP-chained 0 under the canon arch, loop-2 active); per-function body comparison against the golden excerpt stays MISMATCH with the registered param-inference/deref/loop-rotation residual families"
  },
  "overall_status": "MISMATCH",
  "comparand": {
@@ -59,6 +62,6 @@
   "rugra_excerpt_sha256": "9750704b9a2fd3a0be0788e695fde1d5c93406d625e5688f8b934afcad6d0067",
   "golden_sha256": "6b4c4f315c545a96ac323509fccc61fc3eb3767c39a48d8c596e77976a237d08",
   "golden_provenance_sha256": "4c0cd266a6c58d79115acd5d3833251357a41216ae1a2d8d17a962fcc1d55e8d",
-  "runner_sha256": "6f3141a2298fba8d1af3158612ff9d228ee4e49ab3b3fa198527101ef85240a5"
+  "runner_sha256": "17529b477e47b73e9a06426400e537046391b397c99265ab12a02a3a83c6987c"
  }
 }
