@@ -15,14 +15,7 @@ use crate::type_system::datatype::{TypeBase, TypeMetatype};
 use crate::type_system::Datatype;
 use crate::varnode::Varnode;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-
-/// Process-wide latch ensuring the Ghidra-style typedefs
-/// (byte/undefined/undefined4/undefined8/_struct) are emitted exactly once per
-/// decompile run. See doc_function for the rationale: callers build a fresh
-/// `PrintC` per function, so this must live outside the instance.
-static TYPEDEFS_EMITTED: AtomicBool = AtomicBool::new(false);
 
 // Ghidra: printc.cc:36-55 OpToken static instances (precedence + associativity)
 /// Canonical binary-operator token registry mirroring the static OpToken
@@ -11946,12 +11939,16 @@ impl PrintLanguage for PrintC {
         // Pass 2: Final Emission
         self.seen_return = false;
 
-        // Emit Ghidra-style typedefs once at the top of the whole document
-        // (matching Ghidra, which declares byte/undefined/_struct exactly once
-        // per decompiled file rather than repeating them before every function).
+        // Emit the Ghidra-style typedef preamble at the top of EVERY
+        // function document — per-document scope (HERMETICITY-TYPEDEF-
+        // LATCH-0001; the old process-wide AtomicBool latch is removed).
         // byte/bool come from size-based inference in ActionInferParams/
         // ActionTypeInfer; without these typedefs the emitted
         // `byte bVarN;` declarations fail C compilation.
+        // `_struct` is a generic backing type for pointer variables that
+        // get dereferenced via `->field_N` (see fix_deref_declarations):
+        // declaring such a variable as `_struct *` keeps `X->field_N`
+        // legal C.
         // NOTE: scope symbols whose data-type still carries the VarnodeBank
         // adapter's `xunknownN`/`unknown` names (TYPE-UNKNOWN-0001) are
         // declared verbatim by emitLocalVarDecls (printc.cc:2502 pushes
@@ -11959,49 +11956,61 @@ impl PrintLanguage for PrintC {
         // stay uncompilable here until the adapter is unified with the
         // TypeFactory's undefinedN registration — deliberately NOT aliased
         // at print time (no upper-layer bypass of the upstream gap).
-        // `_struct` is a generic backing type for pointer variables that get
-        // dereferenced via `->field_N` (see fix_deref_declarations): declaring
-        // such a variable as `_struct *` keeps `X->field_N` legal C.
         //
-        // The caller (examples/curl_decompile.rs, src/bin/rugra.rs) builds a
-        // fresh `PrintC` per function, so an instance field could not enforce
-        // "once per file"; instead a process-wide AtomicBool guarantees the
-        // typedefs are emitted exactly once across the whole decompile run.
-        // GENSMOKE-T1 note: the preamble is a canon-tier self-containment
-        // artifact with no oracle counterpart (direct-runner goldens carry
-        // zero typedef lines), but it CANNOT be tier-gated here: the curl
-        // driver's multi-process worker protocol reconstructs the latch at
-        // the process boundary and requires every worker document to start
-        // with this exact preamble (TYPEDEF_PREAMBLE +
-        // normalize_worker_typedefs, examples/curl_decompile.rs:5974-5990).
+        // Ghidra: printc.cc:2641-2670 PrintC::docFunction — the oracle
+        // document contract: ONE docFunction call = ONE complete
+        // self-contained document (beginFunction → … → endFunction →
+        // flush) with NO global-declaration step and NO cross-call state
+        // that gates any emission; the same function prints byte-identical
+        // output no matter which functions were printed before it.
+        // Ghidra's declaration sections live in separate caller-invoked
+        // one-shot documents: docAllGlobals (printc.cc:2621-2628,
+        // ifacedecomp.cc:944 `print C globals`) and docTypeDefinitions
+        // (printc.cc:2401-2412, ifacedecomp.cc:957 `print C types`),
+        // and docTypeDefinitions SKIPS core types outright (cc:2409
+        // `isCoreType() continue`) — so `typedef unsigned char byte` and
+        // kin never appear in any oracle docFunction output (direct-runner
+        // goldens: 0 typedef lines on all four corpora). The preamble is
+        // thus a canon-tier self-containment artifact with no oracle
+        // counterpart (GENSMOKE-T1), and the oracle-aligned scope for an
+        // artifact of this kind is the document: emitted once at the top
+        // of every doc_function output, unconditionally, with no process
+        // latch. The removed process-wide latch made the preamble depend
+        // on which functions had already been printed in the same process
+        // — one function + one input could yield two byte variants
+        // (first-in-process document carries the 6-line preamble, later
+        // documents do not; the apr_file_open_stdout 238B/453B pair was
+        // the TFSINGLE probe's capture), violating the closure premise of
+        // 铁律 2.1 on every single-process multi-function face
+        // (bin_sweep / gen_decompile / httpd bare face). The curl
+        // driver's multi-process worker protocol requires every worker
+        // document to start with exactly this preamble (TYPEDEF_PREAMBLE
+        // + normalize_worker_typedefs, examples/curl_decompile.rs), which
+        // the per-document form satisfies by construction.
         // compare_ghidra.py:109/141 normalizes typedef lines out of every
-        // diff face, so the preamble is invisible to all four gates.
-        if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
-            // Ghidra: printc.cc:2621-2628 PrintC::docAllGlobals — document-
-            // level declarations ride inside beginDocument .. endDocument
-            // .. flush; the beginDocument group gives the pretty printer its
-            // base indent entry so the separating tagLine breaks resolve.
-            // Rugra's typedef preamble is the stand-in for the global
-            // declaration section (see note above).
-            self.emit.begin_document();
-            self.emit.tag_line(0);
-            self.emit.print("typedef unsigned char byte;");
-            self.emit.tag_line(0);
-            self.emit.print("typedef unsigned long undefined;");
-            self.emit.tag_line(0);
-            self.emit.print("typedef unsigned short undefined2;");
-            self.emit.tag_line(0);
-            self.emit.print("typedef unsigned long undefined4;");
-            self.emit.tag_line(0);
-            self.emit.print("typedef unsigned long long undefined8;");
-            self.emit.tag_line(0);
-            self.emit
-                .print("typedef struct { char _anon[256]; } _struct;");
-            self.emit.tag_line(0);
-            self.emit.print("");
-            self.emit.end_document();
-            self.emit.flush();
-        }
+        // diff face, so the preamble remains invisible to all four gates.
+        // The preamble rides inside beginDocument .. endDocument .. flush
+        // (docAllGlobals' document form, printc.cc:2621-2628): the
+        // beginDocument group gives the pretty printer its base indent
+        // entry so the separating tagLine breaks resolve.
+        self.emit.begin_document();
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned char byte;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long undefined;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned short undefined2;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long undefined4;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long long undefined8;");
+        self.emit.tag_line(0);
+        self.emit
+            .print("typedef struct { char _anon[256]; } _struct;");
+        self.emit.tag_line(0);
+        self.emit.print("");
+        self.emit.end_document();
+        self.emit.flush();
 
         // Ghidra: printc.cc:2641-2670 PrintC::docFunction — the oracle emits
         // NO global declarations inside a function document: the keyword
@@ -19229,6 +19238,79 @@ mod tests {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
 
         printer.doc_function(&fd);
+    }
+
+    // HERMETICITY-TYPEDEF-LATCH-0001 regression: doc_function is a
+    // per-document emission (oracle docFunction contract, printc.cc:
+    // 2641-2670 — one call = one complete self-contained document, no
+    // cross-call latch gating any emission). The same function printed
+    // after other functions in the same process must produce byte-
+    // identical output to printing it first, and every document must
+    // carry the typedef preamble. The old process-wide AtomicBool latch
+    // failed both properties (post-predecessor documents lost the
+    // preamble).
+    fn doc_function_capture(name: &str, vaddr: u64) -> String {
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        let fd = Funcdata::new(name, Address::new(vaddr), 0x100);
+        printer.doc_function(&fd);
+        printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output()
+    }
+
+    #[test]
+    fn test_typedef_preamble_per_document_closure() {
+        // Predecessor document first (fresh PrintC per document — the
+        // driver shape of curl_decompile/httpd_decompile/rugra).
+        let predecessor = doc_function_capture("func_a", 0x1000);
+        assert!(
+            predecessor.contains("typedef unsigned char byte;"),
+            "first document in process must carry the preamble"
+        );
+        // The SAME target function after the predecessor: must still
+        // carry the preamble (the old process latch suppressed it here).
+        let target_after = doc_function_capture("target", 0x2000);
+        assert!(
+            target_after.contains("typedef unsigned char byte;"),
+            "post-predecessor document lost the typedef preamble — \
+             process latch regression (HERMETICITY-TYPEDEF-LATCH-0001)"
+        );
+        assert!(
+            target_after.contains("typedef unsigned long long undefined8;"),
+            "full preamble family must ride every document"
+        );
+        // Determinism: the same function captured again is byte-identical.
+        let target_again = doc_function_capture("target", 0x2000);
+        assert_eq!(
+            target_after, target_again,
+            "same function + input must produce byte-identical documents"
+        );
+    }
+
+    #[test]
+    fn test_typedef_preamble_reused_printer_instance() {
+        // PrintC-instance reuse shape (one printer, two documents): the
+        // preamble is per document, not per instance — the second call
+        // must emit its own preamble again.
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        let fd_a = Funcdata::new("func_a", Address::new(0x1000), 0x100);
+        let fd_b = Funcdata::new("func_b", Address::new(0x2000), 0x100);
+        printer.doc_function(&fd_a);
+        printer.doc_function(&fd_b);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
+        assert_eq!(
+            text.matches("typedef unsigned char byte;").count(),
+            2,
+            "a reused printer must emit one preamble per document"
+        );
     }
 
     #[test]

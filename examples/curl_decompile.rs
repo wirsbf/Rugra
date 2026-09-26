@@ -7288,7 +7288,9 @@ fn replay_worker_stderr(stderr: &[u8]) -> io::Result<()> {
 
 const TYPEDEF_PREAMBLE: &str = "\ntypedef unsigned char byte;\ntypedef unsigned long undefined;\ntypedef unsigned short undefined2;\ntypedef unsigned long undefined4;\ntypedef unsigned long long undefined8;\ntypedef struct { char _anon[256]; } _struct;\n";
 
-// RUGRA-GLUE: PrintC's process-wide typedef latch is reconstructed at the multi-process boundary.
+// RUGRA-GLUE: PrintC emits the typedef preamble per document
+// (HERMETICITY-TYPEDEF-LATCH-0001); the assembler keeps exactly one copy
+// at the head of the file and strips it from every later document.
 fn normalize_worker_typedefs(
     document: String,
     typedefs_emitted: &mut bool,
@@ -7304,22 +7306,21 @@ fn normalize_worker_typedefs(
     }
 }
 
-// RUGRA-GLUE: direct comparison shares PrintC's in-process latch while isolated workers do not.
+// RUGRA-GLUE: since the per-document typedef preamble
+// (HERMETICITY-TYPEDEF-LATCH-0001) every direct document carries the
+// preamble — same contract as the worker arm, strip all but the first.
 fn normalize_direct_typedefs(
     document: String,
     typedefs_emitted: &mut bool,
 ) -> Result<String, String> {
-    if document.starts_with(TYPEDEF_PREAMBLE) {
-        if *typedefs_emitted {
-            return Err("direct output repeated the typedef preamble".to_string());
-        }
-        *typedefs_emitted = true;
-        return Ok(document);
+    if !document.starts_with(TYPEDEF_PREAMBLE) {
+        return Err("direct output is missing the expected typedef preamble".to_string());
     }
     if *typedefs_emitted {
-        Ok(document)
+        Ok(document[TYPEDEF_PREAMBLE.len()..].to_string())
     } else {
-        Err("first direct output is missing the expected typedef preamble".to_string())
+        *typedefs_emitted = true;
+        Ok(document)
     }
 }
 
