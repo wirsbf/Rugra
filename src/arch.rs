@@ -1182,13 +1182,36 @@ impl Architecture {
     /// (space, first, last) triples are recorded in source order on the
     /// Architecture (`global_scope_ranges`) — registered residual
     /// CSPEC-GLOBAL-APPLY-0001 for the Database-side application.
+    ///
+    /// A REGISTER-space range (e.g. x86-64-gcc.cspec's
+    /// `<global><register name="MXCSR"/></global>`) applies to the global
+    /// scope but is NOT appended to `inferPtrSpaces`:
+    /// `Architecture::cacheAddrSpaceProperties`
+    /// (architecture.cc:680-683) filters the infer list with
+    /// `if (spc->getDelay() == 0) continue; // Don't put in a register
+    /// space` — register spaces (delay 0) never infer constant pointers.
+    /// Pushing Register into the list made a 4-byte constant
+    /// (`inferPtrSpaces=[Ram,Register]`, Register addrSize 4) pass the
+    /// exact-size gate where the oracle's [Ram(+code)] list rejects it
+    /// (4 != 8), so ActionConstantPtr converted the httpd main int-web
+    /// constant 0x17a422 ("ptemp") into a 4-byte
+    /// PTRSUB(spacebase,#0x17a422) that RulePtrsubCharConstant then
+    /// collapsed into a char* constant — typing the whole
+    /// apr_app_initialize-return web char* (`pcVar4 = "ptemp"` +
+    /// `(char *)` casts) where the oracle keeps `int iVar3 = 0x17a422`
+    /// (HTTPDMAIN-F4-WEBTYPE-0001).
     pub fn add_to_global_scope(
         &mut self,
         props: &RangeProperties,
         host: &dyn SpecQuery,
     ) -> Result<(), String> {
         let (spc, first, last) = Self::range_from_properties(props, host)?;
-        self.infer_ptr_spaces.push(spc);
+        // architecture.cc:680: register spaces (delay 0) stay out of the
+        // constant-pointer inference list; the range still applies to the
+        // global scope below.
+        if spc != crate::space::AddressSpace::Register {
+            self.infer_ptr_spaces.push(spc);
+        }
         self.global_scope_ranges.push((spc, first, last));
         if host.is_overlay_base(spc) {
             // We need to duplicate the range being marked as global into

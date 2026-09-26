@@ -506,3 +506,23 @@ wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
 - 本模块 3 处 `// Ghidra:` 头注解的 file:line 已重锚到锁定 oracle (e40ed130)
   的函数定义起始行；本文件中同名单点引用同步更新（正文内点引用/区间端点不在
   机制 D checker 范围，遗留见 RULEACTION-ANNO-PROSE-RANGE-0001）。注释-only，零行为变化。
+
+## 2026-09-26（Lane F4WEBTYPE）— `add_to_global_scope` 寄存器空间过滤（architecture.cc:680）
+
+`add_to_global_scope` 不再把 REGISTER 空间范围追加进 `infer_ptr_spaces`：
+x86-64-gcc.cspec 的 `<global>` 携带 `<register name="MXCSR"/>`（寄存器空间范
+围），oracle 的 `Architecture::cacheAddrSpaceProperties`
+（architecture.cc:680-683）以 `if (spc->getDelay() == 0) continue; // Don't
+put in a register space` 把寄存器空间从 inferPtrSpaces 过滤——范围仍进全局
+作用域（`global_scope_ranges` 不变），仅推理列表排除。Rugra 侧曾把 Register
+（addr_size=4）推入列表，使 4 字节字符串地址常量通过
+`select_infer_space` 的精确尺寸门（4==4）被 `ActionConstantPtr`→
+`spacebase_constant` 改写成 4 字节 `PTRSUB(spacebase,#addr)`，再被
+`RulePtrsubCharConstant` 折叠成 char\* 常量——httpd main 的
+`apr_app_initialize` 返回值 int 网被整体误定型 char\*
+（`pcVar4 = "ptemp"` vs oracle `int iVar3 = 0x17a422`，
+HTTPDMAIN-F4-WEBTYPE-0001）。修后 oracle 尺寸门照抄：Ram(8) 拒绝 4 字节常
+量 → 裸常量保持 → int 网保真。双侧 fixture：
+`tests/oracle/coreaction_constptr_registerspace_1204`
+（inferPtrSpaces 名单 + sz8 容器命中转 PTRSUB/charPrint 指针 +
+sz4 flag-web 同址保持裸常量 + sz8 无容器 miss 四例 MATCH）。
