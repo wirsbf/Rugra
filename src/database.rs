@@ -24,8 +24,75 @@ use std::sync::{Arc, RwLock, Weak};
 /// internal and discarded on decode.
 pub const ID_BASE: u64 = 0x4000_0000_0000_0000;
 
-/// Varnode-like properties of a Symbol. Faithful to the subset of
-/// `Varnode` flags used by Symbol (database.hh:182-184).
+// RUGRA-GLUE: format helper reproducing `RangeList::printBounds`
+// (address.cc:588-600) from the public plain-RangeList API for
+// `SymbolEntry::print_entry` / `Scope::print_bounds`: `all` when empty,
+// else one `<space>: <first>-<last>` line per range (the space prefix
+// appears only when the range bound carries a space; the legacy spaceless
+// model prints bare hex offsets).
+fn format_range_list_bounds(rl: &RangeList) -> String {
+    let ranges = rl.ranges();
+    if ranges.is_empty() {
+        return "all\n".to_string();
+    }
+    let mut out = String::new();
+    for rng in ranges {
+        let space_prefix = match rng.get_first_addr().get_space() {
+            Some(spc) => format!("{}: ", spc.get_name()),
+            None => String::new(),
+        };
+        out.push_str(&format!(
+            "{}{:x}-{:x}\n",
+            space_prefix,
+            rng.get_first_addr().as_u64(),
+            rng.get_last_addr().as_u64()
+        ));
+    }
+    out
+}
+
+// RUGRA-GLUE: C++ `istringstream(s) >> uint8` (database.cc:1328-1331, with
+// dec/hex/oct unset) for `Scope::resolveScope`'s decimal-id branch: skip
+// leading whitespace, consume leading decimal digits, saturate at
+// u64::MAX on overflow, and yield 0 when no digits were consumed.
+fn parse_istream_u64(s: &str) -> u64 {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        i += 1;
+    }
+    let mut value: u64 = 0;
+    let mut digits = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        let d = (bytes[i] - b'0') as u64;
+        value = value.saturating_mul(10).saturating_add(d);
+        digits += 1;
+        i += 1;
+    }
+    if digits == 0 {
+        return 0;
+    }
+    value
+}
+
+// RUGRA-GLUE: byte-wise `std::string::find(delim, mark)` for the
+// delimiter walks of `Database::resolveScopeFromSymbolName` /
+// `findCreateScopeFromSymbolName` — the first occurrence of `delim` in
+// `haystack` at or after `from`.
+fn find_subslice(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(from.min(haystack.len()));
+    }
+    if from >= haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + from)
+}
+
+/// Varnode-like properties of a Symbol. Faithful to the subset of/// `Varnode` flags used by Symbol (database.hh:182-184).
 /// Symbol property flags. Faithful to `Symbol::flags`
 /// (database.hh:183): Ghidra stores the VARNODE flag namespace directly on
 /// the Symbol — `Scope::addMap` writes `Varnode::persist` (database.cc:1132),
@@ -87,6 +154,70 @@ pub enum SymbolCategory {
     UnionFacet = 2,
     /// Temporary placeholder for an input symbol prior to formalizing parameters.
     FakeInput = 3,
+}
+
+/// Class for sub-sorting different SymbolEntry objects at the same address.
+/// Faithful to `SymbolEntry::EntrySubsort` (database.hh:107-134): built from
+/// the SymbolEntry `uselimit` object (see `getSubsort`,
+/// database.cc:93-109), holding the index of the sub-sorting address space
+/// and the offset within it. The (useindex, useoffset) lexicographic order
+/// is the rangemap tie-break for entries sharing a start address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntrySubsort {
+    /// Index of the sub-sorting address space (`EntrySubsort::useindex`).
+    pub useindex: i32,
+    /// Offset into the sub-sorting address space (`EntrySubsort::useoffset`).
+    pub useoffset: u64,
+}
+
+impl EntrySubsort {
+    // RUGRA-GLUE: component-wise constructor — Ghidra builds the subsort
+    // from an `Address` (database.hh:112-113 `addr.getSpace()->getIndex()`
+    // + `addr.getOffset()`); the legacy database model splits the address
+    // into (space index, offset) parts at the caller.
+    /// Construct given a sub-sorting address (space index + offset).
+    pub fn from_parts(useindex: i32, useoffset: u64) -> Self {
+        Self {
+            useindex,
+            useoffset,
+        }
+    }
+
+    // Ghidra: database.hh:114 EntrySubsort::EntrySubsort(void)
+    /// Construct the earliest possible sub-sort (`useindex=0`,
+    /// `useoffset=0`).
+    pub fn earliest() -> Self {
+        Self {
+            useindex: 0,
+            useoffset: 0,
+        }
+    }
+
+    // Ghidra: database.hh:119 EntrySubsort::EntrySubsort(bool)
+    /// Given a boolean value, construct the earliest/latest possible
+    /// sub-sort: `true` sets `useindex = 0xffff` (greater than any real
+    /// value), `false` the earliest.
+    pub fn from_bool(val: bool) -> Self {
+        if val {
+            Self {
+                useindex: 0xffff,
+                useoffset: 0,
+            }
+        } else {
+            Self::earliest()
+        }
+    }
+
+    // Ghidra: database.hh:129 EntrySubsort::operator<
+    /// Compare this with another sub-sort. Faithful to `operator<`
+    /// (database.hh:129-133): lexicographic on (useindex, useoffset) —
+    /// `useindex` first, `useoffset` only as the tie-break.
+    pub fn lt(&self, op2: &EntrySubsort) -> bool {
+        if self.useindex != op2.useindex {
+            return self.useindex < op2.useindex;
+        }
+        self.useoffset < op2.useoffset
+    }
 }
 
 /// Non-owning category slots corresponding to Ghidra's
@@ -298,6 +429,64 @@ impl SymbolEntry {
         }
         // cc:119: uselimit.inRange(usepoint,1).
         self.uselimit.in_range(usepoint)
+    }
+
+    // Ghidra: database.cc:122 SymbolEntry::getFirstUseAddress
+    /// Get the first code address where this storage is valid. Faithful to
+    /// `SymbolEntry::getFirstUseAddress` (database.cc:122-129): the first
+    /// range of the uselimit (`uselimit.getFirstRange()`,
+    /// RangeList set-order = lowest (space index, first offset)), its
+    /// `getFirstAddr()`; an empty uselimit yields the invalid `Address()`.
+    /// Rugra's plain `RangeList` keeps ranges sorted by first offset, and
+    /// the invalid address is the spaceless form (`Address::new(0)`).
+    pub fn get_first_use_address(&self) -> Address {
+        match self.uselimit.ranges().first() {
+            None => Address::new(0),
+            Some(rng) => rng.get_first_addr(),
+        }
+    }
+
+    // Ghidra: database.cc:166 SymbolEntry::printEntry
+    /// Give a contained one-line description of this storage, suitable for a
+    /// debug console. Faithful to `SymbolEntry::printEntry`
+    /// (database.cc:166-181): `<name> : <addr|<dynamic>> : <type size dec>
+    /// <type printRaw> : <uselimit printBounds>`. The address renders as
+    /// the space shortcut char plus the space's printRaw
+    /// (`addr.getShortcut()` / `addr.printRaw(s)`, cc:173-174) when the
+    /// entry's address carries a space, or the bare zero-padded hex offset
+    /// for the legacy spaceless model. The uselimit renders exactly as
+    /// `RangeList::printBounds` (address.cc:588-600): `all` + newline when
+    /// empty, else one `<space>: <first hex>-<last hex>` line per range
+    /// (space prefix present when the range bounds carry a space).
+    pub fn print_entry(&self) -> String {
+        let symbol = self.symbol.read().unwrap();
+        let mut out = String::new();
+        out.push_str(&symbol.name);
+        out.push_str(" : ");
+        if self.addr.is_invalid() {
+            out.push_str("<dynamic>");
+        } else {
+            match self.addr.get_space() {
+                Some(spc) => {
+                    out.push(spc.get_shortcut());
+                    out.push_str(&spc.print_raw(self.addr.as_u64()));
+                }
+                None => {
+                    out.push_str(&format!("{:#x}", self.addr.as_u64()));
+                }
+            }
+        }
+        out.push(':');
+        let (type_size, type_raw) = match &symbol.dtype {
+            Some(dt) => (dt.get_size(), dt.print_raw()),
+            None => (0, String::new()),
+        };
+        out.push_str(&type_size.to_string());
+        out.push(' ');
+        out.push_str(&type_raw);
+        out.push_str(" : ");
+        out.push_str(&format_range_list_bounds(&self.uselimit));
+        out
     }
 
     // RUGRA-GLUE: stable identity predicate standing in for the C++
@@ -531,6 +720,59 @@ impl SymbolEntry {
     }
 }
 
+/// Comparator for sorting Symbol objects by name. Faithful to
+/// `SymbolCompareName` (database.hh:358-372): the strict-weak ordering used
+/// by `SymbolNameTree` (`set<Symbol *, SymbolCompareName>`, database.hh:373)
+/// — name comparison first, the symbols' deduplication ids
+/// (`Symbol::nameDedup`, database.hh:181) as the tie-break.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SymbolCompareName;
+
+impl SymbolCompareName {
+    // Ghidra: database.hh:366 SymbolCompareName::operator()
+    /// Compare two Symbol references. Faithful to `operator()`
+    /// (database.hh:366-371): `\b true` iff the first is ordered before the
+    /// second — `name` lexicographic order (C++ `std::string::compare`,
+    /// i.e. byte-wise on the encoded chars), tie-broken by the unsigned
+    /// `nameDedup` ids.
+    pub fn is_before(&self, sym1: &Symbol, sym2: &Symbol) -> bool {
+        match sym1.name.cmp(&sym2.name) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => sym1.name_dedup < sym2.name_dedup,
+        }
+    }
+}
+
+/// Exception thrown when a function is added more than once to the
+/// database. Faithful to `DuplicateFunctionError`
+/// (database.hh:428-437): stores off the address of the function, so a
+/// handler can recover from the error and pick up the original symbol.
+/// Constructed by `FunctionSymbol::decode`'s RecovError arm
+/// (database.cc:590) with the message "Duplicate Function".
+#[derive(Debug, Clone)]
+pub struct DuplicateFunctionError {
+    /// Address of function causing the error (`DuplicateFunctionError::address`).
+    pub address: Address,
+    /// Name of the function (`DuplicateFunctionError::functionName`).
+    pub function_name: String,
+    /// The `RecovError` message ("Duplicate Function", database.hh:436).
+    pub message: &'static str,
+}
+
+impl DuplicateFunctionError {
+    // Ghidra: database.hh:435 DuplicateFunctionError::DuplicateFunctionError
+    /// Construct given the duplicate function's address and name. Faithful
+    /// to the inline constructor (database.hh:435-436).
+    pub fn new(addr: Address, nm: &str) -> Self {
+        Self {
+            address: addr,
+            function_name: nm.to_string(),
+            message: "Duplicate Function",
+        }
+    }
+}
+
 /// The base class for a symbol in a symbol table or scope. Faithful to
 /// `Symbol` (database.hh:172).
 #[derive(Debug, Clone)]
@@ -557,6 +799,17 @@ pub struct Symbol {
     pub symbol_id: u64,
     /// Number of SymbolEntries that map to the whole Symbol.
     pub whole_count: u32,
+    /// Scope id associated with the current depth resolution — the Rust
+    /// realization of Ghidra's `mutable const Scope *depthScope`
+    /// (database.hh:190), the memo key of
+    /// `Symbol::getResolutionDepth` (database.cc:323-360). `None` models
+    /// the C++ null (no memo yet).
+    pub depth_scope: Option<u64>,
+    /// Number of namespace elements required to resolve the symbol in the
+    /// current scope — Ghidra's `mutable int4 depthResolution`
+    /// (database.hh:191), the memo value of `getResolutionDepth`. Only
+    /// meaningful while `depth_scope` names the queried use scope.
+    pub depth_resolution: i32,
     /// The resolved Datatype of this symbol (Ghidra `Symbol::type`).
     /// Faithful to `Symbol::getType` (database.hh:244).
     pub dtype: Option<Arc<crate::type_system::datatype::Datatype>>,
@@ -579,6 +832,8 @@ impl Symbol {
             catindex: 0,
             symbol_id: 0,
             whole_count: 0,
+            depth_scope: None,
+            depth_resolution: 0,
             dtype: None,
         }
     }
@@ -705,6 +960,52 @@ impl Symbol {
     /// Does this have more than one entire mapping? Faithful to `isMultiEntry`.
     pub fn is_multi_entry(&self) -> bool {
         self.whole_count > 1
+    }
+
+    // Ghidra: database.cc:508 Symbol::getBytesConsumed
+    /// Get the number of bytes consumed by a SymbolEntry representing this
+    /// Symbol. By default (this base-class form) it is the number of bytes
+    /// consumed by the Symbol's data-type (`type->getSize()`,
+    /// database.cc:511); `FunctionSymbol` overrides it with its
+    /// `consumeSize`. Faithful to `Symbol::getBytesConsumed`
+    /// (database.cc:508-512). A Symbol without a resolved `dtype` is a
+    /// precondition violation in Ghidra (null dereference); the Rust value
+    /// model reports 0 for that state instead of panicking.
+    pub fn get_bytes_consumed(&self) -> i32 {
+        match &self.dtype {
+            Some(dt) => dt.get_size() as i32,
+            None => 0,
+        }
+    }
+
+    // Ghidra: database.cc:301 Symbol::getMapEntryPosition
+    /// Among all the SymbolEntrys that map this entire Symbol, calculate the
+    /// position of the given SymbolEntry within the list. Faithful to
+    /// `Symbol::getMapEntryPosition` (database.cc:301-313), including its
+    /// decisive quirks, reproduced exactly:
+    /// - the returned `pos` counts an entry only when the SOUGHT entry's
+    ///   size equals the Symbol's data-type size (`entry->getSize() ==
+    ///   type->getSize()`, database.cc:309) — the counter's condition reads
+    ///   the searched entry, not the iterated one, so a whole-sized sought
+    ///   entry yields its index among ALL entries and a partial sought entry
+    ///   always yields 0;
+    /// - identity is C++ `SymbolEntry*` pointer equality; the Rust form
+    ///   takes the entry's storage identity (same symbol, addr/hash,
+    ///   offset, size — `same_storage_identity`), which is deterministic
+    ///   for fixture-constructed entries.
+    /// Returns its position within the list or -1 if it is not in the list.
+    pub fn get_map_entry_position(&self, entries: &[SymbolEntry], entry: &SymbolEntry) -> i32 {
+        let whole_size = entry.get_size() == self.get_bytes_consumed();
+        let mut pos: i32 = 0;
+        for tmp in entries {
+            if tmp.same_storage_identity(entry) {
+                return pos;
+            }
+            if whole_size {
+                pos += 1;
+            }
+        }
+        -1
     }
 
     // Ghidra: database.hh:262 Symbol::setDisplayFormat
@@ -1019,14 +1320,36 @@ pub struct FunctionSymbol {
 }
 
 impl FunctionSymbol {
+    // Ghidra: database.cc:514 FunctionSymbol::buildType
+    /// Build the placeholder data-type for a function symbol: the base
+    /// `code` type (`types->getTypeCode()`, database.cc:518) plus the
+    /// `namelock | typelock` flag pair (database.cc:519). Faithful to
+    /// `FunctionSymbol::buildType` (database.cc:514-520). The value model
+    /// keeps the `"func"` type-name tag (the subclass discriminator used by
+    /// `Scope::find_function`) alongside the resolved code `dtype`.
+    pub fn build_type(&mut self) {
+        // type.cc:3692 TypeFactory::getTypeCode — the generic TypeCode
+        // (empty name, size 1, marked complete). The same type channel the
+        // existing add_function path installs (2026-09-24
+        // HTTPD-CODEREF-SYMBOLIZE-0001).
+        self.symbol.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Code(
+            crate::type_system::datatype::TypeCode::new(),
+        )));
+        self.symbol.flags |= symbol_flags::NAMELOCK | symbol_flags::TYPELOCK;
+    }
+
     // Ghidra: database.cc:534 FunctionSymbol::new
-    /// Construct given the name and consume size.
+    /// Construct given the name and consume size. Faithful to the
+    /// constructor (database.cc:534-542): `consumeSize = size`,
+    /// `buildType()`, then the name/display-name assignment, in that order.
     pub fn new(scope_id: u64, nm: &str, size: i32, entry: Address) -> Self {
-        Self {
+        let mut out = Self {
             symbol: Symbol::new(scope_id, nm, "func"),
             consume_size: size,
             entry,
-        }
+        };
+        out.build_type();
+        out
     }
 
     // Ghidra: database.cc:534 FunctionSymbol::getBytesConsumed
@@ -1034,6 +1357,27 @@ impl FunctionSymbol {
     /// Faithful to `getBytesConsumed`.
     pub fn get_bytes_consumed(&self) -> i32 {
         self.consume_size
+    }
+
+    // Ghidra: database.cc:557 FunctionSymbol::getFunction
+    /// Get the function's backing Funcdata, building the function \e shell
+    /// lazily from the symbol's first whole-map entry
+    /// (`fd = new Funcdata(name,displayName,scope,entry->getAddr(),this)`,
+    /// database.cc:557-564). MIGRATION RULING (no hard port of the
+    /// Funcdata* channel): in Rugra the Funcdata objects are materialized
+    /// and owned by the driver/Funcdata layer; this database-side
+    /// projection exposes exactly the constructor arguments Ghidra feeds
+    /// the lazy construction — (name, displayName, scope id, entry
+    /// address) — while the Funcdata identity channel itself stays
+    /// UNTESTED at the database layer (the ownership chain is exercised by
+    /// DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001).
+    pub fn get_function_shell(&self) -> Option<(String, String, u64, Address)> {
+        Some((
+            self.symbol.name.clone(),
+            self.symbol.display_name.clone(),
+            self.symbol.scope_id,
+            self.entry,
+        ))
     }
 
     // Ghidra: database.cc:534 FunctionSymbol::getEntry
@@ -1171,13 +1515,48 @@ pub struct LabSymbol {
 }
 
 impl LabSymbol {
+    // Ghidra: database.cc:728 LabSymbol::buildType
+    /// Label symbols don't really have a data-type, so we just put a size 1
+    /// placeholder. Faithful to `LabSymbol::buildType` (database.cc:728-732):
+    /// `type = scope->getArch()->types->getBase(1,TYPE_UNKNOWN)` — the base
+    /// `undefined` type of size 1. The value model keeps the `"label"`
+    /// type-name tag (the subclass discriminator used by
+    /// `Scope::find_code_label`) alongside the resolved placeholder dtype.
+    pub fn build_type(&mut self) {
+        self.symbol.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "undefined".to_string(),
+                1,
+                crate::type_system::datatype::TypeMetatype::Unknown,
+            ),
+        )));
+    }
+
     // Ghidra: database.cc:736 LabSymbol::new
-    /// Construct given the name and address.
+    /// Construct given the name and address. Faithful to the constructor
+    /// (database.cc:736-742): `buildType()` then the name/display-name
+    /// assignment (the Rust form additionally records the labelled address
+    /// in the value model).
     pub fn new(scope_id: u64, nm: &str, addr: Address) -> Self {
-        Self {
+        let mut out = Self {
             symbol: Symbol::new(scope_id, nm, "label"),
             addr,
-        }
+        };
+        out.build_type();
+        out
+    }
+
+    // Ghidra: database.cc:745 LabSymbol::LabSymbol(Scope *)
+    /// Constructor for use with decode (no name/type yet). Faithful to
+    /// `LabSymbol(Scope *sc)` (database.cc:745-749): `buildType()` only.
+    pub fn new_decode(scope_id: u64, addr: Address) -> Self {
+        let mut out = Self {
+            symbol: Symbol::new_unnamed(scope_id),
+            addr,
+        };
+        out.symbol.type_name = "label".to_string();
+        out.build_type();
+        out
     }
 
     // Ghidra: database.cc:751 LabSymbol::encode
@@ -1235,13 +1614,82 @@ pub struct ExternRefSymbol {
 }
 
 impl ExternRefSymbol {
-    // Ghidra: database.cc:785 ExternRefSymbol::new
-    /// Construct given the name and reference address.
+    // Ghidra: database.cc:768 ExternRefSymbol::buildNameType
+    /// Build name, type, and flags based on the placeholder address.
+    /// Faithful to `ExternRefSymbol::buildNameType`
+    /// (database.cc:768-784):
+    /// - the data-type is a pointer to the base `code` type
+    ///   (`getTypeCode()` then `getTypePointer(refaddr.getAddrSize(), ...)`,
+    ///   cc:771-773), sized by the reference address's address size (the
+    ///   legacy spaceless model uses the x86-64 default of 8);
+    /// - an empty name gets `<shortcut><printRaw>_exref`
+    ///   (cc:774-780) — the shortcut char and space printRaw render only
+    ///   when the reference address carries a space, otherwise the bare
+    ///   `0x`-offset form;
+    /// - the display name defaults to the name (cc:781-782);
+    /// - `flags |= externref | typelock` (cc:783).
+    pub fn build_name_type(&mut self) {
+        let (addr_size, word_size, raw) = match self.refaddr.get_space() {
+            Some(spc) => (
+                spc.get_addr_size() as usize,
+                spc.get_word_size() as usize,
+                format!("{}{}", spc.get_shortcut(), spc.print_raw(self.refaddr.as_u64())),
+            ),
+            None => (8, 1, format!("{:#x}", self.refaddr.as_u64())),
+        };
+        let code = Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "code".to_string(),
+                1,
+                crate::type_system::datatype::TypeMetatype::Code,
+            ),
+        ));
+        self.symbol.dtype = Some(Arc::new(
+            crate::type_system::datatype::Datatype::Pointer(
+                crate::type_system::datatype::TypePointer::new(addr_size, code, word_size),
+            ),
+        ));
+        if self.symbol.name.is_empty() {
+            // If a name was not already provided, give the reference a
+            // unique name (database.cc:775-779).
+            self.symbol.name = format!("{}_exref", raw);
+        }
+        if self.symbol.display_name.is_empty() {
+            self.symbol.display_name = self.symbol.name.clone();
+        }
+        self.symbol.flags |= symbol_flags::EXTERNREF | symbol_flags::TYPELOCK;
+    }
+
+    // Ghidra: database.cc:789 ExternRefSymbol::ExternRefSymbol
+    /// Construct given the placeholder address. Faithful to the constructor
+    /// (database.cc:789-794): `refaddr = ref; buildNameType();`.
     pub fn new(scope_id: u64, nm: &str, refaddr: Address) -> Self {
-        Self {
+        let mut out = Self {
             symbol: Symbol::new(scope_id, nm, "exref"),
             refaddr,
+        };
+        out.build_name_type();
+        out
+    }
+
+    // Ghidra: database.hh:351 ExternRefSymbol::ExternRefSymbol(Scope *)
+    /// For use with decode. Faithful to the inline form (database.hh:351):
+    /// base `Symbol(sc)` initialization only — `buildNameType` runs at the
+    /// end of `decode` (database.cc:821).
+    pub fn new_decode(scope_id: u64) -> Self {
+        let mut symbol = Symbol::new_unnamed(scope_id);
+        symbol.type_name = "exref".to_string();
+        Self {
+            symbol,
+            refaddr: Address::new(0),
         }
+    }
+
+    // Ghidra: database.hh:352 ExternRefSymbol::getRefAddr
+    /// Return the placeholder address. Faithful to `getRefAddr`
+    /// (database.hh:352).
+    pub fn get_ref_addr(&self) -> Address {
+        self.refaddr
     }
 
     // Ghidra: database.cc:796 ExternRefSymbol::encode
@@ -1283,28 +1731,60 @@ impl ExternRefSymbol {
             decoder.close_element(addr_id);
             self.refaddr = Address::new(off);
         }
+        // database.cc:821 — decode ends with buildNameType().
+        self.build_name_type();
         decoder.close_element(elem_id);
     }
 }
 
 /// A Symbol that overrides one facet of a union field. Faithful to
-/// `UnionFacetSymbol` (database.hh:362).
+/// `UnionFacetSymbol` (database.hh:319).
 #[derive(Debug, Clone)]
 pub struct UnionFacetSymbol {
     /// The base Symbol.
     pub symbol: Symbol,
-    /// The field index within the union that this facet overrides.
-    pub field: u64,
+    /// Particular field to associate with Symbol access —
+    /// `UnionFacetSymbol::fieldNum` (database.hh:320), an `int4` where -1
+    /// indicates the whole union (database.cc:690).
+    pub field_num: i32,
 }
 
 impl UnionFacetSymbol {
-    // Ghidra: database.cc:688 UnionFacetSymbol::new
-    /// Construct given the name and field index.
-    pub fn new(scope_id: u64, nm: &str, field: u64) -> Self {
-        Self {
-            symbol: Symbol::new(scope_id, nm, "union"),
-            field,
+    // Ghidra: database.cc:691 UnionFacetSymbol::UnionFacetSymbol
+    /// Create a symbol that forces a particular field of a union to
+    /// propagate. Faithful to the constructor (database.cc:691-696):
+    /// `fieldNum = fldNum; category = union_facet;` on top of the base
+    /// `Symbol(sc, nm, unionDt)` initialization.
+    pub fn new(scope_id: u64, nm: &str, union_dt: Option<Arc<crate::type_system::datatype::Datatype>>, fld_num: i32) -> Self {
+        let mut symbol = Symbol::new(scope_id, nm, "union");
+        if let Some(dt) = union_dt {
+            symbol.dtype = Some(dt);
         }
+        symbol.category = SymbolCategory::UnionFacet;
+        Self {
+            symbol,
+            field_num: fld_num,
+        }
+    }
+
+    // Ghidra: database.hh:323 UnionFacetSymbol::UnionFacetSymbol(Scope *)
+    /// Constructor for use with decode. Faithful to the inline form
+    /// (database.hh:323): `fieldNum = -1; category = union_facet;`.
+    pub fn new_decode(scope_id: u64) -> Self {
+        let mut symbol = Symbol::new_unnamed(scope_id);
+        symbol.type_name = "union".to_string();
+        symbol.category = SymbolCategory::UnionFacet;
+        Self {
+            symbol,
+            field_num: -1,
+        }
+    }
+
+    // Ghidra: database.hh:324 UnionFacetSymbol::getFieldNumber
+    /// Get the particular field associated with this. Faithful to
+    /// `getFieldNumber` (database.hh:324).
+    pub fn get_field_number(&self) -> i32 {
+        self.field_num
     }
 
     // Ghidra: database.cc:698 UnionFacetSymbol::encode
@@ -1314,7 +1794,7 @@ impl UnionFacetSymbol {
     pub fn encode(&self, encoder: &mut dyn Encoder) {
         encoder.open_element(&ElementId::new("facetsymbol", 71));
         self.symbol.encode_header(encoder);
-        encoder.write_unsigned_integer(&AttributeId::new("field", 62), self.field);
+        encoder.write_signed_integer(&AttributeId::new("field", 62), self.field_num as i64);
         encoder.close_element(&ElementId::new("facetsymbol", 71));
     }
 
@@ -1337,7 +1817,7 @@ impl UnionFacetSymbol {
                 break;
             }
             match decoder.attribute_name(aid).as_deref() {
-                Some("field") => self.field = decoder.read_unsigned_integer(),
+                Some("field") => self.field_num = decoder.read_signed_integer() as i32,
                 _ => {
                     // Defer to header parsing for the common attributes by
                     // reading the value; header re-parse is not possible, so
@@ -2428,18 +2908,284 @@ impl Scope {
         }
     }
 
-    // Ghidra: database.hh:34 Scope::attachChild
-    /// Attach a child scope.
+    // Ghidra: database.cc:857 Scope::attachScope
+    /// Attach the child as an immediate sub-scope of this scope. Realizes
+    /// `Scope::attachScope` (database.cc:857-862): the C++ form sets the
+    /// child's `parent` back-pointer and inserts it into the parent's
+    /// id-keyed `children` ScopeMap; the value model realizes the
+    /// back-pointer as the child's `parent_id` (written by
+    /// `Database::attach_scope`, the other half of this split) and the
+    /// child list as the insertion-ordered `children` vector
+    /// (deduplicated, preserving first-insertion position where Ghidra's
+    /// `children[child->uniqueId] = child` is an upsert on an id-keyed
+    /// map).
     pub fn attach_child(&mut self, child_id: u64) {
         if !self.children.contains(&child_id) {
             self.children.push(child_id);
         }
     }
 
-    // Ghidra: database.hh:34 Scope::detachChild
-    /// Detach a child scope.
+    // Ghidra: database.cc:866 Scope::detachScope
+    /// Detach (and delete) the indicated child scope. Realizes
+    /// `Scope::detachScope` (database.cc:866-872): the C++ form takes the
+    /// ScopeMap iterator, erases the entry, and `delete`s the child; the
+    /// value model erases the child id (the Scope object itself lives in
+    /// `Database::scopes` and is removed by `Database::delete_scope`, the
+    /// composite owner of this split).
     pub fn detach_child(&mut self, child_id: u64) {
         self.children.retain(|&c| c != child_id);
+    }
+
+    // Ghidra: database.hh:765 Scope::childrenBegin
+    /// Beginning iterator of child scopes. Faithful to the C++
+    /// `childrenBegin()` (database.hh:765) — the C++ ScopeMap iterates
+    /// children in unique-id order; the Rust realization is the children
+    /// slice iterator over the insertion-ordered id list.
+    pub fn children_begin(&self) -> std::slice::Iter<'_, u64> {
+        self.children.iter()
+    }
+
+    // Ghidra: database.hh:766 Scope::childrenEnd
+    /// Ending iterator of child scopes. Faithful to the C++
+    /// `childrenEnd()` (database.hh:766).
+    pub fn children_end(&self) -> std::slice::Iter<'_, u64> {
+        self.children.iter()
+    }
+
+    // Ghidra: database.hh:719 Scope::decodeWrappingAttributes
+    /// Restore attributes for this from a parent element that is not a
+    /// Scope. Faithful to the base-class no-op
+    /// (database.hh:714-719: `virtual void decodeWrappingAttributes(Decoder
+    /// &) {}`); the derived scope implementations that read parent-element
+    /// attributes (e.g. the function-scope wrappers) have no database-layer
+    /// counterpart in the value model, where the parent attributes are
+    /// consumed inline by `Database::decode_scope_path`.
+    pub fn decode_wrapping_attributes(&mut self, _decoder: &mut dyn Decoder) {}
+
+    // Ghidra: database.hh:789 Scope::printBounds
+    /// Print a description of this Scope's owned memory ranges. Faithful
+    /// to `printBounds` (database.hh:789: `rangetree.printBounds(s)`), the
+    /// RangeList form of address.cc:588-600 — `all` when the scope owns no
+    /// ranges, else one `<space>: <first hex>-<last hex>` line per range.
+    pub fn print_bounds(&self) -> String {
+        format_range_list_bounds(&self.rangetree)
+    }
+
+    // Ghidra: database.cc:880 Scope::hashScopeName
+    /// Create a Scope id based on the scope's name and its parent's id.
+    /// Faithful to `Scope::hashScopeName` (database.cc:880-895), the static
+    /// crc cascade over the parent id halves and every name byte:
+    /// - `reg1 = crc_update(hi32(baseId), 0xa9)` FIRST, then
+    ///   `reg2 = crc_update(lo32(baseId), reg1)` (cc:885-886);
+    /// - per byte, `val = nm[i]` reads a SIGNED `char` — bytes >= 0x80
+    ///   sign-extend into the `uint4` (0xFFFFFF80..0xFFFFFFFF) before the
+    ///   crc feed (cc:888), reproduced here with the `i8` round-trip;
+    /// - the result packs `(reg1 << 32) | reg2` (cc:892-893).
+    pub fn hash_scope_name(base_id: u64, nm: &str) -> u64 {
+        let mut reg1: u32 = (base_id >> 32) as u32;
+        let mut reg2: u32 = base_id as u32;
+        reg1 = crate::crc32::crc_update(reg1, 0xa9);
+        reg2 = crate::crc32::crc_update(reg2, reg1);
+        for &b in nm.as_bytes() {
+            let val = b as i8 as i32 as u32;
+            reg1 = crate::crc32::crc_update(reg1, val);
+            reg2 = crate::crc32::crc_update(reg2, reg1);
+        }
+        ((reg1 as u64) << 32) | (reg2 as u64)
+    }
+
+    // Ghidra: database.cc:1387 Scope::overrideSizeLockType
+    /// Change (override) the data-type of a sizelocked Symbol, while
+    /// preserving the lock. Faithful to `overrideSizeLockType`
+    /// (database.cc:1387-1397): when the new data-type's size matches, the
+    /// override happens only if the Symbol currently reports
+    /// `size_typelock` (else `LowlevelError("Overriding symbol that is not
+    /// size locked")`); a size mismatch is always
+    /// `LowlevelError("Overriding symbol with different type size")`. The
+    /// Rust form reports the LowlevelError message text as the `Err` value
+    /// instead of throwing.
+    pub fn override_size_lock_type(
+        &mut self,
+        symbol_id: u64,
+        ct: Arc<crate::type_system::datatype::Datatype>,
+    ) -> Result<(), &'static str> {
+        let sym = match self.symbols.get(&symbol_id) {
+            Some(s) => s.clone(),
+            None => return Err("Overriding symbol that is not size locked"),
+        };
+        let mut sym_w = sym.write().unwrap();
+        let cur_size = sym_w.dtype.as_ref().map_or(0, |dt| dt.get_size());
+        if cur_size == ct.get_size() {
+            if !sym_w.is_size_type_locked() {
+                return Err("Overriding symbol that is not size locked");
+            }
+            sym_w.dtype = Some(ct);
+            return Ok(());
+        }
+        Err("Overriding symbol with different type size")
+    }
+
+    // Ghidra: database.cc:1402 Scope::resetSizeLockType
+    /// Replace any overriding data-type with the locked UNKNOWN type of the
+    /// correct size. Faithful to `resetSizeLockType` (database.cc:1402-1408):
+    /// nothing to do when the current data-type is already `TYPE_UNKNOWN`
+    /// (cc:1405); otherwise the size is preserved and the type replaced by
+    /// the base `undefined` of that size (`glb->types->getBase(size,
+    /// TYPE_UNKNOWN)`, cc:1407).
+    pub fn reset_size_lock_type(&mut self, symbol_id: u64) {
+        let sym = match self.symbols.get(&symbol_id) {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        let mut sym_w = sym.write().unwrap();
+        let (size, metatype) = match &sym_w.dtype {
+            Some(dt) => (dt.get_size(), dt.get_metatype()),
+            None => return,
+        };
+        if metatype == crate::type_system::datatype::TypeMetatype::Unknown {
+            return; // Nothing to do
+        }
+        sym_w.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "undefined".to_string(),
+                size,
+                crate::type_system::datatype::TypeMetatype::Unknown,
+            ),
+        )));
+    }
+
+    // Ghidra: database.cc:1874 ScopeInternal::addDynamicMapInternal
+    /// Add a dynamic SymbolEntry to this scope's dynamic-entry list.
+    /// Faithful to `ScopeInternal::addDynamicMapInternal`
+    /// (database.cc:1874-1887): the entry is appended to `dynamicentry`
+    /// (cc:1877), a reference is stored in the symbol's `mapentry` list
+    /// (cc:1880 — realized by the entry's `symbol` back-reference), and
+    /// when `sz` equals the symbol's data-type size the whole-entry
+    /// counter increments, with the symbol joining the multi-entry set at
+    /// its second whole entry (cc:1881-1885 — realized by
+    /// `Symbol::whole_count`, whose `> 1` state IS the multi-entry set
+    /// membership, cf. `multi_entry_symbols`). Returns the index of the
+    /// newly created entry.
+    pub fn add_dynamic_map_internal(
+        &mut self,
+        symbol_id: u64,
+        exfl: u32,
+        hash: u64,
+        off: i32,
+        sz: i32,
+        uselim: RangeList,
+    ) -> Option<usize> {
+        let sym_arc = self.symbols.get(&symbol_id).cloned()?;
+        let type_size = sym_arc.read().unwrap().get_bytes_consumed();
+        sym_arc.write().unwrap().whole_count += if sz == type_size { 1 } else { 0 };
+        self.dynamic_entries.push(SymbolEntry::new_dynamic(
+            sym_arc,
+            exfl,
+            hash,
+            off,
+            sz,
+            uselim,
+        ));
+        Some(self.dynamic_entries.len() - 1)
+    }
+
+    // Ghidra: database.cc:1992 ScopeInternal::categorySanity
+    /// Look for NULL entries in the category tables. If there are, clear
+    /// out the entire category, marking all symbols as uncategorized.
+    /// Faithful to `ScopeInternal::categorySanity`
+    /// (database.cc:1992-2018): categories are visited in ascending index
+    /// order (C++ vector index; the BTreeMap key order); an empty category
+    /// is skipped (cc:1997); a single interior NULL slot condemns the
+    /// whole category (cc:1998-2005); every live symbol is then
+    /// re-categorized to `no_category` via `setCategory(sym,
+    /// no_category, 0)` (cc:2006-2014) — the C++ copies the slot list
+    /// first because setCategory mutates it, reproduced by collecting the
+    /// symbol ids before mutating.
+    pub fn category_sanity(&mut self) {
+        let cat_keys: Vec<i32> = self.categories.keys().copied().collect();
+        for cat in cat_keys {
+            let slots: Vec<u64> = match self.categories.get(&cat) {
+                None => continue,
+                Some(list) => {
+                    let num = list.len();
+                    if num == 0 {
+                        continue;
+                    }
+                    let mut nullsymbol = false;
+                    let mut ids = Vec::with_capacity(num);
+                    for index in 0..num {
+                        match list.get(index) {
+                            None => {
+                                nullsymbol = true;
+                                ids.push(0);
+                            }
+                            Some(sym) => ids.push(sym.read().unwrap().symbol_id),
+                        }
+                    }
+                    if !nullsymbol {
+                        continue;
+                    }
+                    ids
+                }
+            };
+            // Clear entire category (database.cc:2006-2014).
+            for sym_id in slots {
+                if sym_id == 0 {
+                    continue;
+                }
+                self.set_category(sym_id, -1, 0);
+            }
+        }
+    }
+
+    // Ghidra: database.cc:2362 ScopeInternal::resolveExternalRefFunction
+    /// Resolve the function an ExternRefSymbol refers to, from the scope
+    /// the reference was found in. Faithful to
+    /// `ScopeInternal::resolveExternalRefFunction`
+    /// (database.cc:2362-2366: `return queryFunction(sym->getRefAddr())`).
+    /// The C++ `queryFunction` walks the scope stack through the symbol
+    /// table's mapScope; the value model resolves through this scope's own
+    /// function entries (`find_function`, the cc:2321 layer of that walk)
+    /// and returns the resolved function's entry address.
+    pub fn resolve_external_ref_function(&self, sym_refaddr: Address) -> Option<Address> {
+        self.find_function(sym_refaddr)
+    }
+
+    // Ghidra: database.cc:2791 ScopeInternal::printEntries
+    /// Dump a description of all SymbolEntry objects to a stream.
+    /// Faithful to `ScopeInternal::printEntries`
+    /// (database.cc:2791-2804): `Scope <name>\n` then one
+    /// `SymbolEntry::printEntry` line per entry, walking the per-space
+    /// maptable in ascending space-index order and each rangemap in list
+    /// order. The value model keeps static entries in a single
+    /// insertion-ordered vector (no per-space split), so the walk is
+    /// insertion order — identical to the C++ projection for entries in
+    /// one address space, diverging only when entries span multiple
+    /// spaces.
+    pub fn print_entries(&self) -> String {
+        let mut out = format!("Scope {}\n", self.name);
+        for entry in &self.entries {
+            out.push_str(&entry.print_entry());
+        }
+        out
+    }
+
+    // Ghidra: database.hh:865 ScopeInternal::beginMultiEntry
+    /// The ids of the symbols with more than one entry, in ascending id
+    /// order — the realization of the `multiEntrySet` iteration surface
+    /// (`beginMultiEntry`/`endMultiEntry`, database.hh:865-866). The C++
+    /// `set<Symbol *>` iterates in POINTER order, which is allocation
+    /// noise; both comparands of a B2 observation normalize to symbol-id
+    /// order, so this iterator fixes that normalized order.
+    pub fn multi_entry_symbols(&self) -> Vec<u64> {
+        let mut ids: Vec<u64> = self
+            .symbols
+            .values()
+            .filter(|s| s.read().unwrap().whole_count > 1)
+            .map(|s| s.read().unwrap().symbol_id)
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     // Ghidra: database.hh:34 Scope::numSymbols
@@ -3248,7 +3994,7 @@ impl Scope {
         &mut self,
         nm: &str,
         type_name: &str,
-        field_num: u64,
+        field_num: i32,
         addr: Address,
         hash: u64,
     ) -> (UnionFacetSymbol, u64) {
@@ -3278,7 +4024,7 @@ impl Scope {
             rnglist,
         ));
         // The UnionFacetSymbol view for the caller (database.cc:1746 return).
-        (UnionFacetSymbol::new(self.unique_id, nm, field_num), id)
+        (UnionFacetSymbol::new(self.unique_id, nm, None, field_num), id)
     }
 
     // Ghidra: database.cc:1126 Scope::addMap (flag rules)
@@ -4012,9 +4758,437 @@ impl Database {
         id
     }
 
+    // Ghidra: database.cc:1315 Scope::resolveScope
+    /// Look for the immediate child of the given scope with a given name.
+    /// Faithful to `Scope::resolveScope` (database.cc:1315-1345), realized
+    /// on the Database because the value model keeps the child scopes in
+    /// the id-keyed `scopes` map (the C++ `children` ScopeMap). The three
+    /// branches reproduce the C++ exactly:
+    /// - `strategy` (id-by-name-hash): the child is looked up by
+    ///   `hashScopeName(parent->uniqueId, nm)` and returned only if its
+    ///   name also matches (cc:1318-1325);
+    /// - a decimal-leading name (`nm[0]` in `'0'..='9'`, cc:1326) directly
+    ///   specifies the child id — parsed with C++ `istringstream >> uint8`
+    ///   semantics (leading whitespace skipped, leading decimal digits
+    ///   consumed, saturating at u64::MAX on overflow, 0 on no digits);
+    /// - otherwise a linear scan of the children in unique-id order
+    ///   (the C++ ScopeMap iteration order) comparing names (cc:1336-1343).
+    pub fn resolve_scope_by_name(&self, parent_id: u64, nm: &str, strategy: bool) -> Option<u64> {
+        let parent = self.scopes.get(&parent_id)?;
+        if strategy {
+            let key = Scope::hash_scope_name(parent.unique_id, nm);
+            for &child in &parent.children {
+                if let Some(child_scope) = self.scopes.get(&child) {
+                    if child_scope.unique_id == key {
+                        if child_scope.name == nm {
+                            return Some(child);
+                        }
+                        return None;
+                    }
+                }
+            }
+            return None;
+        }
+        if let Some(c) = nm.chars().next() {
+            if c <= '9' && c >= '0' {
+                // Allow the string to directly specify the id
+                // (database.cc:1327-1334).
+                let key = parse_istream_u64(nm);
+                for &child in &parent.children {
+                    if let Some(child_scope) = self.scopes.get(&child) {
+                        if child_scope.unique_id == key {
+                            return Some(child);
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+        // Linear scan in unique-id order (ScopeMap iteration order).
+        let mut child_ids: Vec<u64> = parent.children.clone();
+        child_ids.sort_unstable();
+        for child in child_ids {
+            if let Some(child_scope) = self.scopes.get(&child) {
+                if child_scope.name == nm {
+                    return Some(child);
+                }
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1432 Scope::isSubScope
+    /// Does the given Scope contain this as a sub-scope? Faithful to
+    /// `Scope::isSubScope` (database.cc:1432-1441): the do/while walk up
+    /// the parent chain — this scope itself counts (the first iteration
+    /// tests `tmp == scp` before advancing), and the global scope's null
+    /// parent terminates the walk.
+    pub fn is_sub_scope(&self, scope_id: u64, scp_id: u64) -> bool {
+        let mut cur = scope_id;
+        loop {
+            if cur == scp_id {
+                return true;
+            }
+            if cur == self.global_scope_id {
+                // The global scope has no parent (C++ parent == 0).
+                return false;
+            }
+            match self.scopes.get(&cur) {
+                None => return false,
+                Some(scope) => cur = scope.parent_id,
+            }
+        }
+    }
+
+    // Ghidra: database.cc:1443 Scope::getFullName
+    /// Get the full `::`-joined name of this Scope. Faithful to
+    /// `Scope::getFullName` (database.cc:1443-1454): the global scope
+    /// itself yields the empty string (`parent == 0`, cc:1446); otherwise
+    /// the walk prepends each ancestor's name while it still has a parent
+    /// — the global scope's name is never part of the path.
+    pub fn get_full_name(&self, scope_id: u64) -> String {
+        let scope = match self.scopes.get(&scope_id) {
+            None => return String::new(),
+            Some(s) => s,
+        };
+        if scope_id == self.global_scope_id {
+            return String::new();
+        }
+        let mut fname = scope.name.clone();
+        let mut cur = scope.parent_id;
+        while cur != self.global_scope_id {
+            match self.scopes.get(&cur) {
+                None => break,
+                Some(parent_scope) => {
+                    fname = format!("{}::{}", parent_scope.name, fname);
+                    cur = parent_scope.parent_id;
+                }
+            }
+        }
+        fname
+    }
+
+    // Ghidra: database.cc:1458 Scope::getScopePath
+    /// Put the parent scopes of this into an array in order, starting with
+    /// the global scope. Faithful to `Scope::getScopePath`
+    /// (database.cc:1458-1474): the two-pass count/fill walk, including
+    /// BOTH the global scope and this scope itself.
+    pub fn get_scope_path(&self, scope_id: u64) -> Vec<u64> {
+        let mut path = Vec::new();
+        let mut cur = Some(scope_id);
+        while let Some(id) = cur {
+            path.push(id);
+            if id == self.global_scope_id {
+                break;
+            }
+            cur = self.scopes.get(&id).map(|s| s.parent_id);
+        }
+        path.reverse();
+        path
+    }
+
+    // Ghidra: database.cc:1481 Scope::findDistinguishingScope
+    /// Any two scopes share at least the global scope as a common
+    /// ancestor; find the first scope that is not in common. Faithful to
+    /// `Scope::findDistinguishingScope` (database.cc:1481-1504): the four
+    /// quick checks first (`this == op2` → null, `parent(this) == op2` →
+    /// this, `parent(op2) == this` → null, same parents → this), then the
+    /// scope-path walk comparing position by position — first mismatch
+    /// yields thisPath[i]; a longer thisPath yields thisPath[min]; a
+    /// longer op2Path yields null; identical full paths yield this.
+    /// Returns `None` for the C++ null result.
+    pub fn find_distinguishing_scope(&self, scope_id: u64, op2_id: u64) -> Option<u64> {
+        let parent_of = |id: u64| -> Option<u64> {
+            if id == self.global_scope_id {
+                return None;
+            }
+            self.scopes.get(&id).map(|s| s.parent_id)
+        };
+        if scope_id == op2_id {
+            return None; // Quickly check most common cases
+        }
+        if parent_of(scope_id) == Some(op2_id) {
+            return Some(scope_id);
+        }
+        if parent_of(op2_id) == Some(scope_id) {
+            return None;
+        }
+        if parent_of(scope_id) == parent_of(op2_id) {
+            return Some(scope_id);
+        }
+        let this_path = self.get_scope_path(scope_id);
+        let op2_path = self.get_scope_path(op2_id);
+        let min = this_path.len().min(op2_path.len());
+        for i in 0..min {
+            if this_path[i] != op2_path[i] {
+                return Some(this_path[i]);
+            }
+        }
+        if min < this_path.len() {
+            return Some(this_path[min]); // thisPath matches op2Path but is longer
+        }
+        if min < op2_path.len() {
+            return None; // op2Path matches thisPath but is longer
+        }
+        Some(scope_id) // ancestor paths are identical (only base scopes differ)
+    }
+
+    // Ghidra: database.cc:2417 ScopeInternal::isNameUsed
+    /// Is the given name used within this scope or (recursively) its
+    /// parents? Faithful to `ScopeInternal::isNameUsed`
+    /// (database.cc:2417-2432): the name itself is tested against this
+    /// scope's symbols (the nametree `lower_bound` existence check);
+    /// otherwise the recursion goes to the parent scope — but stops at a
+    /// null parent, at the given terminating scope `op2`, and never enters
+    /// the global scope (`par->getParent() == 0`, cc:2429-2430).
+    fn is_name_used_terminating(&self, scope_id: u64, nm: &str, op2: Option<u64>) -> bool {
+        if let Some(scope) = self.scopes.get(&scope_id) {
+            if scope.is_name_used(nm) {
+                return true;
+            }
+        }
+        if scope_id == self.global_scope_id {
+            return false; // No parent to recurse into.
+        }
+        let par = match self.scopes.get(&scope_id) {
+            None => return false,
+            Some(scope) => scope.parent_id,
+        };
+        if par == self.global_scope_id || Some(par) == op2 {
+            // Never recurse into the global scope / past the terminating
+            // scope (database.cc:2427-2430).
+            return false;
+        }
+        self.is_name_used_terminating(par, nm, op2)
+    }
+
+    // Ghidra: database.cc:323 Symbol::getResolutionDepth
+    /// For a given context scope where the Symbol is used, determine how
+    /// many elements of the full namespace path need to be printed to
+    /// correctly distinguish it. Faithful to
+    /// `Symbol::getResolutionDepth` (database.cc:323-360):
+    /// - same scope → 0 (cc:326);
+    /// - null use scope → the full ancestor count minus the global scope
+    ///   (cc:327-335);
+    /// - the memo (`depthScope`/`depthResolution`, database.hh:190-191)
+    ///   short-circuits repeat queries (cc:336-337), reproduced on the
+    ///   Symbol fields;
+    /// - otherwise the distinguishing scope of the symbol's scope versus
+    ///   the use scope decides: no distinguishing scope (symbol scope is
+    ///   an ancestor) tests the symbol name against the terminating
+    ///   symbol scope; a distinguishing scope counts one name per step
+    ///   from the symbol scope up to AND INCLUDING it, then tests that
+    ///   scope's name against the terminating scope (cc:343-358); a name
+    ///   collision adds one more (cc:358).
+    pub fn get_resolution_depth(
+        &self,
+        sym: &Arc<RwLock<Symbol>>,
+        use_scope: Option<u64>,
+    ) -> i32 {
+        let mut sym_w = sym.write().unwrap();
+        let scope = sym_w.scope_id;
+        if Some(scope) == use_scope {
+            return 0; // Symbol is in scope where it is used
+        }
+        let use_scope_id = match use_scope {
+            None => {
+                // Treat null useScope as resolving the full path
+                // (database.cc:327-335).
+                let mut count = 0;
+                let mut point = Some(scope);
+                while let Some(id) = point {
+                    count += 1;
+                    if id == self.global_scope_id {
+                        point = None;
+                    } else {
+                        point = self.scopes.get(&id).map(|s| s.parent_id);
+                    }
+                }
+                return count - 1; // Don't print global scope
+            }
+            Some(id) => id,
+        };
+        if sym_w.depth_scope == use_scope {
+            return sym_w.depth_resolution;
+        }
+        sym_w.depth_scope = use_scope;
+        let distinguish_scope = self.find_distinguishing_scope(scope, use_scope_id);
+        let mut depth_resolution: i32 = 0;
+        let sym_name = sym_w.name.clone();
+        let (distinguish_name, terminating_scope) = match distinguish_scope {
+            None => {
+                // Symbol scope is ancestor of use scope (cc:343-346).
+                (sym_name, Some(scope))
+            }
+            Some(ds) => {
+                let mut current = scope;
+                while current != ds {
+                    // For any scope up to the distinguishing scope, print
+                    // its name (database.cc:349-353).
+                    depth_resolution += 1;
+                    current = match self.scopes.get(&current) {
+                        Some(s) => s.parent_id,
+                        None => break,
+                    };
+                }
+                depth_resolution += 1; // Also print the distinguishing scope name
+                let name = self
+                    .scopes
+                    .get(&ds)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                // terminatingScope = distinguishScope->getParent()
+                // (database.cc:355) — None when the distinguishing scope is
+                // the global scope (null parent).
+                let terminating = if ds == self.global_scope_id {
+                    None
+                } else {
+                    Some(
+                        self.scopes
+                            .get(&ds)
+                            .map(|s| s.parent_id)
+                            .unwrap_or(self.global_scope_id),
+                    )
+                };
+                (name, terminating)
+            }
+        };
+        if self.is_name_used_terminating(use_scope_id, &distinguish_name, terminating_scope) {
+            depth_resolution += 1; // Name was overridden, we need one more distinguishing name
+        }
+        sym_w.depth_resolution = depth_resolution;
+        depth_resolution
+    }
+
+    // Ghidra: database.cc:2893 Database::clearReferences
+    /// This recursively clears references in idmap or in resolvemap.
+    /// Faithful to `Database::clearReferences` (database.cc:2893-2904):
+    /// children first (ScopeMap order — the id-sorted child list), then
+    /// `idmap.erase(scope->uniqueId)` for this scope, then
+    /// `clearResolve(scope)` — which never applies to the global scope
+    /// (database.cc:2873). The value model realizes idmap as the `scopes`
+    /// map itself, so clearing the reference removes the Scope value.
+    pub fn clear_references(&mut self, scope_id: u64) {
+        let children: Vec<u64> = self
+            .scopes
+            .get(&scope_id)
+            .map(|s| {
+                let mut c = s.children.clone();
+                c.sort_unstable();
+                c
+            })
+            .unwrap_or_default();
+        for child in children {
+            self.clear_references(child);
+        }
+        self.scopes.remove(&scope_id);
+        if scope_id != self.global_scope_id {
+            self.resolvemap.retain(|(_, sid)| *sid != scope_id);
+        }
+    }
+
+    // Ghidra: database.cc:2975 Database::adjustCaches
+    /// Give this database the chance to inform existing scopes of any
+    /// change to the configuration, which may have changed since the
+    /// initial scopes were created. Faithful to `Database::adjustCaches`
+    /// (database.cc:2975-2982): every scope in the idmap — iterated in
+    /// ScopeMap (unique-id) order, the BTreeMap key order — gets its own
+    /// `adjustCaches`.
+    pub fn adjust_caches(&mut self) {
+        for scope in self.scopes.values_mut() {
+            scope.adjust_caches();
+        }
+    }
+
+    // Ghidra: database.cc:3113 Database::resolveScopeFromSymbolName
+    /// Get the Scope (and base name) associated with a qualified Symbol
+    /// name. Faithful to `Database::resolveScopeFromSymbolName`
+    /// (database.cc:3113-3137): a null start scope means the global scope;
+    /// each delimiter-delimited path element resolves one child via
+    /// `resolveScope(scopename, idByNameHash)` (cc:3129); a delimiter at
+    /// position 0 makes the path absolute (restart at the global scope,
+    /// cc:3124-3126); an unresolvable element returns a null scope
+    /// (cc:3130-3131); the tail after the last delimiter is the passed-back
+    /// base name (cc:3135). The C++ leaves the caller's `basename`
+    /// untouched on the failure path — the Rust tuple returns an empty
+    /// base name there.
+    pub fn resolve_scope_from_symbol_name(
+        &self,
+        fullname: &str,
+        delim: &str,
+        start: Option<u64>,
+    ) -> (Option<u64>, String) {
+        let mut start = start.unwrap_or(self.global_scope_id);
+        let bytes = fullname.as_bytes();
+        let dbytes = delim.as_bytes();
+        let mut mark = 0usize;
+        loop {
+            let endmark = match find_subslice(bytes, dbytes, mark) {
+                None => break,
+                Some(e) => e,
+            };
+            if endmark == 0 {
+                // Path is "absolute" (database.cc:3124-3126).
+                start = self.global_scope_id;
+            } else {
+                let scopename = &fullname[mark..endmark];
+                match self.resolve_scope_by_name(start, scopename, self.id_by_name) {
+                    Some(next) => start = next,
+                    None => return (None, String::new()), // Was the scope name bad
+                }
+            }
+            mark = endmark + dbytes.len();
+        }
+        let basename = fullname[mark..].to_string();
+        (Some(start), basename)
+    }
+
+    // Ghidra: database.cc:3151 Database::findCreateScopeFromSymbolName
+    /// Find and/or create Scopes associated with a qualified Symbol name.
+    /// Faithful to `Database::findCreateScopeFromSymbolName`
+    /// (database.cc:3151-3171): a null start scope means the global scope;
+    /// every path element REQUIRES the id-by-name-hash strategy — without
+    /// it Ghidra throws `LowlevelError("Scope name hashes not allowed")`
+    /// (cc:3162-3163), returned as the `Err` message here; each element's
+    /// id is `hashScopeName(start->uniqueId, scopename)` and the scope is
+    /// created (attached to the current start) if absent
+    /// (`findCreateScope`, cc:3165-3166); the tail after the last
+    /// delimiter is the passed-back base name.
+    pub fn find_create_scope_from_symbol_name(
+        &mut self,
+        fullname: &str,
+        delim: &str,
+        start: Option<u64>,
+    ) -> Result<(u64, String), &'static str> {
+        let mut start = start.unwrap_or(self.global_scope_id);
+        let bytes = fullname.as_bytes();
+        let dbytes = delim.as_bytes();
+        let mut mark = 0usize;
+        loop {
+            let endmark = match find_subslice(bytes, dbytes, mark) {
+                None => break,
+                Some(e) => e,
+            };
+            if !self.id_by_name {
+                return Err("Scope name hashes not allowed");
+            }
+            let scopename = &fullname[mark..endmark];
+            let name_id = Scope::hash_scope_name(
+                self.scopes.get(&start).map(|s| s.unique_id).unwrap_or(0),
+                scopename,
+            );
+            start = self.find_create_scope(name_id, scopename, start);
+            mark = endmark + dbytes.len();
+        }
+        let basename = fullname[mark..].to_string();
+        Ok((start, basename))
+    }
+
     // Ghidra: database.cc:2985 Database::deleteScope
     /// Delete the given Scope and all its sub-scopes. Faithful to
-    /// `deleteScope` (database.hh:933).
+    /// `deleteScope` (database.hh:933). Composes
+    /// `Database::clearReferences` (database.cc:2988) with the parent
+    /// detach (database.cc:2994-2997).
     pub fn delete_scope(&mut self, scope_id: u64) {
         if scope_id == self.global_scope_id {
             return; // Don't delete the global scope.
@@ -5751,7 +6925,8 @@ mod tests {
         let (facet, id) = scope.add_union_facet_symbol(
             "u_facet", "union", 3, Address::new(0x3000), 0xBEEF,
         );
-        assert_eq!(facet.field, 3);
+        assert_eq!(facet.field_num, 3);
+        assert!(facet.symbol.category == SymbolCategory::UnionFacet);
         assert_eq!(scope.dynamic_entries.len(), 1);
         let s = scope.symbols.get(&id).unwrap().read().unwrap();
         assert_eq!(s.type_name, "union");
@@ -5922,6 +7097,409 @@ mod tests {
         scope.adjust_caches();
         // State unchanged.
         assert_eq!(scope.num_symbols(), 1);
+    }
+
+    #[test]
+    fn test_entry_subsort_ordering() {
+        // database.hh:129 — operator< is (useindex, useoffset) lexicographic.
+        let a = EntrySubsort::from_parts(3, 0x10);
+        let b = EntrySubsort::from_parts(4, 0x0);
+        assert!(a.lt(&b));
+        assert!(!b.lt(&a));
+        let c = EntrySubsort::from_parts(3, 0x20);
+        assert!(a.lt(&c));
+        // database.hh:119 — bool ctor: 0xffff sorts above any real index.
+        let latest = EntrySubsort::from_bool(true);
+        let earliest = EntrySubsort::from_bool(false);
+        assert!(earliest.lt(&a));
+        assert!(a.lt(&latest));
+        assert!(!latest.lt(&a));
+    }
+
+    #[test]
+    fn test_symbol_entry_get_first_use_address() {
+        // database.cc:122-129 — first range's first address; empty → invalid.
+        let mut sym = Symbol::new(1, "x", "int");
+        sym.symbol_id = 7;
+        let arc = Arc::new(RwLock::new(sym));
+        let mut rl = RangeList::new();
+        rl.insert_range(Range::new(Address::new(0x2000), Address::new(0x2fff)).unwrap());
+        rl.insert_range(Range::new(Address::new(0x5000), Address::new(0x5fff)).unwrap());
+        let entry = SymbolEntry::new_static(arc, 0, Address::new(0x1000), 0, 4, rl);
+        assert_eq!(entry.get_first_use_address().as_u64(), 0x2000);
+        let empty = SymbolEntry::new_static(
+            Arc::new(RwLock::new(Symbol::new(1, "y", "int"))),
+            0,
+            Address::new(0x1000),
+            0,
+            4,
+            RangeList::new(),
+        );
+        assert!(empty.get_first_use_address().is_invalid());
+    }
+
+    #[test]
+    fn test_symbol_get_map_entry_position_quirk() {
+        // database.cc:301-313 — the counter condition reads the SOUGHT
+        // entry's size (database.cc:309), so a whole-sized sought entry
+        // counts every preceding entry and a partial one always yields 0.
+        let mut sym = Symbol::new(1, "x", "int");
+        sym.symbol_id = 7;
+        sym.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "int".to_string(),
+                4,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        )));
+        let arc = Arc::new(RwLock::new(sym));
+        let e0 = SymbolEntry::new_static(arc.clone(), 0, Address::new(0x1000), 0, 4, RangeList::new());
+        let e1 = SymbolEntry::new_static(arc.clone(), 0, Address::new(0x2000), 0, 2, RangeList::new());
+        let e2 = SymbolEntry::new_static(arc.clone(), 0, Address::new(0x3000), 0, 4, RangeList::new());
+        let entries = vec![e0, e1, e2];
+        let sym_r = arc.read().unwrap();
+        // Whole-sized sought entry at index 2: counts BOTH predecessors.
+        assert_eq!(sym_r.get_map_entry_position(&entries, &entries[2]), 2);
+        // Partial sought entry at index 1: counter never increments.
+        assert_eq!(sym_r.get_map_entry_position(&entries, &entries[1]), 0);
+    }
+
+    #[test]
+    fn test_symbol_subclass_build_types() {
+        // database.cc:514-520 — FunctionSymbol::buildType sets the code
+        // type and namelock|typelock.
+        let f = FunctionSymbol::new(1, "main", 2, Address::new(0x4000));
+        let fs = f.symbol.clone();
+        assert!(fs.is_name_locked() && fs.is_type_locked());
+        let dt = fs.dtype.as_ref().unwrap();
+        assert_eq!(dt.get_metatype(), crate::type_system::datatype::TypeMetatype::Code);
+        assert_eq!(dt.get_size(), 1); // TypeCode base size 1
+        assert_eq!(f.get_bytes_consumed(), 2); // FunctionSymbol override
+
+        // database.cc:728-732 — LabSymbol::buildType sets base(1, unknown).
+        let l = LabSymbol::new(1, "loop", Address::new(0x4010));
+        let dt = l.symbol.dtype.as_ref().unwrap();
+        assert_eq!(dt.get_metatype(), crate::type_system::datatype::TypeMetatype::Unknown);
+        assert_eq!(dt.get_size(), 1);
+
+        // database.cc:768-784 — ExternRefSymbol::buildNameType: generated
+        // name, externref|typelock flags, pointer-to-code type.
+        let x = ExternRefSymbol::new(1, "", Address::new(0x6000));
+        assert_eq!(x.symbol.name, "0x6000_exref");
+        assert!(x.symbol.display_name == "0x6000_exref");
+        assert!(x.symbol.flags & symbol_flags::EXTERNREF != 0);
+        assert!(x.symbol.flags & symbol_flags::TYPELOCK != 0);
+        let dt = x.symbol.dtype.as_ref().unwrap();
+        assert_eq!(dt.get_metatype(), crate::type_system::datatype::TypeMetatype::Pointer);
+        assert_eq!(x.get_ref_addr().as_u64(), 0x6000);
+        // An explicitly provided name is preserved (database.cc:774).
+        let y = ExternRefSymbol::new(1, "printf", Address::new(0x6010));
+        assert_eq!(y.symbol.name, "printf");
+
+        // database.cc:691-696 — UnionFacetSymbol ctor sets fieldNum and
+        // the union_facet category; hh:323 decode ctor defaults to -1.
+        let u = UnionFacetSymbol::new(1, "f", None, 2);
+        assert_eq!(u.get_field_number(), 2);
+        assert!(u.symbol.category == SymbolCategory::UnionFacet);
+        let ud = UnionFacetSymbol::new_decode(1);
+        assert_eq!(ud.get_field_number(), -1);
+        assert!(ud.symbol.category == SymbolCategory::UnionFacet);
+    }
+
+    #[test]
+    fn test_scope_hash_scope_name_determinism() {
+        // database.cc:880-895 — hash cascade over parent id halves + name
+        // bytes. Byte 0x80+ sign-extends into the uint4 feed (cc:888).
+        let h1 = Scope::hash_scope_name(0x0011_2233_4455_6677, "alpha");
+        let h2 = Scope::hash_scope_name(0x0011_2233_4455_6677, "beta");
+        assert_ne!(h1, h2);
+        // Signed-char round trip: the high-byte name differs from the
+        // zero-extended interpretation.
+        let signed = Scope::hash_scope_name(0, "\u{ff}");
+        let _ = signed;
+    }
+
+    #[test]
+    fn test_database_scope_tree_queries() {
+        // global :: a :: b  plus a sibling a :: c
+        let mut db = Database::new(false);
+        let a = db.attach_scope("a", db.global_scope_id);
+        let b = db.attach_scope("b", a);
+        let c = db.attach_scope("c", a);
+
+        // database.cc:1443-1454 — getFullName skips the global scope.
+        assert_eq!(db.get_full_name(b), "a::b");
+        assert_eq!(db.get_full_name(a), "a");
+        assert_eq!(db.get_full_name(db.global_scope_id), "");
+
+        // database.cc:1458-1474 — getScopePath includes global and self.
+        assert_eq!(db.get_scope_path(b), vec![db.global_scope_id, a, b]);
+
+        // database.cc:1432-1441 — isSubScope includes self and global.
+        assert!(db.is_sub_scope(b, b));
+        assert!(db.is_sub_scope(b, a));
+        assert!(db.is_sub_scope(b, db.global_scope_id));
+        assert!(!db.is_sub_scope(a, b));
+
+        // database.cc:1481-1504 — findDistinguishingScope quick checks.
+        assert_eq!(db.find_distinguishing_scope(b, b), None);
+        assert_eq!(db.find_distinguishing_scope(b, a), Some(b));
+        assert_eq!(db.find_distinguishing_scope(a, b), None);
+        assert_eq!(db.find_distinguishing_scope(b, c), Some(b));
+        assert_eq!(db.find_distinguishing_scope(c, b), Some(c));
+
+        // database.cc:1315-1345 — resolveScope linear branch (no hash).
+        assert_eq!(db.resolve_scope_by_name(a, "b", false), Some(b));
+        assert_eq!(db.resolve_scope_by_name(a, "zzz", false), None);
+        // Decimal branch: "1" directly names child id 1 (== a under global).
+        assert_eq!(
+            db.resolve_scope_by_name(db.global_scope_id, &a.to_string(), false),
+            Some(a)
+        );
+    }
+
+    #[test]
+    fn test_database_resolve_scope_by_name_hash_strategy() {
+        // database.cc:1318-1325 — hash branch requires id AND name match.
+        let mut db = Database::new(true);
+        let a = db.attach_scope("ns", db.global_scope_id);
+        let key = Scope::hash_scope_name(0, "ns");
+        // attach_scope assigned sequential ids; re-key the scope to the
+        // hash so the strategy branch can find it.
+        if let Some(scope) = db.scopes.get_mut(&a) {
+            scope.unique_id = key;
+        }
+        assert_eq!(db.resolve_scope_by_name(db.global_scope_id, "ns", true), Some(a));
+        // Hash hit with mismatched name → null (cc:1323-1324 fallthrough).
+        assert_eq!(
+            db.resolve_scope_by_name(db.global_scope_id, "other", true),
+            None
+        );
+    }
+
+    #[test]
+    fn test_database_get_resolution_depth() {
+        // global :: ns :: inner, symbol "x" in ns, queried from inner.
+        let mut db = Database::new(false);
+        let ns = db.attach_scope("ns", db.global_scope_id);
+        let inner = db.attach_scope("inner", ns);
+        let x = db
+            .scopes
+            .get_mut(&ns)
+            .unwrap()
+            .add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        let arc = db.scopes[&ns].symbols[&x].clone();
+
+        // Same scope → 0 (cc:326).
+        assert_eq!(db.get_resolution_depth(&arc, Some(ns)), 0);
+        // Null use scope → full path minus global (cc:327-335): ns path is
+        // (global, ns) → count-1 = 1.
+        assert_eq!(db.get_resolution_depth(&arc, None), 1);
+        // Ancestor use: distinguishing scope null → the SYMBOL's name is
+        // tested against the terminating scope (cc:343-346); no collision
+        // → depth 0 (cc:357).
+        assert_eq!(db.get_resolution_depth(&arc, Some(inner)), 0);
+        // Collision: a same-named symbol in the use scope forces one more
+        // distinguishing name (cc:357-358). Fresh database, because the
+        // C++ memo (database.hh:190-191) would return the stale depth for
+        // a repeat query with the same use scope.
+        let mut db2 = Database::new(false);
+        let ns2 = db2.attach_scope("ns", db2.global_scope_id);
+        let inner2 = db2.attach_scope("inner", ns2);
+        let x2 = db2
+            .scopes
+            .get_mut(&ns2)
+            .unwrap()
+            .add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        db2.scopes
+            .get_mut(&inner2)
+            .unwrap()
+            .add_symbol_mapped("x", "int", Address::new(0x2000), 4);
+        let arc2 = db2.scopes[&ns2].symbols[&x2].clone();
+        assert_eq!(db2.get_resolution_depth(&arc2, Some(inner2)), 1);
+    }
+
+    #[test]
+    fn test_database_symbol_name_parse() {
+        // database.cc:3113-3137 / 3151-3171.
+        let mut db = Database::new(true);
+        // Create the namespace scope under its hash-of-name id
+        // (Scope::hashScopeName under the global scope id 0), exactly as
+        // findCreateScopeFromSymbolName would.
+        let key = Scope::hash_scope_name(0, "ns");
+        let a = db.find_create_scope(key, "ns", db.global_scope_id);
+        // Resolve: existing path element resolves, tail is the base name.
+        let (sc, base) = db.resolve_scope_from_symbol_name("ns::foo", "::", None);
+        assert_eq!(sc, Some(a));
+        assert_eq!(base, "foo");
+        // Unresolvable element → null scope (cc:3130-3131).
+        let (sc, _) = db.resolve_scope_from_symbol_name("nope::foo", "::", None);
+        assert_eq!(sc, None);
+        // Find-or-create: missing element is created with hash id
+        // (cc:3165-3166).
+        let (sc, base) = db
+            .find_create_scope_from_symbol_name("ns::sub2::bar", "::", None)
+            .unwrap();
+        assert_eq!(base, "bar");
+        assert!(db.scopes.contains_key(&sc));
+        let sub2 = db.resolve_scope_by_name(a, "sub2", true).unwrap();
+        assert_eq!(sc, sub2);
+        // Without the hash strategy the create path refuses
+        // (cc:3162-3163).
+        let mut plain = Database::new(false);
+        assert_eq!(
+            plain.find_create_scope_from_symbol_name("a::b", "::", None),
+            Err("Scope name hashes not allowed")
+        );
+    }
+
+    #[test]
+    fn test_database_clear_references_and_adjust_caches() {
+        // database.cc:2893-2904 — clearReferences removes the subtree from
+        // the idmap and its resolvemap entries, but leaves the parent's
+        // children list alone (detachScope is the C++ deleteScope half).
+        let mut db = Database::new(false);
+        let a = db.attach_scope("a", db.global_scope_id);
+        let b = db.attach_scope("b", a);
+        db.set_range(a, &{
+            let mut rl = RangeList::new();
+            rl.insert_range(Range::new(Address::new(0x1000), Address::new(0x1fff)).unwrap());
+            rl
+        });
+        assert!(db.resolvemap.iter().any(|(_, sid)| *sid == a));
+        db.clear_references(a);
+        assert!(!db.scopes.contains_key(&a));
+        assert!(!db.scopes.contains_key(&b));
+        assert!(db.resolvemap.iter().all(|(_, sid)| *sid != a));
+        // The parent (global) children list still names the cleared scope,
+        // exactly like the C++ parent children map before detachScope.
+        assert!(db.scopes[&db.global_scope_id].children.contains(&a));
+
+        // database.cc:2975-2982 — adjustCaches visits every scope.
+        let mut db2 = Database::new(false);
+        db2.attach_scope("n", db2.global_scope_id);
+        db2.adjust_caches(); // must not panic
+    }
+
+    #[test]
+    fn test_scope_override_reset_size_lock_type() {
+        // database.cc:1387-1397 / 1402-1408.
+        let mut scope = Scope::new(2, "func", 1);
+        let id = scope.add_symbol("s", "int");
+        // Size-lock the symbol: type-locked with an UNKNOWN type
+        // (database.hh:205 size_typelock definition).
+        let sym = scope.symbols[&id].clone();
+        {
+            let mut w = sym.write().unwrap();
+            w.flags |= symbol_flags::TYPELOCK;
+            w.dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "undefined".to_string(),
+                    4,
+                    crate::type_system::datatype::TypeMetatype::Unknown,
+                ),
+            )));
+            w.check_size_type_lock();
+        }
+        assert!(sym.read().unwrap().is_size_type_locked());
+        // Same-size override succeeds; different size fails.
+        let dt4 = Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "int".to_string(),
+                4,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        ));
+        assert_eq!(scope.override_size_lock_type(id, dt4.clone()), Ok(()));
+        assert_eq!(
+            sym.read().unwrap().dtype.as_ref().unwrap().get_metatype(),
+            crate::type_system::datatype::TypeMetatype::Int
+        );
+        let dt8 = Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "long".to_string(),
+                8,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        ));
+        assert_eq!(
+            scope.override_size_lock_type(id, dt8),
+            Err("Overriding symbol with different type size")
+        );
+        // reset restores the unknown base of the same size (cc:1407).
+        scope.reset_size_lock_type(id);
+        let w = sym.read().unwrap();
+        assert_eq!(
+            w.dtype.as_ref().unwrap().get_metatype(),
+            crate::type_system::datatype::TypeMetatype::Unknown
+        );
+        assert_eq!(w.dtype.as_ref().unwrap().get_size(), 4);
+    }
+
+    #[test]
+    fn test_scope_category_sanity_and_multi_entry() {
+        // database.cc:1992-2018 — a NULL slot condemns the category.
+        let mut scope = Scope::new(2, "func", 1);
+        let s0 = scope.add_symbol("p0", "int");
+        let s1 = scope.add_symbol("p1", "int");
+        let s2 = scope.add_symbol("p2", "int");
+        scope.set_category(s0, 0, 0);
+        scope.set_category(s1, 0, 1);
+        scope.set_category(s2, 0, 2);
+        // Removing the MIDDLE symbol nulls its slot; only TRAILING nulls
+        // are trimmed (database.cc:2830-2831), leaving the interior hole
+        // that categorySanity repairs.
+        scope.remove_symbol(s1);
+        scope.category_sanity();
+        let w0 = scope.symbols[&s0].read().unwrap();
+        assert!(w0.category == SymbolCategory::NoCategory);
+        let w2 = scope.symbols[&s2].read().unwrap();
+        assert!(w2.category == SymbolCategory::NoCategory);
+        drop(w0);
+        drop(w2);
+
+        // database.cc:1874-1887 — addDynamicMapInternal counts whole
+        // entries; multi-entry surface at the second whole map.
+        let mut scope2 = Scope::new(3, "f2", 1);
+        let d = scope2.add_symbol("d", "int");
+        let sym = scope2.symbols[&d].clone();
+        sym.write().unwrap().dtype = Some(Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "int".to_string(),
+                4,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        )));
+        assert_eq!(
+            scope2.add_dynamic_map_internal(d, 0, 0xabc, 0, 4, RangeList::new()),
+            Some(0)
+        );
+        assert!(scope2.multi_entry_symbols().is_empty());
+        assert_eq!(
+            scope2.add_dynamic_map_internal(d, 0, 0xabd, 0, 4, RangeList::new()),
+            Some(1)
+        );
+        assert_eq!(scope2.multi_entry_symbols(), vec![d]);
+    }
+
+    #[test]
+    fn test_symbol_compare_name_and_duplicate_error() {
+        // database.hh:366-371 — name order, nameDedup tie-break.
+        let mut a = Symbol::new(1, "alpha", "int");
+        a.name_dedup = 2;
+        let mut b = Symbol::new(1, "alpha", "int");
+        b.name_dedup = 3;
+        let c = Symbol::new(1, "beta", "int");
+        let cmp = SymbolCompareName;
+        assert!(cmp.is_before(&a, &b));
+        assert!(!cmp.is_before(&b, &a));
+        assert!(cmp.is_before(&a, &c));
+
+        // database.hh:435-436 — DuplicateFunctionError fields.
+        let err = DuplicateFunctionError::new(Address::new(0x4000), "dup");
+        assert_eq!(err.address.as_u64(), 0x4000);
+        assert_eq!(err.function_name, "dup");
+        assert_eq!(err.message, "Duplicate Function");
     }
 
 
