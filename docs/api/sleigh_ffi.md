@@ -11,8 +11,10 @@ SLEIGH p-code 引擎的进程内边界。Phase2 双链形态（SLEIGH-RUSTIFY-PH
   shim 语义（loadFill 模减/补零、pool 槽位 identity、LOAD/STORE space-id
   规范化、decode_started 冻结、错误分型映射）。
 
-引擎选择: `RUGRA_SLEIGH_ENGINE=cpp|rust` env 覆盖;默认在 `has_sleigh`
-构建下保持 C++（Phase2 纪律:C++ 链在门禁全过前不退役）。`build.rs` 的
+引擎选择: `RUGRA_SLEIGH_ENGINE=cpp|rust` env 覆盖;默认引擎=Rust（Phase2
+门禁全过后翻转——op-for-op 698,605 decodes 零差+五语料 E2E 字节恒等,
+见 docs/alignment_docs/SLEIGH_PHASE2_SWAP_2026-09-26.md;C++ 链在退役
+commit 前仍编译在仓内、可经 env 选回）。`build.rs` 的
 C++ 编译位于 `RUGRA_SLEIGH_CPP` 开关后（默认 on;`=0` 构建纯 Rust 引擎）。
 `SleighCtx::with_engine(kind)` 供门禁仪器在单进程内同时驱动双引擎。
 

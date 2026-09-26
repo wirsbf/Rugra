@@ -172,14 +172,12 @@ fn select_engine_kind() -> Option<SleighEngineKind> {
     }
 }
 
-// RUGRA-GLUE: cfg!(has_sleigh) is false when build.rs skipped the C++ runtime
-// (RUGRA_SLEIGH_CPP=0 / post-retirement); the Rust backend is always available.
+// RUGRA-GLUE: default engine. Flipped to Rust after the Phase2 gates passed
+// (op-for-op zero-diff over 698,605 decodes + five-corpus E2E byte identity,
+// SLEIGH_PHASE2_SWAP_2026-09-26.md); the C++ chain stays compiled-in and
+// selectable via RUGRA_SLEIGH_ENGINE=cpp until the retirement commit.
 fn default_engine_kind() -> SleighEngineKind {
-    if cfg!(has_sleigh) {
-        SleighEngineKind::Cpp
-    } else {
-        SleighEngineKind::Rust
-    }
+    SleighEngineKind::Rust
 }
 
 // RUGRA-GLUE: process-wide Rust configuration for the default SLEIGH asset path
