@@ -6400,6 +6400,46 @@ fn decompile_request(
 
     let mut db = ActionDatabase::new();
     db.set_default_actions();
+    // PIPE-RESTART-0001: install the driver-owned raw-flow regeneration
+    // callback for the oracle's restart cycle (action.cc:574 clearAnalysis
+    // → second-pass ActionStart → startProcessing → followFlow,
+    // funcdata.cc:157). Rugra's flow generation lives here at the driver
+    // boundary, so the configured SLEIGH lifter and the no-return callee
+    // table move into the callback; a restart re-runs the same flow
+    // contract the first pass used (mirror mode = the oracle full-space
+    // followFlow(baddr,eaddr) load contract, RUGRA-FLOW-MIRROR-0001;
+    // default mode = the historical bounded driver range). The callback
+    // is installed on the derived "decompile" root that perform_action
+    // actually runs.
+    let restart_mirror = mirror_flow_enabled();
+    let restart_lifter = Arc::new(std::sync::Mutex::new(sleigh));
+    let restart_callee_protos = callee_protos.clone();
+    let restart_entry = Address::new(target.vaddr);
+    db.set_restart_flow(
+        "decompile",
+        Arc::new(move |restart_fd| {
+            let mut lifter = restart_lifter.lock().map_err(|_| {
+                rugra::Error::from("restart SLEIGH lifter lock poisoned".to_string())
+            })?;
+            if restart_mirror {
+                rugra::flow::follow_flow_range(
+                    restart_fd,
+                    &mut lifter,
+                    0,
+                    u64::MAX,
+                    &restart_callee_protos,
+                )
+            } else {
+                rugra::flow::follow_flow_with_callee_protos(
+                    restart_fd,
+                    &mut lifter,
+                    restart_entry,
+                    u64::MAX,
+                    &restart_callee_protos,
+                )
+            }
+        }),
+    );
     {
         let mut fd_write = fd_arc
             .write()
