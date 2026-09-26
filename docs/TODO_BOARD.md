@@ -32,7 +32,7 @@
 
 > 设计交付 = `docs/alignment_docs/CRATESPLIT_MIGRATION_BLUEPRINT_2026-09-26.md`（车道 wt/cratesplit，
 > 基=master a6becff6，零 src 改动）。核心实测结论：src 生产依赖图 60 模块单一 SCC（草案层序不成立）；
-> 可行 crate 切割线仅 foundation(9 文件)/sleigh-ffi(1)/core(60) 三条；Ghidra include 图 226 文件零环
+> 可行 crate 切割线仅 foundation(9 文件)/sleigh DTO(1)/core(60) 三条；Ghidra include 图 226 文件零环
 > （23 层）为长期镜像目标。**执行触发判据（root 持有，缺一不启）**：①对齐收敛（canon 双语料零未解释
 > 差异）②零待并分支 ③wave 边界；Phase B 追加 ④SLEIGH 换装+TFSINGLE step-2 落地。每步门禁 =
 > canon cmp 字节恒等（curl/httpd 双 profile）+ annotations/refs/doc_sync 全绿。
@@ -46,7 +46,7 @@
 | `CRATESPLIT-A10-CLOSEOUT-0012` | OPEN | P2 | 收尾：fixture_registry path_epoch 裁决执行（250 处历史 src 引用默认不改写，root 拍板）、ROADMAP/STATUS 状态行、终验双 profile | 文档 | 4.0 门禁全套 + CURRENT_STATUS 刷新 |
 | `CRATESPLIT-B0-PUBAUDIT-0013` | OPEN | P2（Phase B） | pub(crate) 全量审计（54 处）+ upper→core 51 对 reach-in 落 item 级 + cargo tree 断言工具 | 审计档 + 新工具 | 升 pub 候选名单冻结；断言工具进 CI |
 | `CRATESPLIT-B1-FOUNDATION-CRATE-0014` | OPEN | P2（Phase B） | 抽 crates/rugra-foundation（9 文件；error/types 私有 mod 升 pub+根包再导出 shim） | crates/rugra-foundation/、Cargo.toml、lib.rs | canon cmp 字节恒等 + runner 二轮重钉 + examples 零改动编译 |
-| `CRATESPLIT-B2-SLEIGHFFI-CRATE-0015` | OPEN | P2（Phase B） | 抽 crates/rugra-sleigh-ffi（sleigh_ffi+build.rs C++ 构图随迁） | crates/rugra-sleigh-ffi/、build.rs、Cargo.toml | build_locked_x86_64_sla.sh + ffi-test 全量回归 + canon cmp |
+| `CRATESPLIT-B2-SLEIGHFFI-CRATE-0015` | OPEN | P2（Phase B） | 抽 crates/rugra-sleigh（sleigh DTO 归位+kuna-sleigh workspace 依赖声明——**R2 修正 2026-09-26**:原"sleigh_ffi+build.rs C++ 构图随迁"作废,build.rs 已随 2fa1c792 退役,无构图可迁,工期 1-2 日→≤0.5 日） | crates/rugra-sleigh/、Cargo.toml | canon cmp 字节恒等 + examples 零改动编译 + runner 二轮重钉 |
 | `CRATESPLIT-B3-CORE-CRATE-0016` | OPEN | P2（Phase B） | 抽 crates/rugra-core（SCC[60] 60 文件；根包变门面再导出；upper 引用 pub(crate) 项升 pub） | crates/rugra-core/、Cargo.toml、lib.rs | canon cmp 字节恒等 + examples ~600 深层引用零改动 + 门禁全套 |
 | `CRATESPLIT-B4-OPTIONAL-UPPERS-0017` | OPEN（可选） | P3 | 可选拆出 rugra-emulate / rugra-frontend / rugra-verify（align+analysis） | crates/rugra-{emulate,frontend,verify}/ | 各包独立 canon cmp + reach-in 面闭合 |
 | `CRATESPLIT-C0..C5-CYCLEBREAK-0018` | OPEN（可选，默认不排期） | P3 | 破环程序六项（蓝图 §5.4：E5 错置副本删除/E11 注册反转/E8 marshal→space/E3+E4 签名移居/E2 downcast 虚化/E10 反向边族），core 按草案层再拆的前置 | 蓝图 §5.4 各行 write-set | 每项独立 B2 fixture + canon cmp；完成前禁宣称 core 可再分层 |

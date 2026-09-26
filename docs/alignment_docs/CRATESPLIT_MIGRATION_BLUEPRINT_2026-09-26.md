@@ -4,6 +4,15 @@
 > 执行阶段另派（触发判据见 §4.4，root 持有）。本蓝图实测数据全部来自本车道对
 > src/ 97 文件与锁定 oracle e40ed130 源码树的机器测绘（工具脚本存档于
 > /dev/shm/rugra-tests/cratesplit/，内存盘易失——关键数字已全部誊入本文）。
+> **事实修正（2026-09-26,Lane TODO-BOOK,依 KUNACRATES 对照报告 R2/R8）**: 本蓝图基点
+> a6becff6 不含 master `2fa1c792`（"sleigh: retire the C++ FFI runtime — the vendored
+> kuna-sleigh engine is the production decoder"，2026-09-26 随 MERGEBATCH17 并入）。现
+> master 上 src/sleigh_ffi.rs 是**纯 Rust DTO 模块**（VarnodeC/PcodeOpC），驱动 vendored
+> crates/kuna-sleigh；**根 build.rs 已不存在**，无 C++ 构建图可迁。据此修正：三线切割之
+> "sleigh-ffi"线改为"sleigh DTO 线"（§0/§2.4）；B2 步骤"C++ 构建图随迁"作废，改
+> "DTO 归位+kuna-sleigh 依赖声明"（≤0.5 日，§4.2）；风险 R6 删除（§6）；§2.5 vendor
+> 表述按 Phase2 后现况改写（kuna-sleigh 已在 rugra 构建图内；dedup 候选面表述保留）。
+> 对照报告= `docs/alignment_docs/LANE_KUNACRATES_2026-09-26.md`（§6.2 R2/R8 逐条）。
 
 ## 0. 摘要
 
@@ -12,9 +21,10 @@
    根因不是移植混乱，而是**架构性**的：Ghidra 的 C++ 头文件 include 图（226 文件）**完全无环**
    （23 个拓扑层），靠前置声明承载类型互引；Rust 无前置声明，这些互引被物化为模块边。
 2. **可行的 crate 切割线只有三条**（实测无环）：foundation（9 文件，含 marshal↔space 微环）、
-   sleigh-ffi（1 文件+build.rs）、以及 SCC[60] 整体作为单 crate（60 文件）。上层 25 文件为无环带，
-   可选做独立 crate。**core 内部按草案层再拆必须先执行 6 项破环重构**（§5.4，每项独立小改动+
-   oracle 门禁，属可选程序）。
+   sleigh DTO（1 文件——sleigh_ffi.rs，纯 Rust DTO 驱动 vendored kuna-sleigh；R2 修正：基点
+   时代的"C++ FFI+build.rs"形态已随 2fa1c792 退役）、以及 SCC[60] 整体作为单 crate（60 文件）。
+   上层 25 文件为无环带，可选做独立 crate。**core 内部按草案层再拆必须先执行 6 项破环重构**
+   （§5.4，每项独立小改动+oracle 门禁，属可选程序）。
 3. **推荐形态：两步走**。Phase A = 单 crate 内目录分组（`#[path]` 保模块路径，零 use 语句搅动、
    零 examples 搅动、零公共 API 破坏）；Phase B = 沿上述三条切割线 crate 化。一步到位 crate 化
    被否（SCC[60] 阻塞 + 单次搅动面 = 全部 15 件基础设施同时迁移，风险不可分步吸收）。
@@ -127,7 +137,7 @@ funcdata 223 · marshal 220 · fspec 152 · unionresolve 111 · disasm 101。
 |---|---|---|---|
 | 语义风险 | 零（纯移动+`#[path]`） | 零（每步 canon cmp 字节恒等门禁） | 零（同左）但不可分步吸收 |
 | SCC[60] 阻塞 | 无（crate 内模块互引合法） | Phase B 只切实测无环线，绕开阻塞 | **被阻塞**：要么 60 文件单 crate（=选项二的 core），要么先做全部破环重构（语义风险面失控） |
-| 编译并行收益 | 无 | foundation/sleigh-ffi/upper 各自并行；core 仍单单元 | 同左 |
+| 编译并行收益 | 无 | foundation/sleigh DTO/upper 各自并行；core 仍单单元 | 同左 |
 | API 纪律收益 | 无（仍 crate 内可见） | foundation 边界强制 pub 面 | 最大 |
 | 基础设施迁移 | 15 件中 ~10 件（路径字面量） | 15 件全量（含 Cargo/build 图） | 同左但一次付清 |
 | 可回退性 | 每组一步可回退 | 每 crate 一步可回退 | 差 |
@@ -184,29 +194,37 @@ crates/
 ├── rugra-foundation/   # 9 文件：opcodes/crc32/error/rangemap/types/space/marshal/compression
 │                        #   依赖：仅外部 crate；marshal↔space 微环内部消化
 │                        #   迁移要点：error/types 现为私有 mod → 升 pub mod + rugra 根再导出
-├── rugra-sleigh-ffi/    # 1 文件：sleigh_ffi + build.rs（C++ SLEIGH 引擎构建随迁）
-│                        #   依赖：rugra-foundation（无——实测 sleigh_ffi 仅依赖 std，可平行于 foundation 或其后）
+├── rugra-sleigh/         # 1 文件：sleigh DTO（sleigh_ffi.rs——纯 Rust DTO，驱动 vendored
+│                         #   kuna-sleigh；R2 修正：C++ FFI+build.rs 已随 2fa1c792 退役，无构图可迁）
+│                         #   依赖：kuna-sleigh（workspace 成员，生产解码引擎）——实测 sleigh_ffi
+│                         #   仅依赖 std+kuna-sleigh 类型面，可平行于 foundation 或其后
 ├── rugra-core/          # 60 文件：SCC[60] 全体（内部保留 §2.3 组目录）
-│                        #   依赖：foundation + sleigh-ffi
+│                        #   依赖：foundation + sleigh DTO
 │                        #   迁移要点：54 处 pub(crate) 中被 upper 引用者升 pub（§5.2 审计）
 └── (root rugra 包)      # 门面：lib.rs 再导出 + bin/ + examples/ + align/analysis/ffi/debugproto
                          #   + 可选 Phase B4 拆出：rugra-emulate{emulate,memstate}、
                          #   rugra-frontend{binary,disasm::sleigh_lift}、rugra-verify{align,analysis}
 ```
 
-依赖方向规则（§5.1）：foundation ← sleigh-ffi ← core ← 门面/upper，**禁止任何向上边与横向边**；
+依赖方向规则（§5.1）：foundation ← sleigh DTO ← core ← 门面/upper，**禁止任何向上边与横向边**；
 每步落地后以 `cargo tree` + 自写扫描器断言无违例（执行期工具）。
 
-### 2.5 crates/ 共存形态
+### 2.5 crates/ 共存形态（R8 修正：vendor 关系表述按 SLEIGH-RUSTIFY Phase2 后现况改写）
 
 - workspace members = `"crates/*"` glob（Cargo.toml:6）——新 crate 放入 crates/ **自动入
   workspace，零 members 编辑**。
-- kuna vendor 四件是独立成员（"nothing in the rugra build graph depends on them"，
-  crates/README.md 明文）；rugra-* 新 crate 与其**零依赖关系**，共存无冲突。
+- **kuna vendor 四件已是生产组件（R8 修正；原"nothing in the rugra build graph depends
+  on them / 与 rugra-* 零依赖"表述已过时）**：kuna-sleigh **在 rugra 构建图内**（根
+  Cargo.toml `[dependencies]` `kuna-sleigh = { path = "crates/kuna-sleigh" }`——
+  src/sleigh_ffi.rs 驱动它作生产 SLEIGH 解码引擎，SLEIGH-RUSTIFY Phase2 已接线，C++ FFI
+  运行时已退役）；kuna-slacomp 经 `tools/build_locked_x86_64_sla.sh` 作生产
+  `.slaspec`→`.sla` 编译器（Phase3 通道）；kuna-base/kuna-num 为 kuna-sleigh 的库基础
+  （经其传递入图）。crates/README.md 现况明文："kuna-sleigh … **is in the rugra
+  build graph**"。
 - kuna-base 与 rugra-foundation 存在概念重叠（addresses/spaces/XML+marshal/raw pcode/
-  compression——crates/README "Runtime dedup … deliberately deferred (Phase 2 decision
-  item)"）。**本蓝图不合并**：合并=语义等价证明工程，超出路径搅动范畴；维持 README 既定
-  "deferred" 裁决，在 foundation crate 文档中标注未来 dedup 候选面。
+  compression）。**本蓝图不合并**：合并=语义等价证明工程，超出路径搅动范畴；维持 README
+  既定 "Runtime dedup … deliberately deferred" 裁决（**dedup 候选面表述保留**），在
+  foundation crate 文档中标注未来 dedup 候选面。
 
 ---
 
@@ -226,7 +244,7 @@ crates/
 | ⑤b | tests/oracle/fixture_registry.json | 250 处 "src/…" 字串（from_path/to_path 等历史证据记录） | DG | — | **裁决建议：历史记录不改写**（证据不可变性——记录的是当时路径）；registry schema 加 `path_epoch` 字段（可选）或在新记录用新路径。执行期 root 拍板。若改写：250 处 sed+复核 ≈ 0.5 日 |
 | ⑥ | docs/TODO_BOARD.md 租约行 | 活动票 write-set 以 `src/foo.rs` 字面表述（如 MIGW1 五票） | DG | DG | 触发判据保证执行时零待并分支+wave 边界=活动票最少；仍存留的票逐行改写路径（每票 1 行）。估 ≤30 行。**执行窗口内新增票必须直接用新路径** |
 | ⑦ | tools/mirror_gate_baselines.tsv + verify_mirror_gate.sh | 基线按 corpus 键控（39 行，无 src 路径）；verify 脚本无 src 引用（实测 grep 零命中） | ✅ | ✅ | 零迁移 |
-| ⑧ | build.rs | 引用 ghidra cpp 树 + sleigh_shim/（**无 src/ 引用**，实测）；[[example]] 路径全指 tests/oracle/*.rs（不动） | ✅ | CS | CS：build.rs 随 sleigh_ffi 迁入 rugra-sleigh-ffi crate（C++ 构建图整体随迁）；根包 build.rs 删除或仅留 ffi-test 联接。~1 日含构建验证 |
+| ⑧ | build.rs | ~~引用 ghidra cpp 树 + sleigh_shim/（无 src/ 引用，实测）~~ **R2 修正：根 build.rs 已随 2fa1c792 删除（C++ FFI 退役），本行 CS 迁移项作废——无构图可迁**；[[example]] 路径事实保留（全指 tests/oracle/*.rs，不动） | ✅ | ✅（作废） | 零迁移（build.rs 不存在；原 ffi-test 回归面已由 SLEIGH-RUSTIFY Phase2 的 op-for-op 36 面+E2E 五语料字节恒等门禁收口） |
 | ⑨ | examples/（28 个） | 深层公共路径 `rugra::type_system::datatype` 等 ~600 处 | ✅ | ✅ | `#[path]`（DG）与门面再导出（CS）均保公共路径 → 零迁移。若 CS 期决定改深层路径则另票（本蓝图默认不改） |
 | ⑩ | .cargo/config、CI（.github/workflows/alignment-gates.yml） | 无 .cargo/ 目录（实测）；CI 只调 tools/*.py 与 verify_mirror_gate.sh，无直接 src 路径 | ✅ | CS | CI 随 ①②③ 工具修复自动正确；CS 期 CI 增加多 crate 构建矩阵 ~10 行（可选） |
 | ⑪ | tools/check_alignment_evidence.py | Evidence 块路径形态校验：接受 `Rugra: src/...` 或 `examples/...`（:47-74） | ✅ | CS | CS 加 `crates/*/src/` 形态 ~3 行 |
@@ -282,7 +300,7 @@ crates/
 |---|---|---|---|
 | B0 | pub(crate) 审计（54 处全录+越界引用定性）+ crate manifest 骨架 + `cargo tree` 断言工具 | 审计漏项→编译期暴露（可修） | 1 日 |
 | B1 | 抽 rugra-foundation（9 文件）：error/types 私有 mod 升 pub；根包 `pub use rugra_foundation::{...}` 保 `crate::error` 等内部路径可达（再导出 shim，pub(crate) 无跨界项——实测仅 marshal 1 处待审） | 再导出 shim 丢 pub(crate) 项（审计兜底） | 1-2 日（含 4.0 门禁+⑤ 二轮重钉） |
-| B2 | 抽 rugra-sleigh-ffi（sleigh_ffi+build.rs 随迁） | C++ 构建图迁移（链接路径/feature 联动） | 1-2 日 |
+| B2 | 抽 rugra-sleigh（sleigh DTO 归位+kuna-sleigh workspace 依赖声明）——**R2 修正：原"sleigh_ffi+build.rs C++ 构图随迁"作废**（build.rs 已随 2fa1c792 退役，无构图可迁） | 无 C++ 构图迁移；DTO 归位+依赖声明+canon cmp 字节恒等 | **≤0.5 日** |
 | B3 | 抽 rugra-core（60 文件）：根包变门面（`pub use rugra_core::*` 族）；upper 25 文件暂留门面包或随组上收 | 公共 API 面（examples ~600 深层引用经再导出保持）；54-pub(crate) 中 upper 引用项升 pub | 3-5 日（含门禁+重钉） |
 | B4+ | 可选拆出：rugra-emulate / rugra-frontend / rugra-verify（align+analysis） | 各自与 core 的 reach-in 面（§5.2 清单） | 每包 1-2 日 |
 
@@ -316,8 +334,9 @@ Phase A（6-8 日）→ Phase B（2-3 周）→ 可选 C（1-2 周）。串行�
 
 ### 5.1 依赖方向规则
 
-- 唯一合法方向：`foundation ← sleigh-ffi ← core ← {门面, emulate, frontend, verify}`；
-  kuna vendor 四件与 rugra-* 完全隔离（§2.5）。
+- 唯一合法方向：`foundation ← sleigh DTO ← core ← {门面, emulate, frontend, verify}`；
+  kuna vendor 四件中 kuna-sleigh 已在 rugra 构建图内（§2.5 R8 修正），kuna-base/kuna-num
+  经 kuna-sleigh 传递入图，kuna-slacomp 独立（构建脚本通道，不入 crate 依赖图）。
 - **禁止**：向上依赖（lower crate 出现于上层 crate 的 [dependencies] 即 CI FAIL）、
   横向依赖（core 内部组间经 crate 边界互指）、门面被任何 crate 依赖。
 - 执行期工具：`cargo tree --workspace` 断言 + 自写扫描器（解析各 crate Cargo.toml 的
@@ -382,10 +401,14 @@ Phase A（6-8 日）→ Phase B（2-3 周）→ 可选 C（1-2 周）。串行�
 | R3 | 并发 agent 在执行窗口内开新票用旧路径 | 触发判据 2/3（零待并+wave 边界）+ A0 看板清扫 + 执行期公告 |
 | R4 | `#[path]` 与 rust-analyzer/工具链兼容性 | 主流工具全支持；A1 试点步先行验证（foundation 组最小） |
 | R5 | B3 门面再导出丢 pub(crate) 项 → 编译断裂 | B0 全量审计（54 处）先行；编译期即暴露、无静默风险 |
-| R6 | build.rs C++ 构图随迁破坏 SLEIGH 链 | B2 独立步+`build_locked_x86_64_sla.sh`+ffi-test 全量回归 |
 | R7 | capability.rs 孤儿（零生产边）被误当可删 | 不可删——capability.hh 对应物在账本内；执行期单独票决定接线或保留（Ghidra capability 注册体系是 architecture 构建期组件） |
 | R8 | 路径搅动作废在飞分支（root 已裁决的背景约束） | 触发判据硬门；执行期任何新分支必须基于移动后 master |
 | R9 | docs/api 镜像移动与 check_doc_sync 的 staged 判定竞态（同 commit 内 .rs+.md 同移） | 每步 commit 同时含两者（铁律 3 同 commit 文档同步） |
+
+> **R6 已删（2026-09-26,R2 修正）**：原风险"build.rs C++ 构图随迁破坏 SLEIGH 链"随
+> 2fa1c792（C++ FFI 运行时退役，vendored kuna-sleigh 为生产解码器）失效——根 build.rs
+> 已不存在，无构图可迁；SLEIGH 链回归面由 op-for-op 36 面+E2E 五语料字节恒等门禁收口
+> （SLEIGH-RUSTIFY Phase2）。
 
 ---
 
