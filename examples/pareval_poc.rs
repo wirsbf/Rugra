@@ -831,9 +831,13 @@ fn fmt_us(us: u128) -> String {
     }
 }
 
-fn write_text_dir(dir: &Path, arm: &str, functions: &[GenFunction], outcomes: &[Outcome]) {
+fn write_text_dir(dir: &Path, arm: &str, functions: &[GenFunction], jobs: &[usize], outcomes: &[Outcome]) {
     fs::create_dir_all(dir).ok();
-    for (idx, outcome) in outcomes.iter().enumerate() {
+    // Results are indexed by JOB position (outcomes[slot] == jobs[slot]'s
+    // outcome); the file name must use the JOB's function, not the slot
+    // number, or skip-list runs mislabel the audit files.
+    for (slot, outcome) in outcomes.iter().enumerate() {
+        let idx = jobs[slot];
         if let Outcome::Ok { text, .. } = outcome {
             let path = dir.join(format!("f{:03}_{}.{}.c", idx, functions[idx].name, arm));
             fs::write(path, text).ok();
@@ -1051,9 +1055,9 @@ fn main() {
             FactoryMode::Isolated => "isolated",
             FactoryMode::Shared => "shared",
         });
-        write_text_dir(&mode_dir.join("serial"), "serial", &functions, &serial);
-        write_text_dir(&mode_dir.join("par1"), "par1", &functions, &par1);
-        write_text_dir(&mode_dir.join("par2"), "par2", &functions, &par2);
+        write_text_dir(&mode_dir.join("serial"), "serial", &functions, &jobs, &serial);
+        write_text_dir(&mode_dir.join("par1"), "par1", &functions, &jobs, &par1);
+        write_text_dir(&mode_dir.join("par2"), "par2", &functions, &jobs, &par2);
 
         // ---- determinism matrix ----
         let mut stage_profile = StageProfile::default();

@@ -153,16 +153,19 @@ PKGG 结论（"单线程无争用非问题"）在并行后**部分翻案**：单
 
 ### 2.5 shell_exec 非封闭缺陷（PoC 核心发现）——P1 票
 
-**现象**：sqlite3 `shell_exec` 同一函数在同一进程内产生**≥3 个字节变体**（同长 38491，局部语句序置换——两相邻独立赋值 `param_2=0;`/`ppppbVar21=0;` 互换），变体由**进程内前置函数集合**决定：
+**现象**：sqlite3 `shell_exec` 同一函数在同一进程内产生**两个字节变体**（同长 38491，局部语句序置换——两相邻独立赋值 `param_2=0;`/`ppppbVar21=0;` 互换），变体由**进程内前置函数集合**决定：
 - 45 作业大跑：isolated serial=A, par1=B, par2=A；shared serial=B, par1=A, par2=B；
 - 单作业探针（3 进程 × 3 线程臂，warmup+serial+2 并行）**9/9 全等 = B**；
-- predecessor 剂量实验（单线程，前置函数数递增）：k=5(2 前置) GREEN；k=4/3/2(3-5 前置) **RED（同跑内串行 vs 并行即分歧）**；k=1(7 前置) = 第三变体 C；k=0(8 前置) = A。
+- predecessor 剂量实验（单线程，前置集 {k..7} 含 warmup f7，k=5..0）：shell_exec 变体 = k5:B, k4:A, k3:A, k2:B, k1:A, k0:A——**非单调**依赖前置集；**其余 7 个伴随函数在所有剂量下字节稳定**（受影响面收敛为单函数）；同跑门禁：k=5/1/0 GREEN（三臂同变体），k=4/3/2 RED（同跑内串行 vs 并行臂翻转）。
+
+> 勘误注记：早先版本记录的"第三变体 C"系 PoC 驱动 write_text_dir 文件名映射缺陷（enumerate 槽位当函数索引）在 skip 运行下的误读；驱动已修复（按 job 位命名+冒烟验证）。门禁矩阵始终用 job 位比较，不受影响。实证变体数 = 2（A/B）。
 
 **判别结论**：
 1. **非线程 RandomState 种子依赖**（9/9 同序概率 ~(1/2)^8≈0.4%，排除纯线程掷硬币假说）；
 2. **进程历史依赖**：同进程前置函数集合改变输出；跨进程（单作业）封闭；
 3. **串行同样受害**：纯串行不同语料子集 → 同函数不同输出——违反铁律 2.1"同输入同输出"的进程模型前提；
-4. 分歧面 = 同长局部置换，非语义差异（无符号/结构漂移）。
+4. 分歧面 = 同长局部置换，非语义差异（无符号/结构漂移）；
+5. **受影响面收敛**：sqlite3 测量集 45 函数中唯一受影响函数 = shell_exec（剂量实验 7 个伴随函数全稳定；curl 31 函数全稳定）。
 
 **嫌疑通道**（按可能性排序，供修复车道）：
 1. `TypeFactory::shared_default()` 进程单例的跨函数累积态（§1.3#1；live_local_scopes 注册时序、types 增长改变下游 HashMap 容量/重哈希触发点）；
@@ -227,12 +230,13 @@ CARGO_TARGET_DIR=/dev/shm/rugra-targets/pareval cargo build --profile fast-relea
 ... pareval_poc /tmp/sqlite3 --screen --max-funcs 48 --out-dir <dir>
 ```
 
-### 4.2 shell_exec 变体指纹（sha256 系 md5 摘录）
+### 4.2 shell_exec 变体指纹（md5 摘录）
 
-- 变体 A `9e5bc8ea…`：45 跑 isolated serial/par2、shared par1；剂量 k=0
-- 变体 B `afc7f416…`：单作业探针 9/9；45 跑 isolated par1、shared serial/par2
-- 变体 C `935f9ad9…`：剂量 k=1（7 前置函数）
+- 变体 A `9e5bc8ea…`：45 跑 isolated serial/par2、shared par1；剂量 k=0/1/4
+- 变体 B `afc7f416…`：单作业探针 9/9；45 跑 isolated par1、shared serial/par2；剂量 k=2/3/5
 - 分歧内容：单行位移（`param_2 = (byte *****)0x0;` 与 `pppppbVar21 = (byte *****)0x0;` 相邻互换），diff 4 行。
+- 剂量实验伴随 7 函数（main/KeccakF1600Step/shell_callback/exec_prepared_stmt/recoverStep/sqlite3_expert_analyze/arDotCommand）全配置字节稳定；curl 31 函数全稳定。
+- 证据归档：`/dev/shm/rugra-reports/pareval-evidence/`（shellexec/ 双变体全文 + 剂量 k0..5 提取 + 双语料 matrix.json + 筛选 JSONL）。
 
 ### 4.3 成本模型（Phase1 扩展预测）
 
