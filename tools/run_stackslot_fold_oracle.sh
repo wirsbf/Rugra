@@ -8,10 +8,12 @@ set -euo pipefail
 # tests/oracle/stackslot_fold_1204.rugra.c) and the deterministic
 # regression driver examples/stackfold_dbg.rs, which re-runs the
 # ap_parse_vhost_addrs pipeline with the canonical Architecture attached
-# and fails unless every in_RSP-chained LOAD/STORE folded (surviving=1,
-# in_RSP-chained=0).  The per-function B2 status stays MISMATCH with the
-# registered param-inference/deref/loop-rotation residual families; this
-# runner guards the fold observable itself (in_RSP census 148 -> 0).
+# and fails unless every in_RSP-chained LOAD/STORE folded (census under the
+# canon cspec arch, loop-2 active: surviving=9 register-pointer/stack-address
+# survivors, in_RSP-chained=0).  The per-function B2 status stays MISMATCH
+# with the registered param-inference/deref/loop-rotation residual
+# families; this runner guards the fold observable itself (in_RSP census
+# 148 -> 0).
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
@@ -80,7 +82,11 @@ if metadata["input_fingerprint"] != fingerprint:
     raise SystemExit("input fingerprint mismatch")
 PY
 
-stage_root=/home/wirs/.cache
+# 2026-09-26 SLEIGHP3 (d8c525ed): the stage root was a stale hardcoded
+# /home/wirs/.cache (unwritable on other machines, mechanism-F style path
+# hardcode). Portable form: XDG_CACHE_HOME/HOME, overridable for /dev/shm
+# staging.
+stage_root="${RUGRA_FIXTURE_STAGE:-${XDG_CACHE_HOME:-$HOME/.cache}}"
 mkdir -p "$stage_root"
 oracle_tmp=$(mktemp -d "$stage_root/rugra-stackslot-fold-1204.XXXXXX")
 cleanup() {
@@ -118,16 +124,21 @@ if [[ $driver_rc -ne 0 ]]; then
   cat "$oracle_tmp/driver.stderr" >&2
   exit 1
 fi
-if ! grep -q '^total surviving LOAD/STORE: 1$' "$oracle_tmp/driver.stderr"; then
-  echo "fold census regression: expected exactly 1 surviving LOAD/STORE" >&2
+if ! grep -q '^total surviving LOAD/STORE: 9$' "$oracle_tmp/driver.stderr"; then
+  echo "fold census regression: expected exactly 9 surviving LOAD/STORE" >&2
   grep '^total surviving LOAD/STORE' "$oracle_tmp/driver.stderr" >&2 || true
   exit 1
 fi
-if ! grep -q '^STACKFOLD FIXTURE PASS: surviving=1 in_RSP-chained=0$' "$oracle_tmp/driver.stderr"; then
-  echo "fold assertion did not pass (expected surviving=1 in_RSP-chained=0)" >&2
+if ! grep -q '^STACKFOLD FIXTURE PASS: surviving=9 in_RSP-chained=0$' "$oracle_tmp/driver.stderr"; then
+  echo "fold assertion did not pass (expected surviving=9 in_RSP-chained=0)" >&2
   exit 1
 fi
 
 grep '^total surviving LOAD/STORE' "$oracle_tmp/driver.stderr"
 grep '^STACKFOLD FIXTURE PASS' "$oracle_tmp/driver.stderr"
-printf 'stackslot_fold_1204: fold observable guarded (in_RSP census 0, single INT_ADD register-pointer survivor); per-function B2 stays MISMATCH with registered residuals\n'
+# STACKFOLD-FIXTURE-F6DC-BREAK-0001: census re-observed under the canon
+# cspec-bearing arch (ActionRestrictLocal loop-2 active) — surviving=9
+# (param-register pointer chains + RBP-derived stack-address values), the
+# loop-1-era "surviving=1" pin retired; the guarded fold observable is
+# unchanged: zero in_RSP-chained survivors (E2E in_RSP census 148 -> 0).
+printf 'stackslot_fold_1204: fold observable guarded (in_RSP census 0; 9 surviving register-pointer/stack-address LOAD/STOREs, zero RSP chains); per-function B2 stays MISMATCH with registered residuals\n'
