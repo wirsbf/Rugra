@@ -435,3 +435,21 @@ rugra-only=13（top `mainloop:unreachable` x24），计数差 top = earlyremoval
 
 `result/curl_cur.c` 是 `cargo run --release --example curl_decompile` 的 stdout 存档（工具链的正式结构化对比输入）。
 **每次 E2E 门禁后必须回流**：`cp /tmp/<run>.log result/curl_cur.c`，再跑 compare_ghidra/audit_syntax 确认。本 wave 曾出现 06:35 存档滞后到 19:09 的事故（跑批只写 /tmp）——root 已修正。
+
+## 生产 types 图环棘轮（2026-09-26，HHMIRROR A2.5）
+
+`cycle_ratchet.py` 复刻 HHMIRROR 压测的 v3 生产 types 图方法（字段持有 + 被持有 trait 签名
+依赖、`#[cfg(test)]` 生产切割、crate::/super::/self:: 导入解析、子目录折叠模块名归一、
+lib.rs 再导出归位）,Tarjan SCC 后执法三断言: (a) SCC 成员 ⊆ 冻结 24 模块集、
+(b) SCC 内环边证据（`form|item|anchor` 锚级）全部在 E1-E16 白名单内、(c) 56 solo 基线
+模块不入环。改善方向（破环）打 `[INFO]` 放行,倒退方向 FAIL。冻结基线 = HHMIRROR 实测树
+master `9ac04ade`（24 SCC / 86 边对 / 186 证据键）。**白名单只进不漏**: 新环边必须先按
+HHMIRROR §2 方法逐边定性并登记 `docs/alignment_docs/CYCLE_RATCHET_2026-09-26.md` 账本,
+再 `--emit-freeze --accept-new` 重冻结;禁止直接改 `FROZEN_*` 常量塞边。
+
+```bash
+python3 tools/cycle_ratchet.py                  # 棘轮扫描（退出码 0/1/2）
+tools/verify_cycle_ratchet.sh                   # CI 门禁 wrapper（Phase A/A2 启用强制）
+python3 tools/cycle_ratchet.py --emit-freeze    # 维护: 打印当前树冻结字面量
+```
+
