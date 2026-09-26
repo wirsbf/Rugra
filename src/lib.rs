@@ -64,6 +64,7 @@ pub mod cover; // ← cover.hh
 pub mod crc32; // ← crc32.hh
 pub mod database; // ← database.hh (Symbol/Scope/Database)
 pub mod debugproto; // native DWARF → locked FuncProto front-end boundary
+pub mod frontend; // native ELF front-end boundary: symbols/discovery/memory map/demangle
 pub mod double_precis; // ← double.cc (SplitVarnode double-precision merge)
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
