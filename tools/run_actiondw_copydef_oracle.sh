@@ -49,7 +49,7 @@ rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_source_paths=(
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs
-  src sleigh_shim
+  src sleigh_shim crates
 )
 
 ghidra_root="$repo_root/ghidra"
@@ -68,8 +68,8 @@ host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
 host_timeout_bin=$(/usr/bin/readlink -f /usr/bin/timeout)
-host_cargo_bin=$(/usr/bin/readlink -f "$(command -v cargo)")
-host_rustc_bin=$(/usr/bin/readlink -f "$(command -v rustc)")
+host_cargo_bin=$(command -v cargo)
+host_rustc_bin=$(command -v rustc)
 for tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" "$host_make_bin" \
   "$host_python_bin" "$host_git_bin" "$host_timeout_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -229,7 +229,7 @@ def reject_pending(label, value):
 archive_paths = [
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
     "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
-    "tests/oracle/funcproto_lock_1204.rs", "src", "sleigh_shim",
+    "tests/oracle/funcproto_lock_1204.rs", "src", "sleigh_shim", "crates",
 ]
 archive_files = []
 for path in snapshot.rglob("*"):
@@ -494,7 +494,7 @@ fixture_target="$oracle_tmp/cargo-target"
 if ! (
   cd "$snapshot_root"
   /usr/bin/env -i HOME="$HOME" RUSTUP_HOME="$HOME/.rustup" \
-  PATH="$clean_path" LC_ALL=C.UTF-8 \
+  PATH="$clean_path:$(/usr/bin/dirname "$host_cargo_bin")" LC_ALL=C.UTF-8 \
   CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
   CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" AR="$host_ar_bin" \
   "$host_cargo_bin" build --quiet --locked --offline --lib

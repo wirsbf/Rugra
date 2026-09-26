@@ -223,7 +223,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 expected_matches = {
     "oplist_all_opcodes", "int_div_rem_signed_family", "shift_family",
     "piece_subpiece_family", "unary_int_bitops", "bool_family",

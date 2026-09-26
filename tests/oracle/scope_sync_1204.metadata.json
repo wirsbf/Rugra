@@ -124,7 +124,7 @@
   "runner_sha256": "35c4262ba20796714cb2f82316db1dcb9521a6fde09cf9a63cf6b948edf09de3",
   "doc_funcdata_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
-  "rust_crate_tree_sha256": "9f464eab1f2945e63c0e1d87fada76833ef85bf137a3b1724fc30c24cdb06cf2",
+  "rust_crate_tree_sha256": "a6c623410c4c28fd0a106d8fc8eb665491f290a317b364bb6006cf7c9224f23d",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-scope-sync-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_source_policy": "Every crate file comes from the pinned base commit b65301a625ae6cc0c0627ba11ec22ba18c430849 Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
  },

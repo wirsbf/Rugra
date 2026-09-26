@@ -95,23 +95,24 @@
    "tests/oracle/decompress_1204.rs",
    "tests/oracle/funcproto_lock_1204.rs",
    "src",
-   "sleigh_shim"
+   "sleigh_shim",
+   "crates"
   ],
   "archive_policy": "Extract only the explicit dependency closure from the pinned commit, then overlay the four declared live source files.",
   "base_closure_hash_scheme": "sha256 of rugra-actiondw-copydef-base-v1 plus sorted length-prefixed relative paths and pinned archive contents",
-  "base_closure_sha256": "6835743d2aab49f8189f7bbd41966e988d2b9ad0ad736c7235827026afa81bfd",
+  "base_closure_sha256": "8129f79e7764640a122edfd2900522425d0141f15ad80b18dc5fd55a28ef426f",
   "overlays": {
    "src/coreaction.rs": {
-    "sha256": "2a42ae2a4284d102321269cd19cf0c62b7af328080413c59dc0eaeb1337d36aa"
+    "sha256": "7a1568be613e8593d1ca3932e3c514e3a9d06b5437a66c9fc0330ee44b1749c7"
    },
    "src/fspec.rs": {
-    "sha256": "e84d6d3babe67cde89b9e9107df3479013098466a57803eac71b0e35ecf2ac35"
+    "sha256": "03aafc2324cb7de07769fc5731b12d54d014f37880afda9b636bfcdbc9d7d329"
    },
    "src/varnode.rs": {
-    "sha256": "d6e178278cb3e00e74e98afaceeb049b5c046de7b13e7f46f4b7defdeb7f5e5e"
+    "sha256": "74edbb6e572b306c32cf063ab071dba26b57f50965f80b56f0d1f63d899641f7"
    },
    "src/action.rs": {
-    "sha256": "4ff5285ccf0a779c270ec2117a79b7d0d24b579c04f6a40f599db3d3f1832125"
+    "sha256": "c97e9ac8d029d751522f011fd404742d017c9a94985fedb627b16812b72fd26c"
    }
   }
  },
@@ -177,7 +178,7 @@
  "comparand": {
   "cpp_fixture_sha256": "d151b9720c74b5e350904226cf466a1e39b7be3e1683160ed4ffc481b940980e",
   "rust_fixture_sha256": "1c8588e74d2b1e8e4c11cb5135ae0cab1ae526c03ccaf7d65628ff84d1381afc",
-  "runner_sha256": "86d1f1997bf7e83672796908b77339083a392dba9c5270692a52ab94ab802b00",
+  "runner_sha256": "76eb34e3682ef35d88ded1132725cab9f1c8170541a014e18042eb140493011f",
   "ghidra_instrumentation_sha256": "87c1c29401e729047130105bf43dc6c67d7a277697b16e6c63b5fb27290e1640"
  },
  "expected_results": {

@@ -32,7 +32,7 @@
  "comparand": {
   "cpp_fixture_sha256": "7986662129619a2f15fd12fa035ad686554f4d37c45abe4e7bd86379d768b83f",
   "rust_fixture_sha256": "9f739a1ca6ca509db3b64a0670682fa99e04cd8a97180e47dd1fdd1ee2ba82ca",
-  "runner_sha256": "8b4379872afaf06814a199523ac7928fe56aa7d895c95631a7e0c000c86d990b"
+  "runner_sha256": "d4fda14759490b810619c33717a7a4791a741cc9903e93a7db3088871242a8f2"
  },
  "assets": {
   "sla": {

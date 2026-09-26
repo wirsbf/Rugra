@@ -256,7 +256,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 expected_matches = {
     "setup_space_indices", "flagbase_partition_accumulate",
     "flagbase_subrange_clear", "flagbase_roundtrip_changepoints",

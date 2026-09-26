@@ -334,7 +334,7 @@ require(
 if not isinstance(legacy["note"], str) or not legacy["note"]:
     raise SystemExit("legacy linked text note must be non-empty")
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MISMATCH")
+require("overall", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 expected_matches = {
     "goto_spec_parity", "exact_match_conversion_fwd", "offcut_warning",
     "beyond_end_skip", "erase_successor_skip_quirk",

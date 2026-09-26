@@ -121,7 +121,7 @@
   "doc_coreaction_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
   "doc_varmap_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
   "doc_merge_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
-  "rust_crate_tree_sha256": "05a8e7e5f51457143b6b123b3fdca5e90c357230d72b7c873752ab61f447b219",
+  "rust_crate_tree_sha256": "ec7bf0fc6244e70c0c390ebcb381c8c3c4fb4cabc12591e845da45877ad2af57",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-linksymbol-typed-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "rust_crate_source_policy": "Every crate file comes from the pinned base commit 5dc9d7b5a93a03d590c4758a68491b4f9aea8e8e Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
  },

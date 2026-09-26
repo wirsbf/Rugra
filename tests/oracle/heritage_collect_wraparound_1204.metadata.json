@@ -58,7 +58,7 @@
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "4b558dcde410c2d6dafc458756da8399259e716946f02505e9f2b1a2f5b79b27",
+  "rust_crate_tree_sha256": "650ad52b4b799bc6ea1cb7beff20975e85f6b241d8a7b8b5ebcf252b05ef6147",
   "host": {
    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
    "cxx_target": "x86_64-linux-gnu",

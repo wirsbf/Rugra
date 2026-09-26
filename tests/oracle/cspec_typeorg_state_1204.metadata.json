@@ -91,8 +91,8 @@
   "errors": "Verbatim oracle LowlevelError text for the uninitialized alignment map."
  },
  "comparand": {
-  "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
-  "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
+  "rugra_base_commit": "bc62cf31140cda8d8c168ecbe03aa8e11f54a127",
+  "rugra_base_tree": "f01e524a16e3ae2488404e692f839a5710b98a3e",
   "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "d3861954655eb410ad045c1780bef8325e79e87415bc44bd0e42150dfb8502d1",
   "cpp_fixture_sha256": "f500bcf61699ae11f916581afb39302450bb36533e271213ec65656a3a8324b3",

@@ -62,7 +62,7 @@
  "comparand_sha256": {
   "cpp_fixture": "caf10f8e5c525193e126dcc261a714780f18c435fbe04fbabed66fbdb9486cd5",
   "rust_fixture": "e8d188ef2903a1bf69c8d5e901f3f97e3886ce70672366960a977a10736581d2",
-  "rugra_flow": "28f28bc2ee00f8e09b258a43e14aa47354097338aef15fb1f4db246bbc6bcdd5",
+  "rugra_flow": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
   "ghidra_flow_cc": "e31e194bc25b5ed2647e2bd1fac18702b6ff7508cf1f75b54fbdfe3318c487f6",
   "ghidra_flow_hh": "4a5f3f9f4470ecd52bf42c615a08f1f3b100e5b153559266f7275b7bc9b1a3ab",
   "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",

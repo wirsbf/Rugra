@@ -143,7 +143,7 @@
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-type-unknown-lib-snapshot-v2 plus sorted length-prefixed paths and contents from pinned base commit with the owned TypeFactory overlay",
-  "rust_crate_tree_sha256": "ed02739a21bd92609fa4e96c46c9f830e1f26e1b34d6aa0ebae1a1482127a6e7",
+  "rust_crate_tree_sha256": "5d818e51ebebbbc126afc7e6fac44a66320cb8e21e9e0038b0db722edca3cf3a",
   "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_cxx_target": "x86_64-linux-gnu",
   "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",

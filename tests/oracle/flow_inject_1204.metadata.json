@@ -148,7 +148,7 @@
   "rust_fixture_sha256": "d1ac04209d6148cb4907c1e38bad0d274d9c27c9f1ea6d2ee935dd0d3b87b4f3",
   "flow_overlay_sha256": "83a23023411233e6ddc4fdc3fe13ab5cb6cc3a2dba35fb95403834d4e68beef7",
   "pcodeinject_overlay_sha256": "abdef04b76bf615cd9214e870caece638e37207d3f6e888ae958dfa2b0f5242d",
-  "runner_sha256": "dcd4b8f850f864d563ec7dae9fecba3c5cc8f2ba4326e112a8f7b5c588d871bb"
+  "runner_sha256": "ab0aa651524134332561807dd10a13f4e104150fc1f5f7b67225995ef9a19f96"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "6effd2324bcbc98df0e5f3bb66958adfe47b69bca1112e3895e91eb62804c80f",

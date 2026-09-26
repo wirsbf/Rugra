@@ -53,7 +53,7 @@
   "cpp_fixture_sha256": "740c7492a0315d36b9db71f589561c2cfc44f06725b0c241e2d67c46d071bf3b",
   "rust_fixture_sha256": "d244b0e4eb422dbc5f57cc2c480c01e393a32f9a174162890bfb20c77eeb15fd",
   "funcdata_rs_sha256": "b36f4b1f5923d07de1ee509eb8703055f7b934c7b88ed0a38913a07bf7dbd2da",
-  "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
+  "funcdata_doc_sha256": "204c4f55873da7e6bf2d0727fbd2d0a6ce4aaea1a5bdc4108824e7e2761893b4",
   "runner_sha256": "381488870d1f580e6cbf06f1ee542b4bb4552e8341f0a6f4124d8affe2206dda",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",

@@ -21,7 +21,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=94789db
+rugra_base_commit=ca19466135f2cd24dcdd3bd4265f1d5ea5e8917b
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/scope_find_overlap_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/scope_find_overlap_1204.cc"

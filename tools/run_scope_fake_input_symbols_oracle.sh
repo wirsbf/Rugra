@@ -23,7 +23,7 @@ metadata="$repo_root/tests/oracle/scope_fake_input_symbols_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/scope_fake_input_symbols_1204.cc"
 rust_fixture="$repo_root/tests/oracle/scope_fake_input_symbols_1204.rs"
 runner="$repo_root/tools/run_scope_fake_input_symbols_oracle.sh"
-rugra_base_commit=9ea2a78e3db7e5599af842ae8e5d337fa30dbdce
+rugra_base_commit=ca19466135f2cd24dcdd3bd4265f1d5ea5e8917b
 
 oracle_tmp=$(mktemp -d /tmp/rugra-scope-fake-input-1204.XXXXXX)
 cleanup() {

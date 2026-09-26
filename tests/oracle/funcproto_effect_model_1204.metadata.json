@@ -111,7 +111,7 @@
  "comparand": {
   "rugra_base_commit": "8ce126c3be09235f1c25f6baf79f71e736a83b82",
   "rugra_base_tree": "dc3deea10753d6bb19db5273f68c65ec4aa7afab",
-  "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
+  "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "bddf29034ae69c9f758dacdd57a380ad9e2281e7eac2d5013b207397207e9df8",
   "cpp_fixture_sha256": "ec3e359794c203e25b5b381ec7e7745d72d0fc27f15a51d35352e361effb12ad",
   "rust_fixture_sha256": "ad17e0615d0ecf69f67c8f5b448a555ea855ff5530a21ba97968d83cc0569e61",

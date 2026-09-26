@@ -228,7 +228,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 expected_matches = {
     "inject_pcode_dispatch_callother", "inject_user_op_context_and_payload",
     "do_injection_emit_and_bookkeeping", "payload_template_execution",

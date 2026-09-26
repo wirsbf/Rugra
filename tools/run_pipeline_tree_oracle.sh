@@ -12,11 +12,11 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=dd76d37866dcd2e4dc0a354323e0f016bb62fb35
-rugra_base_tree=fa3a6d4aeb186599eb00895700b45b47d6862fba
-rugra_base_src_tree=1fb9e4fa6c609fc1f54a3fc38ed3a39379768963
-rugra_base_action_blob=e3032afaf92f065314e6b59747658ebf761d9ebc
-rugra_base_coreaction_blob=fe08e78049f24cf010172b393111281ac600262d
+rugra_base_commit=ca19466135f2cd24dcdd3bd4265f1d5ea5e8917b
+rugra_base_tree=a0241e3f77197a73d01b68b82b22ee56a4634e3c
+rugra_base_src_tree=2f252f03a1542c5e3aee261b4000b9614541390e
+rugra_base_action_blob=40b15b0873e83caf6318ef26267d799be89e624c
+rugra_base_coreaction_blob=e5fb0a75534d714556206c765e6cc075cf3bd8c3
 rugra_base_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_base_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_base_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -216,7 +216,7 @@ git -C "$repo_root" archive --format=tar \
   --output="$oracle_tmp/rugra-source.tar" "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
-  src sleigh_shim
+  src sleigh_shim crates
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 cp "$action_overlay" "$snapshot_root/src/action.rs"
 cp "$coreaction_overlay" "$snapshot_root/src/coreaction.rs"

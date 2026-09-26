@@ -108,7 +108,7 @@
   "rust_fixture_sha256": "8411136056b33b9525879019402eedb6283558bab6aa52e2a1a5809f353eadff",
   "runner_sha256": "2d91f4dd0fb050c825934deecd2756b774a75f3676075e84e51887ca474fb4d8",
   "doc_printc_sha256": "23a0c8a5428edce50a64805d6ef5ed25fc99ecb8d4440d61926467c51faab3d1",
-  "rust_crate_tree_sha256": "16d98e1c267b68ac4060727918525384735b7441b23cbe0e7f0725ef535e3fb5",
+  "rust_crate_tree_sha256": "f9a0d9870ccdfb0e9b6d5e42f0a5e541407c40f6484e6bc3bb33f3471ec1464b",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-symbol-decl-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents"
  },
  "overall_status": "UNTESTED: (B2 downgrade: two-sided pinning incomplete - (B2 canonicalization)..."

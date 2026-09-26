@@ -242,7 +242,7 @@ canonical = json.dumps(
     fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("input manifest sha256", sha(canonical), manifest["sha256"])
-require("overall status", metadata["overall_status"], "MATCH")
+require("overall status", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 for key in (
     "output_append_preserved", "dead_filtered", "same_address_seqnum_order",
     "lower_address_excluded", "upper_address_excluded", "empty_range_append_only",

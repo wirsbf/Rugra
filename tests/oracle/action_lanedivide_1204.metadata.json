@@ -172,7 +172,7 @@
     "expected": "ret2=0 map2=requeued status2=16 count2=1 irStable=1"
    }
   ],
-  "sha256": "46d3627d1285af786c53eceb32478df01be9cf0b857f8d30b059f5d3ecb20e29"
+  "sha256": "832c0ce4be992a9ab84fcff1d6688eee796a5da6802fc6e29edfdcdbb75a5d7c"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "77a0b241002e4fc6432532c2479e1e2bb9ff7bd7ecc4039404e7a2f2540c1b75",

@@ -11,7 +11,7 @@
   "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
- "rugra_base_commit": "71971b2a2bf8e3611f8690bcb6a0bcad34d29f34",
+ "rugra_base_commit": "b326b75e12f05ca74469788ab66e47735e362dc4",
  "architecture": "x86:LE:64:default:gcc; locked BfdArchitecture over examples/curl; byte-addressed 64-bit little-endian spaces",
  "compiler_spec": {
   "id": "gcc",

@@ -223,7 +223,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "MATCH: (B2 canonicalization)")
 expected_coverage = {
     "oplist_dispatch_contract", "zexteliminate_cases", "signform_cases",
     "signnearmult_cases", "shiftbitops_cases", "shift2mult_cases",

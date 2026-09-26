@@ -56,7 +56,7 @@
   "cpp_fixture_sha256": "7b97cda051dd3b4a8e1ee955d18bce8daa2fe1969bea5543d74fb5565ff2e53a",
   "rust_fixture_sha256": "13e955b9fc9cfe5f0ad29b36c29dcd1ae1c0ff44f8a76c3482ed74511f9ff62f",
   "address_rs_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
-  "address_doc_sha256": "507cc5ad8da8cc023b92664e550f6a4d29ebae85a60d0b556dc8d57dd94b527c",
+  "address_doc_sha256": "1c4a2e4e687d1044ec514372e8be7379cb607051a6bb24263f7ffe3687659e4f",
   "runner_sha256": "1825b0a696ce2ffc911c07af3532feac2f05a7230d95e733e7cbbec92e076ed8",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",

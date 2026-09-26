@@ -83,8 +83,8 @@
   "errors": "Verbatim LowlevelError/DecoderError explain strings from seven malformed documents."
  },
  "comparand": {
-  "rugra_base_commit": "b2a92b8f84802e3c877c5c9bb5c0132cc5e3e808",
-  "rugra_base_tree": "7d634e36819bbced8031350ee6b265d8bb443b92",
+  "rugra_base_commit": "555aa1b8ebf410b8458aa9db9f0d5f1e6b9287a6",
+  "rugra_base_tree": "fb515359f6fcb8f4926bf4c57ab9f33148e9ad5b",
   "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "98d110cf5ea1ec69103aab48ab696cc971ef8dfe6bd585363b7e036963bedaad",
   "cpp_fixture_sha256": "2125a48ddfb8f97abc8c289e78095ed5e9f6b9aec1770f860d04eddd1f320df4",

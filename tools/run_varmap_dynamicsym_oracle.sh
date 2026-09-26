@@ -305,7 +305,7 @@ expected_residuals = {
 }
 require("residual branch union", branch_ids, expected_residuals)
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "UNTESTED: (B2 canonicalization)")
 print("snapshot verified", flush=True)
 PY
 

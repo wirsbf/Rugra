@@ -65,7 +65,7 @@
   "binary": {
    "path": "examples/curl",
    "git_blob": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
    "size": 162544
   }
  },
@@ -87,7 +87,7 @@
     "indistinguishable pentries in one group"
    ]
   },
-  "sha256": "583f978c18259e0dac73e28fe366582a5fa62197227ef08c1d60331ef6e2f6e6"
+  "sha256": "f9409e469d9ca705ea356f4b7bd4bfb12a2301d993b00f23bc2ccb2dc394a777"
  },
  "observation_schema": {
   "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
@@ -99,7 +99,7 @@
  "comparand": {
   "rugra_base_commit": "5730ee8227bc72c8621bd2d8487cc19b0147ca6c",
   "rugra_base_tree": "afe57e7f0148d683ac26af3248595cb0cacc044e",
-  "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
+  "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
   "runner_sha256": "bd2a1f1fa79614eb65c5dc03b7388e644f4aedafacbd945d126a735596059de3",
   "cpp_fixture_sha256": "7d914d1ea845af39a7242e0b8c83d7bf004cf45dd5f91d90298b688b45d111ea",
   "rust_fixture_sha256": "80db23ae74cbe641764abe9bb1ba9ff9a3a726ca997ee25d4fb70944dbcdd420",

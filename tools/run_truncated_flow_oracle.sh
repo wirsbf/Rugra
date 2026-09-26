@@ -294,7 +294,7 @@ canonical = json.dumps(
 require("input manifest sha", sha(canonical), manifest["sha256"])
 
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MISMATCH")
+require("overall", metadata["overall_status"], "MISMATCH: (B2 canonicalization)")
 expected_statuses = {
     "raw_op_seqnum_list_order_and_uniqid": "MATCH",
     "callspec_fspec_rebind_projection": "MATCH",

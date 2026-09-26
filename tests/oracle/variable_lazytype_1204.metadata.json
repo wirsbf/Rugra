@@ -45,7 +45,7 @@
   "variable_doc_sha256": "7e9607c0cc78a97fffdc3e3d6b0031e39d9fe7e10bb889ea5d7b3abc6d917a2e",
   "type_infer_doc_sha256": "809d04aaa3bfaab3e5c7949f042a4c0939c7ae12244af7428c416cf71bcbe395",
   "coreaction_doc_sha256": "726abc6abfa83101160016352526704a0aef7a3ffd05cb8fc6dfd3b9ba456f7b",
-  "merge_doc_sha256": "15387e3d95284264662623c6dedcef338e171fadcc40d0b27d44408729b9a67b",
+  "merge_doc_sha256": "5444285cc2e2bdc6260ea88e8fd19ac84f1fd9fa89f865d51ce1c7aacb792471",
   "runner_sha256": "63d55541cbbab7cb49f67fc459bfc680cfabee6e7dec39a5b124684db1b694de",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "8bbeead11c9fbced95411134ce37a4cf4b99b3603ea003607eb4df82cb1b4853",

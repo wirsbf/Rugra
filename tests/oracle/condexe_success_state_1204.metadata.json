@@ -156,7 +156,7 @@
   "cpp_fixture_sha256": "9bae9b4e93c84d5e3ceb42db45c306de00735ea1bc301027bb432fab54544893",
   "rust_fixture_sha256": "cfaae7150026c3f2ef89fd63e44184d41b17ee6fb18a17b358a9aa6601df2dad",
   "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
-  "runner_sha256": "95f01dab3e74b9ffd53fb6dc078c38c87039a8e95050dbc602cb2335b7e6e9ea"
+  "runner_sha256": "b38ea53aac9530bb261bb8021fef4c6f3350f1befe39ed178a867b94b6526833"
  },
  "expected_results": {
   "ghidra_stdout_sha256": "dbe19349dee114c9284bfa6b89146facbadf9d28644e29fb3fd24f065842c4bf",
