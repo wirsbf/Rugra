@@ -1,5 +1,40 @@
 # `heritage.rs` API Reference
 
+## 2026-09-26：KUNABUGS-STORELOAD-FWD-0001 — store→load 转发链双侧 fixture 验证（MATCH）+ guard_loads_range 注释刷新
+
+P1 验证票（kuna LOSS-237 桌面候选根因的实证裁决）：pre-heritage 栈 store→load
+转发机制链——`discover_indexed_stack_pointers`（cc:986）→ `generate_load_guard`
+（cc:909）→ `guard()` addIndirects 半区（cc:1188-1198）→ `guard_stores_range`
+INDIRECT 插入（cc:1538-1559）+ `guard_loads_range` COPY 边界插入（cc:1570-1601）
+→ rename 把 COPY 输入接到被追踪栈版本（cc:2489-2561）→ `analyze_new_load_guards`
+（cc:834，ValueSetSolver 窗口精化）→ `handle_new_load_copies`/`find_address_forces`
+/`propagate_copy_away`（cc:619-730）消除 guard COPY 并对分析窗口内的边界写打
+ADDRFORCE。
+
+新双侧 fixture `tests/oracle/heritage_storeload_fwd_1204.{cc,rs}`（B2 四件套 +
+`tools/run_heritage_storeload_fwd_oracle.sh`）三 case × 两 heritage pass
+（stack delay=1：pass 0 处理寄存器空间，pass 1 处理栈空间）：
+
+- `fwd_indexed_load`：双写栈槽 0x40 + 常量偏移 STORE（INDIRECT 守卫）+ 索引化
+  LOAD（loadGuard COPY 置入→rename 接 INDIRECT 输出→传播销毁；末次写 ADDRFORCE）；
+- `const_load_no_fwd`：负对照——常量偏移 LOAD 指针（traversals==0）不产生
+  loadGuard，无 COPY 生命周期、无 ADDRFORCE；STORE 的 INDIRECT 仍在；
+- `phi_fwd`：双臂写 + join 后索引化 LOAD——COPY 输入 rename 到 join
+  MULTIEQUAL，双臂写均 ADDRFORCE。
+
+**判定 MATCH**：13 行 stdout 双侧字节恒等（sha256
+`468bf48ef02de3c0b4c3a7856eb2cb6b534bb4df0dedbc27158c5578ae20632b`，双侧各双跑
+恒等，stderr 空）。观察面覆盖：guard 记录（pointerBase/min/max/step/state）、
+INDIRECT 引入与输入别名、COPY 邻接消除、ADDRFORCE 落点、phi 槽位、逐 op 顺序/
+flags/desc/active/known/def、逐空间 bank census、restart 位。F-RESIDE/STACKSLOT
+残差族的 LOSS-237 候选根因（转发缺失）在 fixture 观察面上**排除**；残差族根因
+另寻（DB-LOCALSCOPE 簇/merge 平局等其余候选不受本票影响）。
+
+同 commit 刷新 `guard_loads_range` 头注释：原注释仍声称 COPY 插入体为登记
+stub、ValueSetSolver 为 stub——两者自 SB-MATCHURL-ORD55-0001 /
+GETPARAM-OPPOOL-COUNT-0001 / RANGEUTIL-VSEMPTY-0001 起即为实装，本 fixture
+复证；注释改为如实描述并引用 fixture。零行为改动（纯注释）。
+
 ## 2026-09-23：SB-MATCHURL-ORD55-0001 — discoverIndexedStackPointers 落地 + guardLoads COPY 边界体（load-guard COPY 族）
 
 match_url Phase 2 ordinal 55（heritage 二轮）根因修复。oracle 在 heritage 二轮对每个
