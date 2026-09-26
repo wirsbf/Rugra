@@ -39,7 +39,7 @@
  "comparand": {
   "cpp_fixture_sha256": "9afac3f7945cc6383619be82ceb8cbe0ab2541efa810e33de61c72e0183859b5",
   "rust_fixture_sha256": "a98bbf0e9a157961c014002867f133acb69c4a425c7fbaa93a3747a695e8d2ef",
-  "runner_sha256": "959555ccf86a7efbb9965f62e74dd868bfd515b57a24f4cdcb4053e5b0d31a99",
+  "runner_sha256": "fd4c9f0de11f701983361ff8d49917cc0af8a63ba3d5c4dfbebeb86d5ab433d6",
   "doc_varmap_sha256": "37438aff1c6c3cc36367b01c8fdfedcfd2562bedffb6637fd66b08a91f36ce44",
   "rust_crate_tree_sha256": "f8ab48c01a944a3287a144018292e82df225507114689ef06c6ac80b771d9d02",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-dynamicsym-base-v1 plus base commit and sorted length-prefixed paths and contents"
