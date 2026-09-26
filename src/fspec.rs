@@ -502,6 +502,12 @@ pub struct FuncProto {
     /// Parameter-storage assignment failed while rebuilding this prototype.
     /// Faithful to Ghidra's sticky `error_inputparam` flag.
     error_input_param: bool,
+    /// Symbol-backed parameter store. `None` mirrors Ghidra's
+    /// `ProtoStoreInternal` flat storage (the `parameters` vector IS its
+    /// `inparam`); `Some` mirrors `FuncProto::setScope` (fspec.cc:3879-3885)
+    /// installing a `ProtoStoreSymbol`, after which input-parameter
+    /// mutations route to the backing function Scope's category 0.
+    symbol_store: Option<ProtoStoreSymbol>,
 }
 
 impl FuncProto {
@@ -529,6 +535,7 @@ impl FuncProto {
             has_thisptr: false,
             return_bytes_consumed: 0,
             error_input_param: false,
+            symbol_store: None,
         }
     }
 
@@ -1857,6 +1864,198 @@ impl FuncProto {
         self.set_output_parameter(pieces, piece_space);
     }
 
+    // Ghidra: fspec.cc:4172 FuncProto::updateOutputNoTypes
+    /// Update the return value based on Varnode trials, but don't store a
+    /// data-type. Faithful 1:1 body of `updateOutputNoTypes`
+    /// (fspec.cc:4172-4185): a locked output is untouched; an empty trial
+    /// list clears the output; otherwise the output is rebuilt from
+    /// trial[0]'s address and an undefined type of its size
+    /// (`factory->getBase(triallist[0]->getSize(),TYPE_UNKNOWN)`).
+    pub fn update_output_no_types(
+        &mut self,
+        triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+    ) {
+        if self.is_output_locked() { return; }
+        if triallist.is_empty() {
+            // Ghidra: store->clearOutput(); — the void-reset shape shared
+            // with update_output_types' empty arm.
+            self.return_type = std::sync::Arc::new(
+                crate::type_system::datatype::Datatype::Void(
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        crate::type_system::TypeMetatype::Void,
+                    ),
+                ),
+            );
+            self.output_storage = None;
+            self.output_type_locked = false;
+            return;
+        }
+        let mut pieces = ParameterPieces::default();
+        {
+            let vn0 = triallist[0].read().unwrap();
+            pieces.ty = Some(
+                crate::type_system::TypeFactory::shared_default()
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_base(vn0.get_size(), crate::type_system::TypeMetatype::Unknown)
+                    .expect("factory always produces an unknown base type"),
+            );
+            pieces.addr = *vn0.get_addr();
+            pieces.space = vn0.get_space();
+        }
+        pieces.flags = 0;
+        // Ghidra: store->setOutput(pieces);
+        let space = pieces.space;
+        self.set_output_parameter(pieces, space);
+    }
+
+    // Ghidra: fspec.cc:3879 FuncProto::setScope
+    /// Set a backing symbol Scope for \b this. Faithful to `setScope`
+    /// (fspec.cc:3879-3885): the store becomes a `ProtoStoreSymbol` over
+    /// `(s, startpoint)`, so parameters added during analysis reflect in
+    /// the symbol table; the default model takes effect when none is set
+    /// (`if (model == 0) setModel(s->getArch()->defaultfp);`). Rugra's
+    /// flat `parameters` projection stays in sync through
+    /// `set_input_parameter`'s store routing; read-back of the
+    /// symbol-backed views goes through `symbol_store()` (the flat
+    /// `get_param` reads the internal projection).
+    pub fn set_scope(
+        &mut self,
+        scope: FspecScopeRef,
+        startpoint: (AddressSpace, u64),
+        default_model: Option<Arc<ProtoModelFull>>,
+    ) {
+        self.symbol_store = Some(ProtoStoreSymbol::new(scope, startpoint));
+        if self.model.is_none() {
+            self.set_model(default_model);
+        }
+    }
+
+    /// The installed symbol-backed store, if `set_scope` ran (the
+    /// ProtoStoreSymbol face of the prototype's parameter storage).
+    // RUGRA-GLUE: accessor for the optional store field (Ghidra reaches
+    // the store through the protected `store` pointer).
+    pub fn symbol_store(&self) -> Option<&ProtoStoreSymbol> {
+        self.symbol_store.as_ref()
+    }
+
+    // Ghidra: fspec.hh:1513 FuncProto::checkInputJoin
+    /// Check if two input storage locations can represent a single logical
+    /// parameter. Faithful inline delegation `return model->checkInputJoin(
+    /// hiaddr,hisz,loaddr,losz);` (fspec.hh:1514).
+    pub fn check_input_join(
+        &self, space: AddressSpace, hi_addr: Address, hisz: i32, lo_addr: Address, losz: i32,
+    ) -> bool {
+        match &self.model {
+            Some(model) => model.check_input_join(space, hi_addr, hisz, lo_addr, losz),
+            None => false,
+        }
+    }
+
+    // Ghidra: fspec.hh:1524 FuncProto::checkInputSplit
+    /// Check if it makes sense to split a single storage location into two
+    /// input parameters. Faithful inline delegation `return
+    /// model->checkInputSplit(loc,size,splitpoint);` (fspec.hh:1525).
+    pub fn check_input_split(
+        &self, space: AddressSpace, loc: Address, size: i32, splitpoint: i32,
+    ) -> bool {
+        match &self.model {
+            Some(model) => model.input.check_split(space, loc, size, splitpoint),
+            None => false,
+        }
+    }
+
+    // Ghidra: fspec.hh:1534 FuncProto::removeParam
+    /// Remove the i-th input parameter: `void removeParam(int4 i) {
+    /// store->clearInput(i); }` (fspec.hh:1534) — the flat store excises
+    /// the parameter (Rust `Vec::remove` keeps the following parameters in
+    /// place, matching the renumbering `ProtoStoreInternal::clearInput`
+    /// performs at fspec.cc:3348-3351).
+    pub fn remove_param(&mut self, i: usize) {
+        if i < self.parameters.len() {
+            self.parameters.remove(i);
+        }
+    }
+
+    // Ghidra: fspec.hh:1551 FuncProto::internalBegin
+    // Ghidra: fspec.hh:1552 FuncProto::internalEnd
+    /// The model's internal-storage list; the slice IS the
+    /// `internalBegin()`/`internalEnd()` iterator pair (fspec.hh:1551-1552
+    /// delegate to `model->internalBegin()/internalEnd()`). Panics without
+    /// a model exactly like Ghidra's null `model` dereference.
+    pub fn internal_iter(&self) -> &[VarnodeData] {
+        self.model
+            .as_ref()
+            .expect("FuncProto::internal_iter requires a prototype model")
+            .internal_iter()
+    }
+
+    // Ghidra: fspec.hh:1586 FuncProto::assumedInputExtension
+    /// Get the extension opcode and containing input parameter for the
+    /// given storage. Faithful inline delegation `return
+    /// model->assumedInputExtension(addr,size,res);` (fspec.hh:1587).
+    pub fn assumed_input_extension(
+        &self, space: AddressSpace, addr: Address, size: i32, res: &mut VarnodeData,
+    ) -> FspecOpCode {
+        match &self.model {
+            Some(model) => model.assumed_input_extension(space, addr, size, res),
+            None => FspecOpCode::CPUI_COPY,
+        }
+    }
+
+    // Ghidra: fspec.hh:1599 FuncProto::assumedOutputExtension
+    /// Get the extension opcode and containing return-value location for
+    /// the given storage. Faithful inline delegation `return
+    /// model->assumedOutputExtension(addr,size,res);` (fspec.hh:1600).
+    pub fn assumed_output_extension(
+        &self, space: AddressSpace, addr: Address, size: i32, res: &mut VarnodeData,
+    ) -> FspecOpCode {
+        match &self.model {
+            Some(model) => model.assumed_output_extension(space, addr, size, res),
+            None => FspecOpCode::CPUI_COPY,
+        }
+    }
+
+    // Ghidra: fspec.cc:4516 FuncProto::getThisPointerStorage
+    /// Get the storage location associated with the "this" pointer.
+    /// Faithful 1:1 body of `getThisPointerStorage` (fspec.cc:4516-4533):
+    /// models without a this-pointer yield an invalid address; otherwise
+    /// the prototype is assigned as (current output type, dt) and the first
+    /// non-hidden-return input piece's address is returned; an all-hidden
+    /// assignment yields an invalid address.
+    pub fn get_this_pointer_storage(
+        &self,
+        dt: &Arc<Datatype>,
+    ) -> Option<(AddressSpace, Address)> {
+        let model = self.model.as_ref()?;
+        if !model.has_this_pointer() {
+            return None;
+        }
+        let in_types = [dt.clone()];
+        let proto = PrototypePieces {
+            out_type: Some(&self.return_type),
+            in_types: &in_types,
+            first_var_arg_slot: -1,
+        };
+        let mut res = Vec::new();
+        // ignoreOutputError = true (fspec.cc:4527).
+        if model
+            .assign_parameter_storage(&proto, &mut res, true, None)
+            .is_err()
+        {
+            return None;
+        }
+        for piece in res.iter().skip(1) {
+            if (piece.flags & HIDDEN_RET_PARM) != 0 {
+                continue;
+            }
+            return Some((piece.space, piece.addr));
+        }
+        None
+    }
+
     // Ghidra: fspec.cc:4675 FuncProto::decode
     /// Restore this prototype from a `<prototype>` element. Faithful port of
     /// `FuncProto::decode` (fspec.cc:4675-4840). Parses the model name,
@@ -2041,6 +2240,15 @@ impl FuncProto {
     /// Faithful to `ProtoStore::setInput(i, nm, pieces)`: replace (or append
     /// up to) the i-th input parameter with the given pieces.
     fn set_input_parameter(&mut self, i: usize, nm: &str, pieces: ParameterPieces) {
+        // Ghidra: FuncProto::setParam → store->setInput(i,name,piece)
+        // (fspec.hh:1533). With a symbol-backed store installed by
+        // `set_scope` the mutation routes to the backing Scope's
+        // category-0 symbol; the flat vector below is the
+        // ProtoStoreInternal projection (fspec.cc:3329-3338) used when no
+        // scope backs \b this.
+        if let Some(store) = &mut self.symbol_store {
+            store.set_input(i, nm, &pieces);
+        }
         while self.parameters.len() <= i {
             let placeholder = ProtoParameter::new(
                 String::new(),
@@ -10336,6 +10544,676 @@ impl UnknownProtoModel {
     // Ghidra: fspec.hh:1031 UnknownProtoModel::isUnknown
     /// `return true;` (fspec.hh:1031).
     pub fn is_unknown(&self) -> bool { true }
+}
+
+/// Shared owner handle for a function `Scope` (the Rust stand-in for
+/// Ghidra's raw `Scope *` in the ProtoStoreSymbol family).
+// RUGRA-GLUE: ownership handle type for the symbol-backed store family.
+pub type FspecScopeRef = std::sync::Arc<std::sync::RwLock<crate::database::Scope>>;
+
+/// Shared owner handle for a `Symbol` (the Rust stand-in for Ghidra's raw
+/// `Symbol *`).
+// RUGRA-GLUE: ownership handle type for the symbol-backed store family.
+pub type FspecSymbolRef = std::sync::Arc<std::sync::RwLock<crate::database::Symbol>>;
+
+/// `Symbol::function_parameter` category id (database.hh Symbol category 0
+/// holds function parameters).
+pub const SYMBOL_FUNCTION_PARAMETER: i32 = 0;
+/// `Symbol::no_category` (database.hh): -1.
+pub const SYMBOL_NO_CATEGORY: i32 = -1;
+
+/// A parameter with a formal backing Symbol. Faithful to `class
+/// ParameterSymbol : public ProtoParameter` (fspec.hh:1256-1279 +
+/// fspec.cc:2981-3099): every accessor pulls its information off the
+/// backing Symbol; the flat-state methods that ParameterBasic implements
+/// locally forward to Scope/Symbol attribute mutations instead. Rugra's
+/// projection exposes the (scope, symbol) pair directly instead of the
+/// C++ virtual-interface vtable: `ProtoStoreSymbol` constructs these
+/// on the fly and caches them, exactly as Ghidra does.
+#[derive(Debug, Clone)]
+pub struct ParameterSymbol {
+    /// The owning function Scope (Ghidra reaches it via `sym->getScope()`;
+    /// Rugra's `Symbol` carries only `scope_id`).
+    pub scope: FspecScopeRef,
+    /// Backing Symbol for \b this parameter; `None` is the freshly
+    /// allocated uninitialized form of `ParameterSymbol(void) { sym = 0; }`
+    /// (fspec.hh:1260).
+    pub sym: Option<FspecSymbolRef>,
+}
+
+impl ParameterSymbol {
+    // Ghidra: fspec.hh:1260 ParameterSymbol::ParameterSymbol
+    /// Uninitialized constructor: `sym = (Symbol *)0` (fspec.hh:1260).
+    /// The scope handle rides along for the attribute-mutating setters.
+    pub fn new(scope: FspecScopeRef) -> Self {
+        Self { scope, sym: None }
+    }
+
+    // Ghidra: fspec.cc:2981 ParameterSymbol::getName
+    /// `return sym->getName();` (fspec.cc:2981-2985). Panics without a
+    /// backing symbol exactly like the null dereference.
+    pub fn get_name(&self) -> String {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().name.clone()
+    }
+
+    // Ghidra: fspec.cc:2987 ParameterSymbol::getType
+    /// `return sym->getType();` (fspec.cc:2987-2991).
+    pub fn get_type(&self) -> Option<Arc<Datatype>> {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().get_type()
+    }
+
+    // Ghidra: fspec.cc:2993 ParameterSymbol::getAddress
+    /// `return sym->getFirstWholeMap()->getAddr();` (fspec.cc:2993-2997) —
+    /// resolved through the owning Scope's entry table.
+    pub fn get_address(&self) -> Option<Address> {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let scope = self.scope.read().unwrap();
+        sym.read().unwrap().get_first_whole_map(&scope.entries).map(|e| e.get_addr())
+    }
+
+    // Ghidra: fspec.cc:2999 ParameterSymbol::getSize
+    /// `return sym->getFirstWholeMap()->getSize();` (fspec.cc:2999-3003).
+    pub fn get_size(&self) -> Option<i32> {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let scope = self.scope.read().unwrap();
+        sym.read().unwrap().get_first_whole_map(&scope.entries).map(|e| e.get_size())
+    }
+
+    // Ghidra: fspec.cc:3005 ParameterSymbol::isTypeLocked
+    /// `return sym->isTypeLocked();` (fspec.cc:3005-3009).
+    pub fn is_type_locked(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_type_locked()
+    }
+
+    // Ghidra: fspec.cc:3011 ParameterSymbol::isNameLocked
+    /// `return sym->isNameLocked();` (fspec.cc:3011-3015).
+    pub fn is_name_locked(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_name_locked()
+    }
+
+    // Ghidra: fspec.cc:3017 ParameterSymbol::isSizeTypeLocked
+    /// `return sym->isSizeTypeLocked();` (fspec.cc:3017-3021).
+    pub fn is_size_type_locked(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_size_type_locked()
+    }
+
+    // Ghidra: fspec.cc:3023 ParameterSymbol::isThisPointer
+    /// `return sym->isThisPointer();` (fspec.cc:3023-3027).
+    pub fn is_this_pointer(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_this_pointer()
+    }
+
+    // Ghidra: fspec.cc:3029 ParameterSymbol::isIndirectStorage
+    /// `return sym->isIndirectStorage();` (fspec.cc:3029-3033).
+    pub fn is_indirect_storage(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_indirect_storage()
+    }
+
+    // Ghidra: fspec.cc:3035 ParameterSymbol::isHiddenReturn
+    /// `return sym->isHiddenReturn();` (fspec.cc:3035-3039).
+    pub fn is_hidden_return(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_hidden_return()
+    }
+
+    // Ghidra: fspec.cc:3041 ParameterSymbol::isNameUndefined
+    /// `return sym->isNameUndefined();` (fspec.cc:3041-3045).
+    pub fn is_name_undefined(&self) -> bool {
+        self.sym.as_ref().expect("ParameterSymbol without backing symbol").read().unwrap().is_name_undefined()
+    }
+
+    // Ghidra: fspec.cc:3047 ParameterSymbol::setTypeLock
+    /// Toggle the data-type lock on the backing Symbol. Faithful 1:1 body
+    /// of `setTypeLock` (fspec.cc:3047-3058): the attribute mask is
+    /// `typelock | namelock` when the symbol's name is already defined,
+    /// `typelock` alone otherwise; setting raises the mask, clearing
+    /// removes it.
+    pub fn set_type_lock(&self, val: bool) {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let name_undefined = sym.read().unwrap().is_name_undefined();
+        let mut attrs = crate::database::symbol_flags::TYPELOCK;
+        if !name_undefined {
+            attrs |= crate::database::symbol_flags::NAMELOCK;
+        }
+        let id = sym.read().unwrap().symbol_id;
+        let mut scope = self.scope.write().unwrap();
+        if val {
+            scope.set_attribute(id, attrs);
+        } else {
+            scope.clear_attribute(id, attrs);
+        }
+    }
+
+    // Ghidra: fspec.cc:3060 ParameterSymbol::setNameLock
+    /// Toggle the name lock: `scope->setAttribute(sym, namelock)` /
+    /// `clearAttribute` (fspec.cc:3060-3068).
+    pub fn set_name_lock(&self, val: bool) {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let id = sym.read().unwrap().symbol_id;
+        let mut scope = self.scope.write().unwrap();
+        if val {
+            scope.set_attribute(id, crate::database::symbol_flags::NAMELOCK);
+        } else {
+            scope.clear_attribute(id, crate::database::symbol_flags::NAMELOCK);
+        }
+    }
+
+    // Ghidra: fspec.cc:3070 ParameterSymbol::setThisPointer
+    /// Toggle the this-pointer property. Ghidra forwards to
+    /// `scope->setThisPointer(sym, val)` which is the inline
+    /// `sym->setThisPointer(val)` (database.hh:770); Rugra mutates the
+    /// Symbol directly through the same `Symbol::set_this_pointer`.
+    pub fn set_this_pointer(&self, val: bool) {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        sym.write().unwrap().set_this_pointer(val);
+    }
+
+    // Ghidra: fspec.cc:3077 ParameterSymbol::overrideSizeLockType
+    /// Override the data-type of a size-locked symbol. Faithful 1:1 body of
+    /// `Scope::overrideSizeLockType` (database.cc:1387-1398, the callee):
+    /// sizes must match exactly and the symbol must already be size-locked,
+    /// else the error mirrors the LowlevelError throw.
+    pub fn override_size_lock_type(&self, ct: &Arc<Datatype>) -> Result<(), String> {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let mut symbol = sym.write().unwrap();
+        let cur_size = symbol.get_type().map(|t| t.get_size()).unwrap_or(0);
+        if cur_size == ct.get_size() {
+            if !symbol.is_size_type_locked() {
+                return Err("Overriding symbol that is not size locked".to_string());
+            }
+            symbol.dtype = Some(ct.clone());
+            return Ok(());
+        }
+        Err("Overriding symbol with different type size".to_string())
+    }
+
+    // Ghidra: fspec.cc:3083 ParameterSymbol::resetSizeLockType
+    /// Reset the data-type to a TYPE_UNKNOWN of the same size. Faithful to
+    /// `Scope::resetSizeLockType` (database.cc:1402-1408, the callee): an
+    /// already-unknown type is untouched; otherwise the type becomes
+    /// `factory->getBase(size, TYPE_UNKNOWN)` (the lock is preserved).
+    pub fn reset_size_lock_type(&self, factory: &crate::type_system::TypeFactory) {
+        let sym = self.sym.as_ref().expect("ParameterSymbol without backing symbol");
+        let mut symbol = sym.write().unwrap();
+        let cur = match &symbol.dtype {
+            Some(t) => t.clone(),
+            None => return,
+        };
+        if cur.get_metatype() == crate::type_system::TypeMetatype::Unknown {
+            return;
+        }
+        let size = cur.get_size();
+        if let Some(base) = factory.get_base(size, crate::type_system::TypeMetatype::Unknown) {
+            symbol.dtype = Some(base);
+        }
+    }
+
+    // Ghidra: fspec.cc:3089 ParameterSymbol::clone
+    /// Faithful to the throwing override `throw LowlevelError("Should not
+    /// be cloning ParameterSymbol");` (fspec.cc:3089-3093) — mirrored as
+    /// `Err`.
+    pub fn clone_refuses(&self) -> Result<(), String> {
+        Err("Should not be cloning ParameterSymbol".to_string())
+    }
+
+    // Ghidra: fspec.cc:3095 ParameterSymbol::getSymbol
+    /// `return sym;` (fspec.cc:3095-3099).
+    pub fn get_symbol(&self) -> Option<FspecSymbolRef> {
+        self.sym.clone()
+    }
+}
+
+/// A collection of parameter descriptions backed by Symbol information.
+/// Faithful to `class ProtoStoreSymbol : public ProtoStore` (fspec.hh:1286-
+/// 1306 + fspec.cc:3103-3303): input parameters are the function Scope's
+/// category-0 symbols; ParameterSymbol views are constructed on the fly and
+/// cached; the return value is stored internally as a ParameterBasic.
+#[derive(Debug, Clone)]
+pub struct ProtoStoreSymbol {
+    /// Backing Scope for input parameters. Faithful to `Scope *scope`.
+    pub scope: FspecScopeRef,
+    /// A usepoint reference for storage locations (usually the function
+    /// entry, -1). Faithful to `Address restricted_usepoint`; the space
+    /// half rides alongside the legacy offset (ADDRESS-0001).
+    pub restricted_usepoint: (AddressSpace, u64),
+    /// Cache of allocated input parameter views. Faithful to
+    /// `vector<ProtoParameter *> inparam` (null slots = `None`).
+    inparam: Vec<Option<ParameterSymbol>>,
+    /// The return-value parameter (a ParameterBasic in Ghidra too).
+    /// Faithful to `ProtoParameter *outparam`.
+    outparam: Option<ProtoParameter>,
+}
+
+impl ProtoStoreSymbol {
+    // Ghidra: fspec.cc:3103 ProtoStoreSymbol::ProtoStoreSymbol
+    /// Construct the symbol-backed store. Faithful 1:1 body
+    /// (fspec.cc:3103-3113): the scope and usepoint are recorded, the
+    /// outparam starts null, and `setOutput` installs a void ParameterBasic
+    /// (`pieces.type = scope->getArch()->types->getTypeVoid();
+    /// pieces.flags = 0;`).
+    pub fn new(sc: FspecScopeRef, usepoint: (AddressSpace, u64)) -> Self {
+        let mut store = Self {
+            scope: sc,
+            restricted_usepoint: usepoint,
+            inparam: Vec::new(),
+            outparam: None,
+        };
+        let void_type = crate::type_system::TypeFactory::shared_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_void();
+        let pieces = ParameterPieces {
+            space: AddressSpace::Ram,
+            addr: Address::new(0),
+            ty: Some(void_type),
+            flags: 0,
+        };
+        store.set_output(&pieces);
+        store
+    }
+
+    // Ghidra: fspec.cc:3132 ProtoStoreSymbol::getSymbolBacked
+    /// Fetch or allocate the ParameterSymbol view for slot `i`. Faithful
+    /// 1:1 body (fspec.cc:3132-3145): the cache grows with uninitialized
+    /// slots as needed; a slot already holding a symbol-backed view is
+    /// returned as-is; any other occupant is discarded and replaced with a
+    /// fresh uninitialized ParameterSymbol.
+    pub fn get_symbol_backed(&mut self, i: usize) -> ParameterSymbol {
+        while self.inparam.len() <= i {
+            self.inparam.push(None);
+        }
+        if let Some(existing) = &self.inparam[i] {
+            return existing.clone();
+        }
+        let res = ParameterSymbol::new(self.scope.clone());
+        self.inparam[i] = Some(res.clone());
+        res
+    }
+
+    // Ghidra: fspec.cc:3147 ProtoStoreSymbol::setInput
+    /// Establish name, data-type, and storage of an input parameter.
+    /// Faithful 1:1 body of `setInput` (fspec.cc:3147-3214):
+    ///   1. resolve the category-0 symbol at slot `i`; if its whole-map
+    ///      storage disagrees with the incoming pieces the symbol is
+    ///      removed and re-created;
+    ///   2. a fresh symbol is added to the scope at the piece's address,
+    ///      categorized at slot `i`, and its indirectstorage/hiddenretparm/
+    ///      typelock/namelock flags mirror the piece flags;
+    ///   3. an existing symbol only gets its attribute deltas applied, plus
+    ///      a rename on a non-empty differing name and a retype on a
+    ///      differing data-type.
+    pub fn set_input(
+        &mut self,
+        i: usize,
+        nm: &str,
+        pieces: &ParameterPieces,
+    ) -> ParameterSymbol {
+        let mut res = self.get_symbol_backed(i);
+        res.sym = self.scope.read().unwrap().get_category_symbol(SYMBOL_FUNCTION_PARAMETER, i as i32);
+        let piece_type_size = pieces.ty.as_ref().map(|t| t.get_size()).unwrap_or(0) as i32;
+
+        let isindirect = (pieces.flags & INDIRECT_STORAGE_PIECE) != 0;
+        let ishidden = (pieces.flags & HIDDEN_RET_PARM) != 0;
+        let istypelock = (pieces.flags & TYPE_LOCK_PIECE) != 0;
+        let isnamelock = (pieces.flags & NAME_LOCK_PIECE) != 0;
+
+        // Validate the existing symbol's storage against the pieces.
+        if res.sym.is_some() {
+            let sym = res.sym.clone().unwrap();
+            let mut mismatch = false;
+            {
+                let scope = self.scope.read().unwrap();
+                let symbol = sym.read().unwrap();
+                if let Some(entry) = symbol.get_first_whole_map(&scope.entries) {
+                    if entry.get_addr().as_u64() != pieces.addr.as_u64()
+                        || entry.get_size() != piece_type_size
+                    {
+                        mismatch = true;
+                    }
+                } else {
+                    mismatch = true;
+                }
+            }
+            if mismatch {
+                let id = sym.read().unwrap().symbol_id;
+                self.scope.write().unwrap().remove_symbol(id);
+                res.sym = None;
+            }
+        }
+        if res.sym.is_none() {
+            // Ghidra: usepoint = discoverScope(...) ?: restricted_usepoint;
+            // Rugra's Scope::discover_scope resolves by scope-id, and the
+            // single-function Scope owns the whole category-0 range, so the
+            // restricted usepoint is the operative form (the multi-scope
+            // usepoint discipline is the ADDRESS-0001-era residual).
+            let _ = self.restricted_usepoint;
+            let ty = pieces.ty.clone().unwrap_or_else(|| {
+                crate::type_system::TypeFactory::shared_default()
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_type_void()
+            });
+            let type_name = ty.get_name().to_string();
+            let id = self.scope.write().unwrap().add_symbol_mapped(
+                nm,
+                &type_name,
+                pieces.addr,
+                piece_type_size,
+            );
+            // Ghidra: res->sym = scope->addSymbol(nm,pieces.type,...)
+            // —attach the resolved Datatype (Rugra's add_symbol takes the
+            // type NAME; the Arc is linked here).
+            if let Some(sym) = self.scope.read().unwrap().symbols.get(&id).cloned() {
+                sym.write().unwrap().dtype = Some(ty);
+                // Ghidra: scope->setCategory(res->sym,function_parameter,i);
+                self.scope
+                    .write()
+                    .unwrap()
+                    .set_category(id, SYMBOL_FUNCTION_PARAMETER, i as i32);
+                res.sym = Some(sym);
+            }
+            if isindirect || ishidden || istypelock || isnamelock {
+                let mut mirror = 0u32;
+                if isindirect {
+                    mirror |= crate::database::symbol_flags::INDIRECTSTORAGE;
+                }
+                if ishidden {
+                    mirror |= crate::database::symbol_flags::HIDDENRETPARM;
+                }
+                if istypelock {
+                    mirror |= crate::database::symbol_flags::TYPELOCK;
+                }
+                if isnamelock {
+                    mirror |= crate::database::symbol_flags::NAMELOCK;
+                }
+                if let Some(sym) = &res.sym {
+                    let id = sym.read().unwrap().symbol_id;
+                    self.scope.write().unwrap().set_attribute(id, mirror);
+                }
+            }
+            if let Some(sym) = &res.sym {
+                let slot = self
+                    .inparam
+                    .iter()
+                    .position(|p| p.is_none())
+                    .unwrap_or(self.inparam.len());
+                let _ = slot;
+                self.inparam[i] = Some(res.clone());
+            }
+            return res;
+        }
+        // Existing symbol: apply attribute deltas.
+        let sym = res.sym.clone().unwrap();
+        let symbol_id = sym.read().unwrap().symbol_id;
+        {
+            let mut scope = self.scope.write().unwrap();
+            let indirect_now = sym.read().unwrap().is_indirect_storage();
+            if indirect_now != isindirect {
+                if isindirect {
+                    scope.set_attribute(symbol_id, crate::database::symbol_flags::INDIRECTSTORAGE);
+                } else {
+                    scope.clear_attribute(symbol_id, crate::database::symbol_flags::INDIRECTSTORAGE);
+                }
+            }
+            let hidden_now = sym.read().unwrap().is_hidden_return();
+            if hidden_now != ishidden {
+                if ishidden {
+                    scope.set_attribute(symbol_id, crate::database::symbol_flags::HIDDENRETPARM);
+                } else {
+                    scope.clear_attribute(symbol_id, crate::database::symbol_flags::HIDDENRETPARM);
+                }
+            }
+            let typelock_now = sym.read().unwrap().is_type_locked();
+            if typelock_now != istypelock {
+                if istypelock {
+                    scope.set_attribute(symbol_id, crate::database::symbol_flags::TYPELOCK);
+                } else {
+                    scope.clear_attribute(symbol_id, crate::database::symbol_flags::TYPELOCK);
+                }
+            }
+            let namelock_now = sym.read().unwrap().is_name_locked();
+            if namelock_now != isnamelock {
+                if isnamelock {
+                    scope.set_attribute(symbol_id, crate::database::symbol_flags::NAMELOCK);
+                } else {
+                    scope.clear_attribute(symbol_id, crate::database::symbol_flags::NAMELOCK);
+                }
+            }
+            // Ghidra: if ((nm.size()!=0)&&(nm!=res->sym->getName()))
+            //           scope->renameSymbol(res->sym,nm);
+            if !nm.is_empty() && sym.read().unwrap().name != nm {
+                scope.rename_symbol(symbol_id, nm);
+            }
+        }
+        // Ghidra: if (pieces.type != res->sym->getType())
+        //           scope->retypeSymbol(res->sym,pieces.type);
+        let incoming: Option<Arc<Datatype>> = pieces.ty.clone();
+        let current = sym.read().unwrap().get_type();
+        let type_differs = match (&incoming, &current) {
+            (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+            (None, None) => false,
+            _ => true,
+        };
+        if type_differs {
+            if let Some(t) = incoming {
+                sym.write().unwrap().dtype = Some(t);
+            }
+        }
+        self.inparam[i] = Some(res.clone());
+        res
+    }
+
+    // Ghidra: fspec.cc:3216 ProtoStoreSymbol::clearInput
+    /// Remove the input parameter at slot `i`. Faithful 1:1 body
+    /// (fspec.cc:3216-3231): the category-0 symbol at slot `i` is
+    /// uncategorized and removed entirely, then every later category-0
+    /// symbol is renumbered down one slot.
+    pub fn clear_input(&mut self, i: usize) {
+        let mut scope = self.scope.write().unwrap();
+        if let Some(sym) = scope.get_category_symbol(SYMBOL_FUNCTION_PARAMETER, i as i32) {
+            let id = sym.read().unwrap().symbol_id;
+            // Remove it from category list
+            scope.set_category(id, SYMBOL_NO_CATEGORY, 0);
+            // Remove it altogether
+            scope.remove_symbol(id);
+        }
+        // Renumber any category 0 symbol with index greater than i
+        let sz = scope.get_category_size(SYMBOL_FUNCTION_PARAMETER);
+        let mut j = i as i32 + 1;
+        while j < sz as i32 {
+            if let Some(sym) = scope.get_category_symbol(SYMBOL_FUNCTION_PARAMETER, j) {
+                let id = sym.read().unwrap().symbol_id;
+                scope.set_category(id, SYMBOL_FUNCTION_PARAMETER, j - 1);
+            }
+            j += 1;
+        }
+        drop(scope);
+        if i < self.inparam.len() {
+            self.inparam[i] = None;
+        }
+    }
+
+    // Ghidra: fspec.cc:3233 ProtoStoreSymbol::clearAllInputs
+    /// `scope->clearCategory(0);` (fspec.cc:3233-3237).
+    pub fn clear_all_inputs(&mut self) {
+        self.scope.write().unwrap().clear_category(SYMBOL_FUNCTION_PARAMETER);
+        self.inparam.clear();
+    }
+
+    // Ghidra: fspec.cc:3239 ProtoStoreSymbol::getNumInputs
+    /// `return scope->getCategorySize(function_parameter);`
+    /// (fspec.cc:3239-3243).
+    pub fn get_num_inputs(&self) -> usize {
+        self.scope.read().unwrap().get_category_size(SYMBOL_FUNCTION_PARAMETER)
+    }
+
+    // Ghidra: fspec.cc:3245 ProtoStoreSymbol::getInput
+    /// Get the symbol-backed view of slot `i`, binding it to the current
+    /// category-0 symbol (`None` when the slot has no symbol). Faithful to
+    /// getInput (fspec.cc:3245-3254).
+    pub fn get_input(&mut self, i: usize) -> Option<ParameterSymbol> {
+        let sym = self
+            .scope
+            .read()
+            .unwrap()
+            .get_category_symbol(SYMBOL_FUNCTION_PARAMETER, i as i32)?;
+        let mut res = self.get_symbol_backed(i);
+        res.sym = Some(sym);
+        self.inparam[i] = Some(res.clone());
+        Some(res)
+    }
+
+    // Ghidra: fspec.cc:3256 ProtoStoreSymbol::setOutput
+    /// Install the return value as an internal ParameterBasic:
+    /// `outparam = new ParameterBasic("",piece.addr,piece.type,piece.flags);`
+    /// (fspec.cc:3256-3263).
+    pub fn set_output(&mut self, piece: &ParameterPieces) -> &ProtoParameter {
+        self.outparam = Some(ProtoParameter::from_pieces(
+            "",
+            piece.space,
+            piece.addr,
+            piece.ty.clone().unwrap_or_else(|| {
+                crate::type_system::TypeFactory::shared_default()
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_type_void()
+            }),
+            piece.flags,
+        ));
+        self.outparam.as_ref().unwrap()
+    }
+
+    // Ghidra: fspec.cc:3265 ProtoStoreSymbol::clearOutput
+    /// Reset the return value to TYPE_VOID with cleared flags
+    /// (fspec.cc:3265-3272).
+    pub fn clear_output(&mut self) {
+        let void_type = crate::type_system::TypeFactory::shared_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_void();
+        let pieces = ParameterPieces {
+            space: AddressSpace::Ram,
+            addr: Address::new(0),
+            ty: Some(void_type),
+            flags: 0,
+        };
+        self.set_output(&pieces);
+    }
+
+    // Ghidra: fspec.cc:3274 ProtoStoreSymbol::getOutput
+    /// `return outparam;` (fspec.cc:3274-3278).
+    pub fn get_output(&self) -> Option<&ProtoParameter> {
+        self.outparam.as_ref()
+    }
+
+    // Ghidra: fspec.cc:3280 ProtoStoreSymbol::clone
+    /// Clone the store: fresh ProtoStoreSymbol over the same scope, with
+    /// the outparam cloned (Ghidra `outparam->clone()`). Faithful to
+    /// cc:3280-3291; the inparam cache is re-established lazily (Ghidra's
+    /// clone drops it entirely — the fresh store's cache is empty).
+    pub fn duplicate(&self) -> Self {
+        let mut res = ProtoStoreSymbol::new(self.scope.clone(), self.restricted_usepoint);
+        res.outparam = self.outparam.clone();
+        res
+    }
+
+    // Ghidra: fspec.cc:3293 ProtoStoreSymbol::encode
+    /// Nothing is stored explicitly for a symboltable-backed store (the
+    /// symbol table is serialized separately) — faithful no-op
+    /// (fspec.cc:3293-3297).
+    pub fn encode_noop(&self) {}
+
+    // Ghidra: fspec.cc:3299 ProtoStoreSymbol::decode
+    /// Faithful to the throwing override: "Do not decode symbol-backed
+    /// prototype through this interface" (fspec.cc:3299-3303).
+    pub fn decode_refuses(&self) -> Result<(), String> {
+        Err("Do not decode symbol-backed prototype through this interface".to_string())
+    }
+}
+
+// Ghidra: fspec.cc:3421 ProtoStoreInternal::encode
+/// Encode the internal (non-symbol) parameter list as an
+/// `<internallist>` element. Faithful 1:1 body of
+/// `ProtoStoreInternal::encode` (fspec.cc:3421-3462): a `<retparam>` for
+/// the output (typelock flag + address + type ref; a null outparam encodes
+/// an empty `<addr>`/`<void>` pair), then one `<param>` per input carrying
+/// its optional name and true-valued flag attributes (typelock, namelock,
+/// thisptr, indirectstorage, hiddenretparm), address, and type ref.
+/// Rugra's flat `FuncProto.parameters` vector IS the internal store's
+/// `inparam`, so callers pass the flat slices (see
+/// `FuncProto::encode`'s `encode_store` closure hook).
+pub fn encode_internal_store(
+    encoder: &mut dyn crate::marshal::Encoder,
+    outparam: Option<&ProtoParameter>,
+    inparam: &[ProtoParameter],
+    internallist_elem: &crate::marshal::ElementId,
+    retparam_elem: &crate::marshal::ElementId,
+    param_elem: &crate::marshal::ElementId,
+    addr_elem: &crate::marshal::ElementId,
+    void_elem: &crate::marshal::ElementId,
+    space_attrib: &crate::marshal::AttributeId,
+    offset_attrib: &crate::marshal::AttributeId,
+    size_attrib: &crate::marshal::AttributeId,
+    name_attrib: &crate::marshal::AttributeId,
+    typelock_attrib: &crate::marshal::AttributeId,
+    namelock_attrib: &crate::marshal::AttributeId,
+    thisptr_attrib: &crate::marshal::AttributeId,
+    indirectstorage_attrib: &crate::marshal::AttributeId,
+    hiddenretparm_attrib: &crate::marshal::AttributeId,
+) {
+    encoder.open_element(internallist_elem);
+    if let Some(out) = outparam {
+        encoder.open_element(retparam_elem);
+        if out.is_type_locked() {
+            encoder.write_bool(typelock_attrib, true);
+        }
+        // Ghidra: outparam->getAddress().encode(encoder);
+        encoder.open_element(addr_elem);
+        encoder.write_string(space_attrib, space_name(out.address_space));
+        encoder.write_unsigned_integer(offset_attrib, out.address.as_u64());
+        encoder.write_signed_integer(size_attrib, out.data_type.get_size() as i64);
+        encoder.close_element(addr_elem);
+        // Ghidra: outparam->getType()->encodeRef(encoder);
+        out.data_type.encode_ref(encoder);
+        encoder.close_element(retparam_elem);
+    } else {
+        encoder.open_element(retparam_elem);
+        encoder.open_element(addr_elem);
+        encoder.close_element(addr_elem);
+        encoder.open_element(void_elem);
+        encoder.close_element(void_elem);
+        encoder.close_element(retparam_elem);
+    }
+    for param in inparam {
+        encoder.open_element(param_elem);
+        if !param.name.is_empty() {
+            encoder.write_string(name_attrib, &param.name);
+        }
+        if param.is_type_locked() {
+            encoder.write_bool(typelock_attrib, true);
+        }
+        if param.is_name_locked() {
+            encoder.write_bool(namelock_attrib, true);
+        }
+        if param.is_this_pointer() {
+            encoder.write_bool(thisptr_attrib, true);
+        }
+        if param.is_indirect_storage() {
+            encoder.write_bool(indirectstorage_attrib, true);
+        }
+        if param.is_hidden_return() {
+            encoder.write_bool(hiddenretparm_attrib, true);
+        }
+        // Ghidra: param->getAddress().encode(encoder);
+        encoder.open_element(addr_elem);
+        encoder.write_string(space_attrib, space_name(param.address_space));
+        encoder.write_unsigned_integer(offset_attrib, param.address.as_u64());
+        encoder.write_signed_integer(size_attrib, param.data_type.get_size() as i64);
+        encoder.close_element(addr_elem);
+        // Ghidra: param->getType()->encodeRef(encoder);
+        param.data_type.encode_ref(encoder);
+        encoder.close_element(param_elem);
+    }
+    encoder.close_element(internallist_elem);
 }
 
 #[cfg(test)]

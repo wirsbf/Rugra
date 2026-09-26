@@ -1309,3 +1309,43 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   ProtoModelFull。effectBegin/effectEnd/trashBegin/trashEnd（hh:840-843）
   既有 `effect_iter`/`trash_iter` 切片访问器即迭代器对等价物（hh:1017-1021
   同名族已锚），本轮仅补 internalBegin/internalEnd。
+
+### 2026-09-26 — MIGW-FSPEC batch 5-6（FuncProto 方法残项 / ParameterSymbol / ProtoStoreSymbol / internal-store encode / setScope，Lane MIGWFSPEC）
+
+- **FuncProto 方法残项**：`update_output_no_types`（cc:4172-4185 逐字：locked
+  直返 / 空 trial 清输出 / 否则 trial[0] 地址 + getBase(size,UNKNOWN) 重建）、
+  `check_input_join`/`check_input_split`（hh:1513/1524 转发模型）、
+  `remove_param`（hh:1534 store->clearInput 的扁平 Vec::remove 投影）、
+  `internal_iter`（hh:1551-1552 → model.internal_iter）、
+  `assumed_input_extension`/`assumed_output_extension`（hh:1586/1599 转发）、
+  `get_this_pointer_storage`（cc:4516-4533：无 thisptr 模型得 None；
+  assignParameterStorage(ignoreOutputError=true) 后首个非 hiddenretparm 输入
+  piece 的地址）。effectEnd/trashBegin/trashEnd（cc:4251/4260/4269）由既有
+  `effect_iter`/`trash_iter` 切片访问器承载（FuncProto 侧 override-empty
+  委派语义已在其中），本轮不重复实现。
+- **ParameterSymbol（hh:1256-1279 + cc:2981-3099）**：整型落地，
+  (scope, Option<symbol>) 对承载 C++ 虚接口。13 个访问器全部逐字：读走
+  Symbol（name/type/五旗标），getAddress/getSize 经
+  `get_first_whole_map(scope.entries)`；`set_type_lock`（attr mask =
+  typelock|(≠undefined: namelock)，cc:3047-3058）、`set_name_lock`、
+  `set_this_pointer`（=Scope::setThisPointer 的 Symbol 直改，database.hh:770）、
+  `override_size_lock_type`/`reset_size_lock_type`（callee Scope 版逐字，
+  database.cc:1387-1408）、`clone_refuses`（Err 镜像 throw）、`get_symbol`。
+- **ProtoStoreSymbol（hh:1286-1306 + cc:3103-3303）**：整型落地。
+  ctor 装载 void outparam；`get_symbol_backed` 惰性缓存视图；
+  `set_input` 大体逐字（category-0 符号解析 → 存储 mismatch 移除重建 →
+  新符号 addSymbol+setCategory+mirror 旗标 → 既有符号只打 attr 增量 +
+  改名/改型）；`clear_input`（去类目+移除+重编号）、`clear_all_inputs`、
+  `get_num_inputs`、`get_input`、`set_output`/`clear_output`/`get_output`、
+  `duplicate`（=clone，inparam 缓存惰性重建）、`encode_noop`（cc:3293 注释
+  语义）、`decode_refuses`。Rugra 适配注记：add_symbol 走 type_name 形 +
+  dtype Arc 直挂；discoverScope 的多 scope usepoint 纪律为 ADDRESS-0001 期
+  残差（单函数 Scope 全拥 category-0，restricted_usepoint 恒为操作形）。
+- **encode_internal_store（cc:3421-3462）**：`<internallist>` 序列化逐字
+  （retparam typelock+addr+typeref / null outparam 的空 addr+void 对 /
+  每 param 的可选 name+真值旗标+addr+typeref）。FuncProto::encode 的
+  `encode_store` 钩子从此有真实实现可传。
+- **FuncProto::set_scope（cc:3879-3885）**：装 `symbol_store` +
+  无模型时取 default_model。`set_input_parameter` 在 store 存在时路由到
+  符号侧（管线零行为变化：现无调用方设置 scope）。扁平 `parameters`
+  保持 ProtoStoreInternal 投影同步。
