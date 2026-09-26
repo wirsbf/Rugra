@@ -1,0 +1,147 @@
+{
+  "schema_version": 2,
+  "fixture_id": "CONSTSEQ-STRINGCOPY-1204",
+  "status_note": "WORKPKG-UNMAP-STRFOLD-0006 bilateral fixture: the real RuleStringCopy::applyOp drives the full StringSequence chain (ctor getSubType walk, collectCopyOps, checkInterference, formByteArray, constructTypedPointer, buildStringCopy, removeForward/removeCopyOps, transform) on the locked oracle BfdArchitecture and the pinned Rugra snapshot; the internal strings are read back through the architecture's real StringManager (registerInternalStringData cache hit at the STRINGDATA hash).",
+  "decisive_semantics": {
+    "reference_output_parameters": "StringSequence ctor takes the container SymbolEntry as a read-only projection (getAddr space, getFirst, getSize, getSymbol->getType); transform mutates the Funcdata only; constructTypedPointer returns the newly created spacePtr Varnode after per-level updateType(getTypePointerStripArray); removeCopyOps redefines surviving read-point Varnodes in place via opSetOutput(INDIRECT) rather than creating replacement Varnodes.",
+    "loop_bounds_traversal_order": "collectCopyOps iterates the VarnodeLocSet closed span [beginLoc(beginAddr)..endLoc(endAddr)] in VarnodeCompareLocDef order; the ctor do-while breaks at parentType==ct and falls through when getSubType returns null; constructTypedPointer's while(baseType!=charType) continue-on-array-element-0 skips the trailing curOff=newOff (constseq.cc:307); removeForward walks each output's descend list with the PIECE xref double-visit merge.",
+    "counter_accumulator_lifecycle": "collectCopyOps's diff starts at rootAddr-startAddr and advances only on tmpDiff-diff==charAlignSize (gap > alignSize breaks, previous element returns false); lastOff records the innermost array offset; numBytes is moveOps.size()*charType->getSize() (constseq.cc:351), not numElements; formByteArray's count allows exactly one trailing null terminator.",
+    "sorting_comparison_keys": "checkInterference sorts moveOps by op SeqNum order; the ctor's parentType==ct and constructTypedPointer's loop guard are Datatype pointer identity compares (Rugra Arc::ptr_eq plus name/size fallback); the queryContainer bridge takes the smallest containing entry (strictly-smaller rule with exact-size short-circuit)."
+  },
+  "oracle": {
+    "repository": "Ghidra_12.0.4_build (locked decompiler oracle of the Rugra project)",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "constseq_cc_blob": "b5e31405ebb8ffc4550abacc9456313752c59d74"
+  },
+  "rugra_source": {
+    "base_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+    "base_tree": "a49d5080c624c80f4742b9f9f75437b54394fc54",
+    "base_src_tree": "5ffc174b4a45365538e2226c5894d6929c725ea2",
+    "base_constseq_blob": "2192287225c508221092b8581b4698f0dc3eec15",
+    "cargo_toml_blob": "205ab6c1e1c057d7ed3c04a3df2c927cf6603890",
+    "cargo_lock_blob": "dcb52f7bca56892266b532c30994bb5147a37f58"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec"
+  },
+  "analysis_options": [
+    "direct RuleStringCopy::applyOp invocation (no action pool)",
+    "real BfdArchitecture with native StringManagerUnicode(this,2048)",
+    "ScopeLocal symbols installed via Scope::addSymbol"
+  ],
+  "input": "Eight cases on the curl binary's GetStr function local scope: flat_array (char[16], \"Hello\\0\"), nested_struct (struct{char buf[16]; int len;}, \"World\\0\" — struct PTRSUB#0 arm), array_offset_root (\"Tail!\\0\" at +2 — PTRADD(2,1) arm), too_short (\"Hi\\0\" 3 ops), root_not_first (rule applied on second COPY), gap_in_copies (\"ABCD\" 2-byte gap — gap break + unterminated run), wide_copy (2-byte COPY output — size guard), concat_cascade (\"Pair\\0\" + two chained PIECEs + INT_ADD reader — removeForward both arms, dead-PIECE cascade, INDIRECT redefinition); observation surface = rule return, block op dump (opcode/inputs/outputs/type names), surviving COPY count, cumulative STRINGDATA hash readback through getStringData.",
+  "cases": [
+    { "id": "flat_array", "expectation": "ret=1; [STRINGDATA(0x10000000,hash), PTRSUB(register:20,0x2000), CALLOTHER(0x10000004 strncpy)] with 0 surviving copies; bytes 48656c6c6f00" },
+    { "id": "nested_struct", "expectation": "ret=1; PTRSUB(reg,0x2100) then struct-field PTRSUB(prev,0) before the strncpy CALLOTHER" },
+    { "id": "array_offset_root", "expectation": "ret=1; PTRSUB(reg,0x2200) then PTRADD(prev,2,1) before the strncpy CALLOTHER" },
+    { "id": "too_short", "expectation": "ret=0; 3 copies survive unchanged" },
+    { "id": "root_not_first", "expectation": "ret=0; 5 copies survive (collectCopyOps previous-element guard)" },
+    { "id": "gap_in_copies", "expectation": "ret=1; 4 leading copies fold into unterminated \"ABCD\" (bytes 41424344, len=4), trailing 2 copies survive" },
+    { "id": "wide_copy", "expectation": "ret=0; 5 copies survive (COPY size guard)" },
+    { "id": "concat_cascade", "expectation": "ret=1; both PIECEs removed via the xref double-visit cascade, copy3 redefined by INDIRECT(const:1:0,iop) around the CALLOTHER, INT_ADD reads the redefined stack varnode" }
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "8c590826174d8793c495c5c94af748fa553533d8fd84238eae6a116cc3c2e93c",
+    "rust_fixture_sha256": "7daf4446c15cdee16764880cfa5f17909fdc253428f47794c789e1834c4c647b",
+    "constseq_rs_sha256": "dc345978cf79a179be32172cd9509c36eb616ea8486c56af4d9bb02ed17e5c3c",
+    "api_document_sha256": "c9ef01f59307070aefedc6d042ad5596c14f88dc94856ab686c33a650a6a6335",
+    "runner_sha256": "7fd1ee045ed99c79c2b8f54b2c16a253f2f54a7e3c44f8410706fb51b64c1adb",
+    "ghidra_expected_stdout_sha256": "1bb7ab59dd852075ec7707e0889bd195b22a303a0092c9270cae16a8902e95dd",
+    "rugra_expected_stdout_sha256": "1bb7ab59dd852075ec7707e0889bd195b22a303a0092c9270cae16a8902e95dd"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+      "git_blob_oid": "03db9cc6b3adc81f91f5edca38874329033a9ce1",
+      "sha256": "406bfa48bca420786dd61e2b739913c30f85822fff5af1b1a10578e3b83cf52a",
+      "size": 484937
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec_file": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "3665702f81826a4d966932fd753553df4fad39fc",
+      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+      "size": 161728
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "coverage": {
+    "stringsequence_ctor": {
+      "status": "MATCH",
+      "covers": "constseq.cc:188-219 — space/size/zero-constant guards, getSubType walk with lastOff tracking, startAddr back-off, collect/check/formByteArray chain, flat + nested-struct + offset-root + all-negative shapes",
+      "residual_todo_ids": []
+    },
+    "collect_copy_ops": {
+      "status": "MATCH",
+      "covers": "constseq.cc:227-264 — loc-span iteration order, per-varnode guards, previous-element false, gap break, unterminated acceptance, wrong-size false",
+      "residual_todo_ids": []
+    },
+    "construct_typed_pointer": {
+      "status": "MATCH",
+      "covers": "constseq.cc:273-339 — spacebase input, base PTRSUB with byteToAddress offset, struct PTRSUB (including the #0 field arm), array PTRADD (including element-0 skip and numEl scaling), pointer typing via getTypePointerStripArray, residual INT_ADD arm is constructed-negative (no case)",
+      "residual_todo_ids": []
+    },
+    "build_string_copy": {
+      "status": "MATCH",
+      "covers": "constseq.cc:347-372 — numBytes=moveOps.size()*charSize, getInternalString source pointer, STRNCPY builtin selection + registerBuiltin local types, lenVn slot-3 typing",
+      "residual_todo_ids": []
+    },
+    "remove_forward_remove_copy_ops": {
+      "status": "MATCH",
+      "covers": "constseq.cc:383-447 — xref double-visit PIECE merge with min offset, dead-PIECE cascade, surviving point INDIRECT(const:1:0,iop) redefinition before the CALLOTHER, destruction pass ordering",
+      "residual_todo_ids": []
+    },
+    "rule_string_copy_apply_op": {
+      "status": "MATCH",
+      "covers": "constseq.cc:954-972 — constant/char-print/opaque/addr-tied guards, queryContainer bridge (ScopeLocal::find_container_entry stack leg + Database ram leg projection), sequence validity + transform",
+      "residual_todo_ids": []
+    },
+    "wcsncpy_memcpy_selection": {
+      "status": "UNTESTED",
+      "covers": "constseq.cc:169-174 — wchar and memcpy builtin arms need wide-char and non-char element fixtures",
+      "residual_todo_ids": ["CONSTSEQ-WCHAR-FIXTURE-0001"]
+    },
+    "ram_scope_entry_arm": {
+      "status": "UNTESTED",
+      "covers": "constseq.cc:963 queryContainer reaching a ram-space Database entry (global char arrays are normally folded by ActionConstantPtr before this rule)",
+      "residual_todo_ids": ["CONSTSEQ-RAMENTRY-FIXTURE-0001"]
+    }
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "residual_todo_ids": [
+    "CONSTSEQ-WCHAR-FIXTURE-0001",
+    "CONSTSEQ-RAMENTRY-FIXTURE-0001"
+  ]
+}
