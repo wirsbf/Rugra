@@ -1269,3 +1269,43 @@ JTEDGE 移交残差（ap_vhost_iterate_given_conn `code *UNRECOVERED_JUMPTABLE`
   **管线零行为变化**：现行 `find_entry` 线性扫描与 `characterize_as_param`
   查询路径未改动，resolver 仅作数据面填充 + `resolver_for` 查询面；
   `stack_entry_index` 缓存行为保持（非 exclusion 栈 entry 最后写入者胜）。
+
+### 2026-09-26 — MIGW-FSPEC batch 3-4（ParamListMerged / ScoreProtoModel / ProtoModelMerged / UnknownProtoModel + ProtoModel 查询转发面，Lane MIGWFSPEC）
+
+- **ParamListMerged（fspec.hh:712-724 + cc:1794-1833）**：owned-base 形态
+  （`base: ParamListStandard` 承载 C++ 公有基类）。`fold_in` 逐字移植——
+  空并集直取 op2 的 spacebase+entry 列表；spacebase 冲突（op2 侧非空）报
+  "Cannot merge prototype models with different stacks"；subsume 分类
+  （existing subsumes new=typeint2 / new subsumes existing=typeint1，扫描
+  首个命中即断）+ minsize 不齐降级 append + typeint1 原位替换。
+  `finalize`=`populateResolver`；`assignMap`/`fillinMap` 拒绝形（Err 镜像
+  LowlevelError）。ctor 双形态（decode 形 + ParamListStandard 拷贝形）。
+- **ScoreProtoModel（fspec.hh:1040-1064 + cc:2705-2775）**：PEntry
+  （origIndex/slot/size，Ord=slot）+ ctor（finalscore=-1, mismatch=0,
+  reserve(numparam)）+ `add_parameter`（输入侧走
+  `possible_input_param_with_slot`，输出侧 `possible_output_param_with_slot`，
+  miss 计 mismatch）+ `do_score` 逐字（penalty 表 16/10/7/5、flat 3、
+  duplication 20、hole 逐槽累加、nextfree 推进三分支、终分
+  basescore+20*mismatch）。
+- **ProtoModelMerged（fspec.hh:1077-1090 + cc:2834-2921）**：整型落地。
+  `fold_in`——glb 守卫由单 Architecture 表结构性吸收（同表模型共享 glb）；
+  p_standard/p_register 输入种类守卫由 ProtoModelFull::input 共享 owner
+  形态结构性通过（register 残差已在 build_param_list 注记）；首折
+  分配 merged input + 拷贝 output StandardOut 面 + extrapop/injects/
+  effects/trash/ranges 逐字复制；后续折 input foldIn + extrapop 不齐降
+  `EXTRA_POP_UNKNOWN`(0x8000) + inject 不齐报错 + effects/trash/internal
+  三相交（复用既有 `ProtoModelFull::intersect_effects/intersect_registers`
+  静态助手术语）+ localrange/paramrange 取并。`select_model` 逐字：严格 <
+  保首个最优、score==0 早退、无 <500 者报 "No model matches : missing
+  default"。numModels/getModel/isMerged 访问面齐。
+- **UnknownProtoModel（fspec.hh:1025-1032）**：alias 拷贝构造（经
+  ProtoModelFull::clone 承载 `ProtoModel(nm,*placeHold)`）+ 改名 +
+  `placeholder_model` Arc 保身份 + `get_placeholder_model`/`is_unknown`。
+- **ProtoModel 查询转发面（fspec.hh:812-975 内联族，12 条）**：
+  check_input_join/check_output_join/internal_iter/characterize_as_output/
+  possible_input_param_with_slot/possible_output_param_with_slot/
+  unjustified_input_param/assumed_input_extension/assumed_output_extension/
+  get_biggest_contained_input_param/get_biggest_contained_output 落到
+  ProtoModelFull。effectBegin/effectEnd/trashBegin/trashEnd（hh:840-843）
+  既有 `effect_iter`/`trash_iter` 切片访问器即迭代器对等价物（hh:1017-1021
+  同名族已锚），本轮仅补 internalBegin/internalEnd。

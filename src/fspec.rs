@@ -7007,6 +7007,16 @@ impl ParamListStandard {
     pub fn is_auto_killed_by_call(&self) -> bool { self.auto_killed_by_call }
     // Ghidra: fspec.hh:620 ParamListStandard::getEntry
     pub fn get_entry(&self) -> &[ParamEntry] { &self.entry }
+    // RUGRA-GLUE: private-field accessors for the owned-ParamListStandard
+    // shapes (ParamListMerged::foldIn reads and rewrites the entry list and
+    // spacebase exactly as the C++ subclass does through inheritance).
+    pub(crate) fn is_entry_empty(&self) -> bool { self.entry.is_empty() }
+    // RUGRA-GLUE: private-field accessors for the owned-ParamListStandard
+    // shapes (see is_entry_empty).
+    pub(crate) fn entries_mut(&mut self) -> &mut Vec<ParamEntry> { &mut self.entry }
+    // RUGRA-GLUE: private-field accessors for the owned-ParamListStandard
+    // shapes (see is_entry_empty).
+    pub(crate) fn set_space_base(&mut self, spc: Option<AddressSpace>) { self.space_base = spc; }
     // Ghidra: fspec.hh:621 ParamListStandard::isBigEndian
     pub fn is_big_endian(&self) -> bool {
         self.entry.first().map(|e| e.get_space().is_big_endian()).unwrap_or(false)
@@ -8566,6 +8576,148 @@ impl ParamListOutput {
     pub fn get_max_delay(&self) -> i32 {
         self.standard_out().base.get_max_delay()
     }
+
+    // RUGRA-GLUE: clone of the ParamListStandardOut face for
+    // ProtoModelMerged::foldIn (Ghidra slices `*(ParamListStandardOut
+    // *)model->output` through inheritance — both output variants share the
+    // ParamListStandardOut base).
+    pub fn standard_out_clone(&self) -> ParamListStandardOut {
+        self.standard_out().clone()
+    }
+}
+
+/// A union of other input parameter passing models. Faithful to
+/// `class ParamListMerged : public ParamListStandard` (fspec.hh:712-724):
+/// the merged list is the union of constituent resource lists so initial
+/// data-flow analysis can proceed before the exact model is known;
+/// `assignMap`/`fillinMap` refuse to run (the controlling ProtoModelMerged
+/// picks the real model first). Rugra models the C++ public-base via the
+/// owned `base: ParamListStandard`.
+#[derive(Debug, Clone)]
+pub struct ParamListMerged {
+    /// Inherited `ParamListStandard` state (entries, groups, resolver).
+    /// Stands in for the C++ public base class.
+    pub base: ParamListStandard,
+}
+
+impl Default for ParamListMerged {
+    // Ghidra: fspec.hh:714 ParamListMerged::ParamListMerged()
+    // RUGRA-GLUE: Default bridge for the decode() constructor form.
+    fn default() -> Self { Self::new() }
+}
+
+impl ParamListMerged {
+    // Ghidra: fspec.hh:714 ParamListMerged::ParamListMerged()
+    /// Construct for use with decode: `ParamListMerged(void) :
+    /// ParamListStandard() {}` (fspec.hh:714).
+    pub fn new() -> Self {
+        Self { base: ParamListStandard::new() }
+    }
+
+    // Ghidra: fspec.hh:715 ParamListMerged::ParamListMerged(const ParamListMerged &)
+    /// Copy constructor: `ParamListMerged(const ParamListMerged &op2) :
+    /// ParamListStandard(op2) {}` (fspec.hh:715). The Rust `Clone` on the
+    /// owned base absorbs the `ParamListStandard` copy constructor
+    /// (fspec.cc:597-611).
+    pub fn from_standard(op2: &ParamListStandard) -> Self {
+        Self { base: op2.clone() }
+    }
+
+    // Ghidra: fspec.hh:718 ParamListMerged::getType
+    /// The merged list kind: `virtual uint4 getType(void) const { return
+    /// p_merged; }` (fspec.hh:718).
+    pub fn get_type(&self) -> ParamListKind {
+        ParamListKind::Merged
+    }
+
+    // Ghidra: fspec.cc:1794 ParamListMerged::foldIn
+    /// Add another model's entry list to the union. Faithful 1:1 body of
+    /// `foldIn` (fspec.cc:1794-1833):
+    /// 1. An empty union adopts `op2`'s spacebase and entry list verbatim.
+    /// 2. A conflicting non-null spacebase is a hard error ("Cannot merge
+    ///    prototype models with different stacks").
+    /// 3. Otherwise each `op2` entry is classified against the existing
+    ///    list: `typeint = 2` when an existing entry subsumes the new one,
+    ///    `typeint = 1` when the new entry subsumes an existing one. Either
+    ///    way a `minsize` mismatch demotes the classification to 0
+    ///    (append); a promotion (`typeint == 1`) REPLACES the containing
+    ///    entry in place. Unmatched entries append.
+    pub fn fold_in(&mut self, op2: &ParamListStandard) -> Result<(), String> {
+        if self.base.is_entry_empty() {
+            self.base.set_space_base(op2.get_spacebase());
+            *self.base.entries_mut() = op2.get_entry().to_vec();
+            return Ok(());
+        }
+        let op2_spacebase = op2.get_spacebase();
+        if self.base.get_spacebase() != op2_spacebase && op2_spacebase.is_some() {
+            return Err("Cannot merge prototype models with different stacks".to_string());
+        }
+        for opentry in op2.get_entry() {
+            // Ghidra: scan the existing entries for a subsume relationship;
+            // the scan breaks at the FIRST hit with typeint 2 (existing
+            // subsumes new) or 1 (new subsumes existing).
+            let mut hit: Option<(usize, i32)> = None; // (index, typeint)
+            for (i, cur) in self.base.get_entry().iter().enumerate() {
+                if cur.subsumes_definition(opentry) {
+                    hit = Some((i, 2));
+                    break;
+                }
+                if opentry.subsumes_definition(cur) {
+                    hit = Some((i, 1));
+                    break;
+                }
+            }
+            match hit {
+                // Ghidra: typeint==2 — an existing entry subsumes the new
+                // one; the entry is dropped UNLESS the minsize disagrees,
+                // which demotes to an append (typeint = 0).
+                Some((i, 2)) => {
+                    // Ghidra: if ((*iter).getMinSize() != opentry.getMinSize()) typeint = 0;
+                    if self.base.get_entry()[i].get_min_size() != opentry.get_min_size() {
+                        self.base.entries_mut().push(opentry.clone());
+                    }
+                }
+                // Ghidra: typeint==1 — the new entry subsumes the existing
+                // one; minsize agreement replaces the existing entry in
+                // place, disagreement demotes to an append.
+                Some((i, 1)) => {
+                    if self.base.get_entry()[i].get_min_size() != opentry.get_min_size() {
+                        self.base.entries_mut().push(opentry.clone());
+                    } else {
+                        // Replace with the containing entry
+                        self.base.entries_mut()[i] = opentry.clone();
+                    }
+                }
+                // Ghidra: typeint==0 — no subsume relationship: append.
+                Some(_) | None => {
+                    self.base.entries_mut().push(opentry.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.hh:717 ParamListMerged::finalize
+    /// Fold-ins are finished; finalize \b this: `void finalize(void) {
+    /// populateResolver(); }` (fspec.hh:717).
+    pub fn finalize(&mut self) {
+        self.base.populate_resolver();
+    }
+
+    // Ghidra: fspec.hh:719 ParamListMerged::assignMap
+    /// Faithful to the refusing override `throw LowlevelError("Cannot
+    /// assign prototype before model has been resolved");` (fspec.hh:719).
+    pub fn assign_map_refuses(&self) -> Result<(), String> {
+        Err("Cannot assign prototype before model has been resolved".to_string())
+    }
+
+    // Ghidra: fspec.hh:721 ParamListMerged::fillinMap
+    /// Faithful to the refusing override `throw LowlevelError("Cannot
+    /// determine prototype before model has been resolved");`
+    /// (fspec.hh:721).
+    pub fn fillin_map_refuses(&self) -> Result<(), String> {
+        Err("Cannot determine prototype before model has been resolved".to_string())
+    }
 }
 
 /// Internal enum mirroring Ghidra's `AssignAction` hidden-return codes
@@ -8710,6 +8862,131 @@ impl ProtoModelFull {
     /// (fspec.hh:885) to the input ParamList.
     pub fn possible_input_param(&self, loc_space: AddressSpace, loc: Address, size: i32) -> bool {
         self.input.possible_param(loc_space, loc, size)
+    }
+
+    // Ghidra: fspec.hh:812 ProtoModel::checkInputJoin
+    /// Check whether two input storage locations can represent a single
+    /// logical parameter. Faithful inline delegation `return
+    /// input->checkJoin(hiaddr,hisize,loaddr,losize);` (fspec.hh:813).
+    pub fn check_input_join(
+        &self, space: AddressSpace, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32,
+    ) -> bool {
+        self.input.check_join(space, hi_addr, hi_size, lo_addr, lo_size)
+    }
+
+    // Ghidra: fspec.hh:824 ProtoModel::checkOutputJoin
+    /// Check whether two output storage locations can represent a single
+    /// logical return value. Faithful inline delegation `return
+    /// output->checkJoin(hiaddr,hisize,loaddr,losize);` (fspec.hh:825).
+    pub fn check_output_join(
+        &self, space: AddressSpace, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32,
+    ) -> bool {
+        self.output.standard_out().base.check_join(space, hi_addr, hi_size, lo_addr, lo_size)
+    }
+
+    // Ghidra: fspec.hh:844 ProtoModel::internalBegin
+    // Ghidra: fspec.hh:845 ProtoModel::internalEnd
+    /// The model's internal-storage list. The slice IS Ghidra's
+    /// `internalBegin()`/`internalEnd()` iterator pair (fspec.hh:844-845).
+    pub fn internal_iter(&self) -> &[VarnodeData] {
+        &self.internalstorage
+    }
+
+    // Ghidra: fspec.hh:873 ProtoModel::characterizeAsOutput
+    /// Characterize whether the given range overlaps output storage.
+    /// Faithful inline delegation `return output->characterizeAsParam(loc,
+    /// size);` (fspec.hh:874).
+    pub fn characterize_as_output(&self, space: AddressSpace, loc: Address, size: i32) -> i32 {
+        self.output.characterize_as_param(space, loc.as_u64(), size)
+    }
+
+    // Ghidra: fspec.hh:904 ProtoModel::possibleInputParamWithSlot
+    /// Pass-back the slot and slot size for the given storage location as an
+    /// input parameter. Faithful inline delegation `return
+    /// input->possibleParamWithSlot(loc,size,slot,slotsize);` (fspec.hh:905).
+    pub fn possible_input_param_with_slot(
+        &self, space: AddressSpace, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
+    ) -> bool {
+        self.input.possible_param_with_slot(space, loc, size, slot, slot_size)
+    }
+
+    // Ghidra: fspec.hh:916 ProtoModel::possibleOutputParamWithSlot
+    /// Pass-back the slot and slot size for the given storage location as a
+    /// return value. Faithful inline delegation `return
+    /// output->possibleParamWithSlot(loc,size,slot,slotsize);` (fspec.hh:917).
+    pub fn possible_output_param_with_slot(
+        &self, space: AddressSpace, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
+    ) -> bool {
+        self.output
+            .standard_out()
+            .base
+            .possible_param_with_slot(space, loc, size, slot, slot_size)
+    }
+
+    // Ghidra: fspec.hh:928 ProtoModel::unjustifiedInputParam
+    /// Check if the given storage location looks like an unjustified input
+    /// parameter. Faithful inline delegation `return
+    /// input->unjustifiedContainer(loc,size,res);` (fspec.hh:929).
+    pub fn unjustified_input_param(
+        &self, space: AddressSpace, loc: Address, size: i32, res: &mut VarnodeData,
+    ) -> bool {
+        self.input.unjustified_container(space, loc, size, res)
+    }
+
+    // Ghidra: fspec.hh:941 ProtoModel::assumedInputExtension
+    /// Get the type of extension and containing input parameter for the
+    /// given storage. Faithful inline delegation `return
+    /// input->assumedExtension(addr,size,res);` (fspec.hh:942).
+    pub fn assumed_input_extension(
+        &self, space: AddressSpace, addr: Address, size: i32, res: &mut VarnodeData,
+    ) -> FspecOpCode {
+        self.input.assumed_extension(space, addr, size, res)
+    }
+
+    // Ghidra: fspec.hh:954 ProtoModel::assumedOutputExtension
+    /// Get the type of extension and containing return value location for
+    /// the given storage. Faithful inline delegation `return
+    /// output->assumedExtension(addr,size,res);` (fspec.hh:955).
+    pub fn assumed_output_extension(
+        &self, space: AddressSpace, addr: Address, size: i32, res: &mut VarnodeData,
+    ) -> FspecOpCode {
+        self.output.standard_out().base.assumed_extension(space, addr, size, res)
+    }
+
+    // Ghidra: fspec.hh:963 ProtoModel::getBiggestContainedInputParam
+    /// Pass-back the biggest input parameter contained within the given
+    /// range. Faithful inline delegation `return
+    /// input->getBiggestContainedParam(loc, size, res);` (fspec.hh:964).
+    pub fn get_biggest_contained_input_param(
+        &self, space: AddressSpace, loc: Address, size: i32, res: &mut VarnodeData,
+    ) -> bool {
+        match self.input.get_biggest_contained_param(space, loc.as_u64(), size) {
+            Some((res_space, res_offset, res_size)) => {
+                res.space = res_space;
+                res.offset = res_offset;
+                res.size = res_size;
+                true
+            }
+            None => false,
+        }
+    }
+
+    // Ghidra: fspec.hh:973 ProtoModel::getBiggestContainedOutput
+    /// Pass-back the biggest possible output storage location contained
+    /// within the given range. Faithful inline delegation `return
+    /// output->getBiggestContainedParam(loc, size, res);` (fspec.hh:974).
+    pub fn get_biggest_contained_output(
+        &self, space: AddressSpace, loc: Address, size: i32, res: &mut VarnodeData,
+    ) -> bool {
+        match self.output.get_biggest_contained_param(space, loc.as_u64(), size) {
+            Some((res_space, res_offset, res_size)) => {
+                res.space = res_space;
+                res.offset = res_offset;
+                res.size = res_size;
+                true
+            }
+            None => false,
+        }
     }
 
     // Ghidra: fspec.cc:2263 ProtoModel::defaultLocalRange
@@ -9684,6 +9961,381 @@ fn overlaps_range(
         return -1;
     }
     distance as i64
+}
+
+/// Class for calculating "goodness of fit" of parameter trials against a
+/// prototype model. Faithful to `class ScoreProtoModel` (fspec.hh:1040-1064
+/// + fspec.cc:2705-2775): trials are registered via `addParameter`, then
+/// `doScore` computes how well the set fits the model — a LOWER score is a
+/// better fit.
+#[derive(Debug)]
+pub struct ScoreProtoModel<'a> {
+    /// True if scoring against input parameters, false for outputs.
+    /// Faithful to `isinputscore`.
+    is_input_score: bool,
+    /// Map of parameter entries corresponding to trials. Faithful to
+    /// `vector<PEntry> entry`.
+    entry: Vec<ScoreProtoModelEntry>,
+    /// Prototype model to score against. Faithful to `const ProtoModel *`.
+    model: &'a ProtoModelFull,
+    /// The final fitness score. Faithful to `finalscore` (-1 before
+    /// `doScore`).
+    final_score: i32,
+    /// Number of trials that don't fit the prototype model at all.
+    /// Faithful to `mismatch`.
+    mismatch: i32,
+}
+
+/// A record mapping one trial to a parameter entry in the prototype model.
+/// Faithful to `ScoreProtoModel::PEntry` (fspec.hh:1042-1052).
+#[derive(Debug, Clone, Copy)]
+pub struct ScoreProtoModelEntry {
+    /// Original index of the trial. Faithful to `origIndex`.
+    pub orig_index: i32,
+    /// Matching slot within the resource list. Faithful to `slot`.
+    pub slot: i32,
+    /// Number of slots occupied. Faithful to `size`.
+    pub size: i32,
+}
+
+impl PartialOrd for ScoreProtoModelEntry {
+    // Ghidra: fspec.hh:1051 ScoreProtoModel::PEntry::operator<
+    /// Compare PEntry objects by slot: `return (slot < op2.slot);`
+    /// (fspec.hh:1051).
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScoreProtoModelEntry {
+    // Ghidra: fspec.hh:1051 ScoreProtoModel::PEntry::operator<
+    /// Total order by slot (the strict-weak operator< key).
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.slot.cmp(&other.slot)
+    }
+}
+
+impl PartialEq for ScoreProtoModelEntry {
+    // RUGRA-GLUE: PartialEq derived from the Ord key (slot), matching the
+    /// C++ operator< equivalence class.
+    fn eq(&self, other: &Self) -> bool { self.slot == other.slot }
+}
+impl Eq for ScoreProtoModelEntry {}
+
+impl<'a> ScoreProtoModel<'a> {
+    // Ghidra: fspec.cc:2705 ScoreProtoModel::ScoreProtoModel
+    /// `isinputscore = isinput; model = mod; entry.reserve(numparam);
+    /// finalscore = -1; mismatch = 0;` (fspec.cc:2705-2713).
+    pub fn new(isinput: bool, model: &'a ProtoModelFull, numparam: usize) -> Self {
+        Self {
+            is_input_score: isinput,
+            entry: Vec::with_capacity(numparam),
+            model,
+            final_score: -1,
+            mismatch: 0,
+        }
+    }
+
+    // Ghidra: fspec.cc:2717 ScoreProtoModel::addParameter
+    /// Register a trial to be scored. Faithful 1:1 body of `addParameter`
+    /// (fspec.cc:2717-2736): the trial resolves to a model slot through
+    /// `possibleInputParamWithSlot` (input scoring) or
+    /// `possibleOutputParamWithSlot` (output scoring); a hit appends a
+    /// `(origIndex, slot, size)` PEntry, a miss increments `mismatch`.
+    pub fn add_parameter(&mut self, space: AddressSpace, addr: Address, sz: i32) {
+        let orig = self.entry.len() as i32;
+        let mut slot = 0i32;
+        let mut slot_size = 0i32;
+        let isparam = if self.is_input_score {
+            self.model.possible_input_param_with_slot(space, addr, sz, &mut slot, &mut slot_size)
+        } else {
+            self.model.possible_output_param_with_slot(space, addr, sz, &mut slot, &mut slot_size)
+        };
+        if isparam {
+            self.entry.push(ScoreProtoModelEntry {
+                orig_index: orig,
+                slot,
+                size: slot_size,
+            });
+        } else {
+            self.mismatch += 1;
+        }
+    }
+
+    // Ghidra: fspec.cc:2738 ScoreProtoModel::doScore
+    /// Compute the fitness score. Faithful 1:1 body of `doScore`
+    /// (fspec.cc:2738-2775): entries are sorted by slot (a stable sort of
+    /// the `sort(entry.begin(),entry.end())`), then walked keeping a
+    /// `nextfree` cursor over the expected slot sequence:
+    ///   - a hole (`p.slot > nextfree`) scores `penalty[min(nextfree,4)]`
+    ///     per skipped slot (16/10/7/5 then flat 3);
+    ///   - a duplication (`nextfree > p.slot`) scores 20 and only advances
+    ///     `nextfree` when the duplicate extends past it;
+    ///   - an exact continuation advances `nextfree = p.slot + p.size`.
+    /// The final score adds `20 * mismatch`.
+    pub fn do_score(&mut self) {
+        self.entry.sort_by(|a, b| a.slot.cmp(&b.slot));
+
+        let mut nextfree = 0i32; // Next slot we expect to see
+        let mut basescore = 0i32;
+        let penalty = [16i32, 10, 7, 5];
+        let penaltyfinal = 3i32;
+        let mismatchpenalty = 20i32;
+
+        for p in &self.entry {
+            if p.slot > nextfree {
+                // We have some kind of hole in our slot coverage
+                while nextfree < p.slot {
+                    if nextfree < 4 {
+                        basescore += penalty[nextfree as usize];
+                    } else {
+                        basescore += penaltyfinal;
+                    }
+                    nextfree += 1;
+                }
+                nextfree += p.size;
+            } else if nextfree > p.slot {
+                // Some kind of slot duplication
+                basescore += mismatchpenalty;
+                if p.slot + p.size > nextfree {
+                    nextfree = p.slot + p.size;
+                }
+            } else {
+                nextfree = p.slot + p.size;
+            }
+        }
+        self.final_score = basescore + mismatchpenalty * self.mismatch;
+    }
+
+    // Ghidra: fspec.hh:1062 ScoreProtoModel::getScore
+    /// `return finalscore;` (fspec.hh:1062).
+    pub fn get_score(&self) -> i32 { self.final_score }
+
+    // Ghidra: fspec.hh:1063 ScoreProtoModel::getNumMismatch
+    /// `return mismatch;` (fspec.hh:1063).
+    pub fn get_num_mismatch(&self) -> i32 { self.mismatch }
+}
+
+/// A prototype model made by merging together other models. Faithful to
+/// `class ProtoModelMerged : public ProtoModel` (fspec.hh:1077-1090 +
+/// fspec.cc:2834-2921): a placeholder for multiple models; at active
+/// parameter recovery the correct model is selected by `selectModel`.
+/// The output part is NOT merged — constituent models must share the same
+/// output model (Ghidra folds in the first model's output and assumes the
+/// rest match).
+pub struct ProtoModelMerged {
+    /// Constituent models being merged. Faithful to `vector<ProtoModel *>
+    /// modellist`; `Arc` preserves shared identity with the architecture's
+    /// model table.
+    pub modellist: Vec<std::sync::Arc<ProtoModelFull>>,
+    /// The merged input parameter list. Faithful to the inherited
+    /// `ParamList *input` holding a `ParamListMerged`.
+    pub input: ParamListMerged,
+    /// The un-merged output parameter list (from the first folded model).
+    /// Faithful to the inherited `ParamList *output`.
+    pub output: ParamListStandardOut,
+    /// Extra bytes popped from stack (or `EXTRA_POP_UNKNOWN`). Faithful to
+    /// the inherited `extrapop`.
+    pub extrapop: i32,
+    /// Intersected side-effects. Faithful to the inherited `effectlist`.
+    pub effectlist: Vec<EffectRecord>,
+    /// Intersected likely-trash locations. Faithful to the inherited
+    /// `likelytrash`.
+    pub likelytrash: Vec<VarnodeData>,
+    /// Intersected internal storage. Faithful to the inherited
+    /// `internalstorage`.
+    pub internalstorage: Vec<VarnodeData>,
+    /// Injection id at function entry (-1 unused). Faithful to
+    /// `injectUponEntry`.
+    pub inject_upon_entry: i32,
+    /// Injection id after a call (-1 unused). Faithful to
+    /// `injectUponReturn`.
+    pub inject_upon_return: i32,
+    /// Union of the constituents' local ranges. Faithful to `localrange`.
+    pub localrange: crate::address::RangeList,
+    /// Union of the constituents' parameter ranges. Faithful to
+    /// `paramrange`.
+    pub paramrange: crate::address::RangeList,
+}
+
+/// `ProtoModel::extrapop_unknown = 0x8000` (fspec.hh:772).
+pub const EXTRA_POP_UNKNOWN: i32 = 0x8000;
+
+impl ProtoModelMerged {
+    // Ghidra: fspec.hh:1082 ProtoModelMerged::ProtoModelMerged
+    /// Construct an empty merge: `ProtoModelMerged(Architecture *g) :
+    /// ProtoModel(g) {}` (fspec.hh:1082). The output list starts empty and
+    /// is replaced at the first fold-in (Ghidra's null `output` until the
+    /// first `foldIn` allocates it).
+    pub fn new() -> Self {
+        Self {
+            modellist: Vec::new(),
+            input: ParamListMerged::new(),
+            output: ParamListStandardOut::default(),
+            extrapop: 0,
+            effectlist: Vec::new(),
+            likelytrash: Vec::new(),
+            internalstorage: Vec::new(),
+            inject_upon_entry: -1,
+            inject_upon_return: -1,
+            localrange: crate::address::RangeList::new(),
+            paramrange: crate::address::RangeList::new(),
+        }
+    }
+
+    // Ghidra: fspec.hh:1084 ProtoModelMerged::numModels
+    /// `return modellist.size();` (fspec.hh:1084).
+    pub fn num_models(&self) -> usize { self.modellist.len() }
+
+    // Ghidra: fspec.hh:1085 ProtoModelMerged::getModel
+    /// `return modellist[i];` (fspec.hh:1085).
+    pub fn get_model(&self, i: usize) -> &std::sync::Arc<ProtoModelFull> { &self.modellist[i] }
+
+    // Ghidra: fspec.hh:1088 ProtoModelMerged::isMerged
+    /// `return true;` (fspec.hh:1088).
+    pub fn is_merged(&self) -> bool { true }
+
+    // Ghidra: fspec.cc:2834 ProtoModelMerged::foldIn
+    /// Fold-in an additional prototype model. Faithful 1:1 body of
+    /// `foldIn` (fspec.cc:2834-2870):
+    ///   - the architecture-identity guard (`model->glb != glb` throw) is
+    ///     absorbed by Rugra's single-`Architecture` table — all models in
+    ///     one table share `glb` by construction;
+    ///   - the `p_standard`/`p_register` input-kind guard passes
+    ///     structurally: Rugra's `ProtoModelFull::input` is the shared
+    ///     `ParamListStandard` owner for both kinds (the register-strategy
+    ///     residual is documented at `build_param_list`);
+    ///   - FIRST fold: allocate the merged input list + the output list,
+    ///     copy extrapop/injects/effects/trash/ranges verbatim;
+    ///   - LATER folds: fold the input list, demote a disagreeing extrapop
+    ///     to `extrapop_unknown`, throw on disagreeing inject ids,
+    ///     intersect effects/trash/internal registers, and take the UNION
+    ///     of the local/param ranges.
+    pub fn fold_in(&mut self, model: &std::sync::Arc<ProtoModelFull>) -> Result<(), String> {
+        if self.modellist.is_empty() && self.input.base.is_entry_empty() && self.output.base.is_entry_empty() {
+            // First fold in (Ghidra: input == (ParamList *)0)
+            self.input = ParamListMerged::new();
+            self.output = model.output.standard_out_clone();
+            self.input.fold_in(&model.input)?;
+            self.extrapop = model.extrapop;
+            self.effectlist = model.effectlist.clone();
+            self.inject_upon_entry = model.inject_upon_entry;
+            self.inject_upon_return = model.inject_upon_return;
+            self.likelytrash = model.likelytrash.clone();
+            self.localrange = model.localrange.clone();
+            self.paramrange = model.paramrange.clone();
+        } else {
+            self.input.fold_in(&model.input)?;
+            // We assume here that the output models are the same, but we don't check
+            if self.extrapop != model.extrapop {
+                self.extrapop = EXTRA_POP_UNKNOWN;
+            }
+            if self.inject_upon_entry != model.inject_upon_entry
+                || self.inject_upon_return != model.inject_upon_return
+            {
+                return Err("Cannot merge prototype models with different inject ids".to_string());
+            }
+            ProtoModelFull::intersect_effects(&mut self.effectlist, &model.effectlist);
+            ProtoModelFull::intersect_registers(&mut self.likelytrash, &model.likelytrash);
+            ProtoModelFull::intersect_registers(&mut self.internalstorage, &model.internalstorage);
+            // Take the union of the localrange and paramrange
+            for iter in model.localrange.ranges() {
+                self.localrange.insert_range(*iter);
+            }
+            for iter in model.paramrange.ranges() {
+                self.paramrange.insert_range(*iter);
+            }
+        }
+        self.modellist.push(model.clone());
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:2877 ProtoModelMerged::selectModel
+    /// Select the best model for the given set of input parameter trials.
+    /// Faithful 1:1 body of `selectModel` (fspec.cc:2877-2902): each
+    /// constituent is scored with `ScoreProtoModel(true, modellist[i],
+    /// numtrials)` over its ACTIVE trials; the strict-`<` walk keeps the
+    /// FIRST best model, early-exits on a perfect 0 score, and throws
+    /// "No model matches : missing default" when nothing scored under the
+    /// 500 threshold.
+    pub fn select_model(
+        &self,
+        active: &crate::fspec::ParamActive,
+    ) -> Result<std::sync::Arc<ProtoModelFull>, String> {
+        let mut bestscore = 500i32;
+        let mut bestindex: i64 = -1;
+        for i in 0..self.modellist.len() {
+            let numtrials = active.get_num_trials();
+            let mut scoremodel = ScoreProtoModel::new(true, &self.modellist[i], numtrials);
+            for j in 0..numtrials {
+                let trial = active.get_trial(j);
+                if trial.is_active() {
+                    scoremodel.add_parameter(
+                        trial.get_space(),
+                        trial.get_address(),
+                        trial.get_size(),
+                    );
+                }
+            }
+            scoremodel.do_score();
+            let score = scoremodel.get_score();
+            if score < bestscore {
+                bestscore = score;
+                bestindex = i as i64;
+                if bestscore == 0 {
+                    break; // Can't get any lower
+                }
+            }
+        }
+        if bestindex >= 0 {
+            return Ok(self.modellist[bestindex as usize].clone());
+        }
+        Err("No model matches : missing default".to_string())
+    }
+}
+
+impl Default for ProtoModelMerged {
+    // RUGRA-GLUE: Default bridge for the no-arg constructor form.
+    fn default() -> Self { Self::new() }
+}
+
+/// An unrecognized prototype model. Faithful to `class
+/// UnknownProtoModel : public ProtoModel` (fspec.hh:1025-1032): created
+/// for prototype model names with no matching definition; behavior is
+/// cloned from a placeholder model (usually the default), the
+/// unrecognized name is adopted, and `isUnknown()` reports true.
+pub struct UnknownProtoModel {
+    /// The full cloned model state (name overridden with the unrecognized
+    /// name). Stands in for the inherited ProtoModel base.
+    pub base: ProtoModelFull,
+    /// The model whose behavior \b this adopts. Faithful to
+    /// `ProtoModel *placeholderModel`; `Arc` preserves shared identity with
+    /// the architecture's model table.
+    pub placeholder_model: std::sync::Arc<ProtoModelFull>,
+}
+
+impl UnknownProtoModel {
+    // Ghidra: fspec.hh:1028 UnknownProtoModel::UnknownProtoModel
+    /// `UnknownProtoModel(const string &nm,ProtoModel *placeHold) :
+    /// ProtoModel(nm,*placeHold) { placeholderModel = placeHold; }`
+    /// (fspec.hh:1028-1029): the alias copy constructor copies every field
+    /// from the placeholder (including its lists via the ParamList copy
+    /// constructors) and overrides the name.
+    pub fn new(nm: &str, place_hold: &std::sync::Arc<ProtoModelFull>) -> Self {
+        let mut base = ProtoModelFull::clone(place_hold);
+        base.name = nm.to_string();
+        Self { base, placeholder_model: place_hold.clone() }
+    }
+
+    // Ghidra: fspec.hh:1030 UnknownProtoModel::getPlaceholderModel
+    /// `return placeholderModel;` (fspec.hh:1030).
+    pub fn get_placeholder_model(&self) -> &std::sync::Arc<ProtoModelFull> {
+        &self.placeholder_model
+    }
+
+    // Ghidra: fspec.hh:1031 UnknownProtoModel::isUnknown
+    /// `return true;` (fspec.hh:1031).
+    pub fn is_unknown(&self) -> bool { true }
 }
 
 #[cfg(test)]
