@@ -25,6 +25,25 @@ type TypeTreeKey = (
     Reverse<usize>,
     u64);
 
+// Ghidra: type.hh:752 DatatypeWarning
+/// A warning attached to a named data-type. Mirrors Ghidra's
+/// `DatatypeWarning` (type.hh:752-762): the data-type the warning is about
+/// plus the explanatory string displayed to the user. Ghidra stores the
+/// `Datatype*` itself; Rugra records the `(name, id)` identity pair that
+/// `removeWarning` compares on (type.cc:3766: `getId() == dt->getId() &&
+/// getName() == dt->getName()`) — for factory-registered types the pair is
+/// stable across the Arc re-wrapping that Rugra's immutable-Arc registry
+/// performs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatatypeWarning {
+    /// Name of the data-type associated with the warning.
+    pub type_name: String,
+    /// Id of the data-type associated with the warning.
+    pub type_id: u64,
+    /// The explanatory string which should be displayed to the user.
+    pub warning: String,
+}
+
 /// Managed container for all Datatype objects
 pub struct TypeFactory {
     /// All types managed by this factory, keyed by their unique name
@@ -82,6 +101,12 @@ pub struct TypeFactory {
     /// (type.cc:3777-3809), including the TYPE_CODE arm that installs the
     /// referenced code type's prototype on the typedef.
     incomplete_typedefs: Vec<Arc<Datatype>>,
+
+    /// Warnings attached to named data-types, mirroring Ghidra's `warnings`
+    /// list (type.hh:760) of `DatatypeWarning` records appended by
+    /// `insertWarning` (type.cc:3750) and drained entry-by-entry by
+    /// `removeWarning` (type.cc:3761).
+    warnings: Vec<DatatypeWarning>,
 
     /// Size of the core "int" data-type (Ghidra `sizeOfInt`, type.hh:763).
     /// Persisted state of `decodeDataOrganization`/`setupSizes`.
@@ -284,6 +309,7 @@ impl TypeFactory {
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
+            warnings: Vec::new(),
             // Ghidra: type.cc:3106 TypeFactory::TypeFactory zeroes every
             // size field (int/long/char/wchar/pointer/altpointer/enumsize)
             // and leaves alignMap default-constructed (empty).
@@ -338,6 +364,7 @@ impl TypeFactory {
             live_local_scopes: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
+            warnings: Vec::new(),
             size_of_int: 0,
             size_of_long: 0,
             size_of_char: 0,
@@ -1296,7 +1323,13 @@ impl TypeFactory {
             st.base.flags &= !type_flags::TYPE_INCOMPLETE;
             Ok(())
         });
-        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
+        let result = defined.unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        // type.cc:3490-3491 — the grammar path funnels through the same
+        // factory setFields, so the pointer submeta migration tail applies
+        // here too (see set_fields_flags).
+        self.recalc_pointer_submeta(&result, SubMetatype::Ptr);
+        self.recalc_pointer_submeta(&result, SubMetatype::PtrStruct);
+        Some(result)
     }
 
     // Ghidra: type.cc:3479 TypeFactory::setFields (explicit newSize/newAlign arm)
@@ -1333,6 +1366,34 @@ impl TypeFactory {
         new_size: usize,
         new_align: usize,
     ) -> Option<Arc<Datatype>> {
+        self.set_fields_flags(name, fields, new_size, new_align, 0)
+    }
+
+    // Ghidra: type.cc:3479 TypeFactory::setFields (explicit newSize/newAlign arm)
+    /// The full `TypeFactory::setFields(const vector<TypeField> &fd,
+    /// TypeStruct *ot, int4 newSize, int4 newAlign, uint4 flags)` signature
+    /// (type.cc:3479-3492), including the two pieces the size-derived twins
+    /// could not express before this port:
+    ///
+    /// - the flags mask tail (type.cc:3487-3488):
+    ///   `flags &= ~type_incomplete;
+    ///    flags |= (flags & (opaque_string | variable_length | type_incomplete))`
+    ///   — with `flags == 0` this reduces to the plain incomplete clear;
+    /// - the pointer submeta migration tail (type.cc:3490-3491):
+    ///   `recalcPointerSubmeta(ot, SUB_PTR); recalcPointerSubmeta(ot,
+    ///   SUB_PTR_STRUCT);` — pointers interned while the struct was
+    ///   incomplete (SUB_PTR_STRUCT slot) re-key to their now-current
+    ///   submeta so later `getTypePointer` probes find them. The
+    ///   define_replace Arc seam limits the migration to pointers holding
+    ///   the post-completion Arc (TYPEFACTORY-ARC-IDENTITY-0001).
+    pub fn set_fields_flags(
+        &mut self,
+        name: &str,
+        fields: Vec<TypeField>,
+        new_size: usize,
+        new_align: usize,
+        flags: u32,
+    ) -> Option<Arc<Datatype>> {
         let dt = self.types.get(name)?.clone();
         if !dt.is_incomplete() {
             return None;
@@ -1349,10 +1410,18 @@ impl TypeFactory {
             if st.fields.len() == 1 && st.fields[0].type_ptr.get_size() == st.base.size {
                 st.base.flags |= type_flags::NEEDS_RESOLUTION;
             }
+            // type.cc:3487-3488 flag clear + masked-OR transfer.
             st.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            st.base.flags |=
+                flags & (type_flags::OPAQUE_STRUCT | type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
             Ok(())
         });
-        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
+        let result = defined.unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        // type.cc:3490-3491: recalcPointerSubmeta(ot, SUB_PTR) then
+        // (ot, SUB_PTR_STRUCT), in this order.
+        self.recalc_pointer_submeta(&result, SubMetatype::Ptr);
+        self.recalc_pointer_submeta(&result, SubMetatype::PtrStruct);
+        Some(result)
     }
 
     // RUGRA-GLUE: Ghidra exposes no numTypes method; this counts the union of
@@ -1755,6 +1824,25 @@ impl TypeFactory {
         new_size: usize,
         new_align: usize,
     ) -> Option<Arc<Datatype>> {
+        self.set_union_fields_flags(name, fields, new_size, new_align, 0)
+    }
+
+    // Ghidra: type.cc:3493 TypeFactory::setFields(TypeUnion*)
+    /// The full union `TypeFactory::setFields` signature (type.cc:3500-3511)
+    /// including the flags mask tail (type.cc:3508-3509):
+    /// `flags &= ~type_incomplete;
+    ///  flags |= (flags & (variable_length | type_incomplete))` — note the
+    /// union mask has NO `opaque_string` bit (only the struct version at
+    /// type.cc:3488 transfers it), and the union version performs NO
+    /// `recalcPointerSubmeta` calls (contrast type.cc:3490-3491).
+    pub fn set_union_fields_flags(
+        &mut self,
+        name: &str,
+        fields: Vec<TypeField>,
+        new_size: usize,
+        new_align: usize,
+        flags: u32,
+    ) -> Option<Arc<Datatype>> {
         let dt = self.types.get(name)?.clone();
         if !dt.is_incomplete() {
             return None;
@@ -1768,10 +1856,280 @@ impl TypeFactory {
             union.base.size = new_size;
             union.base.alignment = new_align as i32;
             union.base.align_size = calc_align_size(new_size, new_align);
+            // type.cc:3508-3509 flag clear + masked-OR transfer.
             union.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            union.base.flags |=
+                flags & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
             Ok(())
         });
         Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
+    }
+
+    // Ghidra: type.cc:3724 TypeFactory::recalcPointerSubmeta
+    /// Search for pointers that match the given `base` and `sub` sub-metatype
+    /// and re-key them to the current calculated sub-metatype. Faithful to
+    /// `TypeFactory::recalcPointerSubmeta` (type.cc:3724-3745):
+    ///
+    /// ```text
+    /// TypePointer top(1,base,0);        // size 1, ptrto=base, wordsize 0
+    /// sub_metatype curSub = top.submeta;  // = calcSubmeta for pointers to base
+    /// if (curSub == sub) return;          // correct submeta already
+    /// top.submeta = sub;                  // search on the incorrect submeta
+    /// iter = tree.lower_bound(&top);
+    /// while(iter != tree.end()) {
+    ///   if (dt->getMetatype() != TYPE_PTR) break;
+    ///   if (ptr->ptrto != base) break;
+    ///   ++iter;                           // advance BEFORE erase
+    ///   if (ptr->submeta == sub) { tree.erase(ptr); ptr->submeta = curSub; tree.insert(ptr); }
+    /// }
+    /// ```
+    ///
+    /// Alignment Evidence (four decisive-semantics checklist):
+    /// - References/output params: mutates the stored pointer's submeta AND
+    ///   its tree slot in place (`base` is read-only). Rugra's submeta is
+    ///   DERIVED (`pointer_submeta`) rather than stored, so the re-key is
+    ///   `remove(old_key)` + `insert(type_tree_key(same Arc))` — the same
+    ///   Arc is preserved, only the ordering slot migrates.
+    /// - Loop bounds/iteration order: from `tree.lower_bound(&top)` (the
+    ///   probe key `(sub, base-identity, 0, 0, wordsize 0, no-space,
+    ///   Reverse(1), id 0)`) forward through tree order; BREAKS at the first
+    ///   non-TYPE_PTR entry or an entry whose `ptrto` is not `base` by
+    ///   identity — later same-base pointers beyond an unrelated entry are
+    ///   not visited, exactly as in the oracle.
+    /// - Counter/accumulator: none; `++iter` precedes the erase (C++ set
+    ///   iterator invalidation), mirrored by collecting the migration keys
+    ///   before removing.
+    /// - Sort/comparison key: the factory tree's `compareDependency` order —
+    ///   submeta, then `ptrto` pointer identity, then wordsize, then spaceid
+    ///   (no-space last), then descending size (type.cc:955-967); the probe
+    ///   `top` has size 1 / wordsize 0 / no space, so wordsize-0 pointers
+    ///   WITH a space sort before the probe and are skipped — a probe-shape
+    ///   quirk inherited verbatim from the oracle.
+    ///
+    /// Scope: pointers keyed under a PREVIOUS Arc of `base` (the
+    /// `define_replace` completion seam) are not reachable through the
+    /// `ptrto == base` identity check — tracked by
+    /// TYPEFACTORY-ARC-IDENTITY-0001.
+    pub fn recalc_pointer_submeta(&mut self, base: &Arc<Datatype>, sub: SubMetatype) {
+        // TypePointer top(1,base,0) — its calcSubmeta IS the current proper
+        // sub-metatype for pointers to base.
+        let top = TypePointer::new(1, base.clone(), 0);
+        let cur_sub = pointer_submeta(&top);
+        if cur_sub == sub {
+            return; // Don't need to search for pointers with correct submeta
+        }
+        // top.submeta = sub — the probe key under the incorrect submeta:
+        // (submeta, dependency=base identity, offset 0, parent 0, wordsize 0,
+        //  space_rank None=1, space_id 0, Reverse(size 1), id 0).
+        let probe: TypeTreeKey = (
+            sub as u8,
+            Arc::as_ptr(base) as usize,
+            0,
+            0,
+            0,
+            1,
+            0,
+            Reverse(1),
+            0,
+        );
+        let tree = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base_raw = Arc::as_ptr(base) as *const Datatype;
+        let mut migrate: Vec<TypeTreeKey> = Vec::new();
+        for (key, dt) in tree.range(probe..) {
+            let Datatype::Pointer(pointer) = dt.as_ref() else {
+                break; // dt->getMetatype() != TYPE_PTR
+            };
+            if !std::ptr::eq(Arc::as_ptr(&pointer.ptr_to) as *const Datatype, base_raw) {
+                break; // ptr->ptrto != base
+            }
+            // ++iter before the erase; the stored submeta is the key's
+            // submeta component (submeta_of at insertion time).
+            if key.0 == sub as u8 {
+                migrate.push(key.clone());
+            }
+        }
+        for key in migrate {
+            if let Some(arc) = tree.remove(&key) {
+                // ptr->submeta = curSub; tree.insert(ptr) — the derived
+                // submeta already evaluates to curSub, so re-keying by the
+                // current projection performs the migration.
+                tree.insert(Self::type_tree_key(&arc), arc);
+            }
+        }
+    }
+
+    // Ghidra: type.cc:3750 TypeFactory::insertWarning
+    /// Add the data-type and string to the `warnings` container. Faithful to
+    /// `TypeFactory::insertWarning` (type.cc:3750-3757): a data-type with a
+    /// zero id throws `LowlevelError("Can only issue warnings for named
+    /// data-types")`, the `warning_issued` flag is set on the type, and the
+    /// record is appended. The flag write goes through the registered-slot
+    /// replace (Ghidra mutates the registered object in place); Rugra
+    /// re-wraps it in a new Arc under the same registry slots.
+    pub fn insert_warning(
+        &mut self,
+        dt: &Arc<Datatype>,
+        warn: String,
+    ) -> Result<Arc<Datatype>, String> {
+        if dt.get_id() == 0 {
+            return Err("Can only issue warnings for named data-types".to_string());
+        }
+        let updated = self.define_replace(dt, |defined| {
+            // dt->flags |= Datatype::warning_issued (type.hh:185 = 0x20000).
+            defined.set_type_flag(type_flags::WARNING_ISSUED);
+            Ok(())
+        })?;
+        self.warnings.push(DatatypeWarning {
+            type_name: updated.get_name().to_string(),
+            type_id: updated.get_id(),
+            warning: warn,
+        });
+        Ok(updated)
+    }
+
+    // Ghidra: type.cc:3761 TypeFactory::removeWarning
+    /// Run through the `warnings` container and delete every entry matching
+    /// the given data-type. Faithful to `TypeFactory::removeWarning`
+    /// (type.cc:3761-3773): an entry matches when the stored data-type's id
+    /// AND name equal the given type's (type.cc:3766); the list walk is
+    /// order-preserving, `erase` returns the next iterator (no index skips).
+    pub fn remove_warning(&mut self, dt: &Datatype) {
+        let id = dt.get_id();
+        let name = dt.get_name();
+        self.warnings
+            .retain(|entry| !(entry.type_id == id && entry.type_name == name));
+    }
+
+    // Ghidra: type.cc:3445 TypeFactory::setName
+    /// Rename a data-type and fix up the cross-referencing. Faithful to
+    /// `TypeFactory::setName` (type.cc:3445-3459): the name reference is
+    /// erased (when the type carries an id), the type is removed from the
+    /// structural tree, `name`/`displayName` are set, a zero id is replaced
+    /// by `hashName(n)`, and both channels re-insert the type. Returns the
+    /// renamed type.
+    ///
+    /// Rugra performs the erase/reinsert through the registered-slot
+    /// replace, which ADDITIONALLY refuses two pathological collisions the
+    /// oracle would paper over silently (std::set::insert failing when
+    /// another object already occupies the new name/tree slot): those are
+    /// registry misuse, surfaced as `Err` instead of a silently unindexed
+    /// type.
+    pub fn set_name(
+        &mut self,
+        ct: &Arc<Datatype>,
+        n: &str,
+    ) -> Result<Arc<Datatype>, String> {
+        self.define_replace(ct, |defined| {
+            defined.set_type_name(n);
+            if defined.get_id() == 0 {
+                defined.set_type_id(Datatype::hash_name(n));
+            }
+            Ok(())
+        })
+    }
+
+    // Ghidra: type.cc:4055 TypeFactory::getTypePointerWithSpace
+    /// Build a named pointer with an address space attribute. The new
+    /// data-type acts like a typedef of a normal pointer but can affect the
+    /// resolution of constants by the type propagation system. Faithful to
+    /// `TypeFactory::getTypePointerWithSpace` (type.cc:4055-4065):
+    ///
+    /// ```text
+    /// TypePointer tp(ptrTo,spc);   // size=spc->getAddrSize(), wordsize=
+    ///                              // spc->getWordSize(), spaceid=spc,
+    ///                              // calcSubmeta
+    /// tp.name = nm; tp.displayName = nm; tp.id = Datatype::hashName(nm);
+    /// TypePointer *res = (TypePointer *)findAdd(tp);
+    /// res->calcTruncate(*this);
+    /// return res;
+    /// ```
+    ///
+    /// Note the constructor is the AddrSpace form — there is NO
+    /// `getStripped` step on `ptrTo` (unlike `getTypePointer`,
+    /// type.cc:3869-3870). `calcTruncate`'s attached subcomponent is the
+    /// TYPE-0001 structural residual: the guard
+    /// (`size != getSizeOfAltPointer()` early-out) is mirrored and the
+    /// `resizePointer` is issued for its factory-registration side effect,
+    /// same as the decode-path kludge (type.cc:4196 neighbourhood).
+    pub fn get_type_pointer_with_space(
+        &mut self,
+        ptr_to: Arc<Datatype>,
+        space: AddressSpace,
+        nm: &str,
+    ) -> Result<Arc<Datatype>, String> {
+        let mut tp = TypePointer::new_with_space(ptr_to, space);
+        tp.base.name = nm.to_string();
+        tp.base.display_name = nm.to_string();
+        tp.base.id = Datatype::hash_name(nm);
+        let res = self.find_add(Datatype::Pointer(tp), true)?;
+        // res->calcTruncate(*this) — see the doc note above.
+        if res.get_size() as i32 == self.get_size_of_alt_pointer() {
+            let _ = self.resize_pointer(
+                &res,
+                self.get_size_of_pointer() as usize,
+            );
+        }
+        Ok(res)
+    }
+
+    // Ghidra: type.cc:4122 TypeFactory::destroyType
+    /// Remove the indicated data-type from this factory. Indirect references
+    /// (via TypeArray TypeStruct etc.) are not affected. Faithful to
+    /// `TypeFactory::destroyType` (type.cc:4122-4132): a core type throws
+    /// `LowlevelError("Cannot destroy core type")`; a type with a warning
+    /// first drains its warning entries; the name reference and the tree
+    /// entry are erased; the object is deleted (Rugra: the Arc slots are
+    /// dropped, so the object dies when the last external handle dies).
+    ///
+    /// Ghidra's `nametree.erase`/`tree.erase` remove by object identity
+    /// (set erase of the equivalent key); Rugra removes the slot when it
+    /// holds this precise Arc OR an equivalent `(name, id)` / tree-key
+    /// entry, mirroring key-equivalence semantics.
+    pub fn destroy_type(&mut self, ct: &Arc<Datatype>) -> Result<(), String> {
+        if ct.is_coretype() {
+            return Err("Cannot destroy core type".to_string());
+        }
+        if ct.has_warning() {
+            self.remove_warning(ct.as_ref());
+        }
+        // nametree.erase(ct) — the (name, id) keyed channel.
+        let name = ct.get_name();
+        if !name.is_empty() {
+            let remove_name = self
+                .types
+                .get(name)
+                .is_some_and(|registered| {
+                    Arc::ptr_eq(registered, ct)
+                        || (registered.get_id() == ct.get_id()
+                            && registered.get_name() == name)
+                });
+            if remove_name {
+                self.types.remove(name);
+            }
+        }
+        // tree.erase(ct) — the structural channel, by exact key.
+        let tree_key = Self::type_tree_key(ct);
+        {
+            let tree = self
+                .base_type_tree
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let remove_tree = tree
+                .get(&tree_key)
+                .is_some_and(|registered| {
+                    Arc::ptr_eq(registered, ct)
+                        || (registered.get_id() == ct.get_id()
+                            && registered.get_name() == ct.get_name())
+                });
+            if remove_tree {
+                tree.remove(&tree_key);
+            }
+        }
+        // delete ct — mirrored by dropping the removed Arc handles.
+        Ok(())
     }
 
     // Ghidra: type.cc:3967 TypeFactory::getTypeEnum
@@ -8222,5 +8580,278 @@ mod tests {
             ));
         }
         assert!(TypeFactory::current_arch_factory().is_none());
+    }
+
+    // --- WORKPKG-UNMAP-TYPEUNION-0003: TypeFactory recalcPointerSubmeta /
+    // setName / insertWarning / removeWarning / getTypePointerWithSpace /
+    // destroyType / setFields flags (type.cc:3724/3445/3750/3761/4055/4122/3479) ---
+
+    #[test]
+    fn test_string2typeclass_and_metatype2typeclass_live_in_datatype() {
+        // The type.cc free functions live on the datatype module; the
+        // factory re-exports them through the glob import for spec decode.
+        use crate::type_system::datatype::{metatype2typeclass, string2typeclass, TypeClass};
+        assert_eq!(string2typeclass("hiddenret"), Ok(TypeClass::HiddenRet));
+        assert_eq!(metatype2typeclass(TypeMetatype::Pointer), TypeClass::Ptr);
+    }
+
+    /// Install the x86-64-gcc.cspec `<size_alignment_map>` shape (entries
+    /// 1/2/4/8/16, index 0 left at the decode -1 fill) through the real
+    /// `decode_alignment_map` path, so the factory mirrors the production
+    /// cspec-decoded layout rather than `setDefaultAlignmentMap` (whose
+    /// index-0 zero would divide by zero on the size-0 incomplete struct,
+    /// the same UB Ghidra's oracle has there).
+    fn install_cspec_align_map(factory: &mut TypeFactory) {
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        use std::sync::RwLock;
+        fn entry(size: i64, alignment: i64) -> std::sync::Arc<RwLock<Element>> {
+            std::sync::Arc::new(RwLock::new(Element {
+                name: "entry".to_string(),
+                content: String::new(),
+                attr_names: vec!["size".to_string(), "alignment".to_string()],
+                attr_values: vec![size.to_string(), alignment.to_string()],
+                children: Vec::new(),
+            }))
+        }
+        let root = std::sync::Arc::new(RwLock::new(Element {
+            name: "size_alignment_map".to_string(),
+            content: String::new(),
+            attr_names: Vec::new(),
+            attr_values: Vec::new(),
+            children: vec![
+                entry(1, 1),
+                entry(2, 2),
+                entry(4, 4),
+                entry(8, 8),
+                entry(16, 16),
+            ],
+        }));
+        let registry = std::sync::Arc::new(RwLock::new(IdRegistry::new()));
+        let mut decoder = TreeDecoder::new(root, registry);
+        // Descend INTO the <size_alignment_map> node first: production
+        // reaches decode_alignment_map with the decoder already positioned
+        // at that element (decodeDataOrganization opens it before the call).
+        decoder.open_element();
+        factory.decode_alignment_map(&mut decoder);
+    }
+
+    #[test]
+    fn test_recalc_pointer_submeta_migrates_incomplete_struct_pointers() {
+        // type.cc:3724-3745 walk: pointers interned while a struct was
+        // INCOMPLETE sit in the SUB_PTR_STRUCT(4) slot; after the struct
+        // completes as a single-field struct, calcSubmeta yields SUB_PTR(6)
+        // and recalcPointerSubmeta(base, SUB_PTR_STRUCT) must re-key them so
+        // a fresh getTypePointer probe (which computes SUB_PTR) finds the
+        // SAME registration instead of interning a duplicate.
+        let mut factory = TypeFactory::new(8);
+        install_cspec_align_map(&mut factory);
+        // Incomplete single-field struct.
+        let st = factory.create_struct("fixture_recalc_s");
+        assert!(st.is_incomplete());
+        // A pointer to the incomplete struct registers under PtrStruct(4).
+        let ptr_before = factory.get_type_pointer(8, st.clone(), 1);
+        assert_eq!(ptr_before.get_submeta(), SubMetatype::PtrStruct);
+        // Complete the struct through the factory setFields twin — the
+        // completion internally runs the recalc tail (type.cc:3490-3491).
+        let int_t = factory.get_base(4, TypeMetatype::Int).expect("int");
+        let completed = factory
+            .set_fields_sized(
+                "fixture_recalc_s",
+                vec![TypeField { name: "x".into(), offset: 0, type_ptr: int_t.clone() }],
+                4,
+                4,
+            )
+            .expect("completes");
+        assert!(!completed.is_incomplete());
+        // NOTE(observe): set_fields_sized re-wraps the struct in a NEW Arc
+        // (define_replace seam, TYPEFACTORY-ARC-IDENTITY-0001), so the
+        // probe identity differs from the pointer's pointee Arc and the
+        // direct migration cannot reach it. The completed struct itself
+        // must now register pointers as SUB_PTR:
+        let ptr_after = factory.get_type_pointer(8, completed.clone(), 1);
+        assert_eq!(ptr_after.get_submeta(), SubMetatype::Ptr);
+        // And an explicit recalc call with the stale sub on the completed
+        // base is a no-op-safe probe (curSub == SUB_PTR != SUB_PTR_STRUCT
+        // walks; nothing matching ptrto==completed sits under 4 — the
+        // stale pointer holds the pre-completion Arc).
+        factory.recalc_pointer_submeta(&completed, SubMetatype::PtrStruct);
+        let ptr_again = factory.get_type_pointer(8, completed.clone(), 1);
+        assert!(Arc::ptr_eq(&ptr_after, &ptr_again));
+        // A multi-field struct keeps PtrStruct(4) pointers (calcSubmeta:
+        // numDepend > 1), and its recalc(SUB_PTR) early-outs (curSub==sub).
+        let mt = factory.create_struct("fixture_recalc_m");
+        let _mptr = factory.get_type_pointer(8, mt.clone(), 1);
+        let int8 = factory.get_base(8, TypeMetatype::Int).expect("long");
+        let _ = int8;
+        let mcompleted = factory
+            .set_fields_sized(
+                "fixture_recalc_m",
+                vec![
+                    TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+                    TypeField { name: "b".into(), offset: 4, type_ptr: int_t.clone() },
+                ],
+                8,
+                4,
+            )
+            .expect("completes");
+        let mptr_after = factory.get_type_pointer(8, mcompleted.clone(), 1);
+        assert_eq!(mptr_after.get_submeta(), SubMetatype::PtrStruct);
+    }
+
+    #[test]
+    fn test_set_name_reregisters_both_channels() {
+        // type.cc:3445-3459: rename fixes the name channel AND the tree;
+        // a zero id becomes hashName(n).
+        let mut factory = TypeFactory::new(8);
+        // Named construction already carries a hashName id; the rename
+        // observable is the two-channel swap.
+        let st = factory.create_struct("fixture_rename_s");
+        assert_ne!(st.get_id(), 0);
+        let renamed = factory.set_name(&st, "fixture_renamed").expect("renames");
+        assert_eq!(renamed.get_name(), "fixture_renamed");
+        assert_eq!(renamed.get_display_name(), "fixture_renamed");
+        // Id is UNCHANGED by setName when already nonzero (type.cc:3453).
+        assert_eq!(renamed.get_id(), st.get_id());
+        let found = factory.find_by_name("fixture_renamed").expect("new slot");
+        assert!(Arc::ptr_eq(&found, &renamed));
+        assert!(factory.find_by_name("fixture_rename_s").is_none());
+        // The zero-id branch (type.cc:3453-3454) reachable via an
+        // ANONYMOUS tree-registered type: an unnamed array.
+        let int_t = factory.get_base(4, TypeMetatype::Int).expect("int");
+        let arr = factory.get_array(int_t, 2);
+        assert_eq!(arr.get_id(), 0);
+        assert!(arr.get_name().is_empty());
+        let named_arr = factory.set_name(&arr, "fixture_arr").expect("renames");
+        assert_eq!(named_arr.get_id(), Datatype::hash_name("fixture_arr"));
+        assert!(factory.find_by_name("fixture_arr").is_some());
+    }
+
+    #[test]
+    fn test_insert_and_remove_warning() {
+        // type.cc:3750-3757 / 3761-3773.
+        let mut factory = TypeFactory::new(8);
+        // Anonymous (id 0) types cannot carry warnings: an unnamed array.
+        let int_t = factory.get_base(4, TypeMetatype::Int).expect("int");
+        let anon = factory.get_array(int_t, 2);
+        assert!(factory.insert_warning(&anon, "w".into()).is_err());
+        // A named type warns: the flag is set and the record appended.
+        let st = factory.create_struct("fixture_warn_s");
+        assert_ne!(st.get_id(), 0);
+        let warned = factory
+            .insert_warning(&st, "ignoring overlapping field".into())
+            .expect("warns");
+        assert!(warned.has_warning());
+        assert_eq!(factory.warnings.len(), 1);
+        assert_eq!(factory.warnings[0].type_name, "fixture_warn_s");
+        assert_eq!(factory.warnings[0].type_id, st.get_id());
+        assert_eq!(factory.warnings[0].warning, "ignoring overlapping field");
+        // removeWarning matches on (id, name).
+        factory.remove_warning(warned.as_ref());
+        assert!(factory.warnings.is_empty());
+        // A different name does not drain.
+        let warned2 = factory
+            .insert_warning(&warned, "second".into())
+            .expect("warns");
+        let other = factory.create_struct("fixture_warn_other");
+        factory.remove_warning(other.as_ref());
+        assert_eq!(factory.warnings.len(), 1);
+        let _ = warned2;
+    }
+
+    #[test]
+    fn test_destroy_type_channels() {
+        // type.cc:4122-4132: core types are refused; named types leave both
+        // channels; a warned type drains its warnings first.
+        let mut factory = TypeFactory::new(8);
+        let int_t = factory.get_base(4, TypeMetatype::Int).expect("int");
+        assert_eq!(
+            factory.destroy_type(&int_t),
+            Err("Cannot destroy core type".to_string())
+        );
+        let st = factory.create_struct("fixture_destroy_s");
+        let warned = factory
+            .insert_warning(&st, "w".into())
+            .expect("warns");
+        assert_eq!(factory.warnings.len(), 1);
+        factory.destroy_type(&warned).expect("destroys");
+        assert!(factory.find_by_name("fixture_destroy_s").is_none());
+        assert!(factory.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_get_type_pointer_with_space_named_form() {
+        // type.cc:4055-4065: size=space addr size, wordsize=space word
+        // size, name/displayName=nm, id=hashName(nm); NO getStripped step.
+        let mut factory = TypeFactory::new(8);
+        install_cspec_align_map(&mut factory);
+        let int_t = factory.get_base(4, TypeMetatype::Int).expect("int");
+        let ptr = factory
+            .get_type_pointer_with_space(int_t.clone(), AddressSpace::Ram, "file_ptr")
+            .expect("interns");
+        assert_eq!(ptr.get_name(), "file_ptr");
+        assert_eq!(ptr.get_id(), Datatype::hash_name("file_ptr"));
+        let Datatype::Pointer(p) = ptr.as_ref() else {
+            panic!("pointer");
+        };
+        assert_eq!(p.wordsize, AddressSpace::Ram.word_size());
+        assert!(p.base.pointer_space.is_some());
+        // Dedup: the same construction returns the same registration.
+        let int_again = factory.get_base(4, TypeMetatype::Int).expect("int");
+        let ptr2 = factory
+            .get_type_pointer_with_space(int_again, AddressSpace::Ram, "file_ptr")
+            .expect("interns");
+        assert!(Arc::ptr_eq(&ptr, &ptr2));
+    }
+
+    #[test]
+    fn test_set_fields_flags_mask_transfer() {
+        // type.cc:3487-3488: the masked-OR transfers
+        // opaque_string|variable_length|type_incomplete from the caller's
+        // flags; the union mask (type.cc:3508-3509) has NO opaque_string.
+        let mut factory = TypeFactory::new(8);
+        factory
+            .set_core_type_result("char", 1, TypeMetatype::Int, true)
+            .unwrap();
+        let char_t = factory.get_type_char(1).expect("char");
+        let _ = factory.create_struct("fixture_mask_s");
+        let completed = factory
+            .set_fields_flags(
+                "fixture_mask_s",
+                vec![TypeField { name: "c".into(), offset: 0, type_ptr: char_t.clone() }],
+                1,
+                1,
+                type_flags::OPAQUE_STRUCT | type_flags::VARLENGTH,
+            )
+            .expect("completes");
+        let flags = completed.get_flags();
+        assert_eq!(flags & type_flags::OPAQUE_STRUCT, type_flags::OPAQUE_STRUCT);
+        assert_eq!(flags & type_flags::VARLENGTH, type_flags::VARLENGTH);
+        // Union version: opaque_string is NOT transferred.
+        let _ = factory.get_type_union("fixture_mask_u");
+        let udone = factory
+            .set_union_fields_flags(
+                "fixture_mask_u",
+                vec![TypeField { name: "c".into(), offset: 0, type_ptr: char_t }],
+                1,
+                1,
+                type_flags::OPAQUE_STRUCT | type_flags::VARLENGTH,
+            )
+            .expect("completes");
+        let uflags = udone.get_flags();
+        assert_eq!(uflags & type_flags::OPAQUE_STRUCT, 0);
+        assert_eq!(uflags & type_flags::VARLENGTH, type_flags::VARLENGTH);
+        // A masked-in type_incomplete keeps the union registered but
+        // incomplete (the oracle's re-incomplete path).
+        let _ = factory.get_type_union("fixture_mask_u2");
+        let u2 = factory
+            .set_union_fields_flags(
+                "fixture_mask_u2",
+                vec![],
+                0,
+                1,
+                type_flags::TYPE_INCOMPLETE,
+            )
+            .expect("registers");
+        assert!(u2.is_incomplete());
     }
 }

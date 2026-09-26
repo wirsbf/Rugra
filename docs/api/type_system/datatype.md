@@ -539,3 +539,40 @@ PIECE/SUBPIECE 半片标记受影响）。双语料门禁 cmp 恒等（见 lane 
 构成误用陷阱。基类 `Datatype::find_resolve`（type.cc:586，return
 self）保留不变。PartialUnion 的流内解析一律走 unionresolve.rs 自由
 函数。
+
+### 2026-09-26 — WORKPKG-UNMAP-TYPEUNION-0003（type.cc 371/420 + 2536/2542/2440 残项）
+
+- **`pub enum TypeClass`**（type.hh:131-141）：存储类枚举，判别值与
+  Ghidra 全等（GENERAL=0/FLOAT=1/PTR=2/HIDDENRET=3/VECTOR=4，
+  CLASS1..4=100..103），是 spec 解码路径的可观察。
+- **`pub fn string2typeclass(classstring: &str) -> Result<TypeClass, String>`**
+  （type.cc:371-411）：首字符 dispatch + 全串精确匹配；`"unknown"` 映射
+  GENERAL，未识别拼写返回 `Err`（oracle 抛 LowlevelError
+  `"Unknown data-type class: ..."`）。fspec.rs 的
+  `string_to_type_class` 是分叉lookalike（未知串静默 GENERAL、无
+  "general"/"unknown" 拼写、无报错）——消费方迁移归 fspec 车道。
+- **`pub fn metatype2typeclass(meta: TypeMetatype) -> TypeClass`**
+  （type.cc:420-432）：FLOAT→Float、PTR→Ptr、默认 General。
+- **`TypePartialUnion::find_compatible_resolve(&self, ct: &Arc<Datatype>) -> i32`**
+  （type.cc:2536-2540）：由硬编码 `-1` 存根改为忠实委托——转发
+  `unionresolve::find_compatible_resolve(&self.container, ct)`（其
+  PartialUnion 臂即本委托）。参数从 `&Datatype` 改为 `&Arc<Datatype>`
+  （自由函数需要 Arc 身份做指针等价比较；原签名零调用方）。
+- **`TypePartialUnion::resolve_truncation_fd(&self, fd, off, op, slot)`**
+  （type.cc:2542-2546 新增 fd-aware 形）：委托
+  `unionresolve::union_resolve_truncation(fd, &self.container,
+  off + self.offset, op, slot)`——打分并写缓存。退化无 fd 方法形
+  `resolve_truncation(off,op,slot)` 保持返回 `None`（coreaction 的
+  SUBPIECE 传播调用点在飞域未改线，登记
+  TYPEUNION-COREACTION-WIRE-0001）。
+- **`TypePartialUnion::find_truncation(&self, off, sz, op, slot, resolutions)`**
+  （type.cc:2440-2444）：由硬编码 `None` 存根改为忠实委托
+  `container.find_truncation(off + self.offset, ...)`，签名与
+  `Datatype::find_truncation` 的 PartialUnion 分派臂对齐。
+- **`Datatype::has_warning`**（type.hh:232）：由硬编码 `false` 存根改为
+  `(flags & WARNING_ISSUED) != 0`；`type_flags::WARNING_ISSUED = 1<<18`
+  （0x20000）补齐。
+- **`Datatype::set_type_name/set_type_id/set_type_flag`**：RUGRA-GLUE
+  变体无关字段写 seam（Ghidra 从 TypeFactory 方法直接赋公开成员）。
+- `Datatype::find_resolve` 文档修正：删除"override 已加在各 variant 上"
+  的不实声明，明确 override 在 unionresolve.rs 自由函数。
